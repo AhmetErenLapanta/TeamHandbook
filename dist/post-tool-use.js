@@ -76,7 +76,7 @@ function extractErrorText(response) {
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 function emptySessionState(sessionId) {
   return { sessionId, openErrors: [], resolvedPairs: [] };
 }

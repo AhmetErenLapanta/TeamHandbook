@@ -1,8 +1,10 @@
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
+import { flushSessionEnd } from "../lib/signals.js";
 
 async function main(): Promise<void> {
   const input = parseHookInput(await readStdin());
-  if (!input) return;
+  if (!input?.session_id) return;
+  flushSessionEnd(input.session_id);
 }
 
 main().then(

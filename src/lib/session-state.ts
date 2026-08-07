@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 export interface OpenError {
   fingerprint: string;
@@ -59,6 +59,10 @@ export function saveSessionState(state: SessionState, home: string = handbookHom
   const file = sessionFile(state.sessionId, home);
   mkdirSync(join(home, "sessions"), { recursive: true });
   writeFileSync(file, JSON.stringify(state, null, 2));
+}
+
+export function deleteSessionState(sessionId: string, home: string = handbookHome()): void {
+  rmSync(sessionFile(sessionId, home), { force: true });
 }
 
 export function recordFailure(
