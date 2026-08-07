@@ -1,0 +1,9 @@
+{
+  "name": "handbook",
+  "version": "0.1.0",
+  "description": "Turns real error→fix moments from your coding sessions into gated, reviewable, merge-ready skills.",
+  "author": {
+    "name": "Ahmet Eren Lapanta"
+  },
+  "license": "Apache-2.0"
+}
