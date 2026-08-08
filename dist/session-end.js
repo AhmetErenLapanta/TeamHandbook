@@ -1,3 +1,6 @@
+// src/hooks/session-end.ts
+import { fileURLToPath } from "node:url";
+
 // src/lib/hook-io.ts
 async function readStdin(stream = process.stdin) {
   const chunks = [];
@@ -17,9 +20,19 @@ function parseHookInput(raw) {
   }
 }
 
-// src/lib/signals.ts
-import { existsSync, appendFileSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+// src/lib/pipeline.ts
+import { spawn } from "node:child_process";
+import {
+  appendFileSync as appendFileSync2,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync3,
+  readdirSync,
+  readFileSync as readFileSync3,
+  renameSync,
+  rmSync as rmSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { basename, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -56,6 +69,8 @@ function deleteSessionState(sessionId, home = handbookHome()) {
 }
 
 // src/lib/signals.ts
+import { existsSync, appendFileSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
 function signalsFile(home = handbookHome()) {
   return join2(home, "signals.jsonl");
 }
@@ -142,11 +157,44 @@ function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */
   return signals;
 }
 
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+
+// src/lib/pipeline.ts
+function pendingDir(home = handbookHome()) {
+  return join3(home, "pending");
+}
+function enqueuePendingSignals(signals, home = handbookHome()) {
+  if (signals.length === 0) return null;
+  mkdirSync3(pendingDir(home), { recursive: true });
+  const session = signals[0].sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  const base = `${session}-${Date.now()}`;
+  let file = join3(pendingDir(home), `${base}.json`);
+  for (let i = 2; existsSync2(file); i++) {
+    file = join3(pendingDir(home), `${base}-${i}.json`);
+  }
+  writeFileSync2(file, JSON.stringify(signals));
+  return file;
+}
+function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
+  const child = spawnFn(process.execPath, [runnerScript], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+}
+
 // src/hooks/session-end.ts
 async function main() {
   const input = parseHookInput(await readStdin());
   if (!input?.session_id) return;
-  flushSessionEnd(input.session_id);
+  const signals = flushSessionEnd(input.session_id);
+  const candidates = signals.filter((s) => s.kind === "candidate");
+  if (candidates.length === 0) return;
+  enqueuePendingSignals(candidates);
+  spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
 }
 main().then(
   () => process.exit(0),

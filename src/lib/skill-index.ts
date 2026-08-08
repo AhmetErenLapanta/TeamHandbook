@@ -5,6 +5,7 @@ import { handbookHome } from "./session-state.js";
 export interface SkillSummary {
   name: string;
   description: string;
+  scope?: string;
 }
 
 export function candidatesDir(home: string = handbookHome()): string {
@@ -31,7 +32,8 @@ export function parseSkillFrontmatter(md: string): SkillSummary | null {
   const name = fields.get("name");
   const description = fields.get("description");
   if (!name || !description) return null;
-  return { name, description };
+  const scope = fields.get("scope");
+  return { name, description, ...(scope ? { scope } : {}) };
 }
 
 export function listExistingSkills(dirs: string[]): SkillSummary[] {

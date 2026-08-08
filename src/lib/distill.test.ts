@@ -180,6 +180,7 @@ describe("assembleSkillMd", () => {
     expect(parseSkillFrontmatter(md)).toEqual({
       name: "fix-flaky-npm-test",
       description: "Use when npm test fails with a stale snapshot.",
+      scope: "gitlab.x.com/ekip/bff",
     });
   });
 
