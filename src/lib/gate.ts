@@ -48,9 +48,13 @@ export function sieveSignal(
     [signal.command, signal.error, signal.resolvedCommand ?? "", ...signal.edits].join("\n"),
   );
   if (secret) return drop(signal, "secret", secret);
-  if (signal.edits.length === 0) return drop(signal, "no-file-change");
-  if (occurrences < config.repeatThreshold) {
-    return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
+  // manual (T2) signals carry explicit user intent: the detector's noise sieves
+  // (file-change requirement, repeat threshold) do not apply; the secret veto does
+  if (signal.trigger !== "manual") {
+    if (signal.edits.length === 0) return drop(signal, "no-file-change");
+    if (occurrences < config.repeatThreshold) {
+      return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
+    }
   }
   if (signal.error.length > config.maxErrorChars) return drop(signal, "oversized", "error");
   if (signal.command.length > config.maxCommandChars) return drop(signal, "oversized", "command");

@@ -1,10 +1,10 @@
 // src/cli/review.ts
 import { readFileSync as readFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
-// src/lib/queue.ts
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join as join3 } from "node:path";
+// src/lib/deliver.ts
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { join as join4 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -39,6 +39,8 @@ function parseSkillFrontmatter(md) {
 }
 
 // src/lib/queue.ts
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join as join3 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
@@ -122,6 +124,46 @@ function formatCandidateList(metas) {
   return lines.join("\n");
 }
 
+// src/lib/deliver.ts
+function soloSkillsDir(projectCwd) {
+  return join4(projectCwd, ".claude", "skills");
+}
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync) {
+  const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
+  return soloSkillsDir(origin);
+}
+function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
+  const dir = join4(candidatesDir(home), slug);
+  const meta = readCandidateMeta(dir);
+  if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
+  if (meta.status !== "pending") {
+    return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
+  }
+  const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
+  let target = join4(skillsDir, slug);
+  for (let i = 2; existsSync(target); i++) {
+    target = join4(skillsDir, `${slug}-${i}`);
+  }
+  try {
+    mkdirSync(target, { recursive: true });
+    copyFileSync(join4(dir, "SKILL.md"), join4(target, "SKILL.md"));
+    if (existsSync(join4(dir, "grounded-case.json"))) {
+      copyFileSync(join4(dir, "grounded-case.json"), join4(target, "grounded-case.json"));
+    }
+  } catch (err) {
+    return { ok: false, meta, error: `delivery failed: ${String(err)}` };
+  }
+  const updated = {
+    ...meta,
+    status: "approved",
+    decidedAt,
+    deliveredTo: target
+  };
+  writeCandidateMeta(dir, updated);
+  return { ok: true, meta: updated, deliveredTo: target };
+}
+
 // src/cli/review.ts
 function usage() {
   console.error("usage: review.js <list|show|approve|reject> [slug]");
@@ -136,11 +178,11 @@ function main() {
   }
   if (!slug || !isSafeSlug(slug)) usage();
   if (cmd === "show") {
-    const dir = join4(candidatesDir(home), slug);
+    const dir = join5(candidatesDir(home), slug);
     try {
-      console.log(readFileSync2(join4(dir, "SKILL.md"), "utf8"));
+      console.log(readFileSync2(join5(dir, "SKILL.md"), "utf8"));
       console.log("--- grounded-case.json ---");
-      console.log(readFileSync2(join4(dir, "grounded-case.json"), "utf8"));
+      console.log(readFileSync2(join5(dir, "grounded-case.json"), "utf8"));
     } catch {
       console.error(`error: no candidate named "${slug}"`);
       process.exit(1);
@@ -148,13 +190,20 @@ function main() {
     return;
   }
   if (cmd !== "approve" && cmd !== "reject") usage();
-  const result = decideCandidate(home, slug, cmd === "approve" ? "approved" : "rejected");
+  if (cmd === "approve") {
+    const result2 = approveAndDeliver(home, slug);
+    if (!result2.ok) {
+      console.error(`error: ${result2.error}`);
+      process.exit(1);
+    }
+    console.log(`Approved "${slug}" and installed it at ${result2.deliveredTo}.`);
+    return;
+  }
+  const result = decideCandidate(home, slug, "rejected");
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exit(1);
   }
-  console.log(
-    cmd === "approve" ? `Approved "${slug}". It stays in the queue; delivery (solo/team output) is the next pipeline stage.` : `Rejected "${slug}". It will not be delivered; its signal stays in the local ledger.`
-  );
+  console.log(`Rejected "${slug}". It will not be delivered; its signal stays in the local ledger.`);
 }
 main();

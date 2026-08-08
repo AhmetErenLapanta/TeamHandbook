@@ -12,8 +12,9 @@ import {
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import type { Signal } from "./signals.js";
-import { ledgerFingerprintCounts } from "./signals.js";
+import { appendSignals, ledgerFingerprintCounts } from "./signals.js";
 import { runRuleSieves } from "./gate.js";
+import type { DropReason } from "./gate.js";
 import { loadScoreConfig, runClaudeCli, scoreSignal } from "./score.js";
 import type { ClaudeRunner } from "./score.js";
 import { distillVerdict, gitRemoteUrl, loadDistillConfig, writeCandidate } from "./distill.js";
@@ -78,6 +79,7 @@ export interface PipelineSummary {
   rejected: number;
   errored: number;
   written: string[];
+  trigger?: "manual";
 }
 
 export function pipelineLogFile(home: string = handbookHome()): string {
@@ -135,6 +137,82 @@ export async function runPipeline(
   }
   appendPipelineLog(summary, home, now());
   return summary;
+}
+
+export type ManualOutcome =
+  | { stage: "sieved"; reason: DropReason; detail?: string }
+  | { stage: "gate-rejected"; total: number; threshold: number; duplicateOf?: string; rationale?: string }
+  | { stage: "error"; message: string }
+  | { stage: "written"; slug: string; gateTotal: number | null; scope: string };
+
+export async function runManualSignal(
+  signal: Signal,
+  home: string = handbookHome(),
+  deps: PipelineDeps = {},
+  now: () => string = () => new Date().toISOString(),
+): Promise<ManualOutcome> {
+  const runner = deps.runner ?? runClaudeCli;
+  const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
+  const listSkills = deps.listSkills ?? listExistingSkills;
+  const scoreConfig = loadScoreConfig(home);
+  const distillConfig = loadDistillConfig(home);
+  appendSignals([signal], home);
+  const summary: PipelineSummary = {
+    received: 1,
+    sievedOut: 0,
+    scored: 0,
+    rejected: 0,
+    errored: 0,
+    written: [],
+    trigger: "manual",
+  };
+  const finish = <T extends ManualOutcome>(outcome: T): T => {
+    appendPipelineLog(summary, home, now());
+    return outcome;
+  };
+  const { passed, dropped } = runRuleSieves([signal], home);
+  if (passed.length === 0) {
+    summary.sievedOut = 1;
+    const decision = dropped[0]!;
+    return finish({
+      stage: "sieved",
+      reason: decision.reason ?? "not-candidate",
+      ...(decision.detail ? { detail: decision.detail } : {}),
+    });
+  }
+  const occurrences = ledgerFingerprintCounts(home).get(signal.fingerprint) ?? 1;
+  const existing = listSkills(defaultSkillDirs(home, signal.cwd));
+  const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
+  summary.scored = 1;
+  if (verdict.outcome === "error") {
+    summary.errored = 1;
+    return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
+  }
+  if (verdict.outcome === "reject") {
+    summary.rejected = 1;
+    return finish({
+      stage: "gate-rejected",
+      total: verdict.result?.total ?? 0,
+      threshold: scoreConfig.threshold,
+      ...(verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}),
+      ...(verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}),
+    });
+  }
+  const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
+  if (outcome.outcome !== "distilled" || !outcome.artifact) {
+    summary.errored = 1;
+    return finish({ stage: "error", message: outcome.error ?? "distillation failed" });
+  }
+  const dir = writeCandidate(outcome.artifact, home);
+  const slug = basename(dir);
+  writeCandidateMeta(dir, candidateMetaFromArtifact(slug, outcome.artifact, verdict, now()));
+  summary.written.push(slug);
+  return finish({
+    stage: "written",
+    slug,
+    gateTotal: verdict.result?.total ?? null,
+    scope: outcome.artifact.scope,
+  });
 }
 
 export function spawnPipelineRunner(

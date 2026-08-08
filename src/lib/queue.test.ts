@@ -145,6 +145,7 @@ describe("queue", () => {
         description: "Use when npm test fails.",
         fingerprint: "abc123",
         sessionId: "s1",
+        cwd: "/repo",
         gate: {
           total: 8,
           scores: { recurrence: 2, unfindability: 2, generality: 2, durability: 1, costOfError: 1 },

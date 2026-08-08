@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { approveAndDeliver } from "../lib/deliver.js";
 import { decideCandidate, formatCandidateList, isSafeSlug, listCandidates } from "../lib/queue.js";
 import { handbookHome } from "../lib/session-state.js";
 import { candidatesDir } from "../lib/skill-index.js";
@@ -30,16 +31,21 @@ function main(): void {
     return;
   }
   if (cmd !== "approve" && cmd !== "reject") usage();
-  const result = decideCandidate(home, slug, cmd === "approve" ? "approved" : "rejected");
+  if (cmd === "approve") {
+    const result = approveAndDeliver(home, slug);
+    if (!result.ok) {
+      console.error(`error: ${result.error}`);
+      process.exit(1);
+    }
+    console.log(`Approved "${slug}" and installed it at ${result.deliveredTo}.`);
+    return;
+  }
+  const result = decideCandidate(home, slug, "rejected");
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exit(1);
   }
-  console.log(
-    cmd === "approve"
-      ? `Approved "${slug}". It stays in the queue; delivery (solo/team output) is the next pipeline stage.`
-      : `Rejected "${slug}". It will not be delivered; its signal stays in the local ledger.`,
-  );
+  console.log(`Rejected "${slug}". It will not be delivered; its signal stays in the local ledger.`);
 }
 
 main();

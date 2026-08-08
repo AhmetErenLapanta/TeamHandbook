@@ -7,13 +7,14 @@ import {
   enqueuePendingSignals,
   pendingDir,
   pipelineLogFile,
+  runManualSignal,
   runPipeline,
   spawnPipelineRunner,
 } from "./pipeline.js";
 import { readCounters } from "./gate.js";
 import { readCandidateMeta } from "./queue.js";
 import type { ClaudeRunner } from "./score.js";
-import { appendSignals } from "./signals.js";
+import { appendSignals, ledgerFingerprintCounts } from "./signals.js";
 import type { Signal } from "./signals.js";
 import { candidatesDir } from "./skill-index.js";
 import { writeFileSync } from "node:fs";
@@ -198,6 +199,85 @@ describe("runPipeline", () => {
       },
     });
     expect(seenDirs).toEqual([[candidatesDir(home), join("/repo", ".claude", "skills")]]);
+  });
+});
+
+describe("runManualSignal", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function manual(overrides: Partial<Signal> = {}): Signal {
+    return candidate({ trigger: "manual", edits: [], ...overrides });
+  }
+
+  it("writes a first-occurrence manual signal without edits into the queue", async () => {
+    const outcome = await runManualSignal(manual(), home, {
+      runner: fakeRunner(),
+      remoteUrl: () => null,
+    });
+    expect(outcome).toEqual({
+      stage: "written",
+      slug: "fix-npm-test",
+      gateTotal: 8,
+      scope: "team",
+    });
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+  });
+
+  it("appends the manual signal to the ledger and marks the log line as manual", async () => {
+    await runManualSignal(manual(), home, { runner: fakeRunner(), remoteUrl: () => null });
+    expect(ledgerFingerprintCounts(home).get("abc123")).toBe(1);
+    const line = JSON.parse(readFileSync(pipelineLogFile(home), "utf8").trim());
+    expect(line).toMatchObject({ trigger: "manual", received: 1, written: ["fix-npm-test"] });
+  });
+
+  it("vetoes a manual signal on secret without calling the model", async () => {
+    const calls: string[] = [];
+    const outcome = await runManualSignal(
+      manual({ error: "auth failed: api_key=abcd1234efgh5678" }),
+      home,
+      { runner: fakeRunner(calls), remoteUrl: () => null },
+    );
+    expect(outcome).toMatchObject({ stage: "sieved", reason: "secret" });
+    expect(calls).toEqual([]);
+    expect(readCounters(home).redactionBlocked).toBe(1);
+  });
+
+  it("returns the gate verdict with duplicate and rationale details on rejection", async () => {
+    const duplicate = JSON.stringify({
+      scores: { recurrence: 2, unfindability: 2, generality: 2, durability: 2, costOfError: 2 },
+      rationale: "already covered",
+      duplicateOf: "fix-npm-test",
+    });
+    const outcome = await runManualSignal(manual(), home, {
+      runner: async () => duplicate,
+      remoteUrl: () => null,
+    });
+    expect(outcome).toEqual({
+      stage: "gate-rejected",
+      total: 10,
+      threshold: 7,
+      duplicateOf: "fix-npm-test",
+      rationale: "already covered",
+    });
+  });
+
+  it("fails closed when the model call errors", async () => {
+    const outcome = await runManualSignal(manual(), home, {
+      runner: async () => {
+        throw new Error("claude unavailable");
+      },
+      remoteUrl: () => null,
+    });
+    expect(outcome).toMatchObject({ stage: "error" });
+    expect(existsSync(candidatesDir(home))).toBe(false);
   });
 });
 

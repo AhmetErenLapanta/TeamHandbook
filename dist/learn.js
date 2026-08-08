@@ -1,3 +1,103 @@
+// src/lib/hook-io.ts
+async function readStdin(stream = process.stdin) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// src/lib/learn.ts
+import { resolve } from "node:path";
+
+// src/lib/normalize.ts
+import { createHash } from "node:crypto";
+var ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+var MAX_LINES = 40;
+var MAX_CHARS = 2e3;
+function normalizeErrorText(text) {
+  return text.replace(ANSI_RE, "").split("\n").slice(0, MAX_LINES).join("\n").replace(/\/(?:Users|home|private|tmp|var)\/[^\s:'"()]+/g, "<path>").replace(/0x[0-9a-fA-F]+/g, "<hex>").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>").replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>").replace(/\b\d+(?:\.\d+)?\s?m?s\b/g, "<dur>").replace(/:\d+(?::\d+)?\b/g, ":<n>").replace(/\bline \d+/gi, "line <n>").replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim().slice(0, MAX_CHARS);
+}
+var SUBCOMMAND_RE = /^[a-z][a-z0-9:_-]*$/i;
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "time", "env", "command"]);
+var SUB_WITH_ARG = /* @__PURE__ */ new Set(["run", "exec", "x"]);
+function commandFamily(command) {
+  const segments = command.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter((s) => s && !/^cd\s/.test(s) && s !== "cd");
+  const segment = segments[0] ?? "";
+  const tokens = segment.split(/\s+/).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) && !WRAPPERS.has(t));
+  const first = tokens[0];
+  if (!first) return "unknown";
+  const cmd = first.split("/").pop() ?? first;
+  const parts = [cmd];
+  const sub = tokens[1];
+  if (sub && SUBCOMMAND_RE.test(sub)) {
+    parts.push(sub);
+    const arg = tokens[2];
+    if (SUB_WITH_ARG.has(sub) && arg && SUBCOMMAND_RE.test(arg)) {
+      parts.push(arg);
+    }
+  }
+  return parts.join(" ");
+}
+function fingerprint(family, normalizedError) {
+  return createHash("sha256").update(`${family}\0${normalizedError}`).digest("hex").slice(0, 16);
+}
+
+// src/lib/learn.ts
+function parseLearnPayload(raw, defaultCwd = process.cwd()) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { error: "payload is not valid JSON" };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { error: "payload must be a JSON object" };
+  }
+  const p = parsed;
+  if (typeof p.command !== "string" || !p.command.trim()) {
+    return { error: 'payload needs a non-empty "command" string (the command that failed)' };
+  }
+  if (typeof p.error !== "string" || !p.error.trim()) {
+    return { error: 'payload needs a non-empty "error" string (the error output)' };
+  }
+  if (p.edits !== void 0 && (!Array.isArray(p.edits) || p.edits.some((e) => typeof e !== "string"))) {
+    return { error: '"edits" must be an array of file paths' };
+  }
+  if (p.resolvedCommand !== void 0 && typeof p.resolvedCommand !== "string") {
+    return { error: '"resolvedCommand" must be a string' };
+  }
+  const cwd = typeof p.cwd === "string" && p.cwd.trim() ? p.cwd : defaultCwd;
+  return {
+    payload: {
+      command: p.command.trim(),
+      error: p.error,
+      ...typeof p.resolvedCommand === "string" && p.resolvedCommand.trim() ? { resolvedCommand: p.resolvedCommand.trim() } : {},
+      edits: (p.edits ?? []).filter((e) => e.trim()).map((e) => resolve(cwd, e)),
+      cwd,
+      sessionId: typeof p.sessionId === "string" && p.sessionId.trim() ? p.sessionId : "manual"
+    }
+  };
+}
+function signalFromLearnPayload(payload, ts) {
+  const error = normalizeErrorText(payload.error);
+  const family = commandFamily(payload.command);
+  return {
+    ts,
+    sessionId: payload.sessionId,
+    kind: "candidate",
+    fingerprint: fingerprint(family, error),
+    family,
+    command: payload.command,
+    error,
+    cwd: payload.cwd,
+    count: 1,
+    edits: payload.edits,
+    ...payload.resolvedCommand ? { resolvedCommand: payload.resolvedCommand, resolvedAt: ts } : {},
+    trigger: "manual"
+  };
+}
+
 // src/lib/pipeline.ts
 import {
   appendFileSync as appendFileSync2,
@@ -43,6 +143,12 @@ function ledgerFingerprintCounts(home = handbookHome()) {
     }
   }
   return counts;
+}
+function appendSignals(signals, home = handbookHome()) {
+  if (signals.length === 0) return;
+  mkdirSync(home, { recursive: true });
+  const lines = signals.map((s) => JSON.stringify(s)).join("\n") + "\n";
+  appendFileSync(signalsFile(home), lines);
 }
 
 // src/lib/gate.ts
@@ -512,34 +618,6 @@ function candidateMetaFromArtifact(slug, artifact, verdict, createdAt) {
 }
 
 // src/lib/pipeline.ts
-function pendingDir(home = handbookHome()) {
-  return join8(home, "pending");
-}
-function drainPendingSignals(home = handbookHome()) {
-  let entries;
-  try {
-    entries = readdirSync3(pendingDir(home));
-  } catch {
-    return [];
-  }
-  const signals = [];
-  for (const entry of entries.filter((e) => e.endsWith(".json")).sort()) {
-    const file = join8(pendingDir(home), entry);
-    const claimed = `${file}.claimed-${process.pid}`;
-    try {
-      renameSync(file, claimed);
-    } catch {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(readFileSync7(claimed, "utf8"));
-      if (Array.isArray(parsed)) signals.push(...parsed);
-    } catch {
-    }
-    rmSync(claimed, { force: true });
-  }
-  return signals;
-}
 function pipelineLogFile(home = handbookHome()) {
   return join8(home, "pipeline.log");
 }
@@ -547,56 +625,112 @@ function appendPipelineLog(summary, home, ts) {
   mkdirSync4(home, { recursive: true });
   appendFileSync2(pipelineLogFile(home), JSON.stringify({ ts, ...summary }) + "\n");
 }
-async function runPipeline(signals, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+async function runManualSignal(signal, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   const runner = deps.runner ?? runClaudeCli;
   const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
   const listSkills = deps.listSkills ?? listExistingSkills;
   const scoreConfig = loadScoreConfig(home);
   const distillConfig = loadDistillConfig(home);
-  const { passed, dropped } = runRuleSieves(signals, home);
-  const counts = ledgerFingerprintCounts(home);
+  appendSignals([signal], home);
   const summary = {
-    received: signals.length,
-    sievedOut: dropped.length,
+    received: 1,
+    sievedOut: 0,
     scored: 0,
     rejected: 0,
     errored: 0,
-    written: []
+    written: [],
+    trigger: "manual"
   };
-  for (const signal of passed) {
-    const occurrences = counts.get(signal.fingerprint) ?? 0;
-    const existing = listSkills(defaultSkillDirs(home, signal.cwd));
-    const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
-    summary.scored += 1;
-    if (verdict.outcome === "reject") {
-      summary.rejected += 1;
-      continue;
-    }
-    if (verdict.outcome === "error") {
-      summary.errored += 1;
-      continue;
-    }
-    const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
-    if (outcome.outcome !== "distilled" || !outcome.artifact) {
-      summary.errored += 1;
-      continue;
-    }
-    const dir = writeCandidate(outcome.artifact, home);
-    const slug = basename2(dir);
-    writeCandidateMeta(dir, candidateMetaFromArtifact(slug, outcome.artifact, verdict, now()));
-    summary.written.push(slug);
+  const finish = (outcome2) => {
+    appendPipelineLog(summary, home, now());
+    return outcome2;
+  };
+  const { passed, dropped } = runRuleSieves([signal], home);
+  if (passed.length === 0) {
+    summary.sievedOut = 1;
+    const decision = dropped[0];
+    return finish({
+      stage: "sieved",
+      reason: decision.reason ?? "not-candidate",
+      ...decision.detail ? { detail: decision.detail } : {}
+    });
   }
-  appendPipelineLog(summary, home, now());
-  return summary;
+  const occurrences = ledgerFingerprintCounts(home).get(signal.fingerprint) ?? 1;
+  const existing = listSkills(defaultSkillDirs(home, signal.cwd));
+  const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
+  summary.scored = 1;
+  if (verdict.outcome === "error") {
+    summary.errored = 1;
+    return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
+  }
+  if (verdict.outcome === "reject") {
+    summary.rejected = 1;
+    return finish({
+      stage: "gate-rejected",
+      total: verdict.result?.total ?? 0,
+      threshold: scoreConfig.threshold,
+      ...verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {},
+      ...verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}
+    });
+  }
+  const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
+  if (outcome.outcome !== "distilled" || !outcome.artifact) {
+    summary.errored = 1;
+    return finish({ stage: "error", message: outcome.error ?? "distillation failed" });
+  }
+  const dir = writeCandidate(outcome.artifact, home);
+  const slug = basename2(dir);
+  writeCandidateMeta(dir, candidateMetaFromArtifact(slug, outcome.artifact, verdict, now()));
+  summary.written.push(slug);
+  return finish({
+    stage: "written",
+    slug,
+    gateTotal: verdict.result?.total ?? null,
+    scope: outcome.artifact.scope
+  });
 }
 
-// src/cli/run-pipeline.ts
+// src/cli/learn.ts
+function describeSieve(reason, detail) {
+  if (reason === "secret") {
+    return "Dropped: the case contains secret-like content; nothing was stored.";
+  }
+  if (reason === "oversized") {
+    return `Dropped by rule sieve: the ${detail ?? "case"} is too large to distill.`;
+  }
+  return `Dropped by rule sieve (${reason}${detail ? `: ${detail}` : ""}).`;
+}
 async function main() {
-  const signals = drainPendingSignals();
-  if (signals.length === 0) return;
-  await runPipeline(signals);
+  const { payload, error } = parseLearnPayload(await readStdin());
+  if (!payload) {
+    console.error(`error: ${error}`);
+    return 2;
+  }
+  const signal = signalFromLearnPayload(payload, (/* @__PURE__ */ new Date()).toISOString());
+  const outcome = await runManualSignal(signal);
+  switch (outcome.stage) {
+    case "sieved":
+      console.log(describeSieve(outcome.reason, outcome.detail));
+      return 0;
+    case "gate-rejected":
+      console.log(
+        outcome.duplicateOf ? `Gate rejected the candidate as a duplicate of existing skill "${outcome.duplicateOf}".` : `Gate rejected the candidate (score ${outcome.total}/10, threshold ${outcome.threshold}).${outcome.rationale ? ` Rationale: ${outcome.rationale}` : ""}`
+      );
+      return 0;
+    case "error":
+      console.error(`error: ${outcome.message}`);
+      return 1;
+    case "written":
+      console.log(
+        `Candidate "${outcome.slug}" written (scope: ${outcome.scope}${outcome.gateTotal !== null ? `, gate ${outcome.gateTotal}/10` : ""}). Run /handbook:review to approve or reject it.`
+      );
+      return 0;
+  }
 }
 main().then(
-  () => process.exit(0),
-  () => process.exit(1)
+  (code) => process.exit(code),
+  (err) => {
+    console.error(`error: ${String(err)}`);
+    process.exit(1);
+  }
 );
