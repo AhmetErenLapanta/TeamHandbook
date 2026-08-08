@@ -130,18 +130,17 @@ This plugin's hooks read your session, so this matters and is worth stating plai
 
 ## Honest limitations
 
-- **The automatic-capture path is not yet empirically confirmed against a real
-  Claude Code hook payload.** The exact `PostToolUse` payload shape is strongly
-  indicated but was not verifiable in a headless test, so it's verified by
-  dogfooding. The code handles every plausible shape defensively, and
-  `/handbook:status` shows `tool calls seen / failures captured` counters — if
-  failures-captured stays at 0 while tool-calls climbs, set `TEAMHANDBOOK_DEBUG=1`
-  and inspect a real payload in `~/.teamhandbook/debug/`. This is the one thing to
-  watch on first use.
 - Promotion requires **recurrence** (a one-off error→fix won't become a skill);
-  this is deliberate — precision over recall for v1.
+  this is deliberate — precision over recall for v1. It also means capture is
+  conservative: TeamHandbook learns the mistakes your team makes *more than once*.
+- Capture is **command-fingerprint based**. It notices a failing command followed
+  by an edit and a passing re-run of the same command family. Lessons that don't
+  surface as a command failure (a silent logic bug, a design decision) aren't
+  caught; `/handbook:learn` is the manual escape hatch for those.
 - v1 produces **skills only**. Routing lessons to tests/lint rules/`AGENTS.md`
   lines is future work.
+- `/handbook:status` shows `tool calls seen / failures captured / pairs resolved`
+  counters so you can confirm capture is working at a glance.
 
 ## Team setup
 

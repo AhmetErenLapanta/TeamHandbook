@@ -24,5 +24,7 @@ Initial release.
 - **Privacy**: secret redaction before any write; raw payload dumps are opt-in
   (`TEAMHANDBOOK_DEBUG`); no telemetry.
 
-Known limitation: the automatic-capture path's hook-payload assumption is verified
-by dogfooding rather than a headless test — see the README's "Honest limitations".
+The capture path is verified end-to-end against real Claude Code: failures arrive
+as `PostToolUseFailure`, successes as `PostToolUse` with no exit code, and a
+fail→edit→pass sequence produces a candidate. See the README's "Honest limitations"
+for what capture does and doesn't cover.

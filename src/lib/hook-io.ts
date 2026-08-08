@@ -5,7 +5,11 @@ export interface HookInput {
   hook_event_name?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  // PostToolUse (success) carries tool_response; PostToolUseFailure carries error +
+  // is_interrupt and no tool_response.
   tool_response?: unknown;
+  error?: string;
+  is_interrupt?: boolean;
 }
 
 export async function readStdin(stream: NodeJS.ReadableStream = process.stdin): Promise<string> {
