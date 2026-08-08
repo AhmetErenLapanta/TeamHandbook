@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -97,6 +97,26 @@ describe("pending hand-off", () => {
     expect(drained).toHaveLength(1);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
+
+  it("reclaims a stale claimed batch left by a crashed runner", () => {
+    enqueuePendingSignals([candidate()], home);
+    const entry = readdirSync(pendingDir(home))[0]!;
+    const claimed = join(pendingDir(home), `${entry}.claimed-99999`);
+    renameSync(join(pendingDir(home), entry), claimed);
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimed, old, old);
+    const drained = drainPendingSignals(home);
+    expect(drained).toHaveLength(1);
+    expect(readdirSync(pendingDir(home))).toEqual([]);
+  });
+
+  it("leaves a fresh claim alone (its runner may still be alive)", () => {
+    enqueuePendingSignals([candidate()], home);
+    const entry = readdirSync(pendingDir(home))[0]!;
+    renameSync(join(pendingDir(home), entry), join(pendingDir(home), `${entry}.claimed-99999`));
+    expect(drainPendingSignals(home)).toEqual([]);
+    expect(readdirSync(pendingDir(home))).toHaveLength(1);
+  });
 });
 
 describe("runPipeline", () => {
@@ -124,6 +144,9 @@ describe("runPipeline", () => {
       rejected: 0,
       errored: 0,
       written: ["fix-npm-test"],
+      outcomes: [
+        { fingerprint: "abc123", outcome: "promote", total: 8, rationale: "recurring and unfindable" },
+      ],
     });
     const dir = join(candidatesDir(home), "fix-npm-test");
     expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toContain("name: fix-npm-test");

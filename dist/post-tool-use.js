@@ -69,8 +69,8 @@ var INTERRUPT_CODES = /* @__PURE__ */ new Set([124, 130, 137, 143, 144, 145]);
 function extractExitCode(response) {
   if (Array.isArray(response)) return extractExitCode(contentBlocksText(response));
   if (typeof response === "string") {
-    const m2 = response.match(EXIT_CODE_TEXT);
-    return m2 ? Number(m2[1]) : void 0;
+    const m = response.match(EXIT_CODE_TEXT);
+    return m ? Number(m[1]) : void 0;
   }
   if (typeof response !== "object" || response === null) return void 0;
   const record = response;
@@ -78,9 +78,7 @@ function extractExitCode(response) {
     const value = record[key];
     if (typeof value === "number" && Number.isInteger(value)) return value;
   }
-  const text = [record["stderr"], record["stdout"], record["text"]].filter((v) => typeof v === "string").join("\n");
-  const m = text.match(EXIT_CODE_TEXT);
-  return m ? Number(m[1]) : void 0;
+  return void 0;
 }
 function bashFailure(input) {
   if (input.hook_event_name === "PostToolUseFailure") {
@@ -99,13 +97,14 @@ function bashFailure(input) {
 }
 function isBashSuccess(input) {
   if (input.hook_event_name === "PostToolUseFailure") return false;
-  const code = extractExitCode(input.tool_response);
-  if (code !== void 0 && code !== 0) return false;
+  if (typeof input.error === "string" && input.error.trim()) return false;
   const r = input.tool_response;
-  if (typeof r === "object" && r !== null && r["interrupted"] === true) {
-    return false;
-  }
-  return true;
+  const code = extractExitCode(r);
+  if (code !== void 0) return code === 0;
+  if (typeof r !== "object" || r === null || Array.isArray(r)) return false;
+  const record = r;
+  const hasResultShape = ["stdout", "stderr", "interrupted"].some((k) => k in record);
+  return hasResultShape && record["interrupted"] !== true;
 }
 function contentBlocksText(response) {
   if (!Array.isArray(response)) return "";
@@ -128,7 +127,7 @@ function errorTextFromResponse(response) {
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, rmSync as rmSync2 } from "node:fs";
+import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -179,6 +178,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
 function saveSessionState(state, home = handbookHome()) {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 function recordFailure(state, failure, at = (/* @__PURE__ */ new Date()).toISOString()) {
   const existing = state.openErrors.find((e) => e.fingerprint === failure.fingerprint);
   if (existing) {
@@ -252,20 +252,20 @@ function captureFileEdit(input, home = handbookHome()) {
   return true;
 }
 function captureBashSuccess(input, home = handbookHome()) {
-  if (input.tool_name !== "Bash" || !input.session_id) return false;
-  if (!isBashSuccess(input)) return false;
+  if (input.tool_name !== "Bash" || !input.session_id) return 0;
+  if (!isBashSuccess(input)) return 0;
   const command = bashCommand(input);
-  if (!command) return false;
+  if (!command) return 0;
   const state = loadSessionState(input.session_id, home);
-  if (state.openErrors.length === 0) return false;
+  if (state.openErrors.length === 0) return 0;
   const resolved = resolveOpenErrors(state, commandFamily(command), command, input.cwd ?? "");
-  if (resolved.length === 0) return false;
+  if (resolved.length === 0) return 0;
   saveSessionState(state, home);
-  return true;
+  return resolved.length;
 }
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -298,7 +298,7 @@ function maybeDumpPayload(raw, home = handbookHome()) {
   try {
     const dir = join2(home, "debug");
     mkdirSync2(dir, { recursive: true });
-    const n = readdirSync(dir).length;
+    const n = readdirSync2(dir).length;
     if (n >= DEBUG_DUMP_CAP) return;
     writeFileSync2(join2(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
   } catch {
@@ -316,8 +316,9 @@ async function main() {
     bumpCounter("bashFailuresCaptured");
     return;
   }
-  if (captureBashSuccess(input)) {
-    bumpCounter("pairsResolved");
+  const resolved = captureBashSuccess(input);
+  if (resolved > 0) {
+    bumpCounter("pairsResolved", handbookHome(), resolved);
     return;
   }
   captureFileEdit(input);

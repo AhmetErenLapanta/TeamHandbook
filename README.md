@@ -100,6 +100,23 @@ same command        │     · no secret (veto)          team: PR to the skills 
 Output is a **spec-compliant [Agent Skill](https://agentskills.io)**, so it isn't
 Claude-only — the corpus is portable across the ~40 tools that read `SKILL.md`.
 
+## Knowing it's working
+
+TeamHandbook stays out of your way, but never leaves you wondering whether it's alive:
+
+- **First session after install**, it introduces itself once:
+  `TeamHandbook is active — watching this machine for error→fix moments worth keeping…`
+- **When it captured something** since your last session, a one-line heartbeat:
+  `handbook: since your last session — 3 failures watched, 1 error→fix pair captured.`
+- **When a candidate is ready**, the review prompt:
+  `handbook: 1 candidate skill is awaiting your review — run /handbook:review…`
+- Nothing happened → it says nothing. Disable entirely with
+  `~/.teamhandbook/config.json` → `{"notify": {"sessionStart": false}}` (or just the
+  heartbeat via `{"notify": {"heartbeat": false}}`).
+
+`/handbook:status` shows the full picture anytime: detector counters, ledger,
+queue, and the last gate run.
+
 ## Commands
 
 | Command | What it does |

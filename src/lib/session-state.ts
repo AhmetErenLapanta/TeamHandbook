@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { writeFileAtomic } from "./fs-atomic.js";
 
 // An edit is attributed to an open error only if that error was seen within this
@@ -69,6 +69,37 @@ export function saveSessionState(state: SessionState, home: string = handbookHom
 
 export function deleteSessionState(sessionId: string, home: string = handbookHome()): void {
   rmSync(sessionFile(sessionId, home), { force: true });
+}
+
+// SessionEnd never fires on a terminal kill / crash / power loss, so dead session
+// files would otherwise accumulate forever. Sessions this old are unrecoverable;
+// drop them.
+const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function cleanupStaleSessionFiles(
+  home: string = handbookHome(),
+  now: number = Date.now(),
+): number {
+  const dir = join(home, "sessions");
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    try {
+      const file = join(dir, entry);
+      if (now - statSync(file).mtimeMs > SESSION_MAX_AGE_MS) {
+        rmSync(file, { force: true });
+        removed += 1;
+      }
+    } catch {
+      // raced with a live session; leave it
+    }
+  }
+  return removed;
 }
 
 export function recordFailure(

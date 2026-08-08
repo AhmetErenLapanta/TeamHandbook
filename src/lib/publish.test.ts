@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPrBody, buildPrTitle, manualPrUrl, publishCandidate } from "./publish.js";
+import { runGit } from "./init.js";
+import type { GitRunner } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import type { GroundedCase } from "./distill.js";
 
@@ -201,7 +203,7 @@ describe("publishCandidate", () => {
     expect(result.error).toContain("git clone failed");
   });
 
-  it("fails when the push is rejected", () => {
+  it("suffixes past a stale remote branch instead of locking the slug", () => {
     remote = teamRepo();
     const divergent = mkdtempSync(join(tmpdir(), "handbook-divergent-"));
     try {
@@ -220,6 +222,23 @@ describe("publishCandidate", () => {
       meta(),
       { repoUrl: remote, marketplaceName: "t" },
       undefined,
+      () => "",
+    );
+    expect(result.ok).toBe(true);
+    expect(result.branch).toBe("handbook/fix-npm-test-2");
+  });
+
+  it("fails with git's actual reason when the push is rejected", () => {
+    remote = teamRepo();
+    const failingGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") throw new Error("git push failed: remote: protected branch");
+      return runGit(args, cwd);
+    };
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      failingGit,
       () => "",
     );
     expect(result.ok).toBe(false);

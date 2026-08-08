@@ -1,6 +1,7 @@
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
 import { captureBashFailure, captureBashSuccess, captureFileEdit } from "../lib/capture.js";
 import { bumpCounter, maybeDumpPayload } from "../lib/counters.js";
+import { handbookHome } from "../lib/session-state.js";
 
 async function main(): Promise<void> {
   const raw = await readStdin();
@@ -12,8 +13,9 @@ async function main(): Promise<void> {
     bumpCounter("bashFailuresCaptured");
     return;
   }
-  if (captureBashSuccess(input)) {
-    bumpCounter("pairsResolved");
+  const resolved = captureBashSuccess(input);
+  if (resolved > 0) {
+    bumpCounter("pairsResolved", handbookHome(), resolved);
     return;
   }
   captureFileEdit(input);

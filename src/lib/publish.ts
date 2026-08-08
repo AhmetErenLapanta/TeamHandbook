@@ -127,6 +127,14 @@ export function publishCandidate(
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) };
   }
+  // read the artifact before any git work: a corrupted candidate must surface as
+  // its own error, not masquerade as "git push failed"
+  let candidateSkillMd: string;
+  try {
+    candidateSkillMd = readFileSync(join(candidateDir, "SKILL.md"), "utf8");
+  } catch {
+    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
+  }
   const workdir = mkdtempSync(join(tmpdir(), "handbook-publish-"));
   const repoDir = join(workdir, "repo");
   try {
@@ -135,7 +143,27 @@ export function publishCandidate(
     } catch (err) {
       return { ok: false, error: `git clone failed (is the team repo reachable?): ${String(err)}` };
     }
-    const slug = uniqueSlug(meta.slug, (s) => existsSync(join(repoDir, "skills", s)));
+    // A previous approve may have pushed handbook/<slug> whose PR is still open
+    // (or was abandoned): the skills/ dir check alone would reuse that branch name
+    // and the push would be rejected non-fast-forward, locking the slug forever.
+    // Suffix past remote branches too.
+    let remoteBranches = new Set<string>();
+    try {
+      const out = git(["ls-remote", "--heads", "origin"], repoDir);
+      remoteBranches = new Set(
+        String(out ?? "")
+          .split("\n")
+          .map((line) => line.split("\t")[1] ?? "")
+          .filter(Boolean)
+          .map((ref) => ref.replace("refs/heads/", "")),
+      );
+    } catch {
+      // offline check is best-effort; the push itself still reports failures
+    }
+    const slug = uniqueSlug(
+      meta.slug,
+      (s) => existsSync(join(repoDir, "skills", s)) || remoteBranches.has(`handbook/${s}`),
+    );
     const branch = `handbook/${slug}`;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
@@ -144,10 +172,9 @@ export function publishCandidate(
       mkdirSync(join(repoDir, skillDir), { recursive: true });
       // Keep the SKILL.md name in sync with a suffixed slug so it doesn't shadow
       // the skill it collided with.
-      const skillMd = readFileSync(join(candidateDir, "SKILL.md"), "utf8");
       writeFileSync(
         join(repoDir, skillDir, "SKILL.md"),
-        slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug),
+        slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug),
       );
       if (existsSync(join(candidateDir, "grounded-case.json"))) {
         copyFileSync(

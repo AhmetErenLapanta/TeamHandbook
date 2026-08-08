@@ -16,6 +16,7 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
 import { readFileSync } from "node:fs";
@@ -108,7 +109,16 @@ function hostFromUrl(url) {
   return normalized.slice(0, normalized.indexOf("/"));
 }
 function runGit(args, cwd) {
-  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  try {
+    return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  } catch (err) {
+    const stderr = err?.stderr;
+    if (typeof stderr === "string" && stderr.trim()) {
+      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
+      throw new Error(`git ${args[0]} failed: ${tail}`);
+    }
+    throw err;
+  }
 }
 
 // src/lib/publish.ts
@@ -196,6 +206,12 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) };
   }
+  let candidateSkillMd;
+  try {
+    candidateSkillMd = readFileSync2(join4(candidateDir, "SKILL.md"), "utf8");
+  } catch {
+    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
+  }
   const workdir = mkdtempSync(join4(tmpdir(), "handbook-publish-"));
   const repoDir = join4(workdir, "repo");
   try {
@@ -204,17 +220,27 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     } catch (err) {
       return { ok: false, error: `git clone failed (is the team repo reachable?): ${String(err)}` };
     }
-    const slug = uniqueSlug(meta.slug, (s) => existsSync(join4(repoDir, "skills", s)));
+    let remoteBranches = /* @__PURE__ */ new Set();
+    try {
+      const out = git(["ls-remote", "--heads", "origin"], repoDir);
+      remoteBranches = new Set(
+        String(out ?? "").split("\n").map((line) => line.split("	")[1] ?? "").filter(Boolean).map((ref) => ref.replace("refs/heads/", ""))
+      );
+    } catch {
+    }
+    const slug = uniqueSlug(
+      meta.slug,
+      (s) => existsSync(join4(repoDir, "skills", s)) || remoteBranches.has(`handbook/${s}`)
+    );
     const branch = `handbook/${slug}`;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
       mkdirSync(join4(repoDir, skillDir), { recursive: true });
-      const skillMd = readFileSync2(join4(candidateDir, "SKILL.md"), "utf8");
       writeFileSync(
         join4(repoDir, skillDir, "SKILL.md"),
-        slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug)
+        slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
       );
       if (existsSync(join4(candidateDir, "grounded-case.json"))) {
         copyFileSync(
@@ -368,8 +394,8 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   const slug = uniqueSlug(meta.slug, (s) => existsSync2(join6(skillsDir, s)));
   const target = join6(skillsDir, slug);
   try {
-    mkdirSync2(target, { recursive: true });
     const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
+    mkdirSync2(target, { recursive: true });
     writeFileSync3(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync2(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
@@ -404,11 +430,15 @@ function main() {
     const dir = join7(candidatesDir(home), slug);
     try {
       console.log(readFileSync5(join7(dir, "SKILL.md"), "utf8"));
-      console.log("--- grounded-case.json ---");
-      console.log(readFileSync5(join7(dir, "grounded-case.json"), "utf8"));
     } catch {
       console.error(`error: no candidate named "${slug}"`);
       process.exit(1);
+    }
+    console.log("--- grounded-case.json ---");
+    try {
+      console.log(readFileSync5(join7(dir, "grounded-case.json"), "utf8"));
+    } catch {
+      console.log("(this candidate has no grounded case)");
     }
     return;
   }

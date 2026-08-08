@@ -118,9 +118,19 @@ import {
   readFileSync as readFileSync7,
   renameSync as renameSync2,
   rmSync as rmSync2,
+  statSync,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { basename as basename2, join as join8 } from "node:path";
+import { basename as basename2, join as join9 } from "node:path";
+
+// src/lib/init.ts
+import { homedir as homedir2, tmpdir } from "node:os";
+import { dirname as dirname2, join as join5 } from "node:path";
+
+// src/lib/distill.ts
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join4 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -147,185 +157,23 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
-
-// src/lib/signals.ts
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync2 } from "node:fs";
-import { join as join3 } from "node:path";
-
-// src/lib/secrets.ts
-var SECRET_PATTERNS = [
-  { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
-  { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
-  { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
-  { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
-  { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
-  { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
-  { name: "openai-key", re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/ },
-  { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
-  { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
-  { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
-  { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
-  {
-    // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
-    // which \b cannot match between two word chars.
-    name: "assigned-secret",
-    re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i
-  }
-];
-function detectSecret(text) {
-  for (const { name, re } of SECRET_PATTERNS) {
-    if (re.test(text)) return name;
-  }
-  return null;
-}
-function signalSecret(fields) {
-  return detectSecret(
-    [fields.command ?? "", fields.error ?? "", fields.resolvedCommand ?? "", ...fields.edits ?? []].join(
-      "\n"
-    )
-  );
-}
-
-// src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync, readFileSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
-var FIELDS = [
-  "redactionBlocked",
-  "postToolUse",
-  "bashFailuresCaptured",
-  "pairsResolved"
-];
-function countersFile(home = handbookHome()) {
-  return join2(home, "counters.json");
-}
-function readCounters(home = handbookHome()) {
-  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
-  try {
-    const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
-    for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
-  } catch {
-  }
-  return base;
-}
-function bumpCounter(field, home = handbookHome(), by = 1) {
-  const counters = readCounters(home);
-  counters[field] += by;
-  mkdirSync2(home, { recursive: true });
-  writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
-  return counters;
-}
-function incrementRedactionBlocked(home = handbookHome(), by = 1) {
-  return bumpCounter("redactionBlocked", home, by);
-}
-
-// src/lib/signals.ts
-function sanitizeSignalsForPersistence(signals) {
-  let redacted = 0;
-  const clean = signals.map((s) => {
-    if (s.secretRedacted || !signalSecret(s)) return s;
-    redacted += 1;
-    return {
-      ts: s.ts,
-      sessionId: s.sessionId,
-      kind: "weak",
-      fingerprint: s.fingerprint,
-      family: "",
-      command: "",
-      error: "",
-      cwd: "",
-      count: s.count,
-      edits: [],
-      secretRedacted: true
-    };
-  });
-  return { clean, redacted };
-}
-function signalsFile(home = handbookHome()) {
-  return join3(home, "signals.jsonl");
-}
-function ledgerFingerprintCounts(home = handbookHome()) {
-  const counts = /* @__PURE__ */ new Map();
-  let raw;
-  try {
-    raw = readFileSync2(signalsFile(home), "utf8");
-  } catch {
-    return counts;
-  }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (typeof parsed?.fingerprint === "string") {
-        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
-      }
-    } catch {
-    }
-  }
-  return counts;
-}
-function appendSignals(signals, home = handbookHome()) {
-  if (signals.length === 0) return;
-  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
-  if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync3(home, { recursive: true });
-  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
-  appendFileSync(signalsFile(home), lines);
-}
-
-// src/lib/gate.ts
-var defaultGateConfig = {
-  repeatThreshold: 2,
-  maxErrorChars: 4e3,
-  maxCommandChars: 1e3,
-  maxEditCount: 10
-};
-function drop(signal, reason, detail) {
-  return { signal, pass: false, reason, detail };
-}
-function sieveSignal(signal, occurrences, config = defaultGateConfig) {
-  if (signal.kind !== "candidate") return drop(signal, "not-candidate");
-  const secret = signalSecret(signal);
-  if (secret) return drop(signal, "secret", secret);
-  if (signal.trigger !== "manual") {
-    if (signal.edits.length === 0) return drop(signal, "no-file-change");
-    if (occurrences < config.repeatThreshold) {
-      return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
-    }
-  }
-  if (signal.error.length > config.maxErrorChars) return drop(signal, "oversized", "error");
-  if (signal.command.length > config.maxCommandChars) return drop(signal, "oversized", "command");
-  if (signal.edits.length > config.maxEditCount) return drop(signal, "oversized", "edits");
-  return { signal, pass: true };
-}
-function runRuleSieves(signals, home = handbookHome(), config = defaultGateConfig) {
-  const counts = ledgerFingerprintCounts(home);
-  const decisions = signals.map((s) => sieveSignal(s, counts.get(s.fingerprint) ?? 0, config));
-  const secretDrops = decisions.filter((d) => d.reason === "secret").length;
-  if (secretDrops > 0) incrementRedactionBlocked(home, secretDrops);
-  return {
-    passed: decisions.filter((d) => d.pass).map((d) => d.signal),
-    dropped: decisions.filter((d) => !d.pass)
-  };
-}
-
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { readFileSync as readFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync3(join4(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
+
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 // src/lib/prompt-safety.ts
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
@@ -461,19 +309,14 @@ async function scoreSignal(signal, occurrences, config = defaultScoreConfig, run
   return { signal, outcome: result.pass ? "promote" : "reject", result };
 }
 
-// src/lib/distill.ts
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join6 } from "node:path";
-
 // src/lib/skill-index.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
+import { readdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
-  return join5(home, "candidates");
+  return join3(home, "candidates");
 }
 function defaultSkillDirs(home = handbookHome(), cwd = process.cwd()) {
-  return [candidatesDir(home), join5(cwd, ".claude", "skills")];
+  return [candidatesDir(home), join3(cwd, ".claude", "skills")];
 }
 function parseSkillFrontmatter(md) {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
@@ -499,14 +342,14 @@ function listExistingSkills(dirs) {
   for (const dir of dirs) {
     let entries;
     try {
-      entries = readdirSync2(dir);
+      entries = readdirSync(dir);
     } catch {
       continue;
     }
     for (const entry of entries) {
       let raw;
       try {
-        raw = readFileSync4(join5(dir, entry, "SKILL.md"), "utf8");
+        raw = readFileSync2(join3(dir, entry, "SKILL.md"), "utf8");
       } catch {
         continue;
       }
@@ -515,6 +358,43 @@ function listExistingSkills(dirs) {
     }
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// src/lib/secrets.ts
+var SECRET_PATTERNS = [
+  { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
+  { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
+  { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
+  { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+  { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
+  { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
+  { name: "openai-key", re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/ },
+  { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
+  { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
+  { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
+  { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  {
+    // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
+    // which \b cannot match between two word chars.
+    name: "assigned-secret",
+    re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i
+  }
+];
+function detectSecret(text) {
+  for (const { name, re } of SECRET_PATTERNS) {
+    if (re.test(text)) return name;
+  }
+  return null;
+}
+function signalSecret(fields) {
+  return detectSecret(
+    [fields.command ?? "", fields.error ?? "", fields.resolvedCommand ?? "", ...fields.edits ?? []].join(
+      "\n"
+    )
+  );
 }
 
 // src/lib/distill.ts
@@ -696,20 +576,162 @@ function uniqueSlug(baseSlug, taken) {
 }
 function writeCandidate(artifact, home = handbookHome()) {
   const base = candidatesDir(home);
-  const slug = uniqueSlug(artifact.slug, (s) => existsSync2(join6(base, s)));
-  const dir = join6(base, slug);
-  mkdirSync4(dir, { recursive: true });
+  const slug = uniqueSlug(artifact.slug, (s) => existsSync(join4(base, s)));
+  const dir = join4(base, slug);
+  mkdirSync2(dir, { recursive: true });
   const skillMd = slug === artifact.slug ? artifact.skillMd : renameSkillMd(artifact.skillMd, slug);
-  writeFileSync3(join6(dir, "SKILL.md"), skillMd);
-  writeFileSync3(join6(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
+  writeFileSync2(join4(dir, "SKILL.md"), skillMd);
+  writeFileSync2(join4(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
   return dir;
+}
+
+// src/lib/init.ts
+function loadTeamConfig(home = handbookHome()) {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
+  }
+  return null;
+}
+function marketplacesRoot() {
+  return join5(homedir2(), ".claude", "plugins", "marketplaces");
+}
+function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  return team ? join5(root, team.marketplaceName, "skills") : null;
+}
+
+// src/lib/signals.ts
+import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
+
+// src/lib/counters.ts
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join6 } from "node:path";
+var FIELDS = [
+  "redactionBlocked",
+  "postToolUse",
+  "bashFailuresCaptured",
+  "pairsResolved"
+];
+function countersFile(home = handbookHome()) {
+  return join6(home, "counters.json");
+}
+function readCounters(home = handbookHome()) {
+  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
+  try {
+    const parsed = JSON.parse(readFileSync4(countersFile(home), "utf8"));
+    for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
+  } catch {
+  }
+  return base;
+}
+function bumpCounter(field, home = handbookHome(), by = 1) {
+  const counters = readCounters(home);
+  counters[field] += by;
+  mkdirSync3(home, { recursive: true });
+  writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
+  return counters;
+}
+function incrementRedactionBlocked(home = handbookHome(), by = 1) {
+  return bumpCounter("redactionBlocked", home, by);
+}
+
+// src/lib/signals.ts
+function sanitizeSignalsForPersistence(signals) {
+  let redacted = 0;
+  const clean = signals.map((s) => {
+    if (s.secretRedacted || !signalSecret(s)) return s;
+    redacted += 1;
+    return {
+      ts: s.ts,
+      sessionId: s.sessionId,
+      kind: "weak",
+      fingerprint: s.fingerprint,
+      family: "",
+      command: "",
+      error: "",
+      cwd: "",
+      count: s.count,
+      edits: [],
+      secretRedacted: true
+    };
+  });
+  return { clean, redacted };
+}
+function signalsFile(home = handbookHome()) {
+  return join7(home, "signals.jsonl");
+}
+function ledgerFingerprintCounts(home = handbookHome()) {
+  const counts = /* @__PURE__ */ new Map();
+  let raw;
+  try {
+    raw = readFileSync5(signalsFile(home), "utf8");
+  } catch {
+    return counts;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (typeof parsed?.fingerprint === "string") {
+        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
+      }
+    } catch {
+    }
+  }
+  return counts;
+}
+function appendSignals(signals, home = handbookHome()) {
+  if (signals.length === 0) return;
+  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
+  if (redacted > 0) incrementRedactionBlocked(home, redacted);
+  mkdirSync4(home, { recursive: true });
+  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
+  appendFileSync(signalsFile(home), lines);
+}
+
+// src/lib/gate.ts
+var defaultGateConfig = {
+  repeatThreshold: 2,
+  maxErrorChars: 4e3,
+  maxCommandChars: 1e3,
+  maxEditCount: 10
+};
+function drop(signal, reason, detail) {
+  return { signal, pass: false, reason, detail };
+}
+function sieveSignal(signal, occurrences, config = defaultGateConfig) {
+  if (signal.kind !== "candidate") return drop(signal, "not-candidate");
+  const secret = signalSecret(signal);
+  if (secret) return drop(signal, "secret", secret);
+  if (signal.trigger !== "manual") {
+    if (signal.edits.length === 0) return drop(signal, "no-file-change");
+    if (occurrences < config.repeatThreshold) {
+      return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
+    }
+  }
+  if (signal.error.length > config.maxErrorChars) return drop(signal, "oversized", "error");
+  if (signal.command.length > config.maxCommandChars) return drop(signal, "oversized", "command");
+  if (signal.edits.length > config.maxEditCount) return drop(signal, "oversized", "edits");
+  return { signal, pass: true };
+}
+function runRuleSieves(signals, home = handbookHome(), config = defaultGateConfig) {
+  const counts = ledgerFingerprintCounts(home);
+  const decisions = signals.map((s) => sieveSignal(s, counts.get(s.fingerprint) ?? 0, config));
+  const secretDrops = decisions.filter((d) => d.reason === "secret").length;
+  if (secretDrops > 0) incrementRedactionBlocked(home, secretDrops);
+  return {
+    passed: decisions.filter((d) => d.pass).map((d) => d.signal),
+    dropped: decisions.filter((d) => !d.pass)
+  };
 }
 
 // src/lib/queue.ts
 import { readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename, join as join7 } from "node:path";
+import { basename, join as join8 } from "node:path";
 function candidateMetaFile(dir) {
-  return join7(dir, "candidate.json");
+  return join8(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
   writeFileSync4(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
@@ -733,12 +755,29 @@ function candidateMetaFromArtifact(slug, artifact, verdict, createdAt) {
 }
 
 // src/lib/pipeline.ts
-function pipelineLogFile(home = handbookHome()) {
-  return join8(home, "pipeline.log");
+var STALE_CLAIM_MS = 10 * 60 * 1e3;
+function dedupSkillDirs(home, cwd, marketplacesRootDir) {
+  const dirs = defaultSkillDirs(home, cwd);
+  const team = teamSkillsDir(home, marketplacesRootDir);
+  if (team) dirs.push(team);
+  return dirs;
 }
+function pipelineLogFile(home = handbookHome()) {
+  return join9(home, "pipeline.log");
+}
+var LOG_ROTATE_BYTES = 512 * 1024;
+var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
   mkdirSync5(home, { recursive: true });
-  appendFileSync2(pipelineLogFile(home), JSON.stringify({ ts, ...summary }) + "\n");
+  const file = pipelineLogFile(home);
+  appendFileSync2(file, JSON.stringify({ ts, ...summary }) + "\n");
+  try {
+    if (statSync(file).size > LOG_ROTATE_BYTES) {
+      const lines = readFileSync7(file, "utf8").trim().split("\n");
+      writeFileAtomic(file, lines.slice(-LOG_KEEP_LINES).join("\n") + "\n");
+    }
+  } catch {
+  }
 }
 async function runManualSignal(signal, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   const runner = deps.runner ?? runClaudeCli;
@@ -777,7 +816,7 @@ async function runManualSignal(signal, home = handbookHome(), deps = {}, now = (
     });
   }
   const occurrences = ledgerFingerprintCounts(home).get(signal.fingerprint) ?? 1;
-  const existing = listSkills(defaultSkillDirs(home, signal.cwd));
+  const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
   const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
   summary.scored = 1;
   if (verdict.outcome === "error") {

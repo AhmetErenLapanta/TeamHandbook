@@ -5,10 +5,14 @@ import { join } from "node:path";
 import {
   buildSessionStartSummary,
   diffNewSkills,
+  heartbeatDelta,
+  isFirstRun,
   loadNotifyConfig,
   seenSkillsFile,
   sessionStartNotice,
 } from "./notify.js";
+import { bumpCounter } from "./counters.js";
+import { saveTeamConfig } from "./init.js";
 import { writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
@@ -51,12 +55,15 @@ describe("notify", () => {
 
   describe("loadNotifyConfig", () => {
     it("defaults to enabled without a config file", () => {
-      expect(loadNotifyConfig(home)).toEqual({ sessionStart: true });
+      expect(loadNotifyConfig(home)).toEqual({ sessionStart: true, heartbeat: true });
     });
 
     it("can be switched off via config.json", () => {
-      writeFileSync(join(home, "config.json"), JSON.stringify({ notify: { sessionStart: false } }));
-      expect(loadNotifyConfig(home)).toEqual({ sessionStart: false });
+      writeFileSync(
+        join(home, "config.json"),
+        JSON.stringify({ notify: { sessionStart: false, heartbeat: false } }),
+      );
+      expect(loadNotifyConfig(home)).toEqual({ sessionStart: false, heartbeat: false });
     });
   });
 
@@ -84,18 +91,61 @@ describe("notify", () => {
 
   describe("buildSessionStartSummary", () => {
     it("mentions pending candidates and new skills", () => {
-      const text = buildSessionStartSummary(2, ["fix-npm-test"]);
+      const text = buildSessionStartSummary({ pending: 2, newSkills: ["fix-npm-test"] });
       expect(text).toContain("2 candidate skills are awaiting your review");
       expect(text).toContain("/handbook:review");
       expect(text).toContain("1 new skill available since your last session here: fix-npm-test.");
     });
 
     it("uses singular wording for a single pending candidate", () => {
-      expect(buildSessionStartSummary(1, [])).toContain("1 candidate skill is awaiting");
+      expect(buildSessionStartSummary({ pending: 1, newSkills: [] })).toContain(
+        "1 candidate skill is awaiting",
+      );
     });
 
     it("returns null when there is nothing to announce", () => {
-      expect(buildSessionStartSummary(0, [])).toBeNull();
+      expect(buildSessionStartSummary({ pending: 0, newSkills: [] })).toBeNull();
+    });
+
+    it("welcomes on the first run", () => {
+      const text = buildSessionStartSummary({ pending: 0, newSkills: [], firstRun: true });
+      expect(text).toContain("TeamHandbook is active");
+      expect(text).toContain("Nothing leaves your machine");
+    });
+
+    it("shows the heartbeat only when there is activity and nothing stronger to say", () => {
+      const active = buildSessionStartSummary({
+        pending: 0,
+        newSkills: [],
+        heartbeat: { failures: 3, pairs: 1 },
+      });
+      expect(active).toContain("3 failures watched");
+      expect(active).toContain("1 error→fix pair captured");
+
+      const idle = buildSessionStartSummary({ pending: 0, newSkills: [], heartbeat: { failures: 0, pairs: 0 } });
+      expect(idle).toBeNull();
+
+      const withPending = buildSessionStartSummary({
+        pending: 1,
+        newSkills: [],
+        heartbeat: { failures: 3, pairs: 1 },
+      });
+      expect(withPending).not.toContain("since your last session —");
+    });
+  });
+
+  describe("heartbeatDelta / isFirstRun", () => {
+    it("is first-run exactly once", () => {
+      expect(isFirstRun(home)).toBe(true);
+      expect(isFirstRun(home)).toBe(false);
+    });
+
+    it("reports activity since the previous call and then resets", () => {
+      bumpCounter("bashFailuresCaptured", home, 2);
+      expect(heartbeatDelta(home)).toEqual({ failures: 2, pairs: 0 });
+      expect(heartbeatDelta(home)).toEqual({ failures: 0, pairs: 0 });
+      bumpCounter("pairsResolved", home);
+      expect(heartbeatDelta(home)).toEqual({ failures: 0, pairs: 1 });
     });
   });
 
@@ -116,7 +166,26 @@ describe("notify", () => {
       expect(sessionStartNotice(cwd, home)).toBeNull();
     });
 
-    it("stays silent when there is nothing to report", () => {
+    it("welcomes on the very first session, then stays silent when idle", () => {
+      const first = sessionStartNotice(cwd, home);
+      expect(first).toContain("TeamHandbook is active");
+      expect(sessionStartNotice(cwd, home)).toBeNull();
+    });
+
+    it("announces skills that arrived via the team marketplace", () => {
+      saveTeamConfig({ repoUrl: "git@x:t/skills.git", marketplaceName: "acme" }, home);
+      const root = join(home, "marketplaces");
+      sessionStartNotice(cwd, home, root); // baseline (also consumes the welcome)
+      writeSkill(join(root, "acme", "skills"), "teammate-skill");
+      const notice = sessionStartNotice(cwd, home, root);
+      expect(notice).toContain("teammate-skill");
+    });
+
+    it("reports a heartbeat after detector activity, exactly once", () => {
+      sessionStartNotice(cwd, home); // consume first-run welcome
+      bumpCounter("bashFailuresCaptured", home);
+      const notice = sessionStartNotice(cwd, home);
+      expect(notice).toContain("1 failure watched");
       expect(sessionStartNotice(cwd, home)).toBeNull();
     });
   });

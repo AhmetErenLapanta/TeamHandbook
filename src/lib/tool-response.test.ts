@@ -51,4 +51,24 @@ describe("extractExitCode", () => {
     expect(extractExitCode({ stdout: "ok" })).toBeUndefined();
     expect(extractExitCode("just text")).toBeUndefined();
   });
+
+  it("never scrapes exit codes out of an object's output text", () => {
+    // a successful `grep "exit code 1" logs/` must not become a failure
+    expect(extractExitCode({ stdout: "previous run: exit code 1", stderr: "" })).toBeUndefined();
+    expect(extractExitCode({ stderr: "warning mentions exit code 137" })).toBeUndefined();
+  });
+});
+
+describe("misclassification guards", () => {
+  it("keeps a success whose output merely quotes an exit code", () => {
+    const r = { stdout: "reproducing: exit code 1 seen yesterday", stderr: "", interrupted: false };
+    expect(isBashSuccess({ hook_event_name: "PostToolUse", tool_response: r })).toBe(true);
+    expect(bashFailure({ hook_event_name: "PostToolUse", tool_response: r })).toBeNull();
+  });
+
+  it("does not call an evidence-free payload a success", () => {
+    expect(isBashSuccess({ hook_event_name: "SomeFutureEvent", error: "Exit code 1\nboom" })).toBe(false);
+    expect(isBashSuccess({ hook_event_name: "PostToolUse" })).toBe(false);
+    expect(isBashSuccess({ hook_event_name: "PostToolUse", tool_response: {} })).toBe(false);
+  });
 });

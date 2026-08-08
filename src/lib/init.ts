@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 import { handbookHome } from "./session-state.js";
@@ -187,10 +187,40 @@ export function writeSkeleton(dir: string, files: Record<string, string>): void 
   }
 }
 
-export type GitRunner = (args: string[], cwd: string) => void;
+export type GitRunner = (args: string[], cwd: string) => string | void;
 
-export function runGit(args: string[], cwd: string): void {
-  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+export function runGit(args: string[], cwd: string): string {
+  try {
+    return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  } catch (err) {
+    // Surface git's actual reason (e.g. "Permission denied (publickey)") instead
+    // of the bare "Command failed: git …" — the difference between a five-second
+    // and a half-hour diagnosis for the user.
+    const stderr = (err as { stderr?: unknown })?.stderr;
+    if (typeof stderr === "string" && stderr.trim()) {
+      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
+      throw new Error(`git ${args[0]} failed: ${tail}`);
+    }
+    throw err;
+  }
+}
+
+export function marketplacesRoot(): string {
+  return join(homedir(), ".claude", "plugins", "marketplaces");
+}
+
+/**
+ * Where merged team skills land on this machine once Claude Code has pulled the
+ * team marketplace in the background, or null when no team repo is configured.
+ * Used so the session-start "new team skills" notice and the gate's dedup can see
+ * skills that arrived via the team repo, not just local ones.
+ */
+export function teamSkillsDir(
+  home: string = handbookHome(),
+  root: string = marketplacesRoot(),
+): string | null {
+  const team = loadTeamConfig(home);
+  return team ? join(root, team.marketplaceName, "skills") : null;
 }
 
 export interface InitResult {

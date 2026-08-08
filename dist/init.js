@@ -1,7 +1,7 @@
 // src/lib/init.ts
 import { execFileSync } from "node:child_process";
 import { mkdirSync as mkdirSync2, mkdtempSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir as homedir2, tmpdir } from "node:os";
 import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
@@ -29,6 +29,7 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
 import { readFileSync } from "node:fs";
@@ -226,7 +227,16 @@ function writeSkeleton(dir, files) {
   }
 }
 function runGit(args, cwd) {
-  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  try {
+    return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  } catch (err) {
+    const stderr = err?.stderr;
+    if (typeof stderr === "string" && stderr.trim()) {
+      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
+      throw new Error(`git ${args[0]} failed: ${tail}`);
+    }
+    throw err;
+  }
 }
 function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString()) {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
