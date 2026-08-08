@@ -1,0 +1,172 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  formatInitSuccess,
+  hostFromUrl,
+  initTeamRepo,
+  loadTeamConfig,
+  repoNameFromUrl,
+  saveTeamConfig,
+  skeletonFiles,
+  writeSkeleton,
+} from "./init.js";
+
+let home: string;
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+});
+
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
+
+describe("hostFromUrl / repoNameFromUrl", () => {
+  it("parses ssh and https git URLs", () => {
+    expect(hostFromUrl("git@gitlab.acme.com:team/skills.git")).toBe("gitlab.acme.com");
+    expect(hostFromUrl("https://GitHub.com/acme/skills.git")).toBe("github.com");
+    expect(repoNameFromUrl("git@gitlab.acme.com:team/skills.git")).toBe("skills");
+    expect(repoNameFromUrl("https://github.com/acme/team-skills")).toBe("team-skills");
+  });
+
+  it("returns null for unparseable URLs", () => {
+    expect(hostFromUrl("")).toBeNull();
+    expect(repoNameFromUrl("nonsense")).toBeNull();
+  });
+});
+
+describe("skeletonFiles", () => {
+  it("emits marketplace, plugin, readme, bump script, and skills placeholder", () => {
+    const files = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", "gitlab.acme.com");
+    const marketplace = JSON.parse(files[".claude-plugin/marketplace.json"]!);
+    expect(marketplace.name).toBe("acme-skills");
+    expect(marketplace.plugins[0]).toMatchObject({ name: "acme-skills", source: "./" });
+    const plugin = JSON.parse(files[".claude-plugin/plugin.json"]!);
+    expect(plugin).toMatchObject({ name: "acme-skills", version: "0.1.0" });
+    expect(files["README.md"]).toContain("/handbook:join git@gitlab.acme.com:team/skills.git");
+    expect(files["scripts/bump-version.mjs"]).toContain("plugin.version");
+    expect(files["skills/README.md"]).toBeDefined();
+  });
+
+  it("picks GitHub Actions for github hosts and GitLab CI otherwise", () => {
+    const github = skeletonFiles("s", "git@github.com:a/s.git", "github.com");
+    expect(github[".github/workflows/version-bump.yml"]).toBeDefined();
+    expect(github[".gitlab-ci.yml"]).toBeUndefined();
+    const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com");
+    expect(gitlab[".gitlab-ci.yml"]).toBeDefined();
+    expect(gitlab[".github/workflows/version-bump.yml"]).toBeUndefined();
+    const unknown = skeletonFiles("s", "git@code.acme.com:a/s.git", "code.acme.com");
+    expect(unknown[".gitlab-ci.yml"]).toBeDefined();
+  });
+
+  it("produces a bump script that actually increments the patch version", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    try {
+      writeSkeleton(dir, skeletonFiles("s", "git@github.com:a/s.git", "github.com"));
+      execFileSync("node", ["scripts/bump-version.mjs"], { cwd: dir });
+      const plugin = JSON.parse(readFileSync(join(dir, ".claude-plugin/plugin.json"), "utf8"));
+      expect(plugin.version).toBe("0.1.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("team config", () => {
+  it("saves the team section without clobbering other config keys", () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ gate: { model: "haiku" } }));
+    saveTeamConfig({ repoUrl: "git@x.com:a/b.git", marketplaceName: "b" }, home);
+    const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+    expect(config.gate).toEqual({ model: "haiku" });
+    expect(loadTeamConfig(home)).toMatchObject({ repoUrl: "git@x.com:a/b.git", marketplaceName: "b" });
+  });
+
+  it("returns null when no team is configured", () => {
+    expect(loadTeamConfig(home)).toBeNull();
+  });
+});
+
+describe("initTeamRepo", () => {
+  function bareRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-team-"));
+    execFileSync("git", ["init", "--bare", "-b", "main", dir]);
+    return dir;
+  }
+
+  it("scaffolds, pushes to an empty repo, and records the team config", () => {
+    const remote = bareRepo();
+    try {
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, "2026-08-08T02:00:00Z");
+      expect(result).toMatchObject({ ok: true, name: "acme-skills", url: remote });
+      const files = execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "main"], {
+        encoding: "utf8",
+      });
+      expect(files).toContain(".claude-plugin/marketplace.json");
+      expect(files).toContain(".claude-plugin/plugin.json");
+      expect(files).toContain("scripts/bump-version.mjs");
+      expect(loadTeamConfig(home)).toEqual({
+        repoUrl: remote,
+        marketplaceName: "acme-skills",
+        initializedAt: "2026-08-08T02:00:00Z",
+      });
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("derives the marketplace name from the repo URL when none is given", () => {
+    const result = initTeamRepo("git@gitlab.acme.com:team/Payments-Skills.git", undefined, home, () => {});
+    expect(result).toMatchObject({ ok: true, name: "payments-skills" });
+  });
+
+  it("fails without touching config when the push is rejected", () => {
+    const remote = bareRepo();
+    try {
+      const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
+      try {
+        execFileSync("git", ["-C", seed, "init", "-b", "main"]);
+        writeFileSync(join(seed, "existing.txt"), "occupied");
+        execFileSync("git", ["-C", seed, "add", "-A"]);
+        execFileSync(
+          "git",
+          ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"],
+        );
+        execFileSync("git", ["-C", seed, "push", remote, "main"]);
+      } finally {
+        rmSync(seed, { recursive: true, force: true });
+      }
+      const result = initTeamRepo(remote, "acme-skills", home);
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("git failed");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses empty URLs, underivable names, and re-initialization", () => {
+    expect(initTeamRepo("  ", undefined, home)).toMatchObject({ ok: false });
+    expect(initTeamRepo("nonsense", undefined, home, () => {})).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("--name"),
+    });
+    saveTeamConfig({ repoUrl: "git@x.com:a/b.git", marketplaceName: "b" }, home);
+    expect(initTeamRepo("git@x.com:a/c.git", undefined, home, () => {})).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("already configured"),
+    });
+    expect(existsSync(join(home, "sessions"))).toBe(false);
+  });
+});
+
+describe("formatInitSuccess", () => {
+  it("prints the join command and the consumer-only alternative", () => {
+    const text = formatInitSuccess({ ok: true, name: "acme-skills", url: "git@x.com:a/b.git", home });
+    expect(text).toContain("/handbook:join git@x.com:a/b.git");
+    expect(text).toContain("/plugin marketplace add git@x.com:a/b.git");
+    expect(text).toContain("/plugin install acme-skills");
+  });
+});
