@@ -8,6 +8,7 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/signals.ts
 import { join as join3 } from "node:path";
@@ -172,14 +173,19 @@ function loadDistillConfig(home = handbookHome()) {
 // src/lib/notify.ts
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
-  return { sessionStart: notify?.sessionStart !== false };
+  return {
+    sessionStart: notify?.sessionStart !== false,
+    heartbeat: notify?.heartbeat !== false
+  };
 }
 
 // src/lib/pipeline.ts
 import { basename as basename2, join as join7 } from "node:path";
+var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
   return join7(home, "pipeline.log");
 }
+var LOG_ROTATE_BYTES = 512 * 1024;
 
 // src/lib/status.ts
 function ledgerStats(home = handbookHome()) {
@@ -253,6 +259,13 @@ function gatherStatus(home = handbookHome()) {
     }
   };
 }
+function formatLastRejection(lastRun) {
+  const reject = lastRun?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
+  if (!reject) return [];
+  const score = reject.total !== void 0 ? `${reject.total}/10` : "n/a";
+  const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "no rationale recorded";
+  return [`Last rejection:  ${score} \u2014 ${why}`];
+}
 function formatStatus(report) {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
@@ -263,6 +276,7 @@ function formatStatus(report) {
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     lastRun ? `Last gate run:   ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} \u2014 ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last gate run:   never",
+    ...formatLastRejection(lastRun),
     "",
     `Config:          gate model "${config.gateModel}" (threshold ${config.gateThreshold}/10), distill model ${config.distillModel}, session-start notice ${config.sessionStartNotice ? "on" : "off"}`
   ];

@@ -26,10 +26,11 @@ import {
   appendFileSync as appendFileSync2,
   existsSync as existsSync2,
   mkdirSync as mkdirSync4,
-  readdirSync as readdirSync2,
+  readdirSync as readdirSync3,
   readFileSync as readFileSync4,
   renameSync as renameSync2,
   rmSync as rmSync3,
+  statSync as statSync2,
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { basename, join as join4 } from "node:path";
@@ -37,7 +38,7 @@ import { basename, join as join4 } from "node:path";
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, rmSync as rmSync2 } from "node:fs";
+import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -86,10 +87,12 @@ function loadSessionState(sessionId, home = handbookHome()) {
 function saveSessionState(state, home = handbookHome()) {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 
-// src/lib/signals.ts
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
@@ -128,8 +131,12 @@ function signalSecret(fields) {
   );
 }
 
+// src/lib/signals.ts
+import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -255,11 +262,6 @@ function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__
   return signals;
 }
 
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
   return join4(home, "pending");
@@ -284,6 +286,8 @@ function enqueuePendingSignals(signals, home = handbookHome()) {
   }
   return null;
 }
+var STALE_CLAIM_MS = 10 * 60 * 1e3;
+var LOG_ROTATE_BYTES = 512 * 1024;
 function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
   const child = spawnFn(process.execPath, [runnerScript], {
     detached: true,

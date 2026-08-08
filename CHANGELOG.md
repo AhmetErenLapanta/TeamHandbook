@@ -23,6 +23,10 @@ Initial release.
   CI; `/handbook:join` connects the engine to it.
 - **Privacy**: secret redaction before any write; raw payload dumps are opt-in
   (`TEAMHANDBOOK_DEBUG`); no telemetry.
+- **Visibility**: a one-time welcome on the first session, a since-last-session
+  activity heartbeat (only when something was captured and nothing stronger is
+  pending), and detector health counters in `/handbook:status`. All notices are
+  single-line and configurable off.
 
 The capture path is verified end-to-end against real Claude Code: failures arrive
 as `PostToolUseFailure`, successes as `PostToolUse` with no exit code, and a

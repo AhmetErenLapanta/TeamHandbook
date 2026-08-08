@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   assertSafeGitUrl,
   formatInitSuccess,
+  teamSkillsDir,
   hostFromUrl,
   initTeamRepo,
   loadTeamConfig,
@@ -14,6 +15,14 @@ import {
   skeletonFiles,
   writeSkeleton,
 } from "./init.js";
+
+describe("teamSkillsDir", () => {
+  it("is null without a team config and resolves under the marketplaces root with one", () => {
+    expect(teamSkillsDir(home, "/plugins/marketplaces")).toBeNull();
+    saveTeamConfig({ repoUrl: "git@x:t/skills.git", marketplaceName: "acme-skills" }, home);
+    expect(teamSkillsDir(home, "/plugins/marketplaces")).toBe("/plugins/marketplaces/acme-skills/skills");
+  });
+});
 
 describe("assertSafeGitUrl", () => {
   it("accepts real transports and local paths", () => {

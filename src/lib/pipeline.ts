@@ -7,9 +7,12 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
+import { teamSkillsDir } from "./init.js";
+import { writeFileAtomic } from "./fs-atomic.js";
 import { handbookHome } from "./session-state.js";
 import type { Signal } from "./signals.js";
 import { appendSignals, ledgerFingerprintCounts, sanitizeSignalsForPersistence } from "./signals.js";
@@ -52,7 +55,34 @@ export function enqueuePendingSignals(signals: Signal[], home: string = handbook
   return null;
 }
 
+// A runner that crashed between claim and delete leaves a *.claimed-<pid> file no
+// drain would ever pick up again — those signals would be silently lost. Reclaim
+// claims older than this back into the queue.
+const STALE_CLAIM_MS = 10 * 60 * 1000;
+
+function reclaimStaleClaims(dir: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const m = entry.match(/^(.+\.json)\.claimed-\d+$/);
+    if (!m) continue;
+    try {
+      const file = join(dir, entry);
+      if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) {
+        renameSync(file, join(dir, `reclaimed-${Date.now()}-${m[1]}`));
+      }
+    } catch {
+      // another process may have raced us; nothing to do
+    }
+  }
+}
+
 export function drainPendingSignals(home: string = handbookHome()): Signal[] {
+  reclaimStaleClaims(pendingDir(home));
   let entries: string[];
   try {
     entries = readdirSync(pendingDir(home));
@@ -83,6 +113,24 @@ export interface PipelineDeps {
   runner?: ClaudeRunner;
   remoteUrl?: (cwd: string) => string | null;
   listSkills?: (dirs: string[]) => SkillSummary[];
+  marketplacesRoot?: string;
+}
+
+/** The dirs the gate's dedup scans: queue, the signal's project, and (when a team
+ * is configured) the locally-pulled team marketplace skills. */
+function dedupSkillDirs(home: string, cwd: string, marketplacesRootDir?: string): string[] {
+  const dirs = defaultSkillDirs(home, cwd);
+  const team = teamSkillsDir(home, marketplacesRootDir);
+  if (team) dirs.push(team);
+  return dirs;
+}
+
+export interface GateOutcomeLog {
+  fingerprint: string;
+  outcome: "promote" | "reject" | "error";
+  total?: number;
+  rationale?: string;
+  duplicateOf?: string;
 }
 
 export interface PipelineSummary {
@@ -92,6 +140,9 @@ export interface PipelineSummary {
   rejected: number;
   errored: number;
   written: string[];
+  // Why each scored signal was promoted/rejected — without this a user whose
+  // candidates keep being rejected has no way to see the scores or reasons.
+  outcomes?: GateOutcomeLog[];
   trigger?: "manual";
 }
 
@@ -99,9 +150,21 @@ export function pipelineLogFile(home: string = handbookHome()): string {
   return join(home, "pipeline.log");
 }
 
+const LOG_ROTATE_BYTES = 512 * 1024;
+const LOG_KEEP_LINES = 200;
+
 function appendPipelineLog(summary: PipelineSummary, home: string, ts: string): void {
   mkdirSync(home, { recursive: true });
-  appendFileSync(pipelineLogFile(home), JSON.stringify({ ts, ...summary }) + "\n");
+  const file = pipelineLogFile(home);
+  appendFileSync(file, JSON.stringify({ ts, ...summary }) + "\n");
+  try {
+    if (statSync(file).size > LOG_ROTATE_BYTES) {
+      const lines = readFileSync(file, "utf8").trim().split("\n");
+      writeFileAtomic(file, lines.slice(-LOG_KEEP_LINES).join("\n") + "\n");
+    }
+  } catch {
+    // rotation is best-effort
+  }
 }
 
 export async function runPipeline(
@@ -124,12 +187,20 @@ export async function runPipeline(
     rejected: 0,
     errored: 0,
     written: [],
+    outcomes: [],
   };
   for (const signal of passed) {
     const occurrences = counts.get(signal.fingerprint) ?? 0;
-    const existing = listSkills(defaultSkillDirs(home, signal.cwd));
+    const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
     const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
     summary.scored += 1;
+    summary.outcomes!.push({
+      fingerprint: signal.fingerprint,
+      outcome: verdict.outcome === "promote" ? "promote" : verdict.outcome === "reject" ? "reject" : "error",
+      ...(verdict.result ? { total: verdict.result.total } : {}),
+      ...(verdict.result?.rationale ? { rationale: verdict.result.rationale.slice(0, 200) } : {}),
+      ...(verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}),
+    });
     if (verdict.outcome === "reject") {
       summary.rejected += 1;
       continue;
@@ -202,7 +273,7 @@ export async function runManualSignal(
     });
   }
   const occurrences = ledgerFingerprintCounts(home).get(signal.fingerprint) ?? 1;
-  const existing = listSkills(defaultSkillDirs(home, signal.cwd));
+  const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
   const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
   summary.scored = 1;
   if (verdict.outcome === "error") {

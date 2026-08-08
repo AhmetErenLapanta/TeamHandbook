@@ -14,7 +14,13 @@ const EXIT_CODE_TEXT = /\bexit code[:\s]+(\d{1,3})\b/i;
 // Codes that mean "killed/interrupted", not a real failure worth learning from.
 const INTERRUPT_CODES = new Set([124, 130, 137, 143, 144, 145]);
 
-/** Numeric exit code if the payload provides one anywhere; undefined otherwise. */
+/**
+ * Numeric exit code if the payload provides one. For OBJECT responses only the
+ * structured numeric keys count — a successful command whose OUTPUT merely quotes
+ * "exit code 1" (grep over logs, a test runner echoing a subprocess) must never be
+ * reclassified as a failure, so stdout/stderr text is deliberately not scanned.
+ * Text scanning applies only to string/array shapes, where no structure exists.
+ */
 export function extractExitCode(response: unknown): number | undefined {
   if (Array.isArray(response)) return extractExitCode(contentBlocksText(response));
   if (typeof response === "string") {
@@ -27,11 +33,7 @@ export function extractExitCode(response: unknown): number | undefined {
     const value = record[key];
     if (typeof value === "number" && Number.isInteger(value)) return value;
   }
-  const text = [record["stderr"], record["stdout"], record["text"]]
-    .filter((v) => typeof v === "string")
-    .join("\n");
-  const m = text.match(EXIT_CODE_TEXT);
-  return m ? Number(m[1]) : undefined;
+  return undefined;
 }
 
 export interface BashFailure {
@@ -62,19 +64,22 @@ export function bashFailure(input: HookInput): BashFailure | null {
 }
 
 /**
- * True if this event represents a SUCCESSFULLY COMPLETED Bash command. In the real
- * schema, reaching PostToolUse for a Bash tool means it didn't fail (failures fire
- * PostToolUseFailure), unless the run was interrupted.
+ * True if this event represents a SUCCESSFULLY COMPLETED Bash command. Success
+ * requires POSITIVE evidence — either an explicit code 0, or the real PostToolUse
+ * response shape ({stdout, stderr, interrupted}) with interrupted !== true. An
+ * evidence-free payload (missing tool_response, or an error string under an
+ * unfamiliar event name) must never resolve an open error into a fake pair.
  */
 export function isBashSuccess(input: HookInput): boolean {
   if (input.hook_event_name === "PostToolUseFailure") return false;
-  const code = extractExitCode(input.tool_response);
-  if (code !== undefined && code !== 0) return false; // a non-zero code is a failure, not success
+  if (typeof input.error === "string" && input.error.trim()) return false;
   const r = input.tool_response;
-  if (typeof r === "object" && r !== null && (r as Record<string, unknown>)["interrupted"] === true) {
-    return false; // interrupted, not a clean success
-  }
-  return true;
+  const code = extractExitCode(r);
+  if (code !== undefined) return code === 0;
+  if (typeof r !== "object" || r === null || Array.isArray(r)) return false;
+  const record = r as Record<string, unknown>;
+  const hasResultShape = ["stdout", "stderr", "interrupted"].some((k) => k in record);
+  return hasResultShape && record["interrupted"] !== true;
 }
 
 function contentBlocksText(response: unknown): string {

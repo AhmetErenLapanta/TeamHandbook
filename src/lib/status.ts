@@ -108,6 +108,16 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   };
 }
 
+function formatLastRejection(lastRun: (PipelineSummary & { ts: string }) | null): string[] {
+  const reject = lastRun?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
+  if (!reject) return [];
+  const score = reject.total !== undefined ? `${reject.total}/10` : "n/a";
+  const why = reject.duplicateOf
+    ? `duplicate of "${reject.duplicateOf}"`
+    : reject.rationale ?? "no rationale recorded";
+  return [`Last rejection:  ${score} — ${why}`];
+}
+
 export function formatStatus(report: StatusReport): string {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
@@ -120,6 +130,7 @@ export function formatStatus(report: StatusReport): string {
     lastRun
       ? `Last gate run:   ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} — ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written`
       : "Last gate run:   never",
+    ...formatLastRejection(lastRun),
     "",
     `Config:          gate model "${config.gateModel}" (threshold ${config.gateThreshold}/10), distill model ${config.distillModel}, session-start notice ${config.sessionStartNotice ? "on" : "off"}`,
   ];

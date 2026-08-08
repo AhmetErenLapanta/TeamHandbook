@@ -22,11 +22,15 @@ function main(): void {
     const dir = join(candidatesDir(home), slug);
     try {
       console.log(readFileSync(join(dir, "SKILL.md"), "utf8"));
-      console.log("--- grounded-case.json ---");
-      console.log(readFileSync(join(dir, "grounded-case.json"), "utf8"));
     } catch {
       console.error(`error: no candidate named "${slug}"`);
       process.exit(1);
+    }
+    console.log("--- grounded-case.json ---");
+    try {
+      console.log(readFileSync(join(dir, "grounded-case.json"), "utf8"));
+    } catch {
+      console.log("(this candidate has no grounded case)");
     }
     return;
   }

@@ -88,9 +88,11 @@ function deliverSolo(
   const slug = uniqueSlug(meta.slug, (s) => existsSync(join(skillsDir, s)));
   const target = join(skillsDir, slug);
   try {
+    // read before creating the target: an unreadable candidate must not leave an
+    // empty skill dir behind (which would shift every future slug to -2)
+    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
     mkdirSync(target, { recursive: true });
     // rewrite the frontmatter name when suffixed so it doesn't shadow the skill it collided with
-    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
     writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync(join(dir, "grounded-case.json"))) {
       copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));

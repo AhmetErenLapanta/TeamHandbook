@@ -125,7 +125,7 @@ describe("captureBashSuccess", () => {
   it("closes an open error of the same family into a resolved pair", () => {
     captureBashFailure(bashFailure(), home);
     captureFileEdit(fileEdit(), home);
-    expect(captureBashSuccess(bashSuccess(), home)).toBe(true);
+    expect(captureBashSuccess(bashSuccess(), home)).toBe(1);
     const state = loadSessionState("s1", home);
     expect(state.openErrors).toEqual([]);
     expect(state.resolvedPairs).toHaveLength(1);
@@ -138,7 +138,7 @@ describe("captureBashSuccess", () => {
 
   it("matches by family, not exact command", () => {
     captureBashFailure(bashFailure({ tool_input: { command: "npm test -- --run capture" } }), home);
-    expect(captureBashSuccess(bashSuccess({ tool_input: { command: "npm test" } }), home)).toBe(true);
+    expect(captureBashSuccess(bashSuccess({ tool_input: { command: "npm test" } }), home)).toBe(1);
     expect(loadSessionState("s1", home).resolvedPairs).toHaveLength(1);
   });
 
@@ -153,15 +153,15 @@ describe("captureBashSuccess", () => {
 
   it("does not resolve without a matching open error", () => {
     captureBashFailure(bashFailure(), home);
-    expect(captureBashSuccess(bashSuccess({ tool_input: { command: "ls" } }), home)).toBe(false);
-    expect(captureBashSuccess(bashSuccess(), home)).toBe(true);
+    expect(captureBashSuccess(bashSuccess({ tool_input: { command: "ls" } }), home)).toBe(0);
+    expect(captureBashSuccess(bashSuccess(), home)).toBe(1);
   });
 
   it("does not treat a failure event or an interrupted run as a success", () => {
     captureBashFailure(bashFailure(), home);
-    expect(captureBashSuccess(bashFailure(), home)).toBe(false);
+    expect(captureBashSuccess(bashFailure(), home)).toBe(0);
     expect(captureBashSuccess(bashSuccess({ tool_response: { stdout: "", stderr: "", interrupted: true } }), home)).toBe(
-      false,
+      0,
     );
   });
 });

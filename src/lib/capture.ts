@@ -48,18 +48,22 @@ export function captureFileEdit(input: HookInput, home: string = handbookHome())
   return true;
 }
 
-/** A completed Bash command closes any open error of the same command family. */
-export function captureBashSuccess(input: HookInput, home: string = handbookHome()): boolean {
-  if (input.tool_name !== "Bash" || !input.session_id) return false;
-  if (!isBashSuccess(input)) return false;
+/**
+ * A completed Bash command closes any open errors of the same command family.
+ * Returns how many pairs were resolved (0 when nothing matched), so the health
+ * counter can reflect multi-resolves accurately.
+ */
+export function captureBashSuccess(input: HookInput, home: string = handbookHome()): number {
+  if (input.tool_name !== "Bash" || !input.session_id) return 0;
+  if (!isBashSuccess(input)) return 0;
   const command = bashCommand(input);
-  if (!command) return false;
+  if (!command) return 0;
   const state = loadSessionState(input.session_id, home);
-  if (state.openErrors.length === 0) return false;
+  if (state.openErrors.length === 0) return 0;
   // Only resolve errors from the same working directory: a `npm test` pass in
   // repo B must not close an `npm test` failure opened in repo A.
   const resolved = resolveOpenErrors(state, commandFamily(command), command, input.cwd ?? "");
-  if (resolved.length === 0) return false;
+  if (resolved.length === 0) return 0;
   saveSessionState(state, home);
-  return true;
+  return resolved.length;
 }

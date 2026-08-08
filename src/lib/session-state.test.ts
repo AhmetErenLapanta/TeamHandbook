@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   attachEditToOpenErrors,
+  cleanupStaleSessionFiles,
   emptySessionState,
   loadSessionState,
   recordFailure,
@@ -91,6 +92,19 @@ describe("attachEditToOpenErrors", () => {
 
   it("does nothing without open errors", () => {
     expect(attachEditToOpenErrors(emptySessionState("s1"), "/repo/src/app.ts")).toBe(false);
+  });
+});
+
+describe("cleanupStaleSessionFiles", () => {
+  it("removes only sessions older than the retention window", () => {
+    saveSessionState(emptySessionState("old"), home);
+    saveSessionState(emptySessionState("fresh"), home);
+    const eightDaysFromNow = Date.now() + 8 * 24 * 60 * 60 * 1000;
+    expect(cleanupStaleSessionFiles(home, eightDaysFromNow)).toBe(2);
+    expect(cleanupStaleSessionFiles(home)).toBe(0);
+    saveSessionState(emptySessionState("s2"), home);
+    expect(cleanupStaleSessionFiles(home)).toBe(0);
+    expect(loadSessionState("s2", home)).toEqual(emptySessionState("s2"));
   });
 });
 
