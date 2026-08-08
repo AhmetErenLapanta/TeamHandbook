@@ -28,24 +28,30 @@ export function signalsFile(home: string = handbookHome()): string {
   return join(home, "signals.jsonl");
 }
 
-export function ledgerFingerprints(home: string = handbookHome()): Set<string> {
-  const fingerprints = new Set<string>();
+export function ledgerFingerprintCounts(home: string = handbookHome()): Map<string, number> {
+  const counts = new Map<string, number>();
   let raw: string;
   try {
     raw = readFileSync(signalsFile(home), "utf8");
   } catch {
-    return fingerprints;
+    return counts;
   }
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
-      if (typeof parsed?.fingerprint === "string") fingerprints.add(parsed.fingerprint);
+      if (typeof parsed?.fingerprint === "string") {
+        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
+      }
     } catch {
       // skip malformed lines; the ledger is append-only and best-effort
     }
   }
-  return fingerprints;
+  return counts;
+}
+
+export function ledgerFingerprints(home: string = handbookHome()): Set<string> {
+  return new Set(ledgerFingerprintCounts(home).keys());
 }
 
 export function promoteRecurrentSignals(signals: Signal[], priorFingerprints: Set<string>): Signal[] {
