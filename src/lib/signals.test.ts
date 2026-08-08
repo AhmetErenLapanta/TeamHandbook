@@ -18,6 +18,7 @@ import {
   promoteRecurrentSignals,
   signalsFile,
 } from "./signals.js";
+import { readCounters } from "./counters.js";
 import type { Signal } from "./signals.js";
 
 let home: string;
@@ -40,8 +41,8 @@ const failure = {
 
 function seedResolvedPair(edits: string[] = []): void {
   const state = recordFailure(emptySessionState("s1"), failure, "2026-08-08T00:00:00Z");
-  for (const edit of edits) attachEditToOpenErrors(state, edit);
-  resolveOpenErrors(state, "npm test", "npm test", "2026-08-08T00:10:00Z");
+  for (const edit of edits) attachEditToOpenErrors(state, edit, "2026-08-08T00:05:00Z");
+  resolveOpenErrors(state, "npm test", "npm test", "/repo", "2026-08-08T00:10:00Z");
   saveSessionState(state, home);
 }
 
@@ -143,6 +144,43 @@ describe("flushSessionEnd", () => {
     saveSessionState(state, home);
     flushSessionEnd("s1", home);
     expect(readSignals()).toHaveLength(2);
+  });
+});
+
+describe("secret redaction at persistence (Decision T)", () => {
+  const secretSignal: Signal = {
+    ts: "2026-08-08T00:00:00Z",
+    sessionId: "s1",
+    kind: "candidate",
+    fingerprint: "fp-secret",
+    family: "curl example.com",
+    command: "curl -H 'Authorization: Bearer sk-proj-abcdef1234567890ABCDEF'",
+    error: "401 unauthorized",
+    cwd: "/repo",
+    count: 1,
+    edits: ["/repo/api.ts"],
+  };
+
+  it("writes a fingerprint-only tombstone, never the secret, and counts it", () => {
+    appendSignals([secretSignal], home);
+    const raw = readFileSync(signalsFile(home), "utf8");
+    expect(raw).not.toContain("sk-proj");
+    expect(raw).not.toContain("Bearer");
+    const written = readSignals()[0]!;
+    expect(written).toMatchObject({ fingerprint: "fp-secret", kind: "weak", secretRedacted: true });
+    expect(written.command).toBe("");
+    expect(written.error).toBe("");
+    expect(readCounters(home).redactionBlocked).toBe(1);
+    // fingerprint survives, so recurrence counting still works
+    expect(ledgerFingerprints(home).has("fp-secret")).toBe(true);
+  });
+
+  it("passes clean signals through untouched", () => {
+    appendSignals([{ ...secretSignal, command: "npm test", error: "1 failed", fingerprint: "fp-clean" }], home);
+    const written = readSignals()[0]!;
+    expect(written.command).toBe("npm test");
+    expect(written.secretRedacted).toBeUndefined();
+    expect(readCounters(home).redactionBlocked).toBe(0);
   });
 });
 

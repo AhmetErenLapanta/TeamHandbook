@@ -2,14 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  countersFile,
-  defaultGateConfig,
-  incrementRedactionBlocked,
-  readCounters,
-  runRuleSieves,
-  sieveSignal,
-} from "./gate.js";
+import { defaultGateConfig, runRuleSieves, sieveSignal } from "./gate.js";
+import { countersFile, incrementRedactionBlocked, readCounters } from "./counters.js";
 import { appendSignals } from "./signals.js";
 import type { Signal } from "./signals.js";
 
@@ -130,14 +124,14 @@ describe("runRuleSieves", () => {
   it("increments the redaction-blocked counter once per secret drop", () => {
     const leaky = candidate({ error: "token=glpat-xJ2vRq8kQzWn5pYtBs7d" });
     runRuleSieves([leaky, leaky, candidate({ kind: "weak" })], home);
-    expect(readCounters(home)).toEqual({ redactionBlocked: 2 });
+    expect(readCounters(home)).toMatchObject({ redactionBlocked: 2 });
   });
 
   it("never writes candidate content to the counters file", () => {
     runRuleSieves([candidate({ error: "password: Sup3rS3cret!" })], home);
     const raw = readFileSync(countersFile(home), "utf8");
     expect(raw).not.toContain("Sup3rS3cret");
-    expect(JSON.parse(raw)).toEqual({ redactionBlocked: 1 });
+    expect(JSON.parse(raw)).toMatchObject({ redactionBlocked: 1 });
   });
 
   it("does not create the counters file when nothing is secret-dropped", () => {
@@ -149,13 +143,13 @@ describe("runRuleSieves", () => {
 describe("counters", () => {
   it("round-trips increments across calls", () => {
     incrementRedactionBlocked(home);
-    expect(incrementRedactionBlocked(home, 2)).toEqual({ redactionBlocked: 3 });
-    expect(readCounters(home)).toEqual({ redactionBlocked: 3 });
+    expect(incrementRedactionBlocked(home, 2)).toMatchObject({ redactionBlocked: 3 });
+    expect(readCounters(home)).toMatchObject({ redactionBlocked: 3 });
   });
 
   it("recovers from a corrupt counters file", () => {
     writeFileSync(countersFile(home), "not json");
-    expect(readCounters(home)).toEqual({ redactionBlocked: 0 });
-    expect(incrementRedactionBlocked(home)).toEqual({ redactionBlocked: 1 });
+    expect(readCounters(home)).toMatchObject({ redactionBlocked: 0 });
+    expect(incrementRedactionBlocked(home)).toMatchObject({ redactionBlocked: 1 });
   });
 });

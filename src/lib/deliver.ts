@@ -1,7 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadTeamConfig, runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
+import { renameSkillMd, uniqueSlug } from "./distill.js";
 import { publishCandidate, runForge } from "./publish.js";
 import type { ForgeRunner } from "./publish.js";
 import { handbookHome } from "./session-state.js";
@@ -84,13 +85,13 @@ function deliverSolo(
   decidedAt: string,
 ): DeliverResult {
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
-  let target = join(skillsDir, meta.slug);
-  for (let i = 2; existsSync(target); i++) {
-    target = join(skillsDir, `${meta.slug}-${i}`);
-  }
+  const slug = uniqueSlug(meta.slug, (s) => existsSync(join(skillsDir, s)));
+  const target = join(skillsDir, slug);
   try {
     mkdirSync(target, { recursive: true });
-    copyFileSync(join(dir, "SKILL.md"), join(target, "SKILL.md"));
+    // rewrite the frontmatter name when suffixed so it doesn't shadow the skill it collided with
+    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
+    writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync(join(dir, "grounded-case.json"))) {
       copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));
     }

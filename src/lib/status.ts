@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
-import { readCounters } from "./gate.js";
+import { readCounters } from "./counters.js";
 import { listCandidates } from "./queue.js";
 import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
@@ -68,6 +68,7 @@ export interface StatusReport {
   ledger: LedgerStats;
   queue: { pending: number; approved: number; rejected: number };
   redactionBlocked: number;
+  detector: { postToolUse: number; bashFailuresCaptured: number; pairsResolved: number };
   lastRun: (PipelineSummary & { ts: string }) | null;
   config: {
     gateModel: string;
@@ -82,6 +83,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   const count = (status: string) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
   const distill = loadDistillConfig(home);
+  const counters = readCounters(home);
   return {
     home,
     ledger: ledgerStats(home),
@@ -90,7 +92,12 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
       approved: count("approved"),
       rejected: count("rejected"),
     },
-    redactionBlocked: readCounters(home).redactionBlocked,
+    redactionBlocked: counters.redactionBlocked,
+    detector: {
+      postToolUse: counters.postToolUse,
+      bashFailuresCaptured: counters.bashFailuresCaptured,
+      pairsResolved: counters.pairsResolved,
+    },
     lastRun: lastPipelineRun(home),
     config: {
       gateModel: score.model,
@@ -106,6 +113,7 @@ export function formatStatus(report: StatusReport): string {
   const lines = [
     `TeamHandbook status  (${report.home})`,
     "",
+    `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,

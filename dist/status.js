@@ -1,36 +1,46 @@
 // src/lib/status.ts
-import { readFileSync as readFileSync6 } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
+var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 
 // src/lib/signals.ts
-import { join as join2 } from "node:path";
-function signalsFile(home = handbookHome()) {
-  return join2(home, "signals.jsonl");
-}
-
-// src/lib/gate.ts
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join as join3 } from "node:path";
+
+// src/lib/counters.ts
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+var FIELDS = [
+  "redactionBlocked",
+  "postToolUse",
+  "bashFailuresCaptured",
+  "pairsResolved"
+];
 function countersFile(home = handbookHome()) {
-  return join3(home, "counters.json");
+  return join2(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
+  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
   try {
     const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
-    return { redactionBlocked: Number(parsed?.redactionBlocked) || 0 };
+    for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
   } catch {
-    return { redactionBlocked: 0 };
   }
+  return base;
+}
+
+// src/lib/signals.ts
+function signalsFile(home = handbookHome()) {
+  return join3(home, "signals.jsonl");
 }
 
 // src/lib/queue.ts
-import { readdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { basename, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -103,7 +113,7 @@ function listCandidates(home = handbookHome(), status) {
   const base = candidatesDir(home);
   let entries;
   try {
-    entries = readdirSync(base, { withFileTypes: true });
+    entries = readdirSync2(base, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -116,9 +126,21 @@ function listCandidates(home = handbookHome(), status) {
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+// src/lib/config.ts
 import { readFileSync as readFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
-import { promisify } from "node:util";
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync3(join6(home, "config.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// src/lib/score.ts
 var execFileAsync = promisify(execFile);
 var defaultScoreConfig = {
   model: "haiku",
@@ -126,58 +148,37 @@ var defaultScoreConfig = {
   timeoutMs: 6e4
 };
 function loadScoreConfig(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync3(join6(home, "config.json"), "utf8"));
-    const gate = parsed?.gate;
-    return {
-      model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
-      threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
-      timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
-    };
-  } catch {
-    return { ...defaultScoreConfig };
-  }
+  const gate = readConfigFile(home).gate;
+  return {
+    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
+    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
+    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
+  };
 }
 
 // src/lib/distill.ts
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
 var defaultDistillConfig = {
   model: "",
   timeoutMs: 12e4
 };
 function loadDistillConfig(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync4(join7(home, "config.json"), "utf8"));
-    const distill = parsed?.distill;
-    return {
-      model: typeof distill?.model === "string" ? distill.model : defaultDistillConfig.model,
-      timeoutMs: typeof distill?.timeoutMs === "number" && distill.timeoutMs > 0 ? distill.timeoutMs : defaultDistillConfig.timeoutMs
-    };
-  } catch {
-    return { ...defaultDistillConfig };
-  }
+  const distill = readConfigFile(home).distill;
+  return {
+    model: typeof distill?.model === "string" ? distill.model : defaultDistillConfig.model,
+    timeoutMs: typeof distill?.timeoutMs === "number" && distill.timeoutMs > 0 ? distill.timeoutMs : defaultDistillConfig.timeoutMs
+  };
 }
 
 // src/lib/notify.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
-var defaultNotifyConfig = {
-  sessionStart: true
-};
 function loadNotifyConfig(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync5(join8(home, "config.json"), "utf8"));
-    return { sessionStart: parsed?.notify?.sessionStart !== false };
-  } catch {
-    return { ...defaultNotifyConfig };
-  }
+  const notify = readConfigFile(home).notify;
+  return { sessionStart: notify?.sessionStart !== false };
 }
 
 // src/lib/pipeline.ts
-import { basename as basename2, join as join9 } from "node:path";
+import { basename as basename2, join as join7 } from "node:path";
 function pipelineLogFile(home = handbookHome()) {
-  return join9(home, "pipeline.log");
+  return join7(home, "pipeline.log");
 }
 
 // src/lib/status.ts
@@ -185,7 +186,7 @@ function ledgerStats(home = handbookHome()) {
   const stats = { total: 0, candidates: 0, weak: 0, distinctFingerprints: 0 };
   let raw;
   try {
-    raw = readFileSync6(signalsFile(home), "utf8");
+    raw = readFileSync4(signalsFile(home), "utf8");
   } catch {
     return stats;
   }
@@ -209,7 +210,7 @@ function ledgerStats(home = handbookHome()) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync6(pipelineLogFile(home), "utf8");
+    raw = readFileSync4(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -228,6 +229,7 @@ function gatherStatus(home = handbookHome()) {
   const count = (status) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
   const distill = loadDistillConfig(home);
+  const counters = readCounters(home);
   return {
     home,
     ledger: ledgerStats(home),
@@ -236,7 +238,12 @@ function gatherStatus(home = handbookHome()) {
       approved: count("approved"),
       rejected: count("rejected")
     },
-    redactionBlocked: readCounters(home).redactionBlocked,
+    redactionBlocked: counters.redactionBlocked,
+    detector: {
+      postToolUse: counters.postToolUse,
+      bashFailuresCaptured: counters.bashFailuresCaptured,
+      pairsResolved: counters.pairsResolved
+    },
     lastRun: lastPipelineRun(home),
     config: {
       gateModel: score.model,
@@ -251,6 +258,7 @@ function formatStatus(report) {
   const lines = [
     `TeamHandbook status  (${report.home})`,
     "",
+    `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,

@@ -69,6 +69,19 @@ describe("commandFamily", () => {
   it("falls back to unknown for empty commands", () => {
     expect(commandFamily("")).toBe("unknown");
   });
+
+  it("unwraps subshell parentheses", () => {
+    expect(commandFamily("(cd app && npm test)")).toBe("npm test");
+  });
+
+  it("prefers the last stage of a build-then-test chain", () => {
+    expect(commandFamily("npm run build && npm test")).toBe("npm test");
+  });
+
+  it("peels timeout and xargs launchers", () => {
+    expect(commandFamily("timeout 30 npm test")).toBe("npm test");
+    expect(commandFamily("npx prettier --check .")).toBe("prettier");
+  });
 });
 
 describe("fingerprint", () => {

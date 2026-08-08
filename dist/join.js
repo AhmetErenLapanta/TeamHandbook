@@ -1,18 +1,48 @@
 // src/lib/join.ts
-import { mkdtempSync as mkdtempSync2, readFileSync as readFileSync2, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync as readFileSync2, rmSync as rmSync2 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+// src/lib/fs-atomic.ts
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+var seq = 0;
+function writeFileAtomic(file, data) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${seq++}-${process.hrtime.bigint().toString(36)}`;
+  try {
+    writeFileSync(tmp, data);
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+// src/lib/session-state.ts
+var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
+}
+
+// src/lib/config.ts
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 // src/lib/score.ts
@@ -21,27 +51,24 @@ import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 
 // src/lib/init.ts
+var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
+function assertSafeGitUrl(url) {
+  const u = url.trim();
+  if (!u || u.startsWith("-") || REMOTE_HELPER.test(u) || /[\r\n\0]/.test(u)) {
+    throw new Error(`unsafe or unsupported git URL: ${url}`);
+  }
+}
 function loadTeamConfig(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
-    const team = parsed?.team;
-    if (typeof team?.repoUrl === "string" && typeof team?.marketplaceName === "string") {
-      return team;
-    }
-  } catch {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
   }
   return null;
 }
 function saveTeamConfig(team, home = handbookHome()) {
-  let config = {};
-  try {
-    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) config = parsed;
-  } catch {
-  }
+  const config = readConfigFile(home);
   config.team = team;
-  mkdirSync(home, { recursive: true });
-  writeFileSync(join2(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 function runGit(args, cwd) {
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
@@ -51,7 +78,7 @@ function runGit(args, cwd) {
 function readMarketplaceName(repoDir) {
   try {
     const parsed = JSON.parse(
-      readFileSync2(join3(repoDir, ".claude-plugin", "marketplace.json"), "utf8")
+      readFileSync2(join4(repoDir, ".claude-plugin", "marketplace.json"), "utf8")
     );
     return typeof parsed?.name === "string" && parsed.name ? parsed.name : null;
   } catch {
@@ -60,6 +87,11 @@ function readMarketplaceName(repoDir) {
 }
 function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString()) {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
+  try {
+    assertSafeGitUrl(url);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
   const existing = loadTeamConfig(home);
   if (existing && existing.repoUrl !== url) {
     return {
@@ -67,11 +99,11 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       error: `already joined ${existing.repoUrl}; edit config.json to switch teams`
     };
   }
-  const workdir = mkdtempSync2(join3(tmpdir(), "handbook-join-"));
-  const repoDir = join3(workdir, "repo");
+  const workdir = mkdtempSync(join4(tmpdir(), "handbook-join-"));
+  const repoDir = join4(workdir, "repo");
   try {
     try {
-      git(["clone", "--depth", "1", url, repoDir], workdir);
+      git(["clone", "--depth", "1", "--single-branch", "--", url, repoDir], workdir);
     } catch (err) {
       return { ok: false, error: `git clone failed (is the URL correct and reachable?): ${String(err)}` };
     }
@@ -93,7 +125,7 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
     );
     return { ok: true, name, url, home };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    rmSync2(workdir, { recursive: true, force: true });
   }
 }
 function formatJoinSuccess(result) {
@@ -101,7 +133,7 @@ function formatJoinSuccess(result) {
     `Joined the team skill base at ${result.url}.`,
     "",
     "  engine:  approved skills will now target this repository",
-    `  config:  team repo saved to ${join3(result.home ?? "", "config.json")}`,
+    `  config:  team repo saved to ${join4(result.home ?? "", "config.json")}`,
     "",
     "To finish, connect Claude Code to the team marketplace (built-in commands):",
     "",

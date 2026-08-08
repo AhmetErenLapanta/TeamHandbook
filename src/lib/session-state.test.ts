@@ -99,7 +99,7 @@ describe("resolveOpenErrors", () => {
     let state = recordFailure(emptySessionState("s1"), failure);
     state = recordFailure(state, { ...failure, fingerprint: "def456", family: "cargo build" });
     attachEditToOpenErrors(state, "/repo/src/app.ts");
-    const resolved = resolveOpenErrors(state, "npm test", "npm test", "2026-08-08T01:00:00Z");
+    const resolved = resolveOpenErrors(state, "npm test", "npm test", "/repo", "2026-08-08T01:00:00Z");
     expect(resolved).toHaveLength(1);
     expect(resolved[0]).toMatchObject({
       fingerprint: "abc123",

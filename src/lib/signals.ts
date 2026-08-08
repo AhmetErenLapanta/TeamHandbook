@@ -7,6 +7,8 @@ import {
   saveSessionState,
   handbookHome,
 } from "./session-state.js";
+import { signalSecret } from "./secrets.js";
+import { incrementRedactionBlocked } from "./counters.js";
 
 export interface Signal {
   ts: string;
@@ -23,6 +25,39 @@ export interface Signal {
   resolvedAt?: string;
   promotedBy?: "recurrence";
   trigger?: "manual";
+  secretRedacted?: boolean;
+}
+
+/**
+ * A signal whose untrusted fields contain a secret must never reach disk with its
+ * content. Reduce it to a fingerprint-only tombstone (so recurrence
+ * counting — which reads only `fingerprint` — still works) and demote it to weak
+ * so it can never be promoted. Returns the sanitized list plus how many were
+ * redacted, so the caller can bump the counter exactly once per secret.
+ */
+export function sanitizeSignalsForPersistence(signals: Signal[]): {
+  clean: Signal[];
+  redacted: number;
+} {
+  let redacted = 0;
+  const clean = signals.map((s) => {
+    if (s.secretRedacted || !signalSecret(s)) return s;
+    redacted += 1;
+    return {
+      ts: s.ts,
+      sessionId: s.sessionId,
+      kind: "weak" as const,
+      fingerprint: s.fingerprint,
+      family: "",
+      command: "",
+      error: "",
+      cwd: "",
+      count: s.count,
+      edits: [],
+      secretRedacted: true,
+    };
+  });
+  return { clean, redacted };
 }
 
 export function signalsFile(home: string = handbookHome()): string {
@@ -67,8 +102,10 @@ export function promoteRecurrentSignals(signals: Signal[], priorFingerprints: Se
 
 export function appendSignals(signals: Signal[], home: string = handbookHome()): void {
   if (signals.length === 0) return;
+  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
+  if (redacted > 0) incrementRedactionBlocked(home, redacted);
   mkdirSync(home, { recursive: true });
-  const lines = signals.map((s) => JSON.stringify(s)).join("\n") + "\n";
+  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
 

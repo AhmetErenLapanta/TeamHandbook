@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats } from "./status.js";
-import { incrementRedactionBlocked } from "./gate.js";
+import { incrementRedactionBlocked } from "./counters.js";
 import { pipelineLogFile } from "./pipeline.js";
 import { writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
@@ -97,6 +97,7 @@ describe("gatherStatus / formatStatus", () => {
       ledger: { total: 2, candidates: 1, weak: 1, distinctFingerprints: 2 },
       queue: { pending: 1, approved: 1, rejected: 1 },
       redactionBlocked: 1,
+      detector: { postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 },
       lastRun: null,
       config: {
         gateModel: "haiku",

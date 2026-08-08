@@ -18,25 +18,38 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { mkdirSync, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { mkdirSync, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join5 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
+var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 
+// src/lib/config.ts
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 // src/lib/queue.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync } from "node:fs";
-import { basename, join as join3 } from "node:path";
+import { readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync } from "node:fs";
+import { basename, join as join4 } from "node:path";
 
 // src/lib/skill-index.ts
-import { readdirSync, readFileSync } from "node:fs";
-import { join as join2 } from "node:path";
+import { readdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
-  return join2(home, "candidates");
+  return join3(home, "candidates");
 }
 function parseSkillFrontmatter(md) {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
@@ -69,7 +82,7 @@ function listExistingSkills(dirs) {
     for (const entry of entries) {
       let raw;
       try {
-        raw = readFileSync(join2(dir, entry, "SKILL.md"), "utf8");
+        raw = readFileSync2(join3(dir, entry, "SKILL.md"), "utf8");
       } catch {
         continue;
       }
@@ -83,12 +96,12 @@ function listExistingSkills(dirs) {
 // src/lib/queue.ts
 var STATUSES = ["pending", "approved", "rejected"];
 function candidateMetaFile(dir) {
-  return join3(dir, "candidate.json");
+  return join4(dir, "candidate.json");
 }
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync2(join3(dir, "SKILL.md"), "utf8");
+    md = readFileSync3(join4(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -96,7 +109,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync2(join3(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync3(join4(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -113,7 +126,7 @@ function synthesizeMeta(dir) {
 }
 function readCandidateMeta(dir) {
   try {
-    const parsed = JSON.parse(readFileSync2(candidateMetaFile(dir), "utf8"));
+    const parsed = JSON.parse(readFileSync3(candidateMetaFile(dir), "utf8"));
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return { ...parsed, slug: basename(dir) };
     }
@@ -129,7 +142,7 @@ function listCandidates(home = handbookHome(), status) {
   } catch {
     return [];
   }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join3(base, e.name))).filter((m) => m !== null);
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join4(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
     (a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug)
@@ -137,23 +150,16 @@ function listCandidates(home = handbookHome(), status) {
 }
 
 // src/lib/notify.ts
-var defaultNotifyConfig = {
-  sessionStart: true
-};
 function loadNotifyConfig(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync3(join4(home, "config.json"), "utf8"));
-    return { sessionStart: parsed?.notify?.sessionStart !== false };
-  } catch {
-    return { ...defaultNotifyConfig };
-  }
+  const notify = readConfigFile(home).notify;
+  return { sessionStart: notify?.sessionStart !== false };
 }
 function seenSkillsFile(home = handbookHome()) {
-  return join4(home, "seen-skills.json");
+  return join5(home, "seen-skills.json");
 }
 function readSeenSkills(home) {
   try {
-    const parsed = JSON.parse(readFileSync3(seenSkillsFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync4(seenSkillsFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     return parsed;
   } catch {
@@ -189,7 +195,7 @@ function buildSessionStartSummary(pending, newSkills) {
 function sessionStartNotice(cwd, home = handbookHome()) {
   if (!loadNotifyConfig(home).sessionStart) return null;
   const pending = listCandidates(home, "pending").length;
-  const skillsDir = join4(cwd, ".claude", "skills");
+  const skillsDir = join5(cwd, ".claude", "skills");
   const current = listExistingSkills([skillsDir]).map((s) => s.name);
   return buildSessionStartSummary(pending, diffNewSkills(skillsDir, current, home));
 }

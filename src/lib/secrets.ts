@@ -5,11 +5,19 @@ const SECRET_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
   { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
   { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+  { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
+  { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
+  { name: "openai-key", re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/ },
+  { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
+  { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
+  { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
   { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
   {
+    // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
+    // which \b cannot match between two word chars.
     name: "assigned-secret",
-    re: /\b(?:api[_-]?key|secret|token|passw(?:or)?d)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i,
+    re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i,
   },
 ];
 
@@ -18,4 +26,18 @@ export function detectSecret(text: string): string | null {
     if (re.test(text)) return name;
   }
   return null;
+}
+
+/** True-name of any secret found across a signal's untrusted fields, else null. */
+export function signalSecret(fields: {
+  command?: string;
+  error?: string;
+  resolvedCommand?: string;
+  edits?: string[];
+}): string | null {
+  return detectSecret(
+    [fields.command ?? "", fields.error ?? "", fields.resolvedCommand ?? "", ...(fields.edits ?? [])].join(
+      "\n",
+    ),
+  );
 }

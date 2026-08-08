@@ -1,6 +1,6 @@
 import type { HookInput } from "./hook-io.js";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
-import { extractErrorText, extractExitCode } from "./tool-response.js";
+import { extractErrorText, extractExitCode, isInterrupt } from "./tool-response.js";
 import {
   attachEditToOpenErrors,
   loadSessionState,
@@ -16,6 +16,8 @@ export function captureBashFailure(input: HookInput, home: string = handbookHome
   if (input.tool_name !== "Bash" || !input.session_id) return false;
   const exitCode = extractExitCode(input.tool_response);
   if (exitCode === undefined || exitCode === 0) return false;
+  // Ctrl-C / timeout / OOM kills are not real failures to learn from.
+  if (isInterrupt(input.tool_response)) return false;
   const command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
   if (!command) return false;
   const error = normalizeErrorText(extractErrorText(input.tool_response));
@@ -49,7 +51,9 @@ export function captureBashSuccess(input: HookInput, home: string = handbookHome
   if (!command) return false;
   const state = loadSessionState(input.session_id, home);
   if (state.openErrors.length === 0) return false;
-  const resolved = resolveOpenErrors(state, commandFamily(command), command);
+  // Only resolve errors from the same working directory: a `npm test` pass in
+  // repo B must not close an `npm test` failure opened in repo A.
+  const resolved = resolveOpenErrors(state, commandFamily(command), command, input.cwd ?? "");
   if (resolved.length === 0) return false;
   saveSessionState(state, home);
   return true;

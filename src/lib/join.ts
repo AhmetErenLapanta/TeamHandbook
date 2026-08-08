@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { assertSafeGitUrl, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner } from "./init.js";
 import { handbookHome } from "./session-state.js";
 
@@ -31,6 +31,11 @@ export function joinTeamRepo(
   now: string = new Date().toISOString(),
 ): JoinResult {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
+  try {
+    assertSafeGitUrl(url);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
   const existing = loadTeamConfig(home);
   if (existing && existing.repoUrl !== url) {
     return {
@@ -42,7 +47,7 @@ export function joinTeamRepo(
   const repoDir = join(workdir, "repo");
   try {
     try {
-      git(["clone", "--depth", "1", url, repoDir], workdir);
+      git(["clone", "--depth", "1", "--single-branch", "--", url, repoDir], workdir);
     } catch (err) {
       return { ok: false, error: `git clone failed (is the URL correct and reachable?): ${String(err)}` };
     }

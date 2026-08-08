@@ -14,8 +14,16 @@ describe("detectSecret", () => {
     ["slack-token", "xoxb-1234567890-abcdefghijkl"],
     ["bearer-token", "Authorization: Bearer dGhpcy1pcy1hLXZlcnktbG9uZy10b2tlbg"],
     ["url-credentials", "psql postgres://admin:hunter22@db.internal:5432/prod"],
-    ["assigned-secret", "api_key = 'sk-live-abcdef1234567890'"],
+    ["stripe-key", "STRIPE_KEY=sk_live_abcdef1234567890ABCDEF"],
+    ["openai-key", "export OPENAI_API_KEY=sk-proj-abcdef1234567890ABCDEFGH"],
+    ["google-api-key", "AIzaSyA1234567890abcdef_ABCDEFGHIJKLMNOP"],
+    ["npm-token", "//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwxyz012345"],
+    ["basic-auth-header", "Authorization: Basic dXNlcjpwYXNzd29yZA=="],
+    ["assigned-secret", "api_key = 'hunter2000plain'"],
     ["assigned-secret", "password: Sup3rS3cret!"],
+    // \b cannot match between two word chars, so an underscore-prefixed keyword
+    // (the most common env-var leak) must still be caught.
+    ["assigned-secret", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIabcd1234"],
   ])("detects %s", (name, text) => {
     expect(detectSecret(text)).toBe(name);
   });

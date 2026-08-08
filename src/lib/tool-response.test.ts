@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractErrorText, extractExitCode } from "./tool-response.js";
+import { extractErrorText, extractExitCode, isInterrupt } from "./tool-response.js";
 
 describe("extractExitCode", () => {
   it("reads snake_case and camelCase keys", () => {
@@ -13,6 +13,22 @@ describe("extractExitCode", () => {
     expect(extractExitCode({ exit_code: "1" })).toBeUndefined();
     expect(extractExitCode("failed")).toBeUndefined();
     expect(extractExitCode(null)).toBeUndefined();
+  });
+
+  it("falls back to the interrupted flag and an embedded exit-code message", () => {
+    expect(extractExitCode({ interrupted: true })).toBe(130);
+    expect(extractExitCode({ stderr: "boom\nExit code 2" })).toBe(2);
+    expect(extractExitCode("ls: no such file\nError: Exit code 1")).toBe(1);
+  });
+});
+
+describe("isInterrupt", () => {
+  it("flags Ctrl-C, timeout, and OOM kills but not real failures", () => {
+    expect(isInterrupt({ interrupted: true })).toBe(true);
+    expect(isInterrupt({ code: 130 })).toBe(true);
+    expect(isInterrupt({ code: 143 })).toBe(true);
+    expect(isInterrupt({ code: 1 })).toBe(false);
+    expect(isInterrupt({ code: 0 })).toBe(false);
   });
 });
 
