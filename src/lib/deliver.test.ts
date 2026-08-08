@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { approveAndDeliver, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
+import { saveTeamConfig } from "./init.js";
 import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
@@ -45,6 +47,23 @@ function seedCandidate(m: CandidateMeta): string {
   );
   writeFileSync(join(dir, "grounded-case.json"), JSON.stringify({ fingerprint: m.fingerprint }) + "\n");
   return dir;
+}
+
+function bareTeamRepo(): string {
+  const bare = mkdtempSync(join(tmpdir(), "handbook-team-"));
+  execFileSync("git", ["init", "--bare", "-b", "main", bare]);
+  const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
+  try {
+    execFileSync("git", ["clone", bare, join(seed, "repo")], { stdio: "ignore" });
+    const repo = join(seed, "repo");
+    writeFileSync(join(repo, "README.md"), "team skills\n");
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
+    execFileSync("git", ["-C", repo, "push", "origin", "main"]);
+  } finally {
+    rmSync(seed, { recursive: true, force: true });
+  }
+  return bare;
 }
 
 describe("resolveDeliveryDir", () => {
@@ -125,5 +144,75 @@ describe("approveAndDeliver", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("delivery failed");
     expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+  });
+});
+
+describe("approveAndDeliver (team mode)", () => {
+  let remote: string;
+
+  beforeEach(() => {
+    remote = bareTeamRepo();
+  });
+
+  afterEach(() => {
+    rmSync(remote, { recursive: true, force: true });
+  });
+
+  it("publishes to the configured team repo instead of the solo skills dir", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => "https://gitlab.acme.com/team/skills/-/merge_requests/7\n",
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "team",
+      branch: "handbook/fix-npm-test",
+      prUrl: "https://gitlab.acme.com/team/skills/-/merge_requests/7",
+      deliveredTo: "https://gitlab.acme.com/team/skills/-/merge_requests/7",
+    });
+    const files = execFileSync(
+      "git",
+      ["-C", remote, "ls-tree", "-r", "--name-only", "handbook/fix-npm-test"],
+      { encoding: "utf8" },
+    );
+    expect(files).toContain("skills/fix-npm-test/SKILL.md");
+    expect(existsSync(soloSkillsDir(project))).toBe(false);
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))).toMatchObject({
+      status: "approved",
+      decidedAt: "2026-08-08T01:00:00Z",
+    });
+  });
+
+  it("records the branch as deliveredTo when no PR URL could be obtained", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+    const result = approveAndDeliver(home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z", undefined, undefined, () => {
+      throw new Error("glab: command not found");
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "team",
+      branch: "handbook/fix-npm-test",
+      deliveredTo: `${remote} (branch handbook/fix-npm-test)`,
+    });
+    expect(result.prUrl).toBeUndefined();
+  });
+
+  it("keeps the candidate pending when the team repo is unreachable", () => {
+    saveTeamConfig({ repoUrl: join(home, "missing.git"), marketplaceName: "t" }, home);
+    seedCandidate(meta());
+    const result = approveAndDeliver(home, "fix-npm-test");
+    expect(result.ok).toBe(false);
+    expect(result.mode).toBe("team");
+    expect(result.error).toContain("git clone failed");
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+    expect(existsSync(soloSkillsDir(project))).toBe(false);
   });
 });

@@ -15,8 +15,11 @@ machine without their approval.
       asks for it.
    c. Ask the user: approve, reject, or skip?
    d. On approve run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug>`
-      — this installs the skill into the originating project's `.claude/skills/` directory
-      (solo mode); relay the installed path from the CLI output.
+      — with a team repo configured (via /handbook:init or /handbook:join) this pushes a
+      `handbook/<slug>` branch and opens a PR to the team skill base; otherwise it installs
+      the skill into the originating project's `.claude/skills/` directory (solo mode).
+      Relay the PR URL or installed path from the CLI output; if the output shows an
+      "Open the PR here" link instead of a PR URL, pass that link on to the user.
       On reject run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" reject <slug>`
       On skip, leave it pending and move to the next one.
 4. Finish with a one-line tally: how many approved, rejected, and still pending.

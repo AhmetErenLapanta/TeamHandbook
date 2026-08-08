@@ -1,10 +1,15 @@
 // src/cli/review.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-import { join as join5 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // src/lib/deliver.ts
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { join as join4 } from "node:path";
+import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// src/lib/init.ts
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -12,6 +17,11 @@ import { join } from "node:path";
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
 
 // src/lib/skill-index.ts
 import { join as join2 } from "node:path";
@@ -38,23 +48,186 @@ function parseSkillFrontmatter(md) {
   return { name, description, ...scope ? { scope } : {} };
 }
 
+// src/lib/distill.ts
+function normalizeRemoteUrl(raw) {
+  let s = raw.trim();
+  if (!s) return null;
+  const hadProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  s = s.replace(/^[^@/]+@/, "");
+  if (!hadProtocol) {
+    const colon = s.indexOf(":");
+    const slash2 = s.indexOf("/");
+    if (colon > 0 && (slash2 === -1 || colon < slash2)) {
+      s = s.slice(0, colon) + "/" + s.slice(colon + 1);
+    }
+  }
+  s = s.replace(/\.git$/i, "").replace(/\/+$/, "");
+  const slash = s.indexOf("/");
+  if (slash <= 0 || slash === s.length - 1) return null;
+  return s.slice(0, slash).toLowerCase() + s.slice(slash);
+}
+
+// src/lib/init.ts
+function loadTeamConfig(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync(join3(home, "config.json"), "utf8"));
+    const team = parsed?.team;
+    if (typeof team?.repoUrl === "string" && typeof team?.marketplaceName === "string") {
+      return team;
+    }
+  } catch {
+  }
+  return null;
+}
+function hostFromUrl(url) {
+  const normalized = normalizeRemoteUrl(url);
+  if (!normalized) return null;
+  return normalized.slice(0, normalized.indexOf("/"));
+}
+function runGit(args, cwd) {
+  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+}
+
+// src/lib/publish.ts
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync as mkdirSync2, mkdtempSync as mkdtempSync2, readFileSync as readFileSync2, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join4 } from "node:path";
+function runForge(tool, args, cwd) {
+  return execFileSync2(tool, args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+}
+function buildPrTitle(slug) {
+  return `feat(skill): add ${slug}`;
+}
+function buildPrBody(meta, grounded) {
+  const lines = [
+    meta.description,
+    "",
+    `- scope: \`${meta.scope}\``,
+    `- gate score: ${meta.gate ? `${meta.gate.total}/10` : "n/a"}`
+  ];
+  if (meta.gate) {
+    const scores = Object.entries(meta.gate.scores).map(([criterion, score]) => `${criterion} ${score}`).join(", ");
+    if (scores) lines.push(`- criteria: ${scores}`);
+  }
+  if (grounded) {
+    lines.push(
+      "",
+      "## Grounded case",
+      "",
+      "This skill was distilled from a real error-to-fix session; the case below ships with it",
+      "as its regression gate.",
+      "",
+      `- failed command: \`${grounded.command}\``,
+      `- error (normalized): \`${grounded.error}\``,
+      `- resolving command: ${grounded.resolvedCommand ? `\`${grounded.resolvedCommand}\`` : "(none recorded)"}`,
+      `- files edited for the fix: ${grounded.edits.join(", ") || "(none)"}`,
+      `- expect: ${grounded.expect}`
+    );
+  }
+  lines.push("", "---", "Opened by TeamHandbook after human approval of the candidate.");
+  return lines.join("\n");
+}
+function manualPrUrl(repoUrl, branch) {
+  const normalized = normalizeRemoteUrl(repoUrl);
+  if (!normalized) return null;
+  const host = hostFromUrl(repoUrl);
+  if (host && host.includes("github")) {
+    return `https://${normalized}/pull/new/${branch}`;
+  }
+  return `https://${normalized}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${encodeURIComponent(branch)}`;
+}
+function readGroundedCase(candidateDir) {
+  try {
+    return JSON.parse(readFileSync2(join4(candidateDir, "grounded-case.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+function extractUrl(output) {
+  return output.match(/https?:\/\/\S+/)?.[0] ?? null;
+}
+function openPr(repoUrl, branch, title, body, repoDir, forge) {
+  const host = hostFromUrl(repoUrl);
+  try {
+    if (host && host.includes("github")) {
+      return extractUrl(forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir));
+    }
+    return extractUrl(
+      forge(
+        "glab",
+        ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+        repoDir
+      )
+    );
+  } catch {
+    return null;
+  }
+}
+function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
+  const workdir = mkdtempSync2(join4(tmpdir(), "handbook-publish-"));
+  const repoDir = join4(workdir, "repo");
+  try {
+    try {
+      git(["clone", team.repoUrl, repoDir], workdir);
+    } catch (err) {
+      return { ok: false, error: `git clone failed (is the team repo reachable?): ${String(err)}` };
+    }
+    let slug = meta.slug;
+    for (let i = 2; existsSync(join4(repoDir, "skills", slug)); i++) {
+      slug = `${meta.slug}-${i}`;
+    }
+    const branch = `handbook/${slug}`;
+    const skillDir = `skills/${slug}`;
+    const title = buildPrTitle(slug);
+    try {
+      git(["checkout", "-b", branch], repoDir);
+      mkdirSync2(join4(repoDir, skillDir), { recursive: true });
+      copyFileSync(join4(candidateDir, "SKILL.md"), join4(repoDir, skillDir, "SKILL.md"));
+      if (existsSync(join4(candidateDir, "grounded-case.json"))) {
+        copyFileSync(
+          join4(candidateDir, "grounded-case.json"),
+          join4(repoDir, skillDir, "grounded-case.json")
+        );
+      }
+      git(["add", "-A"], repoDir);
+      git(["commit", "-m", title], repoDir);
+      git(["push", "-u", "origin", branch], repoDir);
+    } catch (err) {
+      return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
+    }
+    const body = buildPrBody(meta, readGroundedCase(candidateDir));
+    const prUrl = openPr(team.repoUrl, branch, title, body, repoDir, forge);
+    if (prUrl) return { ok: true, branch, skillDir, prUrl };
+    return {
+      ok: true,
+      branch,
+      skillDir,
+      manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0
+    };
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+}
+
 // src/lib/queue.ts
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join as join3 } from "node:path";
+import { readdirSync, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename, join as join5 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
 }
 function candidateMetaFile(dir) {
-  return join3(dir, "candidate.json");
+  return join5(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
-  writeFileSync(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+  writeFileSync2(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
 }
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync(join3(dir, "SKILL.md"), "utf8");
+    md = readFileSync3(join5(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -62,7 +235,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync(join3(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync3(join5(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -79,7 +252,7 @@ function synthesizeMeta(dir) {
 }
 function readCandidateMeta(dir) {
   try {
-    const parsed = JSON.parse(readFileSync(candidateMetaFile(dir), "utf8"));
+    const parsed = JSON.parse(readFileSync3(candidateMetaFile(dir), "utf8"));
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return { ...parsed, slug: basename(dir) };
     }
@@ -95,7 +268,7 @@ function listCandidates(home = handbookHome(), status) {
   } catch {
     return [];
   }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join3(base, e.name))).filter((m) => m !== null);
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join5(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
     (a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug)
@@ -103,7 +276,7 @@ function listCandidates(home = handbookHome(), status) {
 }
 function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString()) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
-  const dir = join3(candidatesDir(home), slug);
+  const dir = join5(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
   if (meta.status !== "pending") {
@@ -126,33 +299,53 @@ function formatCandidateList(metas) {
 
 // src/lib/deliver.ts
 function soloSkillsDir(projectCwd) {
-  return join4(projectCwd, ".claude", "skills");
+  return join6(projectCwd, ".claude", "skills");
 }
-function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync) {
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync2) {
   const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
   return soloSkillsDir(origin);
 }
-function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
-  const dir = join4(candidatesDir(home), slug);
+  const dir = join6(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
   if (meta.status !== "pending") {
     return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
   }
+  if (team) return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+  return deliverSolo(dir, meta, fallbackCwd, decidedAt);
+}
+function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
+  const published = publishCandidate(dir, meta, team, git, forge);
+  if (!published.ok) return { ok: false, mode: "team", meta, error: published.error };
+  const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
+  const updated = { ...meta, status: "approved", decidedAt, deliveredTo };
+  writeCandidateMeta(dir, updated);
+  return {
+    ok: true,
+    mode: "team",
+    meta: updated,
+    deliveredTo,
+    branch: published.branch,
+    prUrl: published.prUrl,
+    manualUrl: published.manualUrl
+  };
+}
+function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
-  let target = join4(skillsDir, slug);
-  for (let i = 2; existsSync(target); i++) {
-    target = join4(skillsDir, `${slug}-${i}`);
+  let target = join6(skillsDir, meta.slug);
+  for (let i = 2; existsSync2(target); i++) {
+    target = join6(skillsDir, `${meta.slug}-${i}`);
   }
   try {
-    mkdirSync(target, { recursive: true });
-    copyFileSync(join4(dir, "SKILL.md"), join4(target, "SKILL.md"));
-    if (existsSync(join4(dir, "grounded-case.json"))) {
-      copyFileSync(join4(dir, "grounded-case.json"), join4(target, "grounded-case.json"));
+    mkdirSync3(target, { recursive: true });
+    copyFileSync2(join6(dir, "SKILL.md"), join6(target, "SKILL.md"));
+    if (existsSync2(join6(dir, "grounded-case.json"))) {
+      copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
     }
   } catch (err) {
-    return { ok: false, meta, error: `delivery failed: ${String(err)}` };
+    return { ok: false, mode: "solo", meta, error: `delivery failed: ${String(err)}` };
   }
   const updated = {
     ...meta,
@@ -161,7 +354,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
     deliveredTo: target
   };
   writeCandidateMeta(dir, updated);
-  return { ok: true, meta: updated, deliveredTo: target };
+  return { ok: true, mode: "solo", meta: updated, deliveredTo: target };
 }
 
 // src/cli/review.ts
@@ -178,11 +371,11 @@ function main() {
   }
   if (!slug || !isSafeSlug(slug)) usage();
   if (cmd === "show") {
-    const dir = join5(candidatesDir(home), slug);
+    const dir = join7(candidatesDir(home), slug);
     try {
-      console.log(readFileSync2(join5(dir, "SKILL.md"), "utf8"));
+      console.log(readFileSync4(join7(dir, "SKILL.md"), "utf8"));
       console.log("--- grounded-case.json ---");
-      console.log(readFileSync2(join5(dir, "grounded-case.json"), "utf8"));
+      console.log(readFileSync4(join7(dir, "grounded-case.json"), "utf8"));
     } catch {
       console.error(`error: no candidate named "${slug}"`);
       process.exit(1);
@@ -196,7 +389,16 @@ function main() {
       console.error(`error: ${result2.error}`);
       process.exit(1);
     }
-    console.log(`Approved "${slug}" and installed it at ${result2.deliveredTo}.`);
+    if (result2.mode === "team") {
+      if (result2.prUrl) {
+        console.log(`Approved "${slug}" and opened a PR to the team skill base: ${result2.prUrl}`);
+      } else {
+        console.log(`Approved "${slug}" and pushed branch ${result2.branch} to the team skill base.`);
+        if (result2.manualUrl) console.log(`Open the PR here: ${result2.manualUrl}`);
+      }
+    } else {
+      console.log(`Approved "${slug}" and installed it at ${result2.deliveredTo}.`);
+    }
     return;
   }
   const result = decideCandidate(home, slug, "rejected");
