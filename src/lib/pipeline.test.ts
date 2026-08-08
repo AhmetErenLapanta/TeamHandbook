@@ -11,7 +11,7 @@ import {
   runPipeline,
   spawnPipelineRunner,
 } from "./pipeline.js";
-import { readCounters } from "./gate.js";
+import { readCounters } from "./counters.js";
 import { readCandidateMeta } from "./queue.js";
 import type { ClaudeRunner } from "./score.js";
 import { appendSignals, ledgerFingerprintCounts } from "./signals.js";
@@ -145,7 +145,9 @@ describe("runPipeline", () => {
 
   it("never calls the model for a signal the secret sieve dropped", async () => {
     const signal = candidate({ error: "auth failed: api_key=abcd1234efgh5678" });
-    seedLedger(home, signal, 2);
+    // Seed recurrence with a clean signal sharing the fingerprint, so only the
+    // pipeline's own secret sieve increments the redaction counter.
+    seedLedger(home, candidate(), 2);
     const calls: string[] = [];
     const summary = await runPipeline([signal], home, {
       runner: fakeRunner(calls),

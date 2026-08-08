@@ -1,9 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 import { handbookHome } from "./session-state.js";
+import { readConfigFile } from "./config.js";
+import { writeFileAtomic } from "./fs-atomic.js";
+
+// git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
+// runs arbitrary commands on clone, and a URL starting with `-` is parsed as an
+// option (`--upload-pack=...`). Everything else — https/ssh/git@ URLs, file://,
+// and plain local paths — is safe. Denylist those two forms rather than allowlist
+// transports, so legitimate local-path repos still work.
+const REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
+
+export function assertSafeGitUrl(url: string): void {
+  const u = url.trim();
+  if (!u || u.startsWith("-") || REMOTE_HELPER.test(u) || /[\r\n\0]/.test(u)) {
+    throw new Error(`unsafe or unsupported git URL: ${url}`);
+  }
+}
 
 export interface TeamConfig {
   repoUrl: string;
@@ -13,29 +29,17 @@ export interface TeamConfig {
 }
 
 export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null {
-  try {
-    const parsed = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-    const team = parsed?.team;
-    if (typeof team?.repoUrl === "string" && typeof team?.marketplaceName === "string") {
-      return team;
-    }
-  } catch {
-    // no config yet
+  const team = readConfigFile(home).team as TeamConfig | undefined;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
   }
   return null;
 }
 
 export function saveTeamConfig(team: TeamConfig, home: string = handbookHome()): void {
-  let config: Record<string, unknown> = {};
-  try {
-    const parsed = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) config = parsed;
-  } catch {
-    // start from an empty config
-  }
+  const config = readConfigFile(home);
   config.team = team;
-  mkdirSync(home, { recursive: true });
-  writeFileSync(join(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  writeFileAtomic(join(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 
 export function hostFromUrl(url: string): string | null {
@@ -205,6 +209,11 @@ export function initTeamRepo(
   now: string = new Date().toISOString(),
 ): InitResult {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
+  try {
+    assertSafeGitUrl(url);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
   const marketplaceName = slugifySkillName(name ?? repoNameFromUrl(url) ?? "");
   if (!marketplaceName) {
     return { ok: false, error: `cannot derive a marketplace name from "${url}"; pass --name` };
@@ -221,7 +230,7 @@ export function initTeamRepo(
       ["-c", "user.name=TeamHandbook", "-c", "user.email=TeamHandbook@localhost", "commit", "-m", "chore: scaffold team skill base"],
       workdir,
     );
-    git(["remote", "add", "origin", url], workdir);
+    git(["remote", "add", "origin", "--", url], workdir);
     git(["push", "-u", "origin", "main"], workdir);
   } catch (err) {
     return { ok: false, error: `git failed (is the target repo empty and reachable?): ${String(err)}` };

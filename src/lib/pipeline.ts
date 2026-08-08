@@ -12,7 +12,9 @@ import {
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import type { Signal } from "./signals.js";
-import { appendSignals, ledgerFingerprintCounts } from "./signals.js";
+import { appendSignals, ledgerFingerprintCounts, sanitizeSignalsForPersistence } from "./signals.js";
+import { signalSecret } from "./secrets.js";
+import { incrementRedactionBlocked } from "./counters.js";
 import { runRuleSieves } from "./gate.js";
 import type { DropReason } from "./gate.js";
 import { loadScoreConfig, runClaudeCli, scoreSignal } from "./score.js";
@@ -28,6 +30,9 @@ export function pendingDir(home: string = handbookHome()): string {
 
 export function enqueuePendingSignals(signals: Signal[], home: string = handbookHome()): string | null {
   if (signals.length === 0) return null;
+  // The handoff file also lands on disk, so sanitize it too. The ledger append
+  // (appendSignals) already counted these secrets, so don't re-count here.
+  const { clean } = sanitizeSignalsForPersistence(signals);
   mkdirSync(pendingDir(home), { recursive: true });
   const session = signals[0]!.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
@@ -35,8 +40,16 @@ export function enqueuePendingSignals(signals: Signal[], home: string = handbook
   for (let i = 2; existsSync(file); i++) {
     file = join(pendingDir(home), `${base}-${i}.json`);
   }
-  writeFileSync(file, JSON.stringify(signals));
-  return file;
+  // wx: fail rather than clobber a batch a concurrent hook wrote at the same ms.
+  for (let i = 0; i < 50; i++) {
+    try {
+      writeFileSync(file, JSON.stringify(clean), { flag: "wx" });
+      return file;
+    } catch {
+      file = join(pendingDir(home), `${base}-x${i}.json`);
+    }
+  }
+  return null;
 }
 
 export function drainPendingSignals(home: string = handbookHome()): Signal[] {
@@ -156,7 +169,6 @@ export async function runManualSignal(
   const listSkills = deps.listSkills ?? listExistingSkills;
   const scoreConfig = loadScoreConfig(home);
   const distillConfig = loadDistillConfig(home);
-  appendSignals([signal], home);
   const summary: PipelineSummary = {
     received: 1,
     sievedOut: 0,
@@ -170,6 +182,15 @@ export async function runManualSignal(
     appendPipelineLog(summary, home, now());
     return outcome;
   };
+  // On a secret, store nothing at all (not even a ledger tombstone beyond the
+  // counter) and tell the user honestly — matches learn.ts's message.
+  const secret = signalSecret(signal);
+  if (secret) {
+    incrementRedactionBlocked(home, 1);
+    summary.sievedOut = 1;
+    return finish({ stage: "sieved", reason: "secret", detail: secret });
+  }
+  appendSignals([signal], home);
   const { passed, dropped } = runRuleSieves([signal], home);
   if (passed.length === 0) {
     summary.sievedOut = 1;

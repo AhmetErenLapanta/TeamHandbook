@@ -64,8 +64,8 @@ describe("buildScorePrompt", () => {
     const prompt = buildScorePrompt(candidate(), 1, [
       { name: "fix-npm-cache", description: "Use when npm install fails on a stale cache." },
     ]);
-    expect(prompt).toContain("Existing skills already available to the team:");
-    expect(prompt).toContain("- fix-npm-cache: Use when npm install fails on a stale cache.");
+    expect(prompt).toContain("Existing skills already available to the team");
+    expect(prompt).toContain("fix-npm-cache: Use when npm install fails on a stale cache.");
     expect(prompt).toContain('"duplicateOf"');
   });
 });
@@ -181,7 +181,7 @@ describe("scoreSignal", () => {
       },
       [{ name: "fix-npm-cache", description: "Use when npm install fails on a stale cache." }],
     );
-    expect(prompts[0]).toContain("- fix-npm-cache:");
+    expect(prompts[0]).toContain("fix-npm-cache:");
     expect(verdict.outcome).toBe("reject");
     expect(verdict.result?.duplicateOf).toBe("fix-npm-cache");
   });

@@ -1,21 +1,32 @@
 // src/cli/review.ts
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/deliver.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
+var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
+}
+
+// src/lib/config.ts
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 // src/lib/score.ts
@@ -24,9 +35,9 @@ import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 
 // src/lib/skill-index.ts
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
-  return join2(home, "candidates");
+  return join3(home, "candidates");
 }
 function parseSkillFrontmatter(md) {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
@@ -67,16 +78,27 @@ function normalizeRemoteUrl(raw) {
   if (slash <= 0 || slash === s.length - 1) return null;
   return s.slice(0, slash).toLowerCase() + s.slice(slash);
 }
+function renameSkillMd(skillMd, newSlug) {
+  return skillMd.replace(/^name:.*$/m, `name: ${newSlug}`);
+}
+function uniqueSlug(baseSlug, taken) {
+  let slug = baseSlug;
+  for (let i = 2; taken(slug); i++) slug = `${baseSlug}-${i}`;
+  return slug;
+}
 
 // src/lib/init.ts
+var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
+function assertSafeGitUrl(url) {
+  const u = url.trim();
+  if (!u || u.startsWith("-") || REMOTE_HELPER.test(u) || /[\r\n\0]/.test(u)) {
+    throw new Error(`unsafe or unsupported git URL: ${url}`);
+  }
+}
 function loadTeamConfig(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync(join3(home, "config.json"), "utf8"));
-    const team = parsed?.team;
-    if (typeof team?.repoUrl === "string" && typeof team?.marketplaceName === "string") {
-      return team;
-    }
-  } catch {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
   }
   return null;
 }
@@ -91,7 +113,7 @@ function runGit(args, cwd) {
 
 // src/lib/publish.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync as mkdirSync2, mkdtempSync as mkdtempSync2, readFileSync as readFileSync2, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync as readFileSync2, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join4 } from "node:path";
 function runForge(tool, args, cwd) {
@@ -140,10 +162,13 @@ function manualPrUrl(repoUrl, branch) {
 }
 function readGroundedCase(candidateDir) {
   try {
-    return JSON.parse(readFileSync2(join4(candidateDir, "grounded-case.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync2(join4(candidateDir, "grounded-case.json"), "utf8"));
+    if (typeof parsed?.command === "string" && typeof parsed?.error === "string" && typeof parsed?.expect === "string" && Array.isArray(parsed?.edits)) {
+      return parsed;
+    }
   } catch {
-    return null;
   }
+  return null;
 }
 function extractUrl(output) {
   return output.match(/https?:\/\/\S+/)?.[0] ?? null;
@@ -166,25 +191,31 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
   }
 }
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
-  const workdir = mkdtempSync2(join4(tmpdir(), "handbook-publish-"));
+  try {
+    assertSafeGitUrl(team.repoUrl);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
+  const workdir = mkdtempSync(join4(tmpdir(), "handbook-publish-"));
   const repoDir = join4(workdir, "repo");
   try {
     try {
-      git(["clone", team.repoUrl, repoDir], workdir);
+      git(["clone", "--depth", "1", "--", team.repoUrl, repoDir], workdir);
     } catch (err) {
       return { ok: false, error: `git clone failed (is the team repo reachable?): ${String(err)}` };
     }
-    let slug = meta.slug;
-    for (let i = 2; existsSync(join4(repoDir, "skills", slug)); i++) {
-      slug = `${meta.slug}-${i}`;
-    }
+    const slug = uniqueSlug(meta.slug, (s) => existsSync(join4(repoDir, "skills", s)));
     const branch = `handbook/${slug}`;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
-      mkdirSync2(join4(repoDir, skillDir), { recursive: true });
-      copyFileSync(join4(candidateDir, "SKILL.md"), join4(repoDir, skillDir, "SKILL.md"));
+      mkdirSync(join4(repoDir, skillDir), { recursive: true });
+      const skillMd = readFileSync2(join4(candidateDir, "SKILL.md"), "utf8");
+      writeFileSync(
+        join4(repoDir, skillDir, "SKILL.md"),
+        slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug)
+      );
       if (existsSync(join4(candidateDir, "grounded-case.json"))) {
         copyFileSync(
           join4(candidateDir, "grounded-case.json"),
@@ -334,13 +365,12 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
-  let target = join6(skillsDir, meta.slug);
-  for (let i = 2; existsSync2(target); i++) {
-    target = join6(skillsDir, `${meta.slug}-${i}`);
-  }
+  const slug = uniqueSlug(meta.slug, (s) => existsSync2(join6(skillsDir, s)));
+  const target = join6(skillsDir, slug);
   try {
-    mkdirSync3(target, { recursive: true });
-    copyFileSync2(join6(dir, "SKILL.md"), join6(target, "SKILL.md"));
+    mkdirSync2(target, { recursive: true });
+    const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
+    writeFileSync3(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync2(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
     }
@@ -373,9 +403,9 @@ function main() {
   if (cmd === "show") {
     const dir = join7(candidatesDir(home), slug);
     try {
-      console.log(readFileSync4(join7(dir, "SKILL.md"), "utf8"));
+      console.log(readFileSync5(join7(dir, "SKILL.md"), "utf8"));
       console.log("--- grounded-case.json ---");
-      console.log(readFileSync4(join7(dir, "grounded-case.json"), "utf8"));
+      console.log(readFileSync5(join7(dir, "grounded-case.json"), "utf8"));
     } catch {
       console.error(`error: no candidate named "${slug}"`);
       process.exit(1);

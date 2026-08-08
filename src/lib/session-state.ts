@@ -1,6 +1,14 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { writeFileAtomic } from "./fs-atomic.js";
+
+// An edit is attributed to an open error only if that error was seen within this
+// window. Without it, a stale failure from hours ago collects every later edit in
+// the session and produces a false candidate when the command eventually passes.
+const EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1000;
+const MAX_EDITS_PER_ERROR = 20;
+const MAX_OPEN_ERRORS = 50;
 
 export interface OpenError {
   fingerprint: string;
@@ -56,9 +64,7 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
 }
 
 export function saveSessionState(state: SessionState, home: string = handbookHome()): void {
-  const file = sessionFile(state.sessionId, home);
-  mkdirSync(join(home, "sessions"), { recursive: true });
-  writeFileSync(file, JSON.stringify(state, null, 2));
+  writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
 
 export function deleteSessionState(sessionId: string, home: string = handbookHome()): void {
@@ -78,12 +84,26 @@ export function recordFailure(
     return state;
   }
   state.openErrors.push({ ...failure, count: 1, firstSeenAt: at, lastSeenAt: at, edits: [] });
+  // Cap unbounded growth from a session that hits many distinct never-resolved
+  // errors; keep the most recently seen.
+  if (state.openErrors.length > MAX_OPEN_ERRORS) {
+    state.openErrors.sort((a, b) => a.lastSeenAt.localeCompare(b.lastSeenAt));
+    state.openErrors = state.openErrors.slice(-MAX_OPEN_ERRORS);
+  }
   return state;
 }
 
-export function attachEditToOpenErrors(state: SessionState, filePath: string): boolean {
+export function attachEditToOpenErrors(
+  state: SessionState,
+  filePath: string,
+  at: string = new Date().toISOString(),
+): boolean {
+  const cutoff = new Date(at).getTime() - EDIT_ATTACH_WINDOW_MS;
   let attached = false;
   for (const error of state.openErrors) {
+    const seen = new Date(error.lastSeenAt).getTime();
+    if (Number.isFinite(seen) && seen < cutoff) continue; // too old to be related
+    if (error.edits.length >= MAX_EDITS_PER_ERROR) continue;
     if (!error.edits.includes(filePath)) {
       error.edits.push(filePath);
       attached = true;
@@ -96,11 +116,13 @@ export function resolveOpenErrors(
   state: SessionState,
   family: string,
   command: string,
+  cwd = "",
   at: string = new Date().toISOString(),
 ): ResolvedPair[] {
-  const matching = state.openErrors.filter((e) => e.family === family);
+  const sameCwd = (e: OpenError) => cwd === "" || e.cwd === "" || e.cwd === cwd;
+  const matching = state.openErrors.filter((e) => e.family === family && sameCwd(e));
   if (matching.length === 0) return [];
-  state.openErrors = state.openErrors.filter((e) => e.family !== family);
+  state.openErrors = state.openErrors.filter((e) => !(e.family === family && sameCwd(e)));
   const resolved = matching.map((e) => ({ ...e, resolvedAt: at, resolvedCommand: command }));
   state.resolvedPairs.push(...resolved);
   return resolved;

@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeRemoteUrl } from "./distill.js";
+import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
 import type { GroundedCase } from "./distill.js";
-import { hostFromUrl, runGit } from "./init.js";
+import { assertSafeGitUrl, hostFromUrl, runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 
@@ -122,25 +122,33 @@ export function publishCandidate(
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
 ): PublishOutcome {
+  try {
+    assertSafeGitUrl(team.repoUrl);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
   const workdir = mkdtempSync(join(tmpdir(), "handbook-publish-"));
   const repoDir = join(workdir, "repo");
   try {
     try {
-      git(["clone", team.repoUrl, repoDir], workdir);
+      git(["clone", "--depth", "1", "--", team.repoUrl, repoDir], workdir);
     } catch (err) {
       return { ok: false, error: `git clone failed (is the team repo reachable?): ${String(err)}` };
     }
-    let slug = meta.slug;
-    for (let i = 2; existsSync(join(repoDir, "skills", slug)); i++) {
-      slug = `${meta.slug}-${i}`;
-    }
+    const slug = uniqueSlug(meta.slug, (s) => existsSync(join(repoDir, "skills", s)));
     const branch = `handbook/${slug}`;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
       mkdirSync(join(repoDir, skillDir), { recursive: true });
-      copyFileSync(join(candidateDir, "SKILL.md"), join(repoDir, skillDir, "SKILL.md"));
+      // Keep the SKILL.md name in sync with a suffixed slug so it doesn't shadow
+      // the skill it collided with.
+      const skillMd = readFileSync(join(candidateDir, "SKILL.md"), "utf8");
+      writeFileSync(
+        join(repoDir, skillDir, "SKILL.md"),
+        slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug),
+      );
       if (existsSync(join(candidateDir, "grounded-case.json"))) {
         copyFileSync(
           join(candidateDir, "grounded-case.json"),

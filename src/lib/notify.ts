@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { handbookHome } from "./session-state.js";
+import { readConfigFile } from "./config.js";
 import { listCandidates } from "./queue.js";
 import { listExistingSkills } from "./skill-index.js";
 
@@ -13,12 +14,8 @@ export const defaultNotifyConfig: NotifyConfig = {
 };
 
 export function loadNotifyConfig(home: string = handbookHome()): NotifyConfig {
-  try {
-    const parsed = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-    return { sessionStart: parsed?.notify?.sessionStart !== false };
-  } catch {
-    return { ...defaultNotifyConfig };
-  }
+  const notify = readConfigFile(home).notify as Record<string, unknown> | undefined;
+  return { sessionStart: notify?.sessionStart !== false };
 }
 
 export function seenSkillsFile(home: string = handbookHome()): string {
