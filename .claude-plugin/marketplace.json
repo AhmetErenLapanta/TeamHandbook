@@ -1,0 +1,13 @@
+{
+  "name": "teamhandbook",
+  "owner": {
+    "name": "Ahmet Eren Lapanta"
+  },
+  "plugins": [
+    {
+      "name": "handbook",
+      "source": "./",
+      "description": "Turns real error→fix moments from your coding sessions into gated, reviewable, merge-ready skills."
+    }
+  ]
+}
