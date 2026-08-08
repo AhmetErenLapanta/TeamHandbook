@@ -11,6 +11,17 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/post-tool-use.js\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

@@ -62,17 +62,12 @@ function fingerprint(family, normalizedError) {
 }
 
 // src/lib/tool-response.ts
-var EXIT_CODE_KEYS = ["code", "exit_code", "exitCode", "returnCode"];
 var STDOUT_TAIL_CHARS = 2e3;
+var EXIT_CODE_KEYS = ["code", "exit_code", "exitCode", "returnCode"];
 var EXIT_CODE_TEXT = /\bexit code[:\s]+(\d{1,3})\b/i;
-function contentBlocksText(response) {
-  if (!Array.isArray(response)) return null;
-  const parts = response.map((b) => b && typeof b === "object" ? b["text"] : b).filter((t) => typeof t === "string");
-  return parts.length ? parts.join("\n") : null;
-}
+var INTERRUPT_CODES = /* @__PURE__ */ new Set([124, 130, 137, 143, 144, 145]);
 function extractExitCode(response) {
-  const blocks = contentBlocksText(response);
-  if (blocks !== null) return extractExitCode(blocks);
+  if (Array.isArray(response)) return extractExitCode(contentBlocksText(response));
   if (typeof response === "string") {
     const m2 = response.match(EXIT_CODE_TEXT);
     return m2 ? Number(m2[1]) : void 0;
@@ -83,23 +78,42 @@ function extractExitCode(response) {
     const value = record[key];
     if (typeof value === "number" && Number.isInteger(value)) return value;
   }
-  if (record["interrupted"] === true) return 130;
   const text = [record["stderr"], record["stdout"], record["text"]].filter((v) => typeof v === "string").join("\n");
   const m = text.match(EXIT_CODE_TEXT);
   return m ? Number(m[1]) : void 0;
 }
-var INTERRUPT_CODES = /* @__PURE__ */ new Set([124, 130, 137, 143, 144, 145]);
-function isInterrupt(response) {
-  if (typeof response === "object" && response !== null) {
-    if (response["interrupted"] === true) return true;
+function bashFailure(input) {
+  if (input.hook_event_name === "PostToolUseFailure") {
+    const text = typeof input.error === "string" ? input.error : "";
+    const code2 = extractExitCode(text);
+    return {
+      errorText: text,
+      interrupted: input.is_interrupt === true || code2 !== void 0 && INTERRUPT_CODES.has(code2)
+    };
   }
-  const code = extractExitCode(response);
-  return code !== void 0 && INTERRUPT_CODES.has(code);
+  const code = extractExitCode(input.tool_response);
+  if (code !== void 0 && code !== 0) {
+    return { errorText: errorTextFromResponse(input.tool_response), interrupted: INTERRUPT_CODES.has(code) };
+  }
+  return null;
 }
-function extractErrorText(response) {
-  const blocks = contentBlocksText(response);
-  if (blocks !== null) return blocks.slice(-STDOUT_TAIL_CHARS);
+function isBashSuccess(input) {
+  if (input.hook_event_name === "PostToolUseFailure") return false;
+  const code = extractExitCode(input.tool_response);
+  if (code !== void 0 && code !== 0) return false;
+  const r = input.tool_response;
+  if (typeof r === "object" && r !== null && r["interrupted"] === true) {
+    return false;
+  }
+  return true;
+}
+function contentBlocksText(response) {
+  if (!Array.isArray(response)) return "";
+  return response.map((b) => b && typeof b === "object" ? b["text"] : b).filter((t) => typeof t === "string").join("\n");
+}
+function errorTextFromResponse(response) {
   if (typeof response === "string") return response;
+  if (Array.isArray(response)) return contentBlocksText(response).slice(-STDOUT_TAIL_CHARS);
   if (typeof response !== "object" || response === null) return "";
   const record = response;
   const stderr = record["stderr"];
@@ -206,14 +220,16 @@ function resolveOpenErrors(state, family, command, cwd = "", at = (/* @__PURE__ 
 
 // src/lib/capture.ts
 var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
+function bashCommand(input) {
+  return typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+}
 function captureBashFailure(input, home = handbookHome()) {
   if (input.tool_name !== "Bash" || !input.session_id) return false;
-  const exitCode = extractExitCode(input.tool_response);
-  if (exitCode === void 0 || exitCode === 0) return false;
-  if (isInterrupt(input.tool_response)) return false;
-  const command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+  const failure = bashFailure(input);
+  if (!failure || failure.interrupted) return false;
+  const command = bashCommand(input);
   if (!command) return false;
-  const error = normalizeErrorText(extractErrorText(input.tool_response));
+  const error = normalizeErrorText(failure.errorText);
   const family = commandFamily(command);
   const state = loadSessionState(input.session_id, home);
   recordFailure(state, {
@@ -237,8 +253,8 @@ function captureFileEdit(input, home = handbookHome()) {
 }
 function captureBashSuccess(input, home = handbookHome()) {
   if (input.tool_name !== "Bash" || !input.session_id) return false;
-  if (extractExitCode(input.tool_response) !== 0) return false;
-  const command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+  if (!isBashSuccess(input)) return false;
+  const command = bashCommand(input);
   if (!command) return false;
   const state = loadSessionState(input.session_id, home);
   if (state.openErrors.length === 0) return false;

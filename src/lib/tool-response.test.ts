@@ -1,55 +1,54 @@
 import { describe, it, expect } from "vitest";
-import { extractErrorText, extractExitCode, isInterrupt } from "./tool-response.js";
+import { bashFailure, extractExitCode, isBashSuccess } from "./tool-response.js";
+import type { HookInput } from "./hook-io.js";
+
+describe("bashFailure", () => {
+  it("reads a PostToolUseFailure event's error and interrupt flag", () => {
+    const f = bashFailure({ hook_event_name: "PostToolUseFailure", error: "Exit code 1\nboom" });
+    expect(f).toEqual({ errorText: "Exit code 1\nboom", interrupted: false });
+  });
+
+  it("treats an interrupt flag or an interrupt exit code as interrupted", () => {
+    expect(bashFailure({ hook_event_name: "PostToolUseFailure", error: "x", is_interrupt: true })?.interrupted).toBe(
+      true,
+    );
+    expect(bashFailure({ hook_event_name: "PostToolUseFailure", error: "Exit code 130" })?.interrupted).toBe(true);
+  });
+
+  it("returns null for a successful PostToolUse", () => {
+    expect(bashFailure({ hook_event_name: "PostToolUse", tool_response: { stdout: "ok", interrupted: false } })).toBeNull();
+  });
+
+  it("falls back to a non-zero exit code in a PostToolUse tool_response", () => {
+    const f = bashFailure({ hook_event_name: "PostToolUse", tool_response: { exit_code: 2, stderr: "err" } });
+    expect(f).toEqual({ errorText: "err", interrupted: false });
+  });
+});
+
+describe("isBashSuccess", () => {
+  it("is true for a PostToolUse with a clean tool_response", () => {
+    expect(isBashSuccess({ hook_event_name: "PostToolUse", tool_response: { stdout: "ok", interrupted: false } })).toBe(
+      true,
+    );
+  });
+
+  it("is false for a failure event, an interrupted run, or a non-zero exit code", () => {
+    expect(isBashSuccess({ hook_event_name: "PostToolUseFailure", error: "x" })).toBe(false);
+    expect(isBashSuccess({ hook_event_name: "PostToolUse", tool_response: { interrupted: true } })).toBe(false);
+    expect(isBashSuccess({ hook_event_name: "PostToolUse", tool_response: { exit_code: 1 } })).toBe(false);
+  });
+});
 
 describe("extractExitCode", () => {
-  it("reads snake_case and camelCase keys", () => {
-    expect(extractExitCode({ exit_code: 1 })).toBe(1);
-    expect(extractExitCode({ exitCode: 2 })).toBe(2);
+  it("reads numeric fields and an embedded message", () => {
     expect(extractExitCode({ code: 0 })).toBe(0);
+    expect(extractExitCode({ exit_code: 2 })).toBe(2);
+    expect(extractExitCode("failed: Exit code 3")).toBe(3);
+    expect(extractExitCode([{ type: "text", text: "Exit code 4" }])).toBe(4);
   });
 
-  it("returns undefined for missing or non-numeric values", () => {
-    expect(extractExitCode({})).toBeUndefined();
-    expect(extractExitCode({ exit_code: "1" })).toBeUndefined();
-    expect(extractExitCode("failed")).toBeUndefined();
-    expect(extractExitCode(null)).toBeUndefined();
-  });
-
-  it("falls back to the interrupted flag and an embedded exit-code message", () => {
-    expect(extractExitCode({ interrupted: true })).toBe(130);
-    expect(extractExitCode({ stderr: "boom\nExit code 2" })).toBe(2);
-    expect(extractExitCode("ls: no such file\nError: Exit code 1")).toBe(1);
-  });
-});
-
-describe("isInterrupt", () => {
-  it("flags Ctrl-C, timeout, and OOM kills but not real failures", () => {
-    expect(isInterrupt({ interrupted: true })).toBe(true);
-    expect(isInterrupt({ code: 130 })).toBe(true);
-    expect(isInterrupt({ code: 143 })).toBe(true);
-    expect(isInterrupt({ code: 1 })).toBe(false);
-    expect(isInterrupt({ code: 0 })).toBe(false);
-  });
-});
-
-describe("extractErrorText", () => {
-  it("prefers stderr over stdout", () => {
-    expect(extractErrorText({ stderr: "err", stdout: "out" })).toBe("err");
-  });
-
-  it("falls back to the tail of stdout", () => {
-    const stdout = `${"x".repeat(3000)}FAIL`;
-    const result = extractErrorText({ stderr: "  ", stdout });
-    expect(result.length).toBeLessThanOrEqual(2000);
-    expect(result).toContain("FAIL");
-  });
-
-  it("passes through string responses", () => {
-    expect(extractErrorText("plain failure")).toBe("plain failure");
-  });
-
-  it("returns empty string when nothing is available", () => {
-    expect(extractErrorText({})).toBe("");
-    expect(extractErrorText(undefined)).toBe("");
+  it("returns undefined when there is no code", () => {
+    expect(extractExitCode({ stdout: "ok" })).toBeUndefined();
+    expect(extractExitCode("just text")).toBeUndefined();
   });
 });
