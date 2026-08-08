@@ -225,9 +225,20 @@ export async function runPipeline(
 
 export type ManualOutcome =
   | { stage: "sieved"; reason: DropReason; detail?: string }
-  | { stage: "gate-rejected"; total: number; threshold: number; duplicateOf?: string; rationale?: string }
   | { stage: "error"; message: string }
-  | { stage: "written"; slug: string; gateTotal: number | null; scope: string };
+  | {
+      stage: "written";
+      slug: string;
+      gateTotal: number | null;
+      scope: string;
+      // the user explicitly asked for this skill, so a low gate score is advice,
+      // not a veto: the candidate is written either way and these fields let the
+      // review surface the gate's dissent
+      belowThreshold?: boolean;
+      threshold?: number;
+      rationale?: string;
+      duplicateOf?: string;
+    };
 
 export async function runManualSignal(
   signal: Signal,
@@ -280,16 +291,11 @@ export async function runManualSignal(
     summary.errored = 1;
     return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
   }
-  if (verdict.outcome === "reject") {
-    summary.rejected = 1;
-    return finish({
-      stage: "gate-rejected",
-      total: verdict.result?.total ?? 0,
-      threshold: scoreConfig.threshold,
-      ...(verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}),
-      ...(verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}),
-    });
-  }
+  // The user explicitly asked for this skill, so it is ALWAYS distilled and
+  // queued; a low gate score travels with it as advice. The share decision —
+  // publish to the team or not — is the user's, at /handbook:review.
+  const belowThreshold = verdict.outcome === "reject";
+  if (belowThreshold) summary.rejected = 1;
   const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
   if (outcome.outcome !== "distilled" || !outcome.artifact) {
     summary.errored = 1;
@@ -304,6 +310,14 @@ export async function runManualSignal(
     slug,
     gateTotal: verdict.result?.total ?? null,
     scope: outcome.artifact.scope,
+    ...(belowThreshold
+      ? {
+          belowThreshold: true,
+          threshold: scoreConfig.threshold,
+          ...(verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}),
+          ...(verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}),
+        }
+      : {}),
   });
 }
 

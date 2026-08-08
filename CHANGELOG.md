@@ -23,6 +23,12 @@ Initial release.
   CI; `/handbook:join` connects the engine to it.
 - **Privacy**: secret redaction before any write; raw payload dumps are opt-in
   (`TEAMHANDBOOK_DEBUG`); no telemetry.
+- **Procedure skills**: `/handbook:learn` also captures a completed task's
+  procedure (goal + ordered steps + verification) as a candidate; the gate judges
+  it with a manual-trigger calibration, the distiller produces a step-by-step
+  skill, and the grounded case records the original task. Repeated-work detection
+  records each session's work shape and nudges — once per shape — when similar
+  work keeps recurring.
 - **Visibility**: a one-time welcome on the first session, a since-last-session
   activity heartbeat (only when something was captured and nothing stronger is
   pending), and detector health counters in `/handbook:status`. All notices are

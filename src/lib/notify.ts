@@ -7,6 +7,7 @@ import { readCounters } from "./counters.js";
 import { teamSkillsDir } from "./init.js";
 import { listCandidates } from "./queue.js";
 import { listExistingSkills } from "./skill-index.js";
+import { workRecurrences } from "./signals.js";
 
 export interface NotifyConfig {
   sessionStart: boolean;
@@ -79,6 +80,49 @@ export function heartbeatDelta(home: string = handbookHome()): HeartbeatDelta {
   };
 }
 
+// T3: when the same shape of work keeps recurring across sessions, suggest — once
+// per shape — turning the procedure into a skill. A suggestion, never automatic
+// generation: the user runs /handbook:learn with full session context. The
+// threshold trades earliness against confidence; since each shape nudges at most
+// once, a low default mainly changes WHEN you're asked, not how often.
+const DEFAULT_WORK_NUDGE_THRESHOLD = 2;
+
+export function workNudgeThreshold(home: string = handbookHome()): number {
+  const notify = readConfigFile(home).notify as Record<string, unknown> | undefined;
+  const value = notify?.workNudgeThreshold;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1
+    ? value
+    : DEFAULT_WORK_NUDGE_THRESHOLD;
+}
+
+function nudgedWorkFile(home: string): string {
+  return join(home, "nudged-work.json");
+}
+
+export function pendingWorkNudge(home: string = handbookHome()): string | null {
+  let nudged: string[] = [];
+  try {
+    const parsed = JSON.parse(readFileSync(nudgedWorkFile(home), "utf8"));
+    if (Array.isArray(parsed)) nudged = parsed.filter((f) => typeof f === "string");
+  } catch {
+    // nothing nudged yet
+  }
+  const threshold = workNudgeThreshold(home);
+  const due = workRecurrences(home)
+    .filter((r) => r.count >= threshold && !nudged.includes(r.fingerprint))
+    .sort((a, b) => b.count - a.count);
+  const top = due[0];
+  if (!top) return null;
+  writeFileAtomic(nudgedWorkFile(home), JSON.stringify([...nudged, top.fingerprint], null, 2) + "\n");
+  const what = [top.families.slice(0, 3).join(", "), top.exts.slice(0, 3).join(" ")]
+    .filter(Boolean)
+    .join("; editing ");
+  return (
+    `handbook: you've done similar work ${top.count} times (${what}) — if that's a ` +
+    `repeatable procedure, run /handbook:learn to turn it into a team skill.`
+  );
+}
+
 export function seenSkillsFile(home: string = handbookHome()): string {
   return join(home, "seen-skills.json");
 }
@@ -114,15 +158,17 @@ export interface SummaryInputs {
   newSkills: string[];
   firstRun?: boolean;
   heartbeat?: HeartbeatDelta | null;
+  workNudge?: string | null;
 }
 
 export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
-  const { pending, newSkills, firstRun = false, heartbeat = null } = inputs;
+  const { pending, newSkills, firstRun = false, heartbeat = null, workNudge = null } = inputs;
   const lines: string[] = [];
   if (firstRun) {
     lines.push(
       "TeamHandbook is active — watching this machine for error→fix moments worth keeping. " +
-        "Nothing leaves your machine without your approval. Run /handbook:status anytime.",
+        "Nothing leaves your machine without your approval. Run /handbook:status anytime, " +
+        "or try /handbook:learn after your next completed task.",
     );
   }
   if (pending > 0) {
@@ -137,6 +183,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
       `handbook: ${newSkills.length} ${noun} available since your last session here: ${newSkills.join(", ")}.`,
     );
   }
+  if (workNudge) lines.push(workNudge);
   // The heartbeat fills the silence between candidates, but never competes with a
   // stronger line: shown only when there was real activity and nothing else to say.
   if (!firstRun && lines.length === 0 && heartbeat && (heartbeat.failures > 0 || heartbeat.pairs > 0)) {
@@ -173,5 +220,6 @@ export function sessionStartNotice(
     newSkills,
     firstRun: isFirstRun(home),
     heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
+    workNudge: pendingWorkNudge(home),
   });
 }

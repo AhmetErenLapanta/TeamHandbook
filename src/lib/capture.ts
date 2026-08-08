@@ -12,8 +12,48 @@ import {
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
 
+// Command families too generic to describe "what kind of work this was".
+const GENERIC_FAMILIES = new Set([
+  "ls", "cat", "cd", "pwd", "echo", "grep", "find", "head", "tail", "which",
+  "mkdir", "rm", "cp", "mv", "touch", "chmod", "sed", "awk", "wc", "sleep",
+  "git status", "git diff", "git log", "git add",
+]);
+
 function bashCommand(input: HookInput): string {
   return typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+}
+
+/**
+ * Accumulate the session's coarse work shape (which command families ran, which
+ * file types were edited). This powers repeated-work detection (T3): the shape is
+ * recorded at session end and, when similar work recurs, the user is nudged to
+ * turn the procedure into a skill.
+ */
+export function recordActivity(input: HookInput, home: string = handbookHome()): boolean {
+  if (!input.session_id) return false;
+  let family = "";
+  let ext = "";
+  if (input.tool_name === "Bash") {
+    const command = bashCommand(input);
+    if (!command) return false;
+    family = commandFamily(command);
+    if (GENERIC_FAMILIES.has(family) || family === "unknown") return false;
+  } else if (EDIT_TOOLS.has(input.tool_name ?? "")) {
+    const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
+    const m = filePath.match(/\.([A-Za-z0-9]+)$/);
+    if (!m) return false;
+    ext = `.${m[1]!.toLowerCase()}`;
+  } else {
+    return false;
+  }
+  const state = loadSessionState(input.session_id, home);
+  const activity = state.activity ?? { families: [], exts: [] };
+  if (family && !activity.families.includes(family)) activity.families.push(family);
+  else if (ext && !activity.exts.includes(ext)) activity.exts.push(ext);
+  else return false; // nothing new; skip the write
+  state.activity = activity;
+  saveSessionState(state, home);
+  return true;
 }
 
 /** Record a failed Bash command (PostToolUseFailure, or a non-zero PostToolUse). */

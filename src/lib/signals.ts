@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OpenError, ResolvedPair } from "./session-state.js";
@@ -9,6 +10,19 @@ import {
 } from "./session-state.js";
 import { signalSecret } from "./secrets.js";
 import { incrementRedactionBlocked } from "./counters.js";
+
+/** A successfully completed piece of work, captured as a procedure (T2 task mode). */
+export interface TaskCase {
+  goal: string;
+  steps: string[];
+  verification?: string;
+}
+
+/** A session's coarse work shape, used for repeated-work detection (T3). */
+export interface WorkShape {
+  families: string[];
+  exts: string[];
+}
 
 export interface Signal {
   ts: string;
@@ -26,6 +40,10 @@ export interface Signal {
   promotedBy?: "recurrence";
   trigger?: "manual";
   secretRedacted?: boolean;
+  // present on procedure signals: what was done and how, instead of error→fix
+  task?: TaskCase;
+  // present on work-shape records (family === "work"): never promoted, only counted
+  work?: WorkShape;
 }
 
 /**
@@ -90,12 +108,53 @@ export function ledgerFingerprints(home: string = handbookHome()): Set<string> {
   return new Set(ledgerFingerprintCounts(home).keys());
 }
 
+export interface WorkRecurrence {
+  fingerprint: string;
+  count: number;
+  families: string[];
+  exts: string[];
+}
+
+/** How often each work shape has been seen across sessions (T3 recurrence). */
+export function workRecurrences(home: string = handbookHome()): WorkRecurrence[] {
+  const byFp = new Map<string, WorkRecurrence>();
+  let raw: string;
+  try {
+    raw = readFileSync(signalsFile(home), "utf8");
+  } catch {
+    return [];
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.family !== "work" || typeof parsed?.fingerprint !== "string" || !parsed?.work) continue;
+      const existing = byFp.get(parsed.fingerprint);
+      if (existing) existing.count += 1;
+      else {
+        byFp.set(parsed.fingerprint, {
+          fingerprint: parsed.fingerprint,
+          count: 1,
+          families: Array.isArray(parsed.work.families) ? parsed.work.families : [],
+          exts: Array.isArray(parsed.work.exts) ? parsed.work.exts : [],
+        });
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return [...byFp.values()];
+}
+
 export function promoteRecurrentSignals(signals: Signal[], priorFingerprints: Set<string>): Signal[] {
   const seen = new Set(priorFingerprints);
   return signals.map((signal) => {
     const recurrent = seen.has(signal.fingerprint);
     seen.add(signal.fingerprint);
     if (signal.kind !== "weak" || !recurrent) return signal;
+    // work-shape records are recurrence COUNTERS, not skill material: recurring
+    // ones trigger the session-start nudge, never an automatic candidate
+    if (signal.work) return signal;
     return { ...signal, kind: "candidate", promotedBy: "recurrence" };
   });
 }
@@ -165,6 +224,40 @@ export function flushResolvedPairs(
   return signals;
 }
 
+/**
+ * A session that both ran meaningful commands and edited files gets its work
+ * shape recorded (T3). Same shape recurring across sessions → the session-start
+ * nudge suggests turning the procedure into a skill. Never promoted to candidate.
+ */
+export function workRecordFromState(
+  state: { activity?: { families: string[]; exts: string[] }; sessionId?: string },
+  sessionId: string,
+  ts: string,
+  cwd = "",
+): Signal | null {
+  const activity = state.activity;
+  if (!activity || activity.families.length === 0 || activity.exts.length === 0) return null;
+  const families = [...activity.families].sort();
+  const exts = [...activity.exts].sort();
+  const fingerprint = createHash("sha256")
+    .update(`work:${families.join(",")}:${exts.join(",")}`)
+    .digest("hex")
+    .slice(0, 16);
+  return {
+    ts,
+    sessionId,
+    kind: "weak",
+    fingerprint,
+    family: "work",
+    command: "",
+    error: "",
+    cwd,
+    count: 1,
+    edits: [],
+    work: { families, exts },
+  };
+}
+
 export function flushSessionEnd(
   sessionId: string,
   home: string = handbookHome(),
@@ -179,6 +272,8 @@ export function flushSessionEnd(
     ],
     ledgerFingerprints(home),
   );
+  const work = workRecordFromState(state, sessionId, ts);
+  if (work) signals.push(work);
   appendSignals(signals, home);
   deleteSessionState(sessionId, home);
   return signals;

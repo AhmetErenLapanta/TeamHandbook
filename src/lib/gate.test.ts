@@ -153,3 +153,26 @@ describe("counters", () => {
     expect(incrementRedactionBlocked(home)).toMatchObject({ redactionBlocked: 1 });
   });
 });
+
+describe("muted fingerprints (explicit 'don't suggest again')", () => {
+  it("drops automatic recurrences of a muted fingerprint but not manual ones", () => {
+    const signal: Parameters<typeof sieveSignal>[0] = {
+      ts: "t",
+      sessionId: "s1",
+      kind: "candidate",
+      fingerprint: "mutedfp",
+      family: "npm test",
+      command: "npm test",
+      error: "boom",
+      cwd: "/repo",
+      count: 1,
+      edits: ["/repo/a.ts"],
+    };
+    const muted = new Set(["mutedfp"]);
+    const auto = sieveSignal(signal, 5, undefined, muted);
+    expect(auto.pass).toBe(false);
+    expect(auto.reason).toBe("muted");
+    const manual = sieveSignal({ ...signal, trigger: "manual" }, 5, undefined, muted);
+    expect(manual.pass).toBe(true);
+  });
+});

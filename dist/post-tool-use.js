@@ -166,10 +166,12 @@ function loadSessionState(sessionId, home = handbookHome()) {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
     return {
       sessionId,
       openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
-      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : []
+      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
+      ...activity ? { activity } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -220,8 +222,60 @@ function resolveOpenErrors(state, family, command, cwd = "", at = (/* @__PURE__ 
 
 // src/lib/capture.ts
 var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
+var GENERIC_FAMILIES = /* @__PURE__ */ new Set([
+  "ls",
+  "cat",
+  "cd",
+  "pwd",
+  "echo",
+  "grep",
+  "find",
+  "head",
+  "tail",
+  "which",
+  "mkdir",
+  "rm",
+  "cp",
+  "mv",
+  "touch",
+  "chmod",
+  "sed",
+  "awk",
+  "wc",
+  "sleep",
+  "git status",
+  "git diff",
+  "git log",
+  "git add"
+]);
 function bashCommand(input) {
   return typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+}
+function recordActivity(input, home = handbookHome()) {
+  if (!input.session_id) return false;
+  let family = "";
+  let ext = "";
+  if (input.tool_name === "Bash") {
+    const command = bashCommand(input);
+    if (!command) return false;
+    family = commandFamily(command);
+    if (GENERIC_FAMILIES.has(family) || family === "unknown") return false;
+  } else if (EDIT_TOOLS.has(input.tool_name ?? "")) {
+    const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
+    const m = filePath.match(/\.([A-Za-z0-9]+)$/);
+    if (!m) return false;
+    ext = `.${m[1].toLowerCase()}`;
+  } else {
+    return false;
+  }
+  const state = loadSessionState(input.session_id, home);
+  const activity = state.activity ?? { families: [], exts: [] };
+  if (family && !activity.families.includes(family)) activity.families.push(family);
+  else if (ext && !activity.exts.includes(ext)) activity.exts.push(ext);
+  else return false;
+  state.activity = activity;
+  saveSessionState(state, home);
+  return true;
 }
 function captureBashFailure(input, home = handbookHome()) {
   if (input.tool_name !== "Bash" || !input.session_id) return false;
@@ -312,6 +366,7 @@ async function main() {
   const input = parseHookInput(raw);
   if (!input) return;
   bumpCounter("postToolUse");
+  recordActivity(input);
   if (captureBashFailure(input)) {
     bumpCounter("bashFailuresCaptured");
     return;

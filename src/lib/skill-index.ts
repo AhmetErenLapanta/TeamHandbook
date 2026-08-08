@@ -36,6 +36,18 @@ export function parseSkillFrontmatter(md: string): SkillSummary | null {
   return { name, description, ...(scope ? { scope } : {}) };
 }
 
+// A REJECTED candidate must not count as an "existing skill": rejecting once is
+// not "never again", so the gate's dedup must not silently suppress the same
+// learning forever. (Explicit suppression is the separate muted-fingerprints list.)
+function isRejectedCandidate(dir: string, entry: string): boolean {
+  try {
+    const meta = JSON.parse(readFileSync(join(dir, entry, "candidate.json"), "utf8"));
+    return meta?.status === "rejected";
+  } catch {
+    return false; // not a candidate dir (a plain skill), or unreadable — count it
+  }
+}
+
 export function listExistingSkills(dirs: string[]): SkillSummary[] {
   const byName = new Map<string, SkillSummary>();
   for (const dir of dirs) {
@@ -46,6 +58,7 @@ export function listExistingSkills(dirs: string[]): SkillSummary[] {
       continue;
     }
     for (const entry of entries) {
+      if (isRejectedCandidate(dir, entry)) continue;
       let raw: string;
       try {
         raw = readFileSync(join(dir, entry, "SKILL.md"), "utf8");

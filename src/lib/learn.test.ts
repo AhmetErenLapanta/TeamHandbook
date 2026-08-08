@@ -10,6 +10,7 @@ describe("parseLearnPayload", () => {
     );
     expect(error).toBeUndefined();
     expect(payload).toEqual({
+      kind: "error-fix",
       command: "npm test",
       error: "1 test failed",
       edits: [],
@@ -53,6 +54,7 @@ describe("signalFromLearnPayload", () => {
   it("builds a manual candidate with normalized error and matching fingerprint", () => {
     const signal = signalFromLearnPayload(
       {
+        kind: "error-fix",
         command: "npm test",
         error: "\x1b[31m1 test failed\x1b[0m at /Users/me/repo/app.ts:12",
         resolvedCommand: "npm test -- -u",
@@ -82,7 +84,7 @@ describe("signalFromLearnPayload", () => {
 
   it("omits resolution fields when no resolving command was given", () => {
     const signal = signalFromLearnPayload(
-      { command: "npm test", error: "boom", edits: [], cwd: "/repo", sessionId: "manual" },
+      { kind: "error-fix", command: "npm test", error: "boom", edits: [], cwd: "/repo", sessionId: "manual" },
       "2026-08-08T00:00:00Z",
     );
     expect(signal.resolvedCommand).toBeUndefined();

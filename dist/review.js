@@ -3,7 +3,7 @@ import { readFileSync as readFileSync5 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/deliver.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/lib/init.ts
@@ -12,6 +12,24 @@ import { execFileSync } from "node:child_process";
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+// src/lib/fs-atomic.ts
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+var seq = 0;
+function writeFileAtomic(file, data) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${seq++}-${process.hrtime.bigint().toString(36)}`;
+  try {
+    writeFileSync(tmp, data);
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+// src/lib/session-state.ts
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
@@ -123,7 +141,7 @@ function runGit(args, cwd) {
 
 // src/lib/publish.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync as readFileSync2, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync as mkdirSync2, mkdtempSync, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join4 } from "node:path";
 function runForge(tool, args, cwd) {
@@ -143,7 +161,21 @@ function buildPrBody(meta, grounded) {
     const scores = Object.entries(meta.gate.scores).map(([criterion, score]) => `${criterion} ${score}`).join(", ");
     if (scores) lines.push(`- criteria: ${scores}`);
   }
-  if (grounded) {
+  if (grounded && grounded.task) {
+    lines.push(
+      "",
+      "## Grounded case",
+      "",
+      "This skill was distilled from a real completed task; the case below ships with it",
+      "as its regression gate.",
+      "",
+      `- goal: ${grounded.task.goal}`,
+      ...grounded.task.steps.map((s, i) => `- step ${i + 1}: ${s}`),
+      `- verified by: ${grounded.task.verification ?? "(not recorded)"}`,
+      `- files touched: ${grounded.edits.join(", ") || "(none)"}`,
+      `- expect: ${grounded.expect}`
+    );
+  } else if (grounded) {
     lines.push(
       "",
       "## Grounded case",
@@ -237,8 +269,8 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
-      mkdirSync(join4(repoDir, skillDir), { recursive: true });
-      writeFileSync(
+      mkdirSync2(join4(repoDir, skillDir), { recursive: true });
+      writeFileSync2(
         join4(repoDir, skillDir, "SKILL.md"),
         slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
       );
@@ -264,12 +296,12 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    rmSync2(workdir, { recursive: true, force: true });
   }
 }
 
 // src/lib/queue.ts
-import { readdirSync, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { readdirSync, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { basename, join as join5 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
@@ -279,7 +311,7 @@ function candidateMetaFile(dir) {
   return join5(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
-  writeFileSync2(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+  writeFileSync3(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
 }
 function synthesizeMeta(dir) {
   let md;
@@ -331,7 +363,7 @@ function listCandidates(home = handbookHome(), status) {
     (a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug)
   );
 }
-function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
   const dir = join5(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
@@ -341,7 +373,26 @@ function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Da
   }
   const updated = { ...meta, status, decidedAt };
   writeCandidateMeta(dir, updated);
+  if (status === "rejected" && options.mute && meta.fingerprint) {
+    muteFingerprint(meta.fingerprint, home);
+  }
   return { ok: true, meta: updated };
+}
+function mutedFile(home = handbookHome()) {
+  return join5(home, "muted.json");
+}
+function loadMutedFingerprints(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync3(mutedFile(home), "utf8"));
+    if (Array.isArray(parsed)) return new Set(parsed.filter((f) => typeof f === "string"));
+  } catch {
+  }
+  return /* @__PURE__ */ new Set();
+}
+function muteFingerprint(fingerprint, home = handbookHome()) {
+  const muted = loadMutedFingerprints(home);
+  muted.add(fingerprint);
+  writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
 }
 function formatCandidateList(metas) {
   if (metas.length === 0) return "No pending candidates.";
@@ -395,8 +446,8 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   const target = join6(skillsDir, slug);
   try {
     const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
-    mkdirSync2(target, { recursive: true });
-    writeFileSync3(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
+    mkdirSync3(target, { recursive: true });
+    writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync2(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
     }
@@ -415,11 +466,56 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
 
 // src/cli/review.ts
 function usage() {
-  console.error("usage: review.js <list|show|approve|reject> [slug]");
+  console.error("usage: review.js <list|show|approve|reject> [slug] [--never]");
   process.exit(2);
 }
+function showCandidate(home, slug) {
+  const dir = join7(candidatesDir(home), slug);
+  let skillMd;
+  try {
+    skillMd = readFileSync5(join7(dir, "SKILL.md"), "utf8");
+  } catch {
+    console.error(`error: no candidate named "${slug}"`);
+    process.exit(1);
+  }
+  const meta = readCandidateMeta(dir);
+  const gate = meta?.gate;
+  console.log(`candidate: ${slug}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
+  if (gate) {
+    const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
+    console.log(`gate:      ${gate.total}/10  (${scores})`);
+    if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
+  } else {
+    console.log("gate:      n/a");
+  }
+  console.log("");
+  console.log(skillMd.trimEnd());
+  console.log("");
+  console.log("\u2500\u2500 grounded case \u2500\u2500");
+  try {
+    const grounded = JSON.parse(readFileSync5(join7(dir, "grounded-case.json"), "utf8"));
+    if (grounded.task) {
+      console.log(`goal:      ${grounded.task.goal}`);
+      (grounded.task.steps ?? []).forEach((s, i) => console.log(`  step ${i + 1}:  ${s}`));
+      if (grounded.task.verification) console.log(`verified:  ${grounded.task.verification}`);
+    } else {
+      console.log(`failed:    ${grounded.command}`);
+      console.log(`error:     ${String(grounded.error ?? "").split("\n").join("\n           ")}`);
+      if (grounded.resolvedCommand) console.log(`resolved:  ${grounded.resolvedCommand}`);
+      if (Array.isArray(grounded.edits) && grounded.edits.length) {
+        console.log(`edits:     ${grounded.edits.join(", ")}`);
+      }
+    }
+    if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
+  } catch {
+    console.log("(this candidate has no grounded case)");
+  }
+}
 function main() {
-  const [cmd = "list", slug] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const never = args.includes("--never");
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const [cmd = "list", slug] = positional;
   const home = handbookHome();
   if (cmd === "list") {
     console.log(formatCandidateList(listCandidates(home, "pending")));
@@ -427,19 +523,7 @@ function main() {
   }
   if (!slug || !isSafeSlug(slug)) usage();
   if (cmd === "show") {
-    const dir = join7(candidatesDir(home), slug);
-    try {
-      console.log(readFileSync5(join7(dir, "SKILL.md"), "utf8"));
-    } catch {
-      console.error(`error: no candidate named "${slug}"`);
-      process.exit(1);
-    }
-    console.log("--- grounded-case.json ---");
-    try {
-      console.log(readFileSync5(join7(dir, "grounded-case.json"), "utf8"));
-    } catch {
-      console.log("(this candidate has no grounded case)");
-    }
+    showCandidate(home, slug);
     return;
   }
   if (cmd !== "approve" && cmd !== "reject") usage();
@@ -461,11 +545,19 @@ function main() {
     }
     return;
   }
-  const result = decideCandidate(home, slug, "rejected");
+  const result = decideCandidate(home, slug, "rejected", void 0, { mute: never });
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exit(1);
   }
-  console.log(`Rejected "${slug}". It will not be delivered; its signal stays in the local ledger.`);
+  if (never) {
+    console.log(
+      `Rejected "${slug}" and muted its fingerprint \u2014 this learning will not be suggested again.`
+    );
+  } else {
+    console.log(
+      `Rejected "${slug}". If the same learning recurs it may be suggested again; use "reject ${slug} --never" to silence it permanently.`
+    );
+  }
 }
 main();
