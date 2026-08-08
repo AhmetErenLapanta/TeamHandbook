@@ -93,6 +93,21 @@ describe("sieveSignal", () => {
     expect(sieveSignal(candidate(), 1, { ...defaultGateConfig, repeatThreshold: 1 }).pass).toBe(true);
   });
 
+  it("passes a manual signal despite no file change and no recurrence", () => {
+    const manual = candidate({ trigger: "manual", edits: [] });
+    expect(sieveSignal(manual, 1)).toEqual({ signal: manual, pass: true });
+  });
+
+  it("still vetoes a manual signal on secret", () => {
+    const manual = candidate({ trigger: "manual", error: "token=glpat-xJ2vRq8kQzWn5pYtBs7d" });
+    expect(sieveSignal(manual, 1)).toMatchObject({ pass: false, reason: "secret" });
+  });
+
+  it("still drops an oversized manual signal", () => {
+    const manual = candidate({ trigger: "manual", error: "x".repeat(defaultGateConfig.maxErrorChars + 1) });
+    expect(sieveSignal(manual, 1)).toMatchObject({ pass: false, reason: "oversized", detail: "error" });
+  });
+
   it.each([
     ["error", { error: "x".repeat(defaultGateConfig.maxErrorChars + 1) }],
     ["command", { command: "npm " + "x".repeat(defaultGateConfig.maxCommandChars) }],

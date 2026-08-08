@@ -15,8 +15,10 @@ export interface CandidateMeta {
   description: string;
   fingerprint: string;
   sessionId: string;
+  cwd?: string;
   gate: { total: number; scores: Record<string, number>; rationale?: string } | null;
   decidedAt?: string;
+  deliveredTo?: string;
 }
 
 const STATUSES: CandidateStatus[] = ["pending", "approved", "rejected"];
@@ -47,6 +49,7 @@ export function candidateMetaFromArtifact(
     description: parseSkillFrontmatter(artifact.skillMd)?.description ?? "",
     fingerprint: artifact.groundedCase.fingerprint,
     sessionId: verdict.signal.sessionId,
+    cwd: verdict.signal.cwd,
     gate: verdict.result
       ? {
           total: verdict.result.total,

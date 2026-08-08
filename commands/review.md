@@ -15,6 +15,8 @@ machine without their approval.
       asks for it.
    c. Ask the user: approve, reject, or skip?
    d. On approve run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug>`
+      — this installs the skill into the originating project's `.claude/skills/` directory
+      (solo mode); relay the installed path from the CLI output.
       On reject run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" reject <slug>`
       On skip, leave it pending and move to the next one.
 4. Finish with a one-line tally: how many approved, rejected, and still pending.

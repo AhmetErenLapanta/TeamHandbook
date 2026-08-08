@@ -22,6 +22,7 @@ export interface Signal {
   resolvedCommand?: string;
   resolvedAt?: string;
   promotedBy?: "recurrence";
+  trigger?: "manual";
 }
 
 export function signalsFile(home: string = handbookHome()): string {
