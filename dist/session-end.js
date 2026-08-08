@@ -59,23 +59,28 @@ function deleteSessionState(sessionId, home = handbookHome()) {
 function signalsFile(home = handbookHome()) {
   return join2(home, "signals.jsonl");
 }
-function ledgerFingerprints(home = handbookHome()) {
-  const fingerprints = /* @__PURE__ */ new Set();
+function ledgerFingerprintCounts(home = handbookHome()) {
+  const counts = /* @__PURE__ */ new Map();
   let raw;
   try {
     raw = readFileSync2(signalsFile(home), "utf8");
   } catch {
-    return fingerprints;
+    return counts;
   }
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
-      if (typeof parsed?.fingerprint === "string") fingerprints.add(parsed.fingerprint);
+      if (typeof parsed?.fingerprint === "string") {
+        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
+      }
     } catch {
     }
   }
-  return fingerprints;
+  return counts;
+}
+function ledgerFingerprints(home = handbookHome()) {
+  return new Set(ledgerFingerprintCounts(home).keys());
 }
 function promoteRecurrentSignals(signals, priorFingerprints) {
   const seen = new Set(priorFingerprints);
