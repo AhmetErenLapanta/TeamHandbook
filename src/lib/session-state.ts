@@ -31,6 +31,8 @@ export interface SessionState {
   sessionId: string;
   openErrors: OpenError[];
   resolvedPairs: ResolvedPair[];
+  // coarse what-happened-this-session shape, for repeated-work detection (T3)
+  activity?: { families: string[]; exts: string[] };
 }
 
 export function emptySessionState(sessionId: string): SessionState {
@@ -53,10 +55,18 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const activity =
+      typeof parsed.activity === "object" &&
+      parsed.activity !== null &&
+      Array.isArray(parsed.activity.families) &&
+      Array.isArray(parsed.activity.exts)
+        ? { families: parsed.activity.families, exts: parsed.activity.exts }
+        : undefined;
     return {
       sessionId,
       openErrors: parsed.openErrors.map((e: OpenError) => ({ ...e, edits: e.edits ?? [] })),
       resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
+      ...(activity ? { activity } : {}),
     };
   } catch {
     return emptySessionState(sessionId);

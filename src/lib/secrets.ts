@@ -34,10 +34,17 @@ export function signalSecret(fields: {
   error?: string;
   resolvedCommand?: string;
   edits?: string[];
+  task?: { goal?: string; steps?: string[]; verification?: string };
 }): string | null {
   return detectSecret(
-    [fields.command ?? "", fields.error ?? "", fields.resolvedCommand ?? "", ...(fields.edits ?? [])].join(
-      "\n",
-    ),
+    [
+      fields.command ?? "",
+      fields.error ?? "",
+      fields.resolvedCommand ?? "",
+      ...(fields.edits ?? []),
+      fields.task?.goal ?? "",
+      ...(fields.task?.steps ?? []),
+      fields.task?.verification ?? "",
+    ].join("\n"),
   );
 }

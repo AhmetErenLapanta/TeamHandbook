@@ -75,10 +75,12 @@ function loadSessionState(sessionId, home = handbookHome()) {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
     return {
       sessionId,
       openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
-      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : []
+      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
+      ...activity ? { activity } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -125,9 +127,15 @@ function detectSecret(text) {
 }
 function signalSecret(fields) {
   return detectSecret(
-    [fields.command ?? "", fields.error ?? "", fields.resolvedCommand ?? "", ...fields.edits ?? []].join(
-      "\n"
-    )
+    [
+      fields.command ?? "",
+      fields.error ?? "",
+      fields.resolvedCommand ?? "",
+      ...fields.edits ?? [],
+      fields.task?.goal ?? "",
+      ...fields.task?.steps ?? [],
+      fields.task?.verification ?? ""
+    ].join("\n")
   );
 }
 
@@ -221,6 +229,7 @@ function promoteRecurrentSignals(signals, priorFingerprints) {
     const recurrent = seen.has(signal.fingerprint);
     seen.add(signal.fingerprint);
     if (signal.kind !== "weak" || !recurrent) return signal;
+    if (signal.work) return signal;
     return { ...signal, kind: "candidate", promotedBy: "recurrence" };
   });
 }

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
+import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict } from "./score.js";
@@ -138,6 +139,7 @@ export function decideCandidate(
   slug: string,
   status: "approved" | "rejected",
   decidedAt: string = new Date().toISOString(),
+  options: { mute?: boolean } = {},
 ): DecideResult {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
   const dir = join(candidatesDir(home), slug);
@@ -148,7 +150,33 @@ export function decideCandidate(
   }
   const updated: CandidateMeta = { ...meta, status, decidedAt };
   writeCandidateMeta(dir, updated);
+  if (status === "rejected" && options.mute && meta.fingerprint) {
+    muteFingerprint(meta.fingerprint, home);
+  }
   return { ok: true, meta: updated };
+}
+
+// A plain rejection does NOT suppress future recurrences — changing your mind (or
+// misclicking) must stay possible. Only an explicit "don't suggest this again"
+// adds the fingerprint here, and the sieve then drops automatic recurrences.
+export function mutedFile(home: string = handbookHome()): string {
+  return join(home, "muted.json");
+}
+
+export function loadMutedFingerprints(home: string = handbookHome()): Set<string> {
+  try {
+    const parsed = JSON.parse(readFileSync(mutedFile(home), "utf8"));
+    if (Array.isArray(parsed)) return new Set(parsed.filter((f) => typeof f === "string"));
+  } catch {
+    // nothing muted yet
+  }
+  return new Set();
+}
+
+export function muteFingerprint(fingerprint: string, home: string = handbookHome()): void {
+  const muted = loadMutedFingerprints(home);
+  muted.add(fingerprint);
+  writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
 }
 
 export function formatCandidateList(metas: CandidateMeta[]): string {

@@ -9,6 +9,7 @@ import {
   formatCandidateList,
   isSafeSlug,
   listCandidates,
+  loadMutedFingerprints,
   readCandidateMeta,
   writeCandidateMeta,
 } from "./queue.js";
@@ -231,5 +232,33 @@ describe("queue", () => {
     it("says so when there is nothing pending", () => {
       expect(formatCandidateList([])).toBe("No pending candidates.");
     });
+  });
+});
+
+describe("reject semantics", () => {
+  it("a plain reject does not mute; reject with mute records the fingerprint", () => {
+    const home2 = mkdtempSync(join(tmpdir(), "handbook-mute-"));
+    try {
+      for (const slug of ["skill-a", "skill-b"]) {
+        const dir = join(candidatesDir(home2), slug);
+        mkdirSync(dir, { recursive: true });
+        writeCandidateMeta(dir, {
+          slug,
+          status: "pending",
+          createdAt: "2026-08-08T00:00:00Z",
+          scope: "team",
+          description: "d",
+          fingerprint: `fp-${slug}`,
+          sessionId: "s1",
+          gate: null,
+        });
+      }
+      decideCandidate(home2, "skill-a", "rejected");
+      expect(loadMutedFingerprints(home2).size).toBe(0);
+      decideCandidate(home2, "skill-b", "rejected", undefined, { mute: true });
+      expect([...loadMutedFingerprints(home2)]).toEqual(["fp-skill-b"]);
+    } finally {
+      rmSync(home2, { recursive: true, force: true });
+    }
   });
 });

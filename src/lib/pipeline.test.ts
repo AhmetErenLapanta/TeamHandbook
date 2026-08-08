@@ -53,7 +53,7 @@ const distillResponse = JSON.stringify({
 function fakeRunner(calls: string[] = []): ClaudeRunner {
   return async (prompt) => {
     calls.push(prompt);
-    return prompt.includes("promotion gate") ? scoreResponse : distillResponse;
+    return prompt.includes("kebab-case-skill-name") ? distillResponse : scoreResponse;
   };
 }
 
@@ -275,23 +275,28 @@ describe("runManualSignal", () => {
     expect(readCounters(home).redactionBlocked).toBe(1);
   });
 
-  it("returns the gate verdict with duplicate and rationale details on rejection", async () => {
+  it("still writes a gate-rejected manual candidate, carrying the gate's dissent", async () => {
     const duplicate = JSON.stringify({
       scores: { recurrence: 2, unfindability: 2, generality: 2, durability: 2, costOfError: 2 },
       rationale: "already covered",
       duplicateOf: "fix-npm-test",
     });
     const outcome = await runManualSignal(manual(), home, {
-      runner: async () => duplicate,
+      runner: async (prompt) => (prompt.includes("kebab-case-skill-name") ? distillResponse : duplicate),
       remoteUrl: () => null,
     });
-    expect(outcome).toEqual({
-      stage: "gate-rejected",
-      total: 10,
+    // the user explicitly asked: the candidate is queued anyway, with the gate's
+    // objection attached for the review to surface
+    expect(outcome).toMatchObject({
+      stage: "written",
+      slug: "fix-npm-test",
+      belowThreshold: true,
       threshold: 7,
       duplicateOf: "fix-npm-test",
       rationale: "already covered",
     });
+    const meta = readCandidateMeta(join(candidatesDir(home), "fix-npm-test"));
+    expect(meta?.status).toBe("pending");
   });
 
   it("fails closed when the model call errors", async () => {

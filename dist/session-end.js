@@ -75,10 +75,12 @@ function loadSessionState(sessionId, home = handbookHome()) {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
     return {
       sessionId,
       openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
-      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : []
+      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
+      ...activity ? { activity } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -125,13 +127,20 @@ function detectSecret(text) {
 }
 function signalSecret(fields) {
   return detectSecret(
-    [fields.command ?? "", fields.error ?? "", fields.resolvedCommand ?? "", ...fields.edits ?? []].join(
-      "\n"
-    )
+    [
+      fields.command ?? "",
+      fields.error ?? "",
+      fields.resolvedCommand ?? "",
+      ...fields.edits ?? [],
+      fields.task?.goal ?? "",
+      ...fields.task?.steps ?? [],
+      fields.task?.verification ?? ""
+    ].join("\n")
   );
 }
 
 // src/lib/signals.ts
+import { createHash } from "node:crypto";
 import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
 import { join as join3 } from "node:path";
 
@@ -221,6 +230,7 @@ function promoteRecurrentSignals(signals, priorFingerprints) {
     const recurrent = seen.has(signal.fingerprint);
     seen.add(signal.fingerprint);
     if (signal.kind !== "weak" || !recurrent) return signal;
+    if (signal.work) return signal;
     return { ...signal, kind: "candidate", promotedBy: "recurrence" };
   });
 }
@@ -263,6 +273,26 @@ function signalFromOpenError(error, sessionId, ts) {
     edits: error.edits
   };
 }
+function workRecordFromState(state, sessionId, ts, cwd = "") {
+  const activity = state.activity;
+  if (!activity || activity.families.length === 0 || activity.exts.length === 0) return null;
+  const families = [...activity.families].sort();
+  const exts = [...activity.exts].sort();
+  const fingerprint = createHash("sha256").update(`work:${families.join(",")}:${exts.join(",")}`).digest("hex").slice(0, 16);
+  return {
+    ts,
+    sessionId,
+    kind: "weak",
+    fingerprint,
+    family: "work",
+    command: "",
+    error: "",
+    cwd,
+    count: 1,
+    edits: [],
+    work: { families, exts }
+  };
+}
 function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync) {
   const state = loadSessionState(sessionId, home);
   const signals = promoteRecurrentSignals(
@@ -272,6 +302,8 @@ function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */
     ],
     ledgerFingerprints(home)
   );
+  const work = workRecordFromState(state, sessionId, ts);
+  if (work) signals.push(work);
   appendSignals(signals, home);
   deleteSessionState(sessionId, home);
   return signals;

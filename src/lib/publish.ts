@@ -31,7 +31,21 @@ export function buildPrBody(meta: CandidateMeta, grounded: GroundedCase | null):
       .join(", ");
     if (scores) lines.push(`- criteria: ${scores}`);
   }
-  if (grounded) {
+  if (grounded && grounded.task) {
+    lines.push(
+      "",
+      "## Grounded case",
+      "",
+      "This skill was distilled from a real completed task; the case below ships with it",
+      "as its regression gate.",
+      "",
+      `- goal: ${grounded.task.goal}`,
+      ...grounded.task.steps.map((s, i) => `- step ${i + 1}: ${s}`),
+      `- verified by: ${grounded.task.verification ?? "(not recorded)"}`,
+      `- files touched: ${grounded.edits.join(", ") || "(none)"}`,
+      `- expect: ${grounded.expect}`,
+    );
+  } else if (grounded) {
     lines.push(
       "",
       "## Grounded case",

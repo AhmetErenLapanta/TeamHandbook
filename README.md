@@ -64,6 +64,23 @@ Merge it, and every teammate's Claude has it the next day.
 That's the whole install. It works **solo immediately** — captured skills are
 written to the project you're in, no team setup required.
 
+### See it work in 2 minutes
+
+The detector deliberately waits for a lesson to *recur* before proposing a skill,
+so a fresh install is quiet. To watch the whole loop right now, stage a recurring
+error→fix on purpose — in a Claude Code session, ask Claude to:
+
+1. Run a command that fails with a distinctive error (e.g. a script that rejects a
+   config), fix it by editing a file, and re-run the same command until it passes.
+2. Do the same fail→fix once more (a new session works too).
+3. Run `/handbook:status` — watch `failures captured` and `pairs resolved` count up.
+4. Within a minute the gate scores the recurring pair; `/handbook:review` shows
+   the distilled skill with its grounded case. Approve it and find it in the
+   project's `.claude/skills/`.
+
+Or skip the theater: finish any real task and run `/handbook:learn` — it captures
+the procedure immediately, no recurrence needed.
+
 To share with a team, one person runs `/handbook:init` once; it scaffolds the
 team skill repo (a marketplace with version-bump CI) and prints the single
 command teammates run to connect. See [team setup](#team-setup).
@@ -122,7 +139,7 @@ queue, and the last gate run.
 | Command | What it does |
 |---|---|
 | `/handbook:review` | List, show, approve, or reject pending candidates. **Nothing is published without this.** |
-| `/handbook:learn` | Manually turn the current situation into a candidate (still passes the gate). |
+| `/handbook:learn` | Manually capture an error→fix moment OR a completed task's procedure as a candidate (still passes the gate). |
 | `/handbook:status` | Ledger, queue, redaction count, and detector health counters. |
 | `/handbook:init` | Scaffold a team skill repo and print the command teammates run. |
 | `/handbook:join <url>` | Point the engine at an existing team skill repo. |
@@ -150,10 +167,18 @@ This plugin's hooks read your session, so this matters and is worth stating plai
 - Promotion requires **recurrence** (a one-off error→fix won't become a skill);
   this is deliberate — precision over recall for v1. It also means capture is
   conservative: TeamHandbook learns the mistakes your team makes *more than once*.
-- Capture is **command-fingerprint based**. It notices a failing command followed
-  by an edit and a passing re-run of the same command family. Lessons that don't
-  surface as a command failure (a silent logic bug, a design decision) aren't
-  caught; `/handbook:learn` is the manual escape hatch for those.
+- Automatic capture is **error-shaped** (a failing command, an edit, a passing
+  re-run). Successful work is learned through two other paths: `/handbook:learn`
+  captures a completed task's procedure (goal, ordered steps, verification) with
+  the full session context; Claude itself offers to capture a genuinely teachable
+  task the first time it happens (a plugin skill guides it — at most one offer per
+  session, never for trivia); and TeamHandbook tracks each session's **work shape**,
+  nudging once when the same kind of work recurs (default: 2nd time, configurable
+  via `notify.workNudgeThreshold`). Generation is never automatic for procedures:
+  you ask — and because you asked, a manual capture is ALWAYS distilled and
+  queued: a low gate score travels with it as advice, and the publish decision
+  stays yours at review. (The gate's hard veto applies only to the automatic
+  path, plus secrets everywhere.)
 - v1 produces **skills only**. Routing lessons to tests/lint rules/`AGENTS.md`
   lines is future work.
 - `/handbook:status` shows `tool calls seen / failures captured / pairs resolved`

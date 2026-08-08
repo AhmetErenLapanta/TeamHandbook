@@ -1,5 +1,5 @@
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
-import { captureBashFailure, captureBashSuccess, captureFileEdit } from "../lib/capture.js";
+import { captureBashFailure, captureBashSuccess, captureFileEdit, recordActivity } from "../lib/capture.js";
 import { bumpCounter, maybeDumpPayload } from "../lib/counters.js";
 import { handbookHome } from "../lib/session-state.js";
 
@@ -9,6 +9,7 @@ async function main(): Promise<void> {
   const input = parseHookInput(raw);
   if (!input) return;
   bumpCounter("postToolUse");
+  recordActivity(input);
   if (captureBashFailure(input)) {
     bumpCounter("bashFailuresCaptured");
     return;

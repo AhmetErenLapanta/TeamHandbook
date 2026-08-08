@@ -24,20 +24,25 @@ async function main(): Promise<number> {
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));
       return 0;
-    case "gate-rejected":
-      console.log(
-        outcome.duplicateOf
-          ? `Gate rejected the candidate as a duplicate of existing skill "${outcome.duplicateOf}".`
-          : `Gate rejected the candidate (score ${outcome.total}/10, threshold ${outcome.threshold}).${outcome.rationale ? ` Rationale: ${outcome.rationale}` : ""}`,
-      );
-      return 0;
     case "error":
       console.error(`error: ${outcome.message}`);
       return 1;
     case "written":
-      console.log(
-        `Candidate "${outcome.slug}" written (scope: ${outcome.scope}${outcome.gateTotal !== null ? `, gate ${outcome.gateTotal}/10` : ""}). Run /handbook:review to approve or reject it.`,
-      );
+      if (outcome.belowThreshold) {
+        console.log(
+          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}, gate ${outcome.gateTotal ?? "?"}/10 — below the ${outcome.threshold}/10 threshold).` +
+            (outcome.duplicateOf
+              ? ` The gate thinks it duplicates "${outcome.duplicateOf}".`
+              : outcome.rationale
+                ? ` The gate's concern: ${outcome.rationale}`
+                : "") +
+            ` It is queued anyway because you asked for it — the publish decision is yours in /handbook:review.`,
+        );
+      } else {
+        console.log(
+          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}${outcome.gateTotal !== null ? `, gate ${outcome.gateTotal}/10` : ""}). Run /handbook:review to approve or reject it.`,
+        );
+      }
       return 0;
   }
 }

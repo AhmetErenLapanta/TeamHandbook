@@ -93,3 +93,22 @@ describe("defaultSkillDirs", () => {
     ]);
   });
 });
+
+describe("rejected candidates and dedup", () => {
+  it("excludes rejected candidates from the existing-skill list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-rej-"));
+    try {
+      for (const [slug, status] of [["kept-skill", "pending"], ["gone-skill", "rejected"]] as const) {
+        const d = join(dir, slug);
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, "SKILL.md"), `---\nname: ${slug}\ndescription: "d"\n---\nBody.\n`);
+        writeFileSync(join(d, "candidate.json"), JSON.stringify({ slug, status }));
+      }
+      const names = listExistingSkills([dir]).map((s) => s.name);
+      expect(names).toContain("kept-skill");
+      expect(names).not.toContain("gone-skill");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

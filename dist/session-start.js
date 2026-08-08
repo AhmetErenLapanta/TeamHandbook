@@ -18,7 +18,7 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { existsSync, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync7 } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -37,7 +37,7 @@ function writeFileAtomic(file, data) {
 }
 
 // src/lib/notify.ts
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -138,6 +138,14 @@ function parseSkillFrontmatter(md) {
   const scope = fields.get("scope");
   return { name, description, ...scope ? { scope } : {} };
 }
+function isRejectedCandidate(dir, entry) {
+  try {
+    const meta = JSON.parse(readFileSync4(join4(dir, entry, "candidate.json"), "utf8"));
+    return meta?.status === "rejected";
+  } catch {
+    return false;
+  }
+}
 function listExistingSkills(dirs) {
   const byName = /* @__PURE__ */ new Map();
   for (const dir of dirs) {
@@ -148,6 +156,7 @@ function listExistingSkills(dirs) {
       continue;
     }
     for (const entry of entries) {
+      if (isRejectedCandidate(dir, entry)) continue;
       let raw;
       try {
         raw = readFileSync4(join4(dir, entry, "SKILL.md"), "utf8");
@@ -235,6 +244,41 @@ function listCandidates(home = handbookHome(), status) {
   );
 }
 
+// src/lib/signals.ts
+import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync6 } from "node:fs";
+import { join as join7 } from "node:path";
+function signalsFile(home = handbookHome()) {
+  return join7(home, "signals.jsonl");
+}
+function workRecurrences(home = handbookHome()) {
+  const byFp = /* @__PURE__ */ new Map();
+  let raw;
+  try {
+    raw = readFileSync6(signalsFile(home), "utf8");
+  } catch {
+    return [];
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.family !== "work" || typeof parsed?.fingerprint !== "string" || !parsed?.work) continue;
+      const existing = byFp.get(parsed.fingerprint);
+      if (existing) existing.count += 1;
+      else {
+        byFp.set(parsed.fingerprint, {
+          fingerprint: parsed.fingerprint,
+          count: 1,
+          families: Array.isArray(parsed.work.families) ? parsed.work.families : [],
+          exts: Array.isArray(parsed.work.exts) ? parsed.work.exts : []
+        });
+      }
+    } catch {
+    }
+  }
+  return [...byFp.values()];
+}
+
 // src/lib/notify.ts
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
@@ -244,22 +288,22 @@ function loadNotifyConfig(home = handbookHome()) {
   };
 }
 function welcomeMarkerFile(home) {
-  return join7(home, "welcomed");
+  return join8(home, "welcomed");
 }
 function isFirstRun(home = handbookHome()) {
   const marker = welcomeMarkerFile(home);
-  if (existsSync(marker)) return false;
+  if (existsSync2(marker)) return false;
   writeFileAtomic(marker, (/* @__PURE__ */ new Date()).toISOString() + "\n");
   return true;
 }
 function heartbeatSnapshotFile(home) {
-  return join7(home, "notified-counters.json");
+  return join8(home, "notified-counters.json");
 }
 function heartbeatDelta(home = handbookHome()) {
   const current = readCounters(home);
   let prior = { bashFailuresCaptured: 0, pairsResolved: 0 };
   try {
-    const parsed = JSON.parse(readFileSync6(heartbeatSnapshotFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(heartbeatSnapshotFile(home), "utf8"));
     prior = {
       bashFailuresCaptured: Number(parsed?.bashFailuresCaptured) || 0,
       pairsResolved: Number(parsed?.pairsResolved) || 0
@@ -279,12 +323,36 @@ function heartbeatDelta(home = handbookHome()) {
     pairs: Math.max(0, current.pairsResolved - prior.pairsResolved)
   };
 }
+var DEFAULT_WORK_NUDGE_THRESHOLD = 2;
+function workNudgeThreshold(home = handbookHome()) {
+  const notify = readConfigFile(home).notify;
+  const value = notify?.workNudgeThreshold;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : DEFAULT_WORK_NUDGE_THRESHOLD;
+}
+function nudgedWorkFile(home) {
+  return join8(home, "nudged-work.json");
+}
+function pendingWorkNudge(home = handbookHome()) {
+  let nudged = [];
+  try {
+    const parsed = JSON.parse(readFileSync7(nudgedWorkFile(home), "utf8"));
+    if (Array.isArray(parsed)) nudged = parsed.filter((f) => typeof f === "string");
+  } catch {
+  }
+  const threshold = workNudgeThreshold(home);
+  const due = workRecurrences(home).filter((r) => r.count >= threshold && !nudged.includes(r.fingerprint)).sort((a, b) => b.count - a.count);
+  const top = due[0];
+  if (!top) return null;
+  writeFileAtomic(nudgedWorkFile(home), JSON.stringify([...nudged, top.fingerprint], null, 2) + "\n");
+  const what = [top.families.slice(0, 3).join(", "), top.exts.slice(0, 3).join(" ")].filter(Boolean).join("; editing ");
+  return `handbook: you've done similar work ${top.count} times (${what}) \u2014 if that's a repeatable procedure, run /handbook:learn to turn it into a team skill.`;
+}
 function seenSkillsFile(home = handbookHome()) {
-  return join7(home, "seen-skills.json");
+  return join8(home, "seen-skills.json");
 }
 function readSeenSkills(home) {
   try {
-    const parsed = JSON.parse(readFileSync6(seenSkillsFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(seenSkillsFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     return parsed;
   } catch {
@@ -301,11 +369,11 @@ function diffNewSkills(dir, currentNames, home = handbookHome()) {
   return currentNames.filter((name) => !priorSet.has(name)).sort();
 }
 function buildSessionStartSummary(inputs) {
-  const { pending, newSkills, firstRun = false, heartbeat = null } = inputs;
+  const { pending, newSkills, firstRun = false, heartbeat = null, workNudge = null } = inputs;
   const lines = [];
   if (firstRun) {
     lines.push(
-      "TeamHandbook is active \u2014 watching this machine for error\u2192fix moments worth keeping. Nothing leaves your machine without your approval. Run /handbook:status anytime."
+      "TeamHandbook is active \u2014 watching this machine for error\u2192fix moments worth keeping. Nothing leaves your machine without your approval. Run /handbook:status anytime, or try /handbook:learn after your next completed task."
     );
   }
   if (pending > 0) {
@@ -320,6 +388,7 @@ function buildSessionStartSummary(inputs) {
       `handbook: ${newSkills.length} ${noun} available since your last session here: ${newSkills.join(", ")}.`
     );
   }
+  if (workNudge) lines.push(workNudge);
   if (!firstRun && lines.length === 0 && heartbeat && (heartbeat.failures > 0 || heartbeat.pairs > 0)) {
     const parts = [];
     if (heartbeat.failures > 0) {
@@ -336,7 +405,7 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   const config = loadNotifyConfig(home);
   if (!config.sessionStart) return null;
   const pending = listCandidates(home, "pending").length;
-  const watchedDirs = [join7(cwd, ".claude", "skills")];
+  const watchedDirs = [join8(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
   const newSkills = watchedDirs.flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home)).sort();
@@ -344,7 +413,8 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     pending,
     newSkills,
     firstRun: isFirstRun(home),
-    heartbeat: config.heartbeat ? heartbeatDelta(home) : null
+    heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
+    workNudge: pendingWorkNudge(home)
   });
 }
 
