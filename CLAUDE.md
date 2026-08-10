@@ -1,7 +1,7 @@
 # CLAUDE.md — working in this repo
 
-TeamHandbook is a Claude Code plugin (TypeScript/Node) that captures error→fix pairs
-from coding sessions via hooks, gates them, distills `SKILL.md` artifacts, and
+TeamHandbook is a Claude Code plugin (TypeScript/Node) that captures error→fix pairs and
+task procedures from coding sessions, gates them, distills `SKILL.md` artifacts, and
 opens PRs to a team skill repo. See [README.md](README.md) for the product story.
 
 ## Layout

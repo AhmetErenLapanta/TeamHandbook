@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  abandonedFile,
   drainPendingSignals,
   enqueuePendingSignals,
   pendingDir,
@@ -143,6 +144,7 @@ describe("runPipeline", () => {
       scored: 1,
       rejected: 0,
       errored: 0,
+      deferred: 0,
       written: ["fix-npm-test"],
       outcomes: [
         { fingerprint: "abc123", outcome: "promote", total: 8, rationale: "recurring and unfindable" },
@@ -209,6 +211,83 @@ describe("runPipeline", () => {
     });
     expect(summary.errored).toBe(1);
     expect(summary.written).toEqual([]);
+  });
+
+  it("logs a promote whose distillation fails as errored, not a phantom promote", async () => {
+    const signal = candidate();
+    seedLedger(home, signal, 2);
+    // the gate promotes, but the distill prompt gets an unparseable reply
+    const scorePassDistillFail: ClaudeRunner = async (prompt) =>
+      prompt.includes("kebab-case-skill-name") ? "not json at all" : scoreResponse;
+    const summary = await runPipeline([signal], home, {
+      runner: scorePassDistillFail,
+      remoteUrl: () => null,
+    });
+    expect(summary.written).toEqual([]);
+    expect(summary.errored).toBe(1);
+    const outcome = summary.outcomes!.find((o) => o.fingerprint === "abc123");
+    expect(outcome?.outcome).toBe("error");
+    expect(outcome?.error).toContain("unparseable distill response");
+  });
+
+  it("re-enqueues an errored signal for retry, up to the attempt cap", async () => {
+    const signal = candidate();
+    seedLedger(home, signal, 2);
+    const down: ClaudeRunner = async () => {
+      throw new Error("logged out");
+    };
+    await runPipeline([signal], home, { runner: down, remoteUrl: () => null });
+    const requeued = drainPendingSignals(home);
+    expect(requeued).toHaveLength(1);
+    expect(requeued[0]!.attempts).toBe(1);
+    // a signal already at the cap is dropped, not re-enqueued
+    await runPipeline([{ ...signal, attempts: 2 }], home, { runner: down, remoteUrl: () => null });
+    expect(drainPendingSignals(home)).toEqual([]);
+  });
+
+  it("abandons a signal that exhausts its retries — counted and recorded, never silent", async () => {
+    const signal = candidate();
+    seedLedger(home, signal, 2);
+    const down: ClaudeRunner = async () => {
+      throw new Error("logged out");
+    };
+    await runPipeline([{ ...signal, attempts: 2 }], home, { runner: down, remoteUrl: () => null });
+    expect(drainPendingSignals(home)).toEqual([]); // gone from the queue
+    expect(readCounters(home).gateAbandoned).toBe(1); // but counted
+    const abandoned = readFileSync(abandonedFile(home), "utf8").trim();
+    expect(JSON.parse(abandoned).fingerprint).toBe("abc123"); // and recoverable
+    const lastLine = readFileSync(pipelineLogFile(home), "utf8").trim().split("\n").at(-1)!;
+    expect(JSON.parse(lastLine).outcomes.some((o: { abandoned?: boolean }) => o.abandoned)).toBe(true);
+  });
+
+  it("records a gate-error counter so the failure can be pushed to the user", async () => {
+    const signal = candidate();
+    seedLedger(home, signal, 2);
+    await runPipeline([signal], home, {
+      runner: async () => {
+        throw new Error("down");
+      },
+      remoteUrl: () => null,
+    });
+    expect(readCounters(home).gateErrors).toBe(1);
+  });
+
+  it("caps scored signals per run and defers the rest for the next run", async () => {
+    const signals = Array.from({ length: 9 }, (_, i) => candidate({ fingerprint: `fp${i}` }));
+    for (const s of signals) seedLedger(home, s, 2);
+    const calls: string[] = [];
+    const summary = await runPipeline(signals, home, { runner: fakeRunner(calls), remoteUrl: () => null });
+    expect(summary.scored).toBe(6);
+    expect(summary.deferred).toBe(3);
+    expect(drainPendingSignals(home)).toHaveLength(3);
+  });
+
+  it("logs sieved drop reasons into the pipeline outcomes", async () => {
+    const oneOff = candidate({ fingerprint: "solo" }); // never recurred → below threshold
+    const summary = await runPipeline([oneOff], home, { runner: fakeRunner(), remoteUrl: () => null });
+    expect(summary.outcomes).toContainEqual(
+      expect.objectContaining({ fingerprint: "solo", outcome: "sieved", reason: "below-repeat-threshold" }),
+    );
   });
 
   it("passes existing skills from the queue and the signal's project to the gate prompt", async () => {
@@ -286,15 +365,15 @@ describe("runManualSignal", () => {
       remoteUrl: () => null,
     });
     // the user explicitly asked: the candidate is queued anyway, with the gate's
-    // objection attached for the review to surface
+    // objection attached for the review to surface. A 10/10 duplicate is NOT
+    // "below threshold" — the duplicate flag is its own, separate advice.
     expect(outcome).toMatchObject({
       stage: "written",
       slug: "fix-npm-test",
-      belowThreshold: true,
-      threshold: 7,
+      gateTotal: 10,
       duplicateOf: "fix-npm-test",
-      rationale: "already covered",
     });
+    expect((outcome as { belowThreshold?: boolean }).belowThreshold).toBeUndefined();
     const meta = readCandidateMeta(join(candidatesDir(home), "fix-npm-test"));
     expect(meta?.status).toBe("pending");
   });

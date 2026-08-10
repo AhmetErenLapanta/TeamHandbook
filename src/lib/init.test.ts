@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertSafeGitUrl,
+  clearTeamConfig,
   formatInitSuccess,
   teamSkillsDir,
   hostFromUrl,
@@ -87,6 +88,29 @@ describe("skeletonFiles", () => {
     expect(files["README.md"]).toContain("/handbook:join git@gitlab.acme.com:team/skills.git");
     expect(files["scripts/bump-version.mjs"]).toContain("plugin.version");
     expect(files["skills/README.md"]).toBeDefined();
+    // consumer notice hook ships inside the team plugin (no TeamHandbook engine needed)
+    expect(JSON.parse(files["hooks/hooks.json"]!).hooks.SessionStart).toBeDefined();
+    expect(files["hooks/notice.mjs"]).toContain("new skill(s) since your last session");
+  });
+
+  it("guards the GitLab CI job on the token so it skips instead of failing", () => {
+    const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com");
+    expect(gitlab[".gitlab-ci.yml"]).toContain("$TEAMHANDBOOK_CI_TOKEN");
+  });
+
+  it("documents the CI setup its distribution depends on in the generated README, per host", () => {
+    expect(skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]).toContain(
+      "TEAMHANDBOOK_CI_TOKEN",
+    );
+    expect(skeletonFiles("s", "git@github.com:a/s.git", "github.com")["README.md"]).toContain(
+      "Read and write permissions",
+    );
+  });
+
+  it("discloses the consumer hook's local state write in the generated README", () => {
+    expect(skeletonFiles("s", "git@github.com:a/s.git", "github.com")["README.md"]).toContain(
+      "~/.teamhandbook-consumer",
+    );
   });
 
   it("picks GitHub Actions for github hosts and GitLab CI otherwise", () => {
@@ -124,6 +148,15 @@ describe("team config", () => {
 
   it("returns null when no team is configured", () => {
     expect(loadTeamConfig(home)).toBeNull();
+  });
+
+  it("clearTeamConfig drops the binding, returns the previous url, and keeps other keys", () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ gate: { model: "haiku" } }));
+    saveTeamConfig({ repoUrl: "git@x.com:a/b.git", marketplaceName: "b" }, home);
+    expect(clearTeamConfig(home)).toBe("git@x.com:a/b.git");
+    expect(loadTeamConfig(home)).toBeNull();
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).gate).toEqual({ model: "haiku" });
+    expect(clearTeamConfig(home)).toBeNull(); // idempotent once already gone
   });
 });
 

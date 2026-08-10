@@ -30,6 +30,17 @@ export const defaultScoreConfig: ScoreConfig = {
   timeoutMs: 60_000,
 };
 
+/**
+ * Whether the automatic pipeline runs. Default true. When false, the detector
+ * still captures to the local ledger but NO candidate content is ever sent to
+ * claude -p automatically — for privacy-sensitive users (NDA/client work).
+ * Candidates then come only from the explicit /handbook:learn.
+ */
+export function gateAutoEnabled(home: string = handbookHome()): boolean {
+  const gate = readConfigFile(home).gate as Record<string, unknown> | undefined;
+  return gate?.auto !== false;
+}
+
 export function loadScoreConfig(home: string = handbookHome()): ScoreConfig {
   const gate = readConfigFile(home).gate as Record<string, unknown> | undefined;
   return {
@@ -150,6 +161,22 @@ export function parseScoreResponse(text: string, threshold: number): ScoreResult
   };
 }
 
+/**
+ * A concise, user-facing reason from a failed `claude -p` call. execFile's raw error
+ * echoes the entire (multi-KB) prompt on its `Command failed:` line; surfacing that
+ * verbatim buries the real cause. Prefer the process's stderr, special-case a missing
+ * binary, and otherwise strip the echoed command.
+ */
+export function claudeErrorReason(err: unknown): string {
+  const e = err as { code?: string; stderr?: string; message?: string };
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) — run /handbook:doctor";
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
+  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
+  return firstLine.slice(0, 200);
+}
+
 export type ClaudeRunner = (prompt: string, model: string, timeoutMs: number) => Promise<string>;
 
 export const runClaudeCli: ClaudeRunner = async (prompt, model, timeoutMs) => {
@@ -184,7 +211,7 @@ export async function scoreSignal(
       config.timeoutMs,
     );
   } catch (err) {
-    return { signal, outcome: "error", error: `claude invocation failed: ${String(err)}` };
+    return { signal, outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}` };
   }
   const result = parseScoreResponse(response, config.threshold);
   if (!result) return { signal, outcome: "error", error: "unparseable score response" };

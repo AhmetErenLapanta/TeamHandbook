@@ -86,6 +86,39 @@ export function deleteSessionState(sessionId: string, home: string = handbookHom
 // drop them.
 const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+// A session file untouched for this long belongs to a session that ended without
+// SessionEnd firing (terminal kill, crash, power loss). Old enough to be safely
+// treated as orphaned, young enough that its resolved pairs are still worth
+// salvaging before deletion.
+const SESSION_ORPHAN_MS = 3 * 60 * 60 * 1000;
+
+/** Session ids (file basenames) whose file hasn't changed in SESSION_ORPHAN_MS —
+ * candidates for salvage-then-delete at the next session start. */
+export function orphanedSessionIds(
+  home: string = handbookHome(),
+  now: number = Date.now(),
+): string[] {
+  const dir = join(home, "sessions");
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      if (now - statSync(join(dir, entry)).mtimeMs > SESSION_ORPHAN_MS) {
+        ids.push(entry.replace(/\.json$/, ""));
+      }
+    } catch {
+      // raced; skip
+    }
+  }
+  return ids;
+}
+
 export function cleanupStaleSessionFiles(
   home: string = handbookHome(),
   now: number = Date.now(),
@@ -144,9 +177,11 @@ export function attachEditToOpenErrors(
   for (const error of state.openErrors) {
     const seen = new Date(error.lastSeenAt).getTime();
     if (Number.isFinite(seen) && seen < cutoff) continue; // too old to be related
-    if (error.edits.length >= MAX_EDITS_PER_ERROR) continue;
     if (!error.edits.includes(filePath)) {
       error.edits.push(filePath);
+      // most-recent-N ring buffer: an early flurry of flail edits must not lock
+      // out the actual fix that lands later in a long session
+      if (error.edits.length > MAX_EDITS_PER_ERROR) error.edits.shift();
       attached = true;
     }
   }
@@ -163,8 +198,13 @@ export function resolveOpenErrors(
   const sameCwd = (e: OpenError) => cwd === "" || e.cwd === "" || e.cwd === cwd;
   const matching = state.openErrors.filter((e) => e.family === family && sameCwd(e));
   if (matching.length === 0) return [];
-  state.openErrors = state.openErrors.filter((e) => !(e.family === family && sameCwd(e)));
-  const resolved = matching.map((e) => ({ ...e, resolvedAt: at, resolvedCommand: command }));
+  // A single green run resolves only the MOST-RECENTLY-SEEN matching error — not
+  // every same-family error at once (which would mint false pairs all claiming
+  // the same resolving command). The rest stay open to resolve on their own.
+  matching.sort((a, b) => a.lastSeenAt.localeCompare(b.lastSeenAt));
+  const target = matching[matching.length - 1]!;
+  state.openErrors = state.openErrors.filter((e) => e !== target);
+  const resolved = [{ ...target, resolvedAt: at, resolvedCommand: command }];
   state.resolvedPairs.push(...resolved);
   return resolved;
 }

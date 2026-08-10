@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats } from "./status.js";
+import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats, pluginVersion } from "./status.js";
 import { incrementRedactionBlocked } from "./counters.js";
 import { pipelineLogFile } from "./pipeline.js";
 import { writeCandidateMeta } from "./queue.js";
@@ -94,11 +94,16 @@ describe("gatherStatus / formatStatus", () => {
     const report = gatherStatus(home);
     expect(report).toEqual({
       home,
+      version: pluginVersion(),
       ledger: { total: 2, candidates: 1, weak: 1, distinctFingerprints: 2 },
       queue: { pending: 1, approved: 1, rejected: 1 },
       redactionBlocked: 1,
+      sinceInstall: { approved: 1, teamShared: 0, pairsCaptured: 0, secretsBlocked: 1 },
       detector: { postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 },
       lastRun: null,
+      pipeline: { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 },
+      scoringNow: 0,
+      abandoned: 0,
       config: {
         gateModel: "haiku",
         gateThreshold: 7,
@@ -106,6 +111,26 @@ describe("gatherStatus / formatStatus", () => {
         sessionStartNotice: true,
       },
     });
+  });
+
+  it("counts team-shared approvals from the persisted mode and renders the recap", () => {
+    const solo = join(candidatesDir(home), "solo-skill");
+    mkdirSync(solo, { recursive: true });
+    writeCandidateMeta(solo, {
+      slug: "solo-skill", status: "approved", createdAt: "2026-08-08T00:00:00Z", scope: "team",
+      description: "d", fingerprint: "f1", sessionId: "s1", gate: null,
+      deliveredTo: "/Users/me/proj/.claude/skills/solo-skill", deliveredMode: "solo",
+    });
+    const team = join(candidatesDir(home), "team-skill");
+    mkdirSync(team, { recursive: true });
+    writeCandidateMeta(team, {
+      slug: "team-skill", status: "approved", createdAt: "2026-08-08T00:00:00Z", scope: "team",
+      description: "d", fingerprint: "f2", sessionId: "s1", gate: null,
+      deliveredTo: "/srv/git/team-skills.git (branch handbook/team-skill)", deliveredMode: "team",
+    });
+    const report = gatherStatus(home);
+    expect(report.sinceInstall).toMatchObject({ approved: 2, teamShared: 1 });
+    expect(formatStatus(report)).toContain("2 skills approved (1 shared with the team)");
   });
 
   it("formats a readable report that points at review when candidates are pending", () => {
@@ -117,6 +142,13 @@ describe("gatherStatus / formatStatus", () => {
     expect(text).toContain("/handbook:review");
   });
 
+  it("shows getting-started guidance when nothing is approved or pending yet", () => {
+    const text = formatStatus(gatherStatus(home));
+    expect(text).toContain("No skills yet");
+    expect(text).toContain("/handbook:learn");
+    expect(text).not.toContain("/handbook:review to review");
+  });
+
   it("marks a manual last run and omits the review hint when nothing is pending", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(
@@ -126,5 +158,28 @@ describe("gatherStatus / formatStatus", () => {
     const text = formatStatus(gatherStatus(home));
     expect(text).toContain("2026-08-08T01:00:00Z (manual)");
     expect(text).not.toContain("/handbook:review");
+  });
+
+  it("surfaces the last gate error's reason and points at doctor", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      pipelineLogFile(home),
+      JSON.stringify({
+        ts: "2026-08-08T01:00:00Z", received: 1, sievedOut: 0, scored: 1, rejected: 0, errored: 1, written: [],
+        outcomes: [{ fingerprint: "abc", outcome: "error", error: "claude invocation failed (run /handbook:doctor)" }],
+      }) + "\n",
+    );
+    const text = formatStatus(gatherStatus(home));
+    expect(text).toContain("Last error:");
+    expect(text).toContain("claude invocation failed");
+    expect(text).toContain("/handbook:doctor");
+  });
+
+  it("reports abandoned pairs so the loss is never silent", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "counters.json"), JSON.stringify({ gateAbandoned: 2 }));
+    const text = formatStatus(gatherStatus(home));
+    expect(text).toContain("Abandoned:");
+    expect(text).toContain("2 captured pair(s) given up");
   });
 });

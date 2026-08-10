@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildSessionStartSummary,
+  pendingBatchCount,
+  pendingTeamNudge,
   diffNewSkills,
   heartbeatDelta,
   isFirstRun,
@@ -110,25 +112,28 @@ describe("notify", () => {
     it("welcomes on the first run", () => {
       const text = buildSessionStartSummary({ pending: 0, newSkills: [], firstRun: true });
       expect(text).toContain("TeamHandbook is active");
-      expect(text).toContain("Nothing leaves your machine");
+      expect(text).toContain("nothing is shared or published without your approval");
+      // sets the recurrence expectation and points at doctor, so quiet ≠ broken
+      expect(text).toContain("waits for an error class to recur");
+      expect(text).toContain("/handbook:doctor");
     });
 
     it("shows the heartbeat only when there is activity and nothing stronger to say", () => {
       const active = buildSessionStartSummary({
         pending: 0,
         newSkills: [],
-        heartbeat: { failures: 3, pairs: 1 },
+        heartbeat: { failures: 3, pairs: 1, gateErrors: 0 },
       });
       expect(active).toContain("3 failures watched");
       expect(active).toContain("1 error→fix pair captured");
 
-      const idle = buildSessionStartSummary({ pending: 0, newSkills: [], heartbeat: { failures: 0, pairs: 0 } });
+      const idle = buildSessionStartSummary({ pending: 0, newSkills: [], heartbeat: { failures: 0, pairs: 0, gateErrors: 0 } });
       expect(idle).toBeNull();
 
       const withPending = buildSessionStartSummary({
         pending: 1,
         newSkills: [],
-        heartbeat: { failures: 3, pairs: 1 },
+        heartbeat: { failures: 3, pairs: 1, gateErrors: 0 },
       });
       expect(withPending).not.toContain("since your last session —");
     });
@@ -142,10 +147,10 @@ describe("notify", () => {
 
     it("reports activity since the previous call and then resets", () => {
       bumpCounter("bashFailuresCaptured", home, 2);
-      expect(heartbeatDelta(home)).toEqual({ failures: 2, pairs: 0 });
-      expect(heartbeatDelta(home)).toEqual({ failures: 0, pairs: 0 });
+      expect(heartbeatDelta(home)).toEqual({ failures: 2, pairs: 0, gateErrors: 0 });
+      expect(heartbeatDelta(home)).toEqual({ failures: 0, pairs: 0, gateErrors: 0 });
       bumpCounter("pairsResolved", home);
-      expect(heartbeatDelta(home)).toEqual({ failures: 0, pairs: 1 });
+      expect(heartbeatDelta(home)).toEqual({ failures: 0, pairs: 1, gateErrors: 0 });
     });
   });
 
@@ -188,5 +193,88 @@ describe("notify", () => {
       expect(notice).toContain("1 failure watched");
       expect(sessionStartNotice(cwd, home)).toBeNull();
     });
+  });
+});
+
+describe("pendingTeamNudge (solo → team growth bridge)", () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-teamnudge-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function approveN(home: string, n: number): void {
+    for (let i = 0; i < n; i++) {
+      const dir = join(candidatesDir(home), `skill-${i}`);
+      mkdirSync(dir, { recursive: true });
+      writeCandidateMeta(dir, {
+        slug: `skill-${i}`,
+        status: "approved",
+        createdAt: "2026-08-08T00:00:00Z",
+        scope: "team",
+        description: "d",
+        fingerprint: `fp${i}`,
+        sessionId: "s1",
+        gate: null,
+      });
+    }
+  }
+
+  it("fires exactly once after enough solo approvals", () => {
+    approveN(home, 3);
+    const nudge = pendingTeamNudge(home);
+    expect(nudge).toContain("3 approved skills");
+    expect(nudge).toContain("/handbook:init");
+    expect(pendingTeamNudge(home)).toBeNull();
+  });
+
+  it("stays silent below the threshold or when a team repo is configured", () => {
+    approveN(home, 2);
+    expect(pendingTeamNudge(home)).toBeNull();
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "t" }, home);
+    approveN(home, 5);
+    expect(pendingTeamNudge(home)).toBeNull();
+  });
+});
+
+describe("gate failure push (B3)", () => {
+  it("pushes a gate-outage line regardless of other content", () => {
+    const notice = buildSessionStartSummary({
+      pending: 1,
+      newSkills: [],
+      heartbeat: { failures: 0, pairs: 0, gateErrors: 3 },
+    });
+    expect(notice).toContain("3 gate runs failed since your last session");
+    expect(notice).toContain("/handbook:doctor");
+  });
+});
+
+describe("pendingBatchCount", () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-pbc-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function writeBatch(name: string, len: number): void {
+    const dir = join(home, "pending");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name), JSON.stringify(Array.from({ length: len }, (_, i) => ({ fingerprint: `f${i}` }))));
+  }
+
+  it("counts pairs in *.json batches and ignores claimed and non-json entries", () => {
+    writeBatch("s-1.json", 2);
+    writeBatch("s-2.json", 3);
+    writeBatch("s-3.json.claimed-999", 4); // in-flight/orphan claim — not a queued batch
+    writeFileSync(join(home, "pending", "note.txt"), "noise");
+    expect(pendingBatchCount(home)).toBe(5);
+  });
+
+  it("is zero with no pending directory", () => {
+    expect(pendingBatchCount(home)).toBe(0);
   });
 });

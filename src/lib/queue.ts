@@ -20,6 +20,7 @@ export interface CandidateMeta {
   gate: { total: number; scores: Record<string, number>; rationale?: string } | null;
   decidedAt?: string;
   deliveredTo?: string;
+  deliveredMode?: "solo" | "team";
 }
 
 const STATUSES: CandidateStatus[] = ["pending", "approved", "rejected"];
@@ -33,7 +34,9 @@ export function candidateMetaFile(dir: string): string {
 }
 
 export function writeCandidateMeta(dir: string, meta: CandidateMeta): void {
-  writeFileSync(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+  // atomic: a torn candidate.json would make readCandidateMeta fall back to a
+  // synthesized "pending" meta, resurrecting an already-decided candidate
+  writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
 }
 
 export function candidateMetaFromArtifact(
@@ -123,15 +126,33 @@ export function listCandidates(
     .map((e) => readCandidateMeta(join(base, e.name)))
     .filter((m): m is CandidateMeta => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
+  // newest first — the most recently captured lesson is the most relevant to review
   return filtered.sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug),
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug),
   );
+}
+
+function relativeAge(iso: string, now: number): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "unknown age";
+  const mins = Math.max(0, Math.round((now - then) / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function originProject(meta: CandidateMeta): string {
+  if (!meta.cwd) return "unknown project";
+  return meta.cwd.split("/").filter(Boolean).pop() ?? meta.cwd;
 }
 
 export interface DecideResult {
   ok: boolean;
   meta?: CandidateMeta;
   error?: string;
+  /** true only when a mute was requested AND actually recorded */
+  muted?: boolean;
 }
 
 export function decideCandidate(
@@ -150,10 +171,12 @@ export function decideCandidate(
   }
   const updated: CandidateMeta = { ...meta, status, decidedAt };
   writeCandidateMeta(dir, updated);
+  let muted = false;
   if (status === "rejected" && options.mute && meta.fingerprint) {
     muteFingerprint(meta.fingerprint, home);
+    muted = true;
   }
-  return { ok: true, meta: updated };
+  return { ok: true, meta: updated, muted };
 }
 
 // A plain rejection does NOT suppress future recurrences — changing your mind (or
@@ -179,12 +202,14 @@ export function muteFingerprint(fingerprint: string, home: string = handbookHome
   writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
 }
 
-export function formatCandidateList(metas: CandidateMeta[]): string {
+export function formatCandidateList(metas: CandidateMeta[], now: number = Date.now()): string {
   if (metas.length === 0) return "No pending candidates.";
-  const lines = [`Pending candidates (${metas.length}):`, ""];
+  const lines = [`Pending candidates (${metas.length}), newest first:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
-    lines.push(`  ${i + 1}. ${meta.slug}  [${meta.scope}]  ${gate}`);
+    lines.push(
+      `  ${i + 1}. ${meta.slug}  [${meta.scope}]  ${gate}  ·  ${relativeAge(meta.createdAt, now)}  ·  from ${originProject(meta)}`,
+    );
     lines.push(`     ${meta.description}`);
   });
   return lines.join("\n");

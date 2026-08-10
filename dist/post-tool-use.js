@@ -124,6 +124,53 @@ function errorTextFromResponse(response) {
   return "";
 }
 
+// src/lib/secrets.ts
+var SECRET_PATTERNS = [
+  { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
+  { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
+  { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
+  { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+  { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
+  { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
+  { name: "openai-key", re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/ },
+  { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
+  { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
+  { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
+  { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  {
+    // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
+    // which \b cannot match between two word chars.
+    name: "assigned-secret",
+    re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i
+  }
+];
+function detectSecret(text) {
+  for (const { name, re } of SECRET_PATTERNS) {
+    if (re.test(text)) return name;
+  }
+  return null;
+}
+function signalSecret(fields) {
+  return detectSecret(
+    [
+      fields.command ?? "",
+      fields.error ?? "",
+      fields.resolvedCommand ?? "",
+      ...fields.edits ?? [],
+      fields.task?.goal ?? "",
+      ...fields.task?.steps ?? [],
+      fields.task?.verification ?? ""
+    ].join("\n")
+  );
+}
+
+// src/lib/counters.ts
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
+
 // src/lib/session-state.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -181,6 +228,7 @@ function saveSessionState(state, home = handbookHome()) {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 function recordFailure(state, failure, at = (/* @__PURE__ */ new Date()).toISOString()) {
   const existing = state.openErrors.find((e) => e.fingerprint === failure.fingerprint);
   if (existing) {
@@ -202,9 +250,9 @@ function attachEditToOpenErrors(state, filePath, at = (/* @__PURE__ */ new Date(
   for (const error of state.openErrors) {
     const seen = new Date(error.lastSeenAt).getTime();
     if (Number.isFinite(seen) && seen < cutoff) continue;
-    if (error.edits.length >= MAX_EDITS_PER_ERROR) continue;
     if (!error.edits.includes(filePath)) {
       error.edits.push(filePath);
+      if (error.edits.length > MAX_EDITS_PER_ERROR) error.edits.shift();
       attached = true;
     }
   }
@@ -214,10 +262,63 @@ function resolveOpenErrors(state, family, command, cwd = "", at = (/* @__PURE__ 
   const sameCwd = (e) => cwd === "" || e.cwd === "" || e.cwd === cwd;
   const matching = state.openErrors.filter((e) => e.family === family && sameCwd(e));
   if (matching.length === 0) return [];
-  state.openErrors = state.openErrors.filter((e) => !(e.family === family && sameCwd(e)));
-  const resolved = matching.map((e) => ({ ...e, resolvedAt: at, resolvedCommand: command }));
+  matching.sort((a, b) => a.lastSeenAt.localeCompare(b.lastSeenAt));
+  const target = matching[matching.length - 1];
+  state.openErrors = state.openErrors.filter((e) => e !== target);
+  const resolved = [{ ...target, resolvedAt: at, resolvedCommand: command }];
   state.resolvedPairs.push(...resolved);
   return resolved;
+}
+
+// src/lib/counters.ts
+var FIELDS = [
+  "redactionBlocked",
+  "postToolUse",
+  "bashFailuresCaptured",
+  "pairsResolved",
+  "gateErrors",
+  "gateAbandoned"
+];
+function countersFile(home = handbookHome()) {
+  return join2(home, "counters.json");
+}
+function readCounters(home = handbookHome()) {
+  const base = {
+    redactionBlocked: 0,
+    postToolUse: 0,
+    bashFailuresCaptured: 0,
+    pairsResolved: 0,
+    gateErrors: 0,
+    gateAbandoned: 0
+  };
+  try {
+    const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
+    for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
+  } catch {
+  }
+  return base;
+}
+function bumpCounter(field, home = handbookHome(), by = 1) {
+  const counters = readCounters(home);
+  counters[field] += by;
+  mkdirSync2(home, { recursive: true });
+  writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
+  return counters;
+}
+function incrementRedactionBlocked(home = handbookHome(), by = 1) {
+  return bumpCounter("redactionBlocked", home, by);
+}
+var DEBUG_DUMP_CAP = 50;
+function maybeDumpPayload(raw, home = handbookHome()) {
+  if (!process.env.TEAMHANDBOOK_DEBUG) return;
+  try {
+    const dir = join2(home, "debug");
+    mkdirSync2(dir, { recursive: true });
+    const n = readdirSync2(dir).length;
+    if (n >= DEBUG_DUMP_CAP) return;
+    writeFileSync2(join2(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
+  } catch {
+  }
 }
 
 // src/lib/capture.ts
@@ -258,12 +359,14 @@ function recordActivity(input, home = handbookHome()) {
   if (input.tool_name === "Bash") {
     const command = bashCommand(input);
     if (!command) return false;
+    if (signalSecret({ command })) return false;
     family = commandFamily(command);
     if (GENERIC_FAMILIES.has(family) || family === "unknown") return false;
   } else if (EDIT_TOOLS.has(input.tool_name ?? "")) {
     const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
     const m = filePath.match(/\.([A-Za-z0-9]+)$/);
     if (!m) return false;
+    if (signalSecret({ edits: [filePath] })) return false;
     ext = `.${m[1].toLowerCase()}`;
   } else {
     return false;
@@ -284,6 +387,10 @@ function captureBashFailure(input, home = handbookHome()) {
   const command = bashCommand(input);
   if (!command) return false;
   const error = normalizeErrorText(failure.errorText);
+  if (signalSecret({ command, error })) {
+    incrementRedactionBlocked(home);
+    return false;
+  }
   const family = commandFamily(command);
   const state = loadSessionState(input.session_id, home);
   recordFailure(state, {
@@ -300,6 +407,10 @@ function captureFileEdit(input, home = handbookHome()) {
   if (!input.session_id || !EDIT_TOOLS.has(input.tool_name ?? "")) return false;
   const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
   if (!filePath) return false;
+  if (signalSecret({ edits: [filePath] })) {
+    incrementRedactionBlocked(home);
+    return false;
+  }
   const state = loadSessionState(input.session_id, home);
   if (!attachEditToOpenErrors(state, filePath)) return false;
   saveSessionState(state, home);
@@ -312,51 +423,14 @@ function captureBashSuccess(input, home = handbookHome()) {
   if (!command) return 0;
   const state = loadSessionState(input.session_id, home);
   if (state.openErrors.length === 0) return 0;
+  if (signalSecret({ resolvedCommand: command })) {
+    incrementRedactionBlocked(home);
+    return 0;
+  }
   const resolved = resolveOpenErrors(state, commandFamily(command), command, input.cwd ?? "");
   if (resolved.length === 0) return 0;
   saveSessionState(state, home);
   return resolved.length;
-}
-
-// src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
-var FIELDS = [
-  "redactionBlocked",
-  "postToolUse",
-  "bashFailuresCaptured",
-  "pairsResolved"
-];
-function countersFile(home = handbookHome()) {
-  return join2(home, "counters.json");
-}
-function readCounters(home = handbookHome()) {
-  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
-  try {
-    const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
-    for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
-  } catch {
-  }
-  return base;
-}
-function bumpCounter(field, home = handbookHome(), by = 1) {
-  const counters = readCounters(home);
-  counters[field] += by;
-  mkdirSync2(home, { recursive: true });
-  writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
-  return counters;
-}
-var DEBUG_DUMP_CAP = 50;
-function maybeDumpPayload(raw, home = handbookHome()) {
-  if (!process.env.TEAMHANDBOOK_DEBUG) return;
-  try {
-    const dir = join2(home, "debug");
-    mkdirSync2(dir, { recursive: true });
-    const n = readdirSync2(dir).length;
-    if (n >= DEBUG_DUMP_CAP) return;
-    writeFileSync2(join2(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
-  } catch {
-  }
 }
 
 // src/hooks/post-tool-use.ts

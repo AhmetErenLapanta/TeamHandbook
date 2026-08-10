@@ -1,10 +1,10 @@
 // src/cli/review.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { join as join7 } from "node:path";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join9 } from "node:path";
 
 // src/lib/deliver.ts
 import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join6 } from "node:path";
+import { basename as basename2, join as join6 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync } from "node:child_process";
@@ -35,6 +35,7 @@ function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
 import { readFileSync } from "node:fs";
@@ -52,6 +53,19 @@ function readConfigFile(home = handbookHome()) {
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+var defaultScoreConfig = {
+  model: "haiku",
+  threshold: 7,
+  timeoutMs: 6e4
+};
+function loadScoreConfig(home = handbookHome()) {
+  const gate = readConfigFile(home).gate;
+  return {
+    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
+    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
+    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
+  };
+}
 
 // src/lib/skill-index.ts
 import { join as join3 } from "node:path";
@@ -82,6 +96,7 @@ function parseSkillFrontmatter(md) {
 function normalizeRemoteUrl(raw) {
   let s = raw.trim();
   if (!s) return null;
+  if (/[\x00-\x1f\x7f]/.test(s)) return null;
   const hadProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
   s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
   s = s.replace(/^[^@/]+@/, "");
@@ -126,6 +141,17 @@ function hostFromUrl(url) {
   if (!normalized) return null;
   return normalized.slice(0, normalized.indexOf("/"));
 }
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
 function runGit(args, cwd) {
   try {
     return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
@@ -218,18 +244,22 @@ function extractUrl(output) {
 function openPr(repoUrl, branch, title, body, repoDir, forge) {
   const host = hostFromUrl(repoUrl);
   try {
-    if (host && host.includes("github")) {
-      return extractUrl(forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir));
-    }
-    return extractUrl(
-      forge(
-        "glab",
-        ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
-        repoDir
-      )
+    const out = host && host.includes("github") ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+      "glab",
+      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+      repoDir
     );
-  } catch {
-    return null;
+    return { url: extractUrl(out) };
+  } catch (err) {
+    const e = err;
+    const tool = host && host.includes("github") ? "gh" : "glab";
+    let reason;
+    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
+    else {
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      reason = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+    }
+    return { url: null, error: reason };
   }
 }
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
@@ -244,6 +274,23 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
+  const readIdentity = (key) => {
+    try {
+      return git(["config", key], process.cwd());
+    } catch {
+      return "";
+    }
+  };
+  const email = readIdentity("user.email");
+  const name = readIdentity("user.name");
+  const unset = (v) => typeof v === "string" && v.trim() === "";
+  if (unset(email) || unset(name)) {
+    return {
+      ok: false,
+      error: 'git user.name/user.email is not set \u2014 the PR would have a junk author. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then approve again.'
+    };
+  }
+  const identityArgs = typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== "" ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`] : [];
   const workdir = mkdtempSync(join4(tmpdir(), "handbook-publish-"));
   const repoDir = join4(workdir, "repo");
   try {
@@ -281,19 +328,20 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
         );
       }
       git(["add", "-A"], repoDir);
-      git(["commit", "-m", title], repoDir);
+      git([...identityArgs, "commit", "-m", title], repoDir);
       git(["push", "-u", "origin", branch], repoDir);
     } catch (err) {
       return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir));
-    const prUrl = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (prUrl) return { ok: true, branch, skillDir, prUrl };
+    const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
+    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url };
     return {
       ok: true,
       branch,
       skillDir,
-      manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0
+      manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0,
+      ...pr.error ? { prError: pr.error } : {}
     };
   } finally {
     rmSync2(workdir, { recursive: true, force: true });
@@ -301,7 +349,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
 }
 
 // src/lib/queue.ts
-import { readdirSync, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { readdirSync, readFileSync as readFileSync3 } from "node:fs";
 import { basename, join as join5 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
@@ -311,7 +359,7 @@ function candidateMetaFile(dir) {
   return join5(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
-  writeFileSync3(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+  writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
 }
 function synthesizeMeta(dir) {
   let md;
@@ -360,8 +408,21 @@ function listCandidates(home = handbookHome(), status) {
   const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join5(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug)
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
   );
+}
+function relativeAge(iso, now) {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "unknown age";
+  const mins = Math.max(0, Math.round((now - then) / 6e4));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+function originProject(meta) {
+  if (!meta.cwd) return "unknown project";
+  return meta.cwd.split("/").filter(Boolean).pop() ?? meta.cwd;
 }
 function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
@@ -373,10 +434,12 @@ function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Da
   }
   const updated = { ...meta, status, decidedAt };
   writeCandidateMeta(dir, updated);
+  let muted = false;
   if (status === "rejected" && options.mute && meta.fingerprint) {
     muteFingerprint(meta.fingerprint, home);
+    muted = true;
   }
-  return { ok: true, meta: updated };
+  return { ok: true, meta: updated, muted };
 }
 function mutedFile(home = handbookHome()) {
   return join5(home, "muted.json");
@@ -394,12 +457,14 @@ function muteFingerprint(fingerprint, home = handbookHome()) {
   muted.add(fingerprint);
   writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
 }
-function formatCandidateList(metas) {
+function formatCandidateList(metas, now = Date.now()) {
   if (metas.length === 0) return "No pending candidates.";
-  const lines = [`Pending candidates (${metas.length}):`, ""];
+  const lines = [`Pending candidates (${metas.length}), newest first:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
-    lines.push(`  ${i + 1}. ${meta.slug}  [${meta.scope}]  ${gate}`);
+    lines.push(
+      `  ${i + 1}. ${meta.slug}  [${meta.scope}]  ${gate}  \xB7  ${relativeAge(meta.createdAt, now)}  \xB7  from ${originProject(meta)}`
+    );
     lines.push(`     ${meta.description}`);
   });
   return lines.join("\n");
@@ -428,7 +493,7 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
   const published = publishCandidate(dir, meta, team, git, forge);
   if (!published.ok) return { ok: false, mode: "team", meta, error: published.error };
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
-  const updated = { ...meta, status: "approved", decidedAt, deliveredTo };
+  const updated = { ...meta, status: "approved", decidedAt, deliveredTo, deliveredMode: "team" };
   writeCandidateMeta(dir, updated);
   return {
     ok: true,
@@ -437,11 +502,17 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
     deliveredTo,
     branch: published.branch,
     prUrl: published.prUrl,
-    manualUrl: published.manualUrl
+    manualUrl: published.manualUrl,
+    ...published.prError ? { prError: published.prError } : {}
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
+  const originGone = !!meta.cwd && !existsSync2(meta.cwd);
+  const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
+  const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})` : void 0;
+  const installedProject = meta.cwd && existsSync2(meta.cwd) ? meta.cwd : fallbackCwd;
+  const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
   const slug = uniqueSlug(meta.slug, (s) => existsSync2(join6(skillsDir, s)));
   const target = join6(skillsDir, slug);
   try {
@@ -458,32 +529,95 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
     ...meta,
     status: "approved",
     decidedAt,
-    deliveredTo: target
+    deliveredTo: target,
+    deliveredMode: "solo"
   };
   writeCandidateMeta(dir, updated);
-  return { ok: true, mode: "solo", meta: updated, deliveredTo: target };
+  return {
+    ok: true,
+    mode: "solo",
+    meta: updated,
+    deliveredTo: target,
+    ...warning ? { warning } : {},
+    ...originProject2 ? { originProject: originProject2 } : {}
+  };
+}
+
+// src/lib/notify.ts
+import { existsSync as existsSync3, readFileSync as readFileSync5, readdirSync as readdirSync2 } from "node:fs";
+import { join as join7 } from "node:path";
+function pendingBatchCount(home = handbookHome()) {
+  let entries;
+  try {
+    entries = readdirSync2(join7(home, "pending"));
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const parsed = JSON.parse(readFileSync5(join7(home, "pending", entry), "utf8"));
+      if (Array.isArray(parsed)) total += parsed.length;
+    } catch {
+    }
+  }
+  return total;
+}
+
+// src/lib/status.ts
+import { readFileSync as readFileSync6 } from "node:fs";
+
+// src/lib/pipeline.ts
+import { basename as basename3, join as join8 } from "node:path";
+var STALE_CLAIM_MS = 10 * 60 * 1e3;
+function pipelineLogFile(home = handbookHome()) {
+  return join8(home, "pipeline.log");
+}
+var LOG_ROTATE_BYTES = 512 * 1024;
+
+// src/lib/status.ts
+function lastPipelineRun(home = handbookHome()) {
+  let raw;
+  try {
+    raw = readFileSync6(pipelineLogFile(home), "utf8");
+  } catch {
+    return null;
+  }
+  const lines = raw.split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (typeof parsed?.ts === "string") return parsed;
+    } catch {
+    }
+  }
+  return null;
 }
 
 // src/cli/review.ts
 function usage() {
-  console.error("usage: review.js <list|show|approve|reject> [slug] [--never]");
+  console.error("usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never]");
   process.exit(2);
 }
 function showCandidate(home, slug) {
-  const dir = join7(candidatesDir(home), slug);
+  const dir = join9(candidatesDir(home), slug);
   let skillMd;
   try {
-    skillMd = readFileSync5(join7(dir, "SKILL.md"), "utf8");
+    skillMd = readFileSync7(join9(dir, "SKILL.md"), "utf8");
   } catch {
     console.error(`error: no candidate named "${slug}"`);
     process.exit(1);
   }
   const meta = readCandidateMeta(dir);
   const gate = meta?.gate;
+  const threshold = loadScoreConfig(home).threshold;
   console.log(`candidate: ${slug}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
+  console.log(`location:  ${dir}`);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
-    console.log(`gate:      ${gate.total}/10  (${scores})`);
+    const dissent = gate.total < threshold ? `  \u2014 below the ${threshold}/10 threshold` : "";
+    console.log(`gate:      ${gate.total}/10  (${scores})${dissent}`);
     if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
   } else {
     console.log("gate:      n/a");
@@ -493,7 +627,7 @@ function showCandidate(home, slug) {
   console.log("");
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
-    const grounded = JSON.parse(readFileSync5(join7(dir, "grounded-case.json"), "utf8"));
+    const grounded = JSON.parse(readFileSync7(join9(dir, "grounded-case.json"), "utf8"));
     if (grounded.task) {
       console.log(`goal:      ${grounded.task.goal}`);
       (grounded.task.steps ?? []).forEach((s, i) => console.log(`  step ${i + 1}:  ${s}`));
@@ -511,53 +645,83 @@ function showCandidate(home, slug) {
     console.log("(this candidate has no grounded case)");
   }
 }
-function main() {
-  const args = process.argv.slice(2);
-  const never = args.includes("--never");
-  const positional = args.filter((a) => !a.startsWith("--"));
-  const [cmd = "list", slug] = positional;
-  const home = handbookHome();
-  if (cmd === "list") {
-    console.log(formatCandidateList(listCandidates(home, "pending")));
+function approveOne(home, slug) {
+  const result = approveAndDeliver(home, slug);
+  if (!result.ok) {
+    console.error(`error (${slug}): ${result.error}`);
     return;
   }
-  if (!slug || !isSafeSlug(slug)) usage();
-  if (cmd === "show") {
-    showCandidate(home, slug);
-    return;
-  }
-  if (cmd !== "approve" && cmd !== "reject") usage();
-  if (cmd === "approve") {
-    const result2 = approveAndDeliver(home, slug);
-    if (!result2.ok) {
-      console.error(`error: ${result2.error}`);
-      process.exit(1);
-    }
-    if (result2.mode === "team") {
-      if (result2.prUrl) {
-        console.log(`Approved "${slug}" and opened a PR to the team skill base: ${result2.prUrl}`);
-      } else {
-        console.log(`Approved "${slug}" and pushed branch ${result2.branch} to the team skill base.`);
-        if (result2.manualUrl) console.log(`Open the PR here: ${result2.manualUrl}`);
-      }
+  if (result.mode === "team") {
+    if (result.prUrl) {
+      console.log(`Approved "${slug}" and opened a PR to the team skill base: ${result.prUrl}`);
     } else {
-      console.log(`Approved "${slug}" and installed it at ${result2.deliveredTo}.`);
+      console.log(`Approved "${slug}" and pushed branch ${result.branch} to the team skill base.`);
+      if (result.prError) console.log(`Auto-PR skipped (${result.prError}) \u2014 install/authenticate gh or glab to open PRs automatically.`);
+      if (result.manualUrl) console.log(`Open the PR here: ${result.manualUrl}`);
     }
-    return;
+  } else {
+    if (result.warning) console.log(`Note: ${result.warning}`);
+    const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
+    console.log(
+      `Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. Commit this directory so the skill travels with the repo.`
+    );
   }
+}
+function rejectOne(home, slug, never) {
   const result = decideCandidate(home, slug, "rejected", void 0, { mute: never });
   if (!result.ok) {
-    console.error(`error: ${result.error}`);
-    process.exit(1);
+    console.error(`error (${slug}): ${result.error}`);
+    return;
   }
-  if (never) {
-    console.log(
-      `Rejected "${slug}" and muted its fingerprint \u2014 this learning will not be suggested again.`
-    );
+  if (never && result.muted) {
+    console.log(`Rejected "${slug}" and muted its fingerprint \u2014 this learning will not be suggested again.`);
+  } else if (never) {
+    console.log(`Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`);
   } else {
     console.log(
       `Rejected "${slug}". If the same learning recurs it may be suggested again; use "reject ${slug} --never" to silence it permanently.`
     );
+  }
+}
+function main() {
+  const args = process.argv.slice(2);
+  const never = args.includes("--never");
+  const all = args.includes("--all");
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const [cmd = "list", ...slugArgs] = positional;
+  const home = handbookHome();
+  if (cmd === "list") {
+    const pending = listCandidates(home, "pending");
+    console.log(formatCandidateList(pending));
+    if (pending.length === 0) {
+      const scoring = pendingBatchCount(home);
+      if (scoring > 0) {
+        console.log(`(${scoring} captured pair(s) are still being scored in the background \u2014 try again in a minute.)`);
+      } else {
+        const reject = lastPipelineRun(home)?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
+        if (reject) {
+          const score = reject.total !== void 0 ? `${reject.total}/10` : "n/a";
+          const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "below the bar";
+          console.log(
+            `(The most recent capture was scored but didn't clear the gate: ${score} \u2014 ${why}. Nothing is waiting for you.)`
+          );
+        }
+      }
+    }
+    return;
+  }
+  if (cmd !== "approve" && cmd !== "reject") {
+    if (cmd === "show" && slugArgs[0] && isSafeSlug(slugArgs[0])) {
+      showCandidate(home, slugArgs[0]);
+      return;
+    }
+    usage();
+  }
+  const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
+  if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
+  for (const slug of slugs) {
+    if (cmd === "approve") approveOne(home, slug);
+    else rejectOne(home, slug, never);
   }
 }
 main();

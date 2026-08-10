@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { readConfigFile } from "./config.js";
-import { runClaudeCli } from "./score.js";
+import { claudeErrorReason, runClaudeCli } from "./score.js";
 import type { ClaudeRunner, GateVerdict } from "./score.js";
 import type { Signal } from "./signals.js";
 import { candidatesDir } from "./skill-index.js";
@@ -34,6 +34,11 @@ export function loadDistillConfig(home: string = handbookHome()): DistillConfig 
 export function normalizeRemoteUrl(raw: string): string | null {
   let s = raw.trim();
   if (!s) return null;
+  // A remote URL never contains control characters. An embedded newline is either a
+  // corrupted remote or an attempt to smuggle a scalar break into the SKILL.md
+  // frontmatter derived from this scope — reject it (falls back to "team" scope).
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(s)) return null;
   const hadProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
   s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
   s = s.replace(/^[^@/]+@/, "");
@@ -157,22 +162,38 @@ export function parseDistillResponse(text: string): DistilledDraft | null {
 }
 
 function yamlQuote(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+  return `"${escaped}"`;
 }
 
-export function assembleSkillMd(draft: DistilledDraft, scope: string): string {
+export function assembleSkillMd(draft: DistilledDraft, scope: string, fromTask = false): string {
+  const origin = fromTask ? "completed task" : "error-to-fix session";
+  // Runtime scope filtering is v1.5. Until then, a project-scoped skill would load
+  // and fire in every repo, so bake the boundary into the text the model reads:
+  // the description (which is always in context) and the top of the body.
+  const scoped = scope !== "team";
+  const guard = scoped ? ` Applies ONLY in the ${scope} repository — do not use it elsewhere.` : "";
+  const description = draft.description + guard;
+  const body = scoped
+    ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project — ignore this skill in any other repo.\n\n${draft.body}`
+    : draft.body;
   return [
     "---",
     `name: ${draft.slug}`,
-    `description: ${yamlQuote(draft.description)}`,
+    `description: ${yamlQuote(description.slice(0, 1024))}`,
     `scope: ${yamlQuote(scope)}`,
     "---",
     "",
-    draft.body,
+    body,
     "",
     "## Grounded case",
     "",
-    "This skill was distilled from a real error-to-fix session. The originating case and its",
+    `This skill was distilled from a real ${origin}. The originating case and its`,
     "expected behavior live in [grounded-case.json](grounded-case.json) and serve as the",
     "regression gate whenever this skill is edited or challenged.",
     "",
@@ -246,7 +267,7 @@ export async function distillVerdict(
       config.timeoutMs,
     );
   } catch (err) {
-    return { signal, outcome: "error", error: `claude invocation failed: ${String(err)}` };
+    return { signal, outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}` };
   }
   const draft = parseDistillResponse(response);
   if (!draft) return { signal, outcome: "error", error: "unparseable distill response" };
@@ -263,7 +284,7 @@ export async function distillVerdict(
     artifact: {
       slug: draft.slug,
       scope,
-      skillMd: assembleSkillMd(draft, scope),
+      skillMd: assembleSkillMd(draft, scope, !!signal.task),
       groundedCase: buildGroundedCase(signal, verdict, draft.expect),
     },
   };

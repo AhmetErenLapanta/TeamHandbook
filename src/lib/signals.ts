@@ -40,6 +40,9 @@ export interface Signal {
   promotedBy?: "recurrence";
   trigger?: "manual";
   secretRedacted?: boolean;
+  // retry bookkeeping for signals whose gate/distill call failed (e.g. logged-out
+  // claude); re-enqueued up to a small cap instead of being lost
+  attempts?: number;
   // present on procedure signals: what was done and how, instead of error→fix
   task?: TaskCase;
   // present on work-shape records (family === "work"): never promoted, only counted

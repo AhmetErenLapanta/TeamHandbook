@@ -1,12 +1,13 @@
 ---
-description: Turn something from this session — an error→fix moment OR a completed task's procedure — into a skill candidate (T2 trigger)
+description: Turn something from this session — an error→fix moment OR a completed task's procedure — into a skill candidate
 argument-hint: [optional hint about which moment or task to capture]
 ---
 
 The user wants to turn something that happened in this session into a reusable skill
-candidate. This is TeamHandbook's manual (T2) trigger: it still passes the promotion gate
-(LLM scoring + secret veto), but skips the automatic detector's noise sieves because the
-user explicitly asked.
+candidate. This is TeamHandbook's manual (T2) trigger: because the user explicitly asked,
+the candidate is ALWAYS distilled and queued — the promotion gate scores it, but its
+verdict travels as advice for the review, not as a veto. Only the secret scan can still
+drop it entirely.
 
 There are TWO capture modes. Pick the one that matches what happened:
 
@@ -27,7 +28,7 @@ actually happened (never invent):
 
 Procedure:
 
-1. Decide the mode. If the user's hint ($ARGUMENTS) names a task ("bu task'ı",
+1. Decide the mode. If the user's hint ($ARGUMENTS) names a task ("this task",
    "how we added X"), use mode B; if it names an error, use mode A; with no hint,
    prefer the most recent clear error→fix sequence, else the session's main completed
    task.
@@ -51,7 +52,10 @@ Procedure:
 
    Never put secrets, tokens, or passwords in the payload — the secret scan will veto
    the whole candidate.
-4. Relay the CLI's verdict to the user verbatim: written (with slug and gate score),
-   gate-rejected (with score/rationale), or dropped by a rule sieve.
+4. Relay the CLI's verdict to the user verbatim: written (with slug and gate score —
+   including the gate's concern when the score is below the threshold), or dropped by a
+   rule sieve (secret / oversized).
 
-The gate call uses the user's own `claude` CLI and may take up to a minute; that is normal.
+This uses the user's own `claude` CLI and runs two calls back to back — it scores, then
+distills — so it may take a couple of minutes. That is normal; do not cancel it. If it
+errors, the message ends with a `/handbook:doctor` pointer.

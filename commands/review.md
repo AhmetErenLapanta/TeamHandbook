@@ -7,7 +7,7 @@ session learnings (error→fix moments and task procedures) and now wait for the
 verdict. Nothing leaves this machine without their approval.
 
 1. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" list`
-2. If there are no pending candidates, tell the user so and stop.
+2. If there are no pending candidates, tell the user so — but if the CLI notes that captured pairs are still being scored in the background, relay that they should try again shortly — then stop.
 3. For each pending candidate, one at a time:
    a. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" show <slug>`
    b. Present a compact summary: name, description, scope, gate score (and its rationale,
@@ -15,7 +15,7 @@ verdict. Nothing leaves this machine without their approval.
       user should see), and the grounded case. Quote the full SKILL.md body only if the
       user asks for it.
    c. Ask the user: **approve, edit first, reject, or skip?**
-   d. **Edit first**: if the user wants changes ("adım 3 yanlış", "add a warning about X"),
+   d. **Edit first**: if the user wants changes ("step 3 is wrong", "add a warning about X"),
       edit the candidate's `SKILL.md` in place (it lives in the directory shown by `show`;
       keep the frontmatter `name:` unchanged), show the diff, and then continue to their
       approve/reject decision. This is the expected way to fix a 90%-right skill instead of

@@ -34,4 +34,5 @@ One short sentence, after the task is done, e.g.:
 If the user agrees, follow the `/handbook:learn` command's procedure mode: gather
 the goal, the ordered meaningful steps actually taken, how success was verified,
 and the files touched — strictly from this session, inventing nothing — and submit
-them. The promotion gate still judges the candidate; relay its verdict verbatim.
+them. The gate scores the candidate (a low score is shown as advice at review); relay
+the CLI's message verbatim.

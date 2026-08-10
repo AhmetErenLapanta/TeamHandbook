@@ -42,6 +42,17 @@ export function saveTeamConfig(team: TeamConfig, home: string = handbookHome()):
   writeFileAtomic(join(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 
+/** Drop the team binding (the escape hatch for a wrong URL or a team switch),
+ * leaving every other config key intact. Returns the repo that was left, if any. */
+export function clearTeamConfig(home: string = handbookHome()): string | null {
+  const config = readConfigFile(home);
+  const previous = (config.team as TeamConfig | undefined)?.repoUrl ?? null;
+  if (!("team" in config)) return null;
+  delete config.team;
+  writeFileAtomic(join(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  return previous;
+}
+
 export function hostFromUrl(url: string): string | null {
   const normalized = normalizeRemoteUrl(url);
   if (!normalized) return null;
@@ -100,7 +111,8 @@ const GITLAB_CI = `# Bumps the plugin version on every merge to the default bran
 version-bump:
   image: node:20
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^ci: bump plugin version/'
+    # only run when the CI token exists — otherwise skip (don't fail the pipeline)
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^ci: bump plugin version/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
     - git config user.name "handbook-ci"
@@ -110,17 +122,23 @@ version-bump:
 `;
 
 function readmeFor(name: string, url: string): string {
+  const ciSetup = (hostFromUrl(url) ?? "").includes("github")
+    ? "the repository's Actions must have **Read and write permissions** (Settings → Actions → " +
+      "General), and if the default branch is protected, Actions must be allowed to push to it."
+    : "a project access token with `write_repository` scope must be stored in the " +
+      "**TEAMHANDBOOK_CI_TOKEN** CI/CD variable (Settings → CI/CD → Variables); until it is set the " +
+      "bump job is skipped and no teammate's copy refreshes.";
   return `# ${name}
 
-Your team's skill base: approved skills distilled from real error-to-fix coding sessions
-by TeamHandbook. This repository is a Claude Code plugin marketplace; every merge reaches
-all subscribed teammates automatically.
+Your team's skill base: approved skills distilled by TeamHandbook from real coding
+sessions (error→fix moments and task procedures). This repository is a Claude Code
+plugin marketplace; every merge reaches all subscribed teammates automatically.
 
 ## Consume skills (no TeamHandbook needed)
 
 \`\`\`
 /plugin marketplace add ${url}
-/plugin install ${name}
+/plugin install ${name}@${name}
 \`\`\`
 
 ## Produce skills (TeamHandbook engine required)
@@ -135,11 +153,62 @@ Every merge to the default branch bumps the plugin version via CI
 (\`scripts/bump-version.mjs\`), which triggers Claude Code's background marketplace
 update on each teammate's machine. Skills live under \`skills/\`, one directory per
 skill (\`SKILL.md\` plus its \`grounded-case.json\` regression anchor).
+
+> **CI setup (required for the above to work):** ${ciSetup} With it unset, merges do
+> not bump the version and teammates silently stop receiving updates.
+
+This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
+"N new skills" notice; it records the skill names it has already shown you under
+\`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
+It makes no network calls and needs no TeamHandbook engine.
 `;
 }
 
+// A tiny, dependency-free SessionStart hook that ships INSIDE the team plugin, so
+// even consumers who never install TeamHandbook itself get "N new team skills" notices.
+const CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] },
+      ],
+    },
+  },
+  null,
+  2,
+);
+
+const CONSUMER_NOTICE_SCRIPT = `#!/usr/bin/env node
+// Prints "<plugin>: N new skills since your last session" — no dependencies, no
+// TeamHandbook engine required. Best-effort: any error exits 0 silently.
+import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+try {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  let name = "team-skills";
+  try { name = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8")).name || name; } catch {}
+  const current = readdirSync(join(root, "skills"), { withFileTypes: true })
+    .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  const seenDir = join(homedir(), ".teamhandbook-consumer");
+  const seenFile = join(seenDir, name + ".json");
+  let prior = null;
+  try { prior = JSON.parse(readFileSync(seenFile, "utf8")); } catch {}
+  mkdirSync(seenDir, { recursive: true });
+  writeFileSync(seenFile, JSON.stringify(current));
+  if (Array.isArray(prior)) {
+    const fresh = current.filter((s) => !prior.includes(s));
+    if (fresh.length) console.log(name + ": " + fresh.length + " new skill(s) since your last session: " + fresh.join(", ") + ".");
+  }
+} catch {}
+process.exit(0);
+`;
+
 export function skeletonFiles(name: string, url: string, host: string | null): Record<string, string> {
   const files: Record<string, string> = {
+    "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
+    "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
     ".claude-plugin/marketplace.json":
       JSON.stringify(
         {
@@ -149,7 +218,7 @@ export function skeletonFiles(name: string, url: string, host: string | null): R
             {
               name,
               source: "./",
-              description: "Approved team skills distilled from real error-to-fix sessions by TeamHandbook.",
+              description: "Approved team skills distilled from real coding sessions by TeamHandbook.",
             },
           ],
         },
@@ -160,7 +229,7 @@ export function skeletonFiles(name: string, url: string, host: string | null): R
       JSON.stringify(
         {
           name,
-          description: "Approved team skills distilled from real error-to-fix sessions by TeamHandbook.",
+          description: "Approved team skills distilled from real coding sessions by TeamHandbook.",
           version: "0.1.0",
         },
         null,
@@ -249,7 +318,10 @@ export function initTeamRepo(
     return { ok: false, error: `cannot derive a marketplace name from "${url}"; pass --name` };
   }
   if (loadTeamConfig(home)) {
-    return { ok: false, error: "a team repository is already configured; edit config.json to re-init" };
+    return {
+      ok: false,
+      error: `a team repository is already configured; run /handbook:leave (or edit ${join(home, "config.json")}) to re-init`,
+    };
   }
   const workdir = mkdtempSync(join(tmpdir(), "handbook-init-"));
   writeSkeleton(workdir, skeletonFiles(marketplaceName, url, hostFromUrl(url)));
@@ -270,6 +342,24 @@ export function initTeamRepo(
 }
 
 export function formatInitSuccess(result: InitResult): string {
+  const isGitHub = !!result.url && (hostFromUrl(result.url) ?? "").includes("github");
+  const ciNote = isGitHub
+    ? [
+        "",
+        "  ⚠ CI: the version-bump workflow needs write access. In the repo settings enable",
+        "    'Read and write permissions' for Actions (Settings → Actions → General).",
+        "    If the default branch is protected, also allow Actions to bypass the push",
+        "    restriction (branch-protection rule) or push with a PAT secret — otherwise the",
+        "    bump push is rejected on every merge and teammates stop updating.",
+      ]
+    : [
+        "",
+        "  ⚠ CI (required for auto-distribution): the version-bump job needs a project access",
+        "    token with the `write_repository` scope, a Maintainer role, and permission to push",
+        "    to the protected default branch. Add it as a CI/CD variable named TEAMHANDBOOK_CI_TOKEN",
+        "    (Settings → CI/CD → Variables). Until it's set the job is SKIPPED and teammates'",
+        "    marketplace copies won't refresh — nothing else will warn you.",
+      ];
   return [
     "Team skill base initialized.",
     "",
@@ -277,6 +367,7 @@ export function formatInitSuccess(result: InitResult): string {
     `  marketplace: ${result.name}`,
     "  pushed:      marketplace skeleton + version-bump CI (branch main)",
     `  config:      team repo saved to ${join(result.home ?? "", "config.json")}`,
+    ...ciNote,
     "",
     "Tell your teammates who will PRODUCE skills to run:",
     "",
@@ -285,6 +376,6 @@ export function formatInitSuccess(result: InitResult): string {
     "Teammates who only want to CONSUME skills need two built-in commands instead:",
     "",
     `  /plugin marketplace add ${result.url}`,
-    `  /plugin install ${result.name}`,
+    `  /plugin install ${result.name}@${result.name}`,
   ].join("\n");
 }

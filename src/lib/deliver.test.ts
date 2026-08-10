@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { approveAndDeliver, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
 import { saveTeamConfig } from "./init.js";
 import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
@@ -102,6 +102,18 @@ describe("approveAndDeliver", () => {
     const result = approveAndDeliver(home, "fix-npm-test");
     expect(result.deliveredTo).toBe(join(soloSkillsDir(project), "fix-npm-test-2"));
     expect(readFileSync(join(occupied, "SKILL.md"), "utf8")).toBe("original");
+  });
+
+  it("names the origin project when it differs from the review cwd (cross-project approve)", () => {
+    seedCandidate(meta()); // captured in `project`
+    const result = approveAndDeliver(home, "fix-npm-test", "/somewhere/else");
+    expect(result.originProject).toBe(basename(project));
+  });
+
+  it("omits originProject when approving from the same project the skill was captured in", () => {
+    seedCandidate(meta());
+    const result = approveAndDeliver(home, "fix-npm-test", project);
+    expect(result.originProject).toBeUndefined();
   });
 
   it("delivers to the fallback cwd when the origin project no longer exists", () => {

@@ -1,5 +1,7 @@
 // src/lib/status.ts
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { dirname, join as join9 } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -9,6 +11,7 @@ function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/signals.ts
 import { join as join3 } from "node:path";
@@ -20,13 +23,22 @@ var FIELDS = [
   "redactionBlocked",
   "postToolUse",
   "bashFailuresCaptured",
-  "pairsResolved"
+  "pairsResolved",
+  "gateErrors",
+  "gateAbandoned"
 ];
 function countersFile(home = handbookHome()) {
   return join2(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
-  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
+  const base = {
+    redactionBlocked: 0,
+    postToolUse: 0,
+    bashFailuresCaptured: 0,
+    pairsResolved: 0,
+    gateErrors: 0,
+    gateAbandoned: 0
+  };
   try {
     const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
@@ -41,7 +53,7 @@ function signalsFile(home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { readdirSync as readdirSync2, readFileSync as readFileSync2 } from "node:fs";
 import { basename, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -121,13 +133,13 @@ function listCandidates(home = handbookHome(), status) {
   const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join5(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug)
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
   );
 }
 
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+// src/lib/notify.ts
+import { existsSync, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // src/lib/config.ts
 import { readFileSync as readFileSync3 } from "node:fs";
@@ -142,6 +154,8 @@ function readConfigFile(home = handbookHome()) {
 }
 
 // src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 var defaultScoreConfig = {
   model: "haiku",
@@ -170,6 +184,19 @@ function loadDistillConfig(home = handbookHome()) {
   };
 }
 
+// src/lib/init.ts
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
+
 // src/lib/notify.ts
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
@@ -178,21 +205,52 @@ function loadNotifyConfig(home = handbookHome()) {
     heartbeat: notify?.heartbeat !== false
   };
 }
+function pendingBatchCount(home = handbookHome()) {
+  let entries;
+  try {
+    entries = readdirSync3(join7(home, "pending"));
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const parsed = JSON.parse(readFileSync4(join7(home, "pending", entry), "utf8"));
+      if (Array.isArray(parsed)) total += parsed.length;
+    } catch {
+    }
+  }
+  return total;
+}
 
 // src/lib/pipeline.ts
-import { basename as basename2, join as join7 } from "node:path";
+import { basename as basename2, join as join8 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join7(home, "pipeline.log");
+  return join8(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 
 // src/lib/status.ts
+function pluginVersion() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const up of ["..", "../.."]) {
+    try {
+      const parsed = JSON.parse(
+        readFileSync5(join9(here, up, ".claude-plugin", "plugin.json"), "utf8")
+      );
+      if (typeof parsed?.version === "string") return parsed.version;
+    } catch {
+    }
+  }
+  return "unknown";
+}
 function ledgerStats(home = handbookHome()) {
   const stats = { total: 0, candidates: 0, weak: 0, distinctFingerprints: 0 };
   let raw;
   try {
-    raw = readFileSync4(signalsFile(home), "utf8");
+    raw = readFileSync5(signalsFile(home), "utf8");
   } catch {
     return stats;
   }
@@ -216,7 +274,7 @@ function ledgerStats(home = handbookHome()) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync4(pipelineLogFile(home), "utf8");
+    raw = readFileSync5(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -230,14 +288,39 @@ function lastPipelineRun(home = handbookHome()) {
   }
   return null;
 }
+function pipelineAggregate(home = handbookHome()) {
+  const agg = { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 };
+  let raw;
+  try {
+    raw = readFileSync5(pipelineLogFile(home), "utf8");
+  } catch {
+    return agg;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const p = JSON.parse(line);
+      agg.runs += 1;
+      agg.written += Array.isArray(p.written) ? p.written.length : 0;
+      agg.rejected += Number(p.rejected) || 0;
+      agg.errored += Number(p.errored) || 0;
+      agg.sievedOut += Number(p.sievedOut) || 0;
+    } catch {
+    }
+  }
+  return agg;
+}
 function gatherStatus(home = handbookHome()) {
   const candidates = listCandidates(home);
   const count = (status) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
   const distill = loadDistillConfig(home);
   const counters = readCounters(home);
+  const approved = candidates.filter((c) => c.status === "approved");
+  const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
   return {
     home,
+    version: pluginVersion(),
     ledger: ledgerStats(home),
     queue: {
       pending: count("pending"),
@@ -245,12 +328,21 @@ function gatherStatus(home = handbookHome()) {
       rejected: count("rejected")
     },
     redactionBlocked: counters.redactionBlocked,
+    sinceInstall: {
+      approved: approved.length,
+      teamShared,
+      pairsCaptured: counters.pairsResolved,
+      secretsBlocked: counters.redactionBlocked
+    },
     detector: {
       postToolUse: counters.postToolUse,
       bashFailuresCaptured: counters.bashFailuresCaptured,
       pairsResolved: counters.pairsResolved
     },
     lastRun: lastPipelineRun(home),
+    pipeline: pipelineAggregate(home),
+    scoringNow: pendingBatchCount(home),
+    abandoned: counters.gateAbandoned,
     config: {
       gateModel: score.model,
       gateThreshold: score.threshold,
@@ -266,22 +358,37 @@ function formatLastRejection(lastRun) {
   const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "no rationale recorded";
   return [`Last rejection:  ${score} \u2014 ${why}`];
 }
+function formatLastError(lastRun) {
+  const errored = lastRun?.outcomes?.filter((o) => o.outcome === "error").at(-1);
+  if (!errored) return [];
+  return [`Last error:      ${errored.error ?? "(no reason recorded)"} \u2014 run /handbook:doctor`];
+}
 function formatStatus(report) {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
-    `TeamHandbook status  (${report.home})`,
+    `TeamHandbook status  (v${report.version}, ${report.home})`,
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
+    `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error\u2192fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun ? `Last gate run:   ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} \u2014 ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last gate run:   never",
     ...formatLastRejection(lastRun),
+    ...formatLastError(lastRun),
+    `Gate pipeline:   ${report.pipeline.runs} run(s) in log \u2014 ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    ...report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} captured pair(s) given up after repeated gate failures (kept in abandoned.jsonl) \u2014 run /handbook:doctor`] : [],
+    ...report.scoringNow > 0 ? [`Scoring now:     ${report.scoringNow} captured pair(s) queued for the background gate`] : [],
     "",
     `Config:          gate model "${config.gateModel}" (threshold ${config.gateThreshold}/10), distill model ${config.distillModel}, session-start notice ${config.sessionStartNotice ? "on" : "off"}`
   ];
   if (queue.pending > 0) {
     lines.push("", `Run /handbook:review to review the ${queue.pending} pending candidate(s).`);
+  } else if (report.sinceInstall.approved === 0) {
+    lines.push(
+      "",
+      "No skills yet \u2014 normal early on: automatic capture waits for an error class to recur. Run /handbook:learn after a task to make one now, or /handbook:doctor to confirm the gate can reach claude."
+    );
   }
   return lines.join("\n");
 }

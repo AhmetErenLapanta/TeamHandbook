@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureBashFailure, captureBashSuccess, captureFileEdit } from "./capture.js";
+import { captureBashFailure, captureBashSuccess, captureFileEdit, recordActivity } from "./capture.js";
 import { loadSessionState } from "./session-state.js";
+import { readCounters } from "./counters.js";
 import type { HookInput } from "./hook-io.js";
 
 let home: string;
@@ -163,5 +164,72 @@ describe("captureBashSuccess", () => {
     expect(captureBashSuccess(bashSuccess({ tool_response: { stdout: "", stderr: "", interrupted: true } }), home)).toBe(
       0,
     );
+  });
+});
+
+describe("secret redaction at the session boundary", () => {
+  const SECRET = "sk-proj-abcdef1234567890ABCDEFGH";
+
+  function sessionHasNoSecret(): void {
+    const file = join(home, "sessions", "s1.json");
+    if (existsSync(file)) expect(readFileSync(file, "utf8")).not.toContain(SECRET);
+  }
+
+  it("drops a secret-bearing failing command entirely — nothing on disk, counter bumped", () => {
+    const input = bashFailure({
+      tool_input: { command: `curl -H 'Authorization: Bearer ${SECRET}' https://x` },
+      error: "Exit code 1\n401 unauthorized",
+    });
+    expect(captureBashFailure(input, home)).toBe(false);
+    expect(loadSessionState("s1", home).openErrors).toEqual([]); // no husk left behind
+    expect(readCounters(home).redactionBlocked).toBe(1);
+    sessionHasNoSecret();
+  });
+
+  it("captures a CLEAN recurrence of a secret-tainted error and pairs it (no silent loss)", () => {
+    // occurrence 1 carries an inline secret in the command → dropped
+    expect(
+      captureBashFailure(
+        bashFailure({ tool_input: { command: `API_KEY=${SECRET} npm test` }, error: "Exit code 1\n2 failing" }),
+        home,
+      ),
+    ).toBe(false);
+    // occurrence 2 is clean (same normalized error/family) → captured fresh
+    expect(
+      captureBashFailure(bashFailure({ tool_input: { command: "npm test" }, error: "Exit code 1\n2 failing" }), home),
+    ).toBe(true);
+    captureFileEdit(fileEdit(), home);
+    // the green re-run must still close the pair — the tombstone regression returned 0 here
+    expect(captureBashSuccess(bashSuccess(), home)).toBe(1);
+    const pair = loadSessionState("s1", home).resolvedPairs[0]!;
+    expect(pair.family).toBe("npm test");
+    expect(pair.resolvedCommand).toBe("npm test");
+    expect(JSON.stringify(pair)).not.toContain(SECRET);
+    expect(readCounters(home).redactionBlocked).toBe(1); // only occurrence 1 was blocked
+  });
+
+  it("does not pair a fix whose resolving command carries a secret", () => {
+    captureBashFailure(bashFailure({ tool_input: { command: "curl https://x" }, error: "Exit code 1\nboom" }), home);
+    const resolved = captureBashSuccess(
+      bashSuccess({ tool_input: { command: `curl -H 'Authorization: Bearer ${SECRET}' https://x` } }),
+      home,
+    );
+    expect(resolved).toBe(0);
+    expect(loadSessionState("s1", home).resolvedPairs).toEqual([]);
+    sessionHasNoSecret();
+    expect(readCounters(home).redactionBlocked).toBe(1);
+  });
+
+  it("drops a secret-bearing edit path instead of attaching it", () => {
+    captureBashFailure(bashFailure(), home);
+    const attached = captureFileEdit(fileEdit({ tool_input: { file_path: `/repo/tmp/token=${SECRET}.ts` } }), home);
+    expect(attached).toBe(false);
+    expect(loadSessionState("s1", home).openErrors[0]?.edits).toEqual([]);
+    sessionHasNoSecret();
+  });
+
+  it("does not record activity for a secret-bearing command (recordActivity guard)", () => {
+    expect(recordActivity(bashSuccess({ tool_input: { command: `deploy ${SECRET}` } }), home)).toBe(false);
+    sessionHasNoSecret();
   });
 });

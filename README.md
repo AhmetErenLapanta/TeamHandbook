@@ -1,6 +1,6 @@
 # TeamHandbook
 
-**Turn your team's real error→fix moments into gated, reviewable, merge-ready skills.**
+**Turn your team's real error→fix moments and task procedures into gated, reviewable, merge-ready skills.**
 
 TeamHandbook is a [Claude Code](https://code.claude.com) plugin. While you work, it
 quietly notices when a command failed and a later edit made it pass, decides
@@ -45,7 +45,7 @@ FAIL src/api.test.ts
 Next time you open Claude Code, if that class of failure has recurred, you see:
 
 ```
-handbook: 1 candidate ready to publish — /handbook:review
+handbook: 1 candidate skill is awaiting your review — run /handbook:review to approve or reject.
 ```
 
 `/handbook:review` shows the distilled skill and its grounded case; you approve,
@@ -54,10 +54,25 @@ Merge it, and every teammate's Claude has it the next day.
 
 ## Install
 
-**Requires** Claude Code and Node.js ≥ 18.
+**Requires** Claude Code ≥ 2.1 and Node.js ≥ 18.
 
 ```
 /plugin marketplace add <your-username>/TeamHandbook
+/plugin install handbook@teamhandbook
+```
+
+> Replace `<your-username>` with the GitHub owner this repo is hosted under.
+
+Installing from a local clone (before it is published, or for offline use):
+
+```
+git clone <this-repo-url> TeamHandbook
+```
+
+then in Claude Code point the marketplace at that directory:
+
+```
+/plugin marketplace add ./TeamHandbook
 /plugin install handbook@teamhandbook
 ```
 
@@ -76,7 +91,8 @@ error→fix on purpose — in a Claude Code session, ask Claude to:
 3. Run `/handbook:status` — watch `failures captured` and `pairs resolved` count up.
 4. Within a minute the gate scores the recurring pair; `/handbook:review` shows
    the distilled skill with its grounded case. Approve it and find it in the
-   project's `.claude/skills/`.
+   project's `.claude/skills/`. (If the queue is still empty after a minute, run
+   `/handbook:doctor` — the gate needs your `claude` CLI installed and logged in.)
 
 Or skip the theater: finish any real task and run `/handbook:learn` — it captures
 the procedure immediately, no recurrence needed.
@@ -94,7 +110,7 @@ Bash exits ≠ 0     ─┐     rule sieves (cheap):        approved candidate �
 edit attached       ├──▶  · has a file change?    ──▶ solo: project/.claude/skills
 same command        │     · no secret (veto)          team: PR to the skills repo
   later exits 0   ──┘     · seen ≥ N times            ─────────────────────────────
-(a resolved pair)         · size                       nothing leaves the machine
+(a resolved pair)         · size · not muted           nothing leaves the machine
                           then LLM (your own claude):  without your approval
                           score 5 criteria, ≥7/10
                           distill → SKILL.md + case
@@ -127,6 +143,10 @@ TeamHandbook stays out of your way, but never leaves you wondering whether it's 
   `handbook: since your last session — 3 failures watched, 1 error→fix pair captured.`
 - **When a candidate is ready**, the review prompt:
   `handbook: 1 candidate skill is awaiting your review — run /handbook:review…`
+- **When new skills arrived** (your own approvals or teammates' merges):
+  `handbook: 2 new skills available since your last session here: …`
+- **When the same kind of work keeps recurring**, a once-per-shape suggestion:
+  `handbook: you've done similar work 2 times — … run /handbook:learn…`
 - Nothing happened → it says nothing. Disable entirely with
   `~/.teamhandbook/config.json` → `{"notify": {"sessionStart": false}}` (or just the
   heartbeat via `{"notify": {"heartbeat": false}}`).
@@ -138,9 +158,10 @@ queue, and the last gate run.
 
 | Command | What it does |
 |---|---|
-| `/handbook:review` | List, show, approve, or reject pending candidates. **Nothing is published without this.** |
-| `/handbook:learn` | Manually capture an error→fix moment OR a completed task's procedure as a candidate (still passes the gate). |
-| `/handbook:status` | Ledger, queue, redaction count, and detector health counters. |
+| `/handbook:review` | List, show, edit-then-approve, reject, or skip pending candidates. **Nothing is published without this.** |
+| `/handbook:learn` | Manually capture an error→fix moment OR a completed task's procedure. Always queued — the gate's score rides along as advice. |
+| `/handbook:status` | Ledger, queue, detector health counters, and a since-install value recap. |
+| `/handbook:doctor` | One-command diagnosis: node, claude CLI, hooks firing, config, team repo reachability. |
 | `/handbook:init` | Scaffold a team skill repo and print the command teammates run. |
 | `/handbook:join <url>` | Point the engine at an existing team skill repo. |
 
@@ -148,15 +169,26 @@ queue, and the last gate run.
 
 This plugin's hooks read your session, so this matters and is worth stating plainly:
 
-- **Nothing leaves your machine without your explicit approval.** Candidates sit
-  in a local queue; only `/handbook:review` → approve opens a PR, using your own
-  git credentials.
-- **Secret redaction runs before anything is written.** A signal whose command,
-  error, or edits contain a secret is dropped entirely and reduced to a
-  content-free fingerprint; only a counter is kept. Patterns cover private keys,
-  AWS/GitHub/GitLab/Slack/Stripe/OpenAI/Google/npm tokens, JWTs, Basic-auth
-  headers, and `KEY=value` assignments ([`src/lib/secrets.ts`](src/lib/secrets.ts)).
-- **The gate's scoring uses *your* Claude** (`claude -p`), not a bundled key —
+- **Nothing is *shared with your team* without your explicit approval.** Candidates
+  sit in a local queue; only `/handbook:review` → approve publishes (a PR, using
+  your own git credentials, or a local install).
+- **Automatic scoring/distillation runs through your own `claude` CLI.** To decide
+  and write a candidate, TeamHandbook sends its (secret-redacted) command/error text to
+  `claude -p` — the same Anthropic API your Claude Code session already uses —
+  *before* you review it. If that's not acceptable for a repo, set
+  `~/.teamhandbook/config.json` → `{"gate": {"auto": false}}`: the detector still
+  captures locally, but nothing is sent anywhere automatically, and you create
+  candidates only with the explicit `/handbook:learn`.
+- **Secret redaction runs before anything is written — including the transient
+  per-session state.** A command, error, or edit that matches a known secret pattern
+  is reduced to a content-free fingerprint (only a counter is kept), so the raw text
+  never reaches `~/.teamhandbook/` — not the session files, the ledger, a candidate, or
+  a PR. Patterns cover private keys, AWS/GitHub/GitLab/Slack/Stripe/OpenAI/Google/npm
+  tokens, JWTs, Basic-auth headers, and `KEY=value` assignments
+  ([`src/lib/secrets.ts`](src/lib/secrets.ts)). Detection is **best-effort pattern
+  matching**: a secret in an unrecognized format can slip through, so still eyeball a
+  candidate before you approve it.
+- **Gate scoring and distillation use *your* Claude** (`claude -p`), not a bundled key —
   no third-party model, no extra credentials.
 - **No telemetry.** State lives under `~/.teamhandbook/`.
 - Raw hook payloads are **never** written to disk unless you opt in with
@@ -178,7 +210,7 @@ This plugin's hooks read your session, so this matters and is worth stating plai
   you ask — and because you asked, a manual capture is ALWAYS distilled and
   queued: a low gate score travels with it as advice, and the publish decision
   stays yours at review. (The gate's hard veto applies only to the automatic
-  path, plus secrets everywhere.)
+  path, plus secrets and size limits everywhere.)
 - v1 produces **skills only**. Routing lessons to tests/lint rules/`AGENTS.md`
   lines is future work.
 - `/handbook:status` shows `tool calls seen / failures captured / pairs resolved`
@@ -203,11 +235,38 @@ repo is an ordinary Claude Code marketplace:
 
 ```
 /plugin marketplace add <team-repo-url>
-/plugin install <team-plugin>@<team-marketplace>
+/plugin install <team-plugin-name>
 ```
 
 If your team deletes TeamHandbook tomorrow, the skill repo and its distribution keep
 working — there's no lock-in.
+
+## One developer, several machines
+
+All state lives under `~/.teamhandbook` on **each machine separately** — there is no
+sync. Practically:
+
+- **Recurrence doesn't merge across machines.** An error you hit once on your laptop
+  and once on your desktop is two single occurrences, so it won't reach the N=2
+  threshold. Team mode is the fix: merged skills reach every machine.
+- **Solo-approved skills** are written into that project's `.claude/skills/` on the
+  approving machine only. **Commit that directory** and they travel with the repo to
+  your other machines (and teammates) on the next pull.
+- Welcome, heartbeat, mutes (`reject --never`), and nudges are per-machine.
+- Point several machines at one state dir with the `TEAMHANDBOOK_HOME` env var if you
+  really want shared local state (advanced; no locking guarantees across machines).
+
+## Uninstall
+
+Remove the plugin (`/plugin uninstall TeamHandbook`) and delete its local state:
+
+```
+rm -rf ~/.teamhandbook
+```
+
+That's everything — TeamHandbook keeps no other data anywhere. Skills already
+approved into projects or merged into a team repo are ordinary files/commits and
+remain yours.
 
 ## Development
 
