@@ -9,13 +9,13 @@ import {
   resolveOpenErrors,
   saveSessionState,
 } from "./session-state.js";
-import { flushResolvedPairs, signalsFile } from "./signals.js";
-import { enqueuePendingSignals, pendingDir } from "./pipeline.js";
+import { flushResolvedPairs, ledgerPairsForSession, signalsFile } from "./signals.js";
+import { enqueueHarvestJob, pendingDir } from "./pipeline.js";
 import { readCounters } from "./counters.js";
 
 // The auto path that runs thousands of times in dogfood:
-// PostToolUse → Stop → flushResolvedPairs (ledger) → enqueuePendingSignals (handoff).
-// A Bearer token in the failing command must not survive to EITHER file on disk.
+// PostToolUse → Stop → flushResolvedPairs (ledger) → session-end harvest job.
+// A Bearer token in the failing command must not survive to ANY file on disk.
 let home: string;
 const SECRET = "sk-proj-abcdef1234567890ABCDEFGH";
 
@@ -33,8 +33,8 @@ function readAll(dir: string): string {
     .join("\n");
 }
 
-describe("secret redaction on the flush + enqueue path", () => {
-  it("leaks the secret into neither signals.jsonl nor pending/*.json", () => {
+describe("secret redaction on the flush + harvest-job path", () => {
+  it("leaks the secret into neither signals.jsonl nor the harvest job file", () => {
     const editedFile = join(home, "api.ts");
     writeFileSync(editedFile, "fixed");
 
@@ -53,18 +53,24 @@ describe("secret redaction on the flush + enqueue path", () => {
     resolveOpenErrors(state, "curl example.com", "curl example.com", home, "2026-08-08T00:02:00Z");
     saveSessionState(state, home);
 
-    const signals = flushResolvedPairs("s1", home, "2026-08-08T00:03:00Z");
-    const candidates = signals.filter((s) => s.kind === "candidate");
-    enqueuePendingSignals(candidates, home);
+    flushResolvedPairs("s1", home, "2026-08-08T00:03:00Z");
+    // the session-end hook builds the job from the (sanitized) ledger — redacted
+    // rows are excluded from harvest evidence entirely
+    const pairs = ledgerPairsForSession("s1", home);
+    enqueueHarvestJob(
+      { sessionId: "s1", cwd: home, evidence: { pairs, recurrence: {} } },
+      home,
+    );
 
     const ledger = readFileSync(signalsFile(home), "utf8");
-    const pending = readAll(pendingDir(home));
+    const jobs = readAll(pendingDir(home));
     expect(ledger).not.toContain(SECRET);
     expect(ledger).not.toContain("Bearer");
-    expect(pending).not.toContain(SECRET);
-    expect(pending).not.toContain("Bearer");
+    expect(jobs).not.toContain(SECRET);
+    expect(jobs).not.toContain("Bearer");
     // fingerprint still recorded (recurrence survives) and the veto was counted
     expect(ledger).toContain("fp1");
+    expect(pairs).toEqual([]); // a redacted row never becomes harvest evidence
     expect(readCounters(home).redactionBlocked).toBe(1);
   });
 });

@@ -1,24 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   abandonedFile,
-  drainPendingSignals,
-  enqueuePendingSignals,
+  drainHarvestJobs,
+  enqueueHarvestJob,
   pendingDir,
   pipelineLogFile,
+  runHarvestJob,
   runManualSignal,
-  runPipeline,
   spawnPipelineRunner,
 } from "./pipeline.js";
 import { readCounters } from "./counters.js";
 import { readCandidateMeta } from "./queue.js";
 import type { ClaudeRunner } from "./score.js";
-import { appendSignals, ledgerFingerprintCounts } from "./signals.js";
+import { ledgerFingerprintCounts } from "./signals.js";
 import type { Signal } from "./signals.js";
+import type { HarvestJob } from "./harvest.js";
 import { candidatesDir } from "./skill-index.js";
-import { writeFileSync } from "node:fs";
 
 function candidate(overrides: Partial<Signal> = {}): Signal {
   return {
@@ -33,7 +33,6 @@ function candidate(overrides: Partial<Signal> = {}): Signal {
     count: 2,
     edits: ["/repo/src/app.ts"],
     resolvedCommand: "npm test",
-    resolvedAt: "2026-08-08T00:10:00Z",
     ...overrides,
   };
 }
@@ -58,11 +57,35 @@ function fakeRunner(calls: string[] = []): ClaudeRunner {
   };
 }
 
-function seedLedger(home: string, signal: Signal, times: number): void {
-  appendSignals(Array.from({ length: times }, () => signal), home);
+const harvestReply = JSON.stringify([
+  {
+    kind: "correction",
+    name: "prefer-config-feature-flags",
+    description: "Use when adding a feature flag.",
+    body: "## Rule\n\nFlags live in config.",
+    expect: "New flags are read from config.",
+    scope: "team",
+    scores: { recurrence: 1, unfindability: 2, generality: 2, durability: 1, costOfError: 1 },
+    quote: "we keep feature flags in config",
+  },
+]);
+
+function job(home: string, overrides: Partial<HarvestJob> = {}): HarvestJob {
+  const transcript = join(home, "t.jsonl");
+  writeFileSync(
+    transcript,
+    JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "we keep flags in config" } }) + "\n",
+  );
+  return {
+    sessionId: "s1",
+    cwd: home,
+    transcriptPath: transcript,
+    evidence: { pairs: [], recurrence: {} },
+    ...overrides,
+  };
 }
 
-describe("pending hand-off", () => {
+describe("harvest job hand-off", () => {
   let home: string;
 
   beforeEach(() => {
@@ -73,54 +96,49 @@ describe("pending hand-off", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("round-trips signals through the pending directory and consumes the files", () => {
-    enqueuePendingSignals([candidate()], home);
-    enqueuePendingSignals([candidate({ fingerprint: "def456" })], home);
-    const drained = drainPendingSignals(home);
-    expect(drained.map((s) => s.fingerprint).sort()).toEqual(["abc123", "def456"]);
-    expect(drainPendingSignals(home)).toEqual([]);
+  it("round-trips a job through the pending directory and consumes the file", () => {
+    enqueueHarvestJob(job(home), home);
+    enqueueHarvestJob(job(home, { sessionId: "s2" }), home);
+    const drained = drainHarvestJobs(home);
+    expect(drained.map((j) => j.sessionId).sort()).toEqual(["s1", "s2"]);
+    expect(drainHarvestJobs(home)).toEqual([]);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
 
-  it("writes nothing for an empty batch", () => {
-    expect(enqueuePendingSignals([], home)).toBeNull();
-    expect(existsSync(pendingDir(home))).toBe(false);
-  });
-
-  it("drains an empty home without error", () => {
-    expect(drainPendingSignals(home)).toEqual([]);
-  });
-
-  it("drops malformed batch files but keeps draining the rest", () => {
-    enqueuePendingSignals([candidate()], home);
+  it("drops malformed job files but keeps draining the rest", () => {
+    enqueueHarvestJob(job(home), home);
     writeFileSync(join(pendingDir(home), "zz-broken.json"), "not json");
-    const drained = drainPendingSignals(home);
+    writeFileSync(join(pendingDir(home), "zz-wrong-shape.json"), JSON.stringify({ nope: true }));
+    const drained = drainHarvestJobs(home);
     expect(drained).toHaveLength(1);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
 
-  it("reclaims a stale claimed batch left by a crashed runner", () => {
-    enqueuePendingSignals([candidate()], home);
+  it("reclaims a stale claimed job left by a crashed runner", () => {
+    enqueueHarvestJob(job(home), home);
     const entry = readdirSync(pendingDir(home))[0]!;
     const claimed = join(pendingDir(home), `${entry}.claimed-99999`);
     renameSync(join(pendingDir(home), entry), claimed);
     const old = new Date(Date.now() - 11 * 60 * 1000);
     utimesSync(claimed, old, old);
-    const drained = drainPendingSignals(home);
-    expect(drained).toHaveLength(1);
+    expect(drainHarvestJobs(home)).toHaveLength(1);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
 
   it("leaves a fresh claim alone (its runner may still be alive)", () => {
-    enqueuePendingSignals([candidate()], home);
+    enqueueHarvestJob(job(home), home);
     const entry = readdirSync(pendingDir(home))[0]!;
     renameSync(join(pendingDir(home), entry), join(pendingDir(home), `${entry}.claimed-99999`));
-    expect(drainPendingSignals(home)).toEqual([]);
+    expect(drainHarvestJobs(home)).toEqual([]);
     expect(readdirSync(pendingDir(home))).toHaveLength(1);
+  });
+
+  it("drains an empty home without error", () => {
+    expect(drainHarvestJobs(home)).toEqual([]);
   });
 });
 
-describe("runPipeline", () => {
+describe("runHarvestJob", () => {
   let home: string;
 
   beforeEach(() => {
@@ -131,178 +149,41 @@ describe("runPipeline", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("carries a recurring candidate through sieve, score, distill, and into the queue", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    const summary = await runPipeline([signal], home, {
-      runner: fakeRunner(),
-      remoteUrl: () => null,
-    });
-    expect(summary).toEqual({
-      received: 1,
-      sievedOut: 0,
-      scored: 1,
-      rejected: 0,
-      errored: 0,
-      deferred: 0,
-      written: ["fix-npm-test"],
-      outcomes: [
-        { fingerprint: "abc123", outcome: "promote", total: 8, rationale: "recurring and unfindable" },
-      ],
-    });
-    const dir = join(candidatesDir(home), "fix-npm-test");
-    expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toContain("name: fix-npm-test");
-    expect(JSON.parse(readFileSync(join(dir, "grounded-case.json"), "utf8")).fingerprint).toBe("abc123");
-    const meta = readCandidateMeta(dir);
-    expect(meta?.status).toBe("pending");
-    expect(meta?.gate?.total).toBe(8);
-    expect(meta?.sessionId).toBe("s1");
+  const deps = { listSkills: () => [], skillDirs: () => [], remoteUrl: () => null };
+
+  it("harvests a session into pending candidates and logs the run", async () => {
+    const summary = await runHarvestJob(job(home), home, { ...deps, runner: async () => harvestReply });
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+    const meta = readCandidateMeta(join(candidatesDir(home), "prefer-config-feature-flags"));
+    expect(meta).toMatchObject({ origin: "harvest", kind: "correction", status: "pending" });
+    const line = JSON.parse(readFileSync(pipelineLogFile(home), "utf8").trim());
+    expect(line).toMatchObject({ received: 1, written: ["prefer-config-feature-flags"] });
+    expect(line.harvest.sessionId).toBe("s1");
   });
 
-  it("appends a summary line to the pipeline log", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    await runPipeline([signal], home, { runner: fakeRunner(), remoteUrl: () => null });
-    const lines = readFileSync(pipelineLogFile(home), "utf8").trim().split("\n");
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ received: 1, written: ["fix-npm-test"] });
-  });
-
-  it("never calls the model for a signal the secret sieve dropped", async () => {
-    const signal = candidate({ error: "auth failed: api_key=abcd1234efgh5678" });
-    // Seed recurrence with a clean signal sharing the fingerprint, so only the
-    // pipeline's own secret sieve increments the redaction counter.
-    seedLedger(home, candidate(), 2);
-    const calls: string[] = [];
-    const summary = await runPipeline([signal], home, {
-      runner: fakeRunner(calls),
-      remoteUrl: () => null,
-    });
-    expect(summary.sievedOut).toBe(1);
-    expect(summary.written).toEqual([]);
-    expect(calls).toEqual([]);
-    expect(readCounters(home).redactionBlocked).toBe(1);
-  });
-
-  it("counts a gate rejection and writes no candidate", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    const lowScore = JSON.stringify({
-      scores: { recurrence: 1, unfindability: 0, generality: 0, durability: 0, costOfError: 0 },
-      duplicateOf: null,
-    });
-    const summary = await runPipeline([signal], home, {
-      runner: async () => lowScore,
-      remoteUrl: () => null,
-    });
-    expect(summary.rejected).toBe(1);
-    expect(summary.written).toEqual([]);
-    expect(existsSync(candidatesDir(home))).toBe(false);
-  });
-
-  it("fails closed when the model call errors", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    const summary = await runPipeline([signal], home, {
-      runner: async () => {
-        throw new Error("claude unavailable");
-      },
-      remoteUrl: () => null,
-    });
-    expect(summary.errored).toBe(1);
-    expect(summary.written).toEqual([]);
-  });
-
-  it("logs a promote whose distillation fails as errored, not a phantom promote", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    // the gate promotes, but the distill prompt gets an unparseable reply
-    const scorePassDistillFail: ClaudeRunner = async (prompt) =>
-      prompt.includes("kebab-case-skill-name") ? "not json at all" : scoreResponse;
-    const summary = await runPipeline([signal], home, {
-      runner: scorePassDistillFail,
-      remoteUrl: () => null,
-    });
-    expect(summary.written).toEqual([]);
-    expect(summary.errored).toBe(1);
-    const outcome = summary.outcomes!.find((o) => o.fingerprint === "abc123");
-    expect(outcome?.outcome).toBe("error");
-    expect(outcome?.error).toContain("unparseable distill response");
-  });
-
-  it("re-enqueues an errored signal for retry, up to the attempt cap", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
+  it("re-enqueues a failed job up to the attempt cap, then abandons it — never silently", async () => {
     const down: ClaudeRunner = async () => {
       throw new Error("logged out");
     };
-    await runPipeline([signal], home, { runner: down, remoteUrl: () => null });
-    const requeued = drainPendingSignals(home);
+    await runHarvestJob(job(home), home, { ...deps, runner: down });
+    const requeued = drainHarvestJobs(home);
     expect(requeued).toHaveLength(1);
     expect(requeued[0]!.attempts).toBe(1);
-    // a signal already at the cap is dropped, not re-enqueued
-    await runPipeline([{ ...signal, attempts: 2 }], home, { runner: down, remoteUrl: () => null });
-    expect(drainPendingSignals(home)).toEqual([]);
-  });
-
-  it("abandons a signal that exhausts its retries — counted and recorded, never silent", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    const down: ClaudeRunner = async () => {
-      throw new Error("logged out");
-    };
-    await runPipeline([{ ...signal, attempts: 2 }], home, { runner: down, remoteUrl: () => null });
-    expect(drainPendingSignals(home)).toEqual([]); // gone from the queue
-    expect(readCounters(home).gateAbandoned).toBe(1); // but counted
-    const abandoned = readFileSync(abandonedFile(home), "utf8").trim();
-    expect(JSON.parse(abandoned).fingerprint).toBe("abc123"); // and recoverable
-    const lastLine = readFileSync(pipelineLogFile(home), "utf8").trim().split("\n").at(-1)!;
-    expect(JSON.parse(lastLine).outcomes.some((o: { abandoned?: boolean }) => o.abandoned)).toBe(true);
-  });
-
-  it("records a gate-error counter so the failure can be pushed to the user", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    await runPipeline([signal], home, {
-      runner: async () => {
-        throw new Error("down");
-      },
-      remoteUrl: () => null,
-    });
     expect(readCounters(home).gateErrors).toBe(1);
+
+    await runHarvestJob({ ...job(home), attempts: 2 }, home, { ...deps, runner: down });
+    expect(drainHarvestJobs(home)).toEqual([]); // gone from the queue
+    expect(readCounters(home).gateAbandoned).toBe(1); // but counted
+    expect(JSON.parse(readFileSync(abandonedFile(home), "utf8").trim()).sessionId).toBe("s1");
   });
 
-  it("caps scored signals per run and defers the rest for the next run", async () => {
-    const signals = Array.from({ length: 9 }, (_, i) => candidate({ fingerprint: `fp${i}` }));
-    for (const s of signals) seedLedger(home, s, 2);
-    const calls: string[] = [];
-    const summary = await runPipeline(signals, home, { runner: fakeRunner(calls), remoteUrl: () => null });
-    expect(summary.scored).toBe(6);
-    expect(summary.deferred).toBe(3);
-    expect(drainPendingSignals(home)).toHaveLength(3);
-  });
-
-  it("logs sieved drop reasons into the pipeline outcomes", async () => {
-    const oneOff = candidate({ fingerprint: "solo" }); // never recurred → below threshold
-    const summary = await runPipeline([oneOff], home, { runner: fakeRunner(), remoteUrl: () => null });
-    expect(summary.outcomes).toContainEqual(
-      expect.objectContaining({ fingerprint: "solo", outcome: "sieved", reason: "below-repeat-threshold" }),
-    );
-  });
-
-  it("passes existing skills from the queue and the signal's project to the gate prompt", async () => {
-    const signal = candidate();
-    seedLedger(home, signal, 2);
-    const seenDirs: string[][] = [];
-    await runPipeline([signal], home, {
-      runner: fakeRunner(),
-      remoteUrl: () => null,
-      listSkills: (dirs) => {
-        seenDirs.push(dirs);
-        return [];
-      },
-    });
-    expect(seenDirs).toEqual([[candidatesDir(home), join("/repo", ".claude", "skills")]]);
+  it("logs a skipped harvest when there is nothing to work from", async () => {
+    const empty: HarvestJob = { sessionId: "s0", cwd: home, evidence: { pairs: [], recurrence: {} } };
+    const summary = await runHarvestJob(empty, home, { ...deps, runner: async () => harvestReply });
+    expect(summary.outcome).toBe("skipped");
+    const line = JSON.parse(readFileSync(pipelineLogFile(home), "utf8").trim());
+    expect(line.harvest.skipped).toContain("no transcript");
   });
 });
 

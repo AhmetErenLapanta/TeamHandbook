@@ -10,6 +10,8 @@ export interface HookInput {
   tool_response?: unknown;
   error?: string;
   is_interrupt?: boolean;
+  // UserPromptSubmit carries the text the user just typed
+  prompt?: string;
 }
 
 export async function readStdin(stream: NodeJS.ReadableStream = process.stdin): Promise<string> {

@@ -7,6 +7,7 @@ import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig } from "./init.js";
 import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
+import { loadHarvestConfig } from "./harvest.js";
 import { lastPipelineRun, pluginVersion } from "./status.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
@@ -68,9 +69,12 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
   // exact failure (auth expired) that silently breaks the gate. Probe with the
   // CONFIGURED gate/distill model, not the default: a typo'd or retired gate.model
   // makes every real gate run fail while a default-model probe stays green.
+  // Probe every model a real run can use: the harvest model drives the AUTOMATIC
+  // path, so a typo there breaks everything while a gate-only probe stays green.
+  const harvestModel = loadHarvestConfig(home).model;
   const gateModel = loadScoreConfig(home).model;
   const distillModel = loadDistillConfig(home).model;
-  const models = distillModel && distillModel !== gateModel ? [gateModel, distillModel] : [gateModel];
+  const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
   for (const model of models) {
     try {
       const reply = run("claude", ["-p", "Reply with exactly: OK", ...(model ? ["--model", model] : [])], 30_000);
@@ -85,13 +89,13 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
       }
       return fail(
         "claude CLI",
-        `logged in, but \`claude -p --model ${model}\` failed — is that model valid? (config.json gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
+        `logged in, but \`claude -p --model ${model}\` failed — is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
       );
     }
   }
   return ok(
     "claude CLI",
-    models.length > 1 ? "installed and authenticated (gate + distill models reachable)" : "installed and authenticated",
+    models.length > 1 ? `installed and authenticated (${models.length} configured models reachable)` : "installed and authenticated",
   );
 }
 

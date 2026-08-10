@@ -1,6 +1,3 @@
-// src/hooks/stop.ts
-import { fileURLToPath } from "node:url";
-
 // src/lib/hook-io.ts
 async function readStdin(stream = process.stdin) {
   const chunks = [];
@@ -20,20 +17,9 @@ function parseHookInput(raw) {
   }
 }
 
-// src/lib/pipeline.ts
-import { spawn } from "node:child_process";
-import {
-  appendFileSync as appendFileSync2,
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync4,
-  readdirSync as readdirSync3,
-  readFileSync as readFileSync5,
-  renameSync as renameSync2,
-  rmSync as rmSync3,
-  statSync as statSync2,
-  writeFileSync as writeFileSync3
-} from "node:fs";
-import { basename, join as join5 } from "node:path";
+// src/lib/signals.ts
+import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -80,7 +66,11 @@ function loadSessionState(sessionId, home = handbookHome()) {
       sessionId,
       openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
       resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
-      ...activity ? { activity } : {}
+      ...activity ? { activity } : {},
+      ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
+      ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
+      ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -91,27 +81,6 @@ function saveSessionState(state, home = handbookHome()) {
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
-
-// src/lib/config.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
-function readConfigFile(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync2(join2(home, "config.json"), "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-function gateAutoEnabled(home = handbookHome()) {
-  const gate = readConfigFile(home).gate;
-  return gate?.auto !== false;
-}
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
@@ -156,26 +125,9 @@ function signalSecret(fields) {
   );
 }
 
-// src/lib/init.ts
-var CONSUMER_NOTICE_HOOKS = JSON.stringify(
-  {
-    hooks: {
-      SessionStart: [
-        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
-      ]
-    }
-  },
-  null,
-  2
-);
-
-// src/lib/signals.ts
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
-
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
   "postToolUse",
@@ -185,7 +137,7 @@ var FIELDS = [
   "gateAbandoned"
 ];
 function countersFile(home = handbookHome()) {
-  return join3(home, "counters.json");
+  return join2(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
   const base = {
@@ -197,7 +149,7 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0
   };
   try {
-    const parsed = JSON.parse(readFileSync3(countersFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
   } catch {
   }
@@ -237,40 +189,7 @@ function sanitizeSignalsForPersistence(signals) {
   return { clean, redacted };
 }
 function signalsFile(home = handbookHome()) {
-  return join4(home, "signals.jsonl");
-}
-function ledgerFingerprintCounts(home = handbookHome()) {
-  const counts = /* @__PURE__ */ new Map();
-  let raw;
-  try {
-    raw = readFileSync4(signalsFile(home), "utf8");
-  } catch {
-    return counts;
-  }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (typeof parsed?.fingerprint === "string") {
-        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
-      }
-    } catch {
-    }
-  }
-  return counts;
-}
-function ledgerFingerprints(home = handbookHome()) {
-  return new Set(ledgerFingerprintCounts(home).keys());
-}
-function promoteRecurrentSignals(signals, priorFingerprints) {
-  const seen = new Set(priorFingerprints);
-  return signals.map((signal) => {
-    const recurrent = seen.has(signal.fingerprint);
-    seen.add(signal.fingerprint);
-    if (signal.kind !== "weak" || !recurrent) return signal;
-    if (signal.work) return signal;
-    return { ...signal, kind: "candidate", promotedBy: "recurrence" };
-  });
+  return join3(home, "signals.jsonl");
 }
 function appendSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return;
@@ -300,60 +219,18 @@ function signalFromPair(pair, sessionId, ts, fileExists = existsSync) {
 function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync) {
   const state = loadSessionState(sessionId, home);
   if (state.resolvedPairs.length === 0) return [];
-  const signals = promoteRecurrentSignals(
-    state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
-    ledgerFingerprints(home)
-  );
+  const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
   appendSignals(signals, home);
   state.resolvedPairs = [];
   saveSessionState(state, home);
   return signals;
 }
 
-// src/lib/pipeline.ts
-function pendingDir(home = handbookHome()) {
-  return join5(home, "pending");
-}
-function enqueuePendingSignals(signals, home = handbookHome()) {
-  if (signals.length === 0) return null;
-  const { clean } = sanitizeSignalsForPersistence(signals);
-  mkdirSync4(pendingDir(home), { recursive: true });
-  const session = signals[0].sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
-  const base = `${session}-${Date.now()}`;
-  let file = join5(pendingDir(home), `${base}.json`);
-  for (let i = 2; existsSync2(file); i++) {
-    file = join5(pendingDir(home), `${base}-${i}.json`);
-  }
-  for (let i = 0; i < 50; i++) {
-    try {
-      writeFileSync3(file, JSON.stringify(clean), { flag: "wx" });
-      return file;
-    } catch {
-      file = join5(pendingDir(home), `${base}-x${i}.json`);
-    }
-  }
-  return null;
-}
-var STALE_CLAIM_MS = 10 * 60 * 1e3;
-var LOG_ROTATE_BYTES = 512 * 1024;
-function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
-  const child = spawnFn(process.execPath, [runnerScript], {
-    detached: true,
-    stdio: "ignore"
-  });
-  child.unref();
-}
-
 // src/hooks/stop.ts
 async function main() {
   const input = parseHookInput(await readStdin());
   if (!input?.session_id) return;
-  const signals = flushResolvedPairs(input.session_id);
-  const candidates = signals.filter((s) => s.kind === "candidate");
-  if (candidates.length === 0) return;
-  if (!gateAutoEnabled()) return;
-  enqueuePendingSignals(candidates);
-  spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
+  flushResolvedPairs(input.session_id);
 }
 main().then(
   () => process.exit(0),

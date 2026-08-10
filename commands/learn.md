@@ -3,11 +3,10 @@ description: Turn something from this session — an error→fix moment OR a com
 argument-hint: [optional hint about which moment or task to capture]
 ---
 
-The user wants to turn something that happened in this session into a reusable skill
-candidate. This is TeamHandbook's manual (T2) trigger: because the user explicitly asked,
-the candidate is ALWAYS distilled and queued — the promotion gate scores it, but its
-verdict travels as advice for the review, not as a veto. Only the secret scan can still
-drop it entirely.
+The user wants to capture something from this session on demand, without waiting for the
+end-of-session harvest. Because the user explicitly asked, the candidate is ALWAYS
+distilled and queued — the gate scores it, but its verdict travels as advice for the
+review, not as a veto. Only the secret scan can still drop it entirely.
 
 There are TWO capture modes. Pick the one that matches what happened:
 

@@ -2,6 +2,7 @@ import type { HookInput } from "./hook-io.js";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
 import { bashFailure, isBashSuccess } from "./tool-response.js";
 import { signalSecret } from "./secrets.js";
+import { noteCorrection } from "./corrections.js";
 import { incrementRedactionBlocked } from "./counters.js";
 import {
   attachEditToOpenErrors,
@@ -53,11 +54,32 @@ export function recordActivity(input: HookInput, home: string = handbookHome()):
     return false;
   }
   const state = loadSessionState(input.session_id, home);
+  // Evidence for the harvest: count every meaningful tool call (substance check)
+  // and remember where the transcript lives, even when the activity shape is not new.
+  state.meaningfulToolCalls = (state.meaningfulToolCalls ?? 0) + 1;
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
   const activity = state.activity ?? { families: [], exts: [] };
+  let fresh = true;
   if (family && !activity.families.includes(family)) activity.families.push(family);
   else if (ext && !activity.exts.includes(ext)) activity.exts.push(ext);
-  else return false; // nothing new; skip the write
+  else fresh = false;
   state.activity = activity;
+  saveSessionState(state, home);
+  return fresh;
+}
+
+/**
+ * Flag a teaching-shaped prompt ("we never use X here", "always run Y first") so
+ * the harvest gets it as evidence instead of having to spot it in the transcript.
+ * Secret-bearing prompts are dropped by noteCorrection — nothing raw is stored.
+ */
+export function captureCorrection(input: HookInput, home: string = handbookHome()): boolean {
+  if (!input.session_id || typeof input.prompt !== "string") return false;
+  const state = loadSessionState(input.session_id, home);
+  const next = noteCorrection(state.corrections ?? [], input.prompt);
+  if (!next) return false;
+  state.corrections = next;
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
   saveSessionState(state, home);
   return true;
 }
@@ -82,6 +104,7 @@ export function captureBashFailure(input: HookInput, home: string = handbookHome
   }
   const family = commandFamily(command);
   const state = loadSessionState(input.session_id, home);
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
   recordFailure(state, {
     fingerprint: fingerprint(family, error),
     family,

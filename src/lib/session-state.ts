@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { writeFileAtomic } from "./fs-atomic.js";
+import type { CorrectionNote } from "./corrections.js";
 
 // An edit is attributed to an open error only if that error was seen within this
 // window. Without it, a stale failure from hours ago collects every later edit in
@@ -33,6 +34,17 @@ export interface SessionState {
   resolvedPairs: ResolvedPair[];
   // coarse what-happened-this-session shape, for repeated-work detection (T3)
   activity?: { families: string[]; exts: string[] };
+  // where this session's transcript lives — the harvest reads it at session end
+  // (and salvage needs it recorded, since the hook input is gone by then)
+  transcriptPath?: string;
+  // meaningful (non-generic) tool calls this session — one leg of the substance check
+  meaningfulToolCalls?: number;
+  // teaching-shaped prompts the user typed ("we never do X here") — flagged
+  // deterministically as they happen so the harvest cannot miss them
+  corrections?: CorrectionNote[];
+  // set when salvage already harvested this (possibly still-alive) session, so an
+  // orphan is never harvested twice
+  harvestedAt?: string;
 }
 
 export function emptySessionState(sessionId: string): SessionState {
@@ -67,6 +79,12 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
       openErrors: parsed.openErrors.map((e: OpenError) => ({ ...e, edits: e.edits ?? [] })),
       resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
       ...(activity ? { activity } : {}),
+      ...(typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {}),
+      ...(typeof parsed.meaningfulToolCalls === "number"
+        ? { meaningfulToolCalls: parsed.meaningfulToolCalls }
+        : {}),
+      ...(typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {}),
+      ...(Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}),
     };
   } catch {
     return emptySessionState(sessionId);
@@ -75,6 +93,19 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
 
 export function saveSessionState(state: SessionState, home: string = handbookHome()): void {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
+}
+
+// A session is worth harvesting when it did real work. Deterministic and free —
+// this decides whether a claude call happens at all (spec §4).
+const SUBSTANCE_MIN_TOOL_CALLS = 5;
+
+export function sessionHasSubstance(state: SessionState): boolean {
+  if (state.resolvedPairs.length > 0) return true;
+  // one explicit teaching is enough on its own: a human stated a rule
+  if ((state.corrections?.length ?? 0) > 0) return true;
+  const activity = state.activity;
+  if (activity && activity.families.length > 0 && activity.exts.length > 0) return true;
+  return (state.meaningfulToolCalls ?? 0) >= SUBSTANCE_MIN_TOOL_CALLS;
 }
 
 export function deleteSessionState(sessionId: string, home: string = handbookHome()): void {

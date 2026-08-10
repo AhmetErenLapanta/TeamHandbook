@@ -1,17 +1,21 @@
 # CLAUDE.md — working in this repo
 
-TeamHandbook is a Claude Code plugin (TypeScript/Node) that captures error→fix pairs and
-task procedures from coding sessions, gates them, distills `SKILL.md` artifacts, and
-opens PRs to a team skill repo. See [README.md](README.md) for the product story.
+TeamHandbook is a Claude Code plugin (TypeScript/Node) that harvests durable lessons from
+real coding sessions — the corrections you gave, the procedures you completed, the traps
+you hit — and offers each one as a personal, project, or team skill. See
+[README.md](README.md) for the product story and [docs/SPEC-P1-HARVEST.md] for the v2
+design decisions (K1–K8).
 
 ## Layout
 
-- `src/hooks/` — hook entrypoints (`post-tool-use`, `stop`, `session-end`,
-  `session-start`). Thin; they read stdin, call a lib function, exit 0.
+- `src/hooks/` — hook entrypoints (`post-tool-use`, `user-prompt-submit`, `stop`,
+  `session-end`, `session-start`). Thin; they read stdin, call a lib function, exit 0.
 - `src/cli/` — command entrypoints backing `commands/*.md`.
-- `src/lib/` — the engine: `capture`/`session-state`/`signals` (detector),
-  `gate`/`secrets`/`score`/`distill` (promotion + distillation),
-  `queue`/`deliver`/`publish`/`init`/`join` (review + team), plus small utilities.
+- `src/lib/` — the engine: `capture`/`corrections`/`session-state`/`signals`
+  (deterministic evidence), `transcript`/`harvest` (the session harvest: slice, redact,
+  ONE `claude -p`, sieve), `secrets`/`prompt-safety` (trust boundaries),
+  `gate`/`score`/`distill` (the `/handbook:learn` path only),
+  `queue`/`deliver`/`publish`/`init`/`join` (review + routing), plus small utilities.
 - `hooks/hooks.json`, `commands/*.md`, `.claude-plugin/` — the plugin manifest and
   wiring, discovered by Claude Code by convention.
 - `dist/` — esbuild bundles, committed (the plugin is installed by git clone).
@@ -32,5 +36,8 @@ opens PRs to a team skill repo. See [README.md](README.md) for the product story
 - Nothing is delivered without explicit user approval via `/handbook:review`.
 - Secrets are redacted at the persistence boundary — no captured secret reaches
   `signals.jsonl`, the pending queue, a candidate, or a PR.
-- Untrusted session text (stderr, commands) is fenced as data, never instructions,
-  in the gate and distill prompts.
+- Untrusted session text — stderr, commands, and the transcript slice (the
+  conversation itself) — is fenced as data, never instructions, in every model prompt.
+- The transcript slice is redacted line-by-line before it enters the harvest prompt.
+- `gate.ts`'s recurrence threshold is legacy: no automatic path reaches it (K8). Don't
+  reintroduce a recurrence precondition without a deliberate decision.

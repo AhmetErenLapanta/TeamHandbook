@@ -7,7 +7,7 @@ import { runManualSignal } from "./pipeline.js";
 import { sieveSignal } from "./gate.js";
 import { buildScorePrompt } from "./score.js";
 import { buildDistillPrompt } from "./distill.js";
-import { flushSessionEnd, promoteRecurrentSignals, workRecordFromState, workRecurrences } from "./signals.js";
+import { flushSessionEnd, workRecordFromState, workRecurrences } from "./signals.js";
 import type { Signal } from "./signals.js";
 import { recordActivity } from "./capture.js";
 import { saveSessionState, emptySessionState } from "./session-state.js";
@@ -126,14 +126,14 @@ describe("repeated-work detection (T3)", () => {
     expect(rec[0]!.exts).toContain(".kt");
   });
 
-  it("never promotes work records to candidates", () => {
+  it("keeps work records weak — they are recurrence counters, never skill material", () => {
     const work = workRecordFromState(
       { activity: { families: ["gradlew test"], exts: [".kt"] } },
       "s1",
       "2026-08-08T00:00:00Z",
     )!;
-    const promoted = promoteRecurrentSignals([work], new Set([work.fingerprint]));
-    expect(promoted[0]!.kind).toBe("weak");
+    expect(work.kind).toBe("weak");
+    expect(work.work).toBeDefined();
   });
 
   it("nudges once per work shape at the default threshold (2)", () => {

@@ -24,7 +24,6 @@ function parseHookInput(raw) {
 import { spawn } from "node:child_process";
 import {
   appendFileSync as appendFileSync2,
-  existsSync as existsSync2,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync3,
   readFileSync as readFileSync5,
@@ -80,11 +79,23 @@ function loadSessionState(sessionId, home = handbookHome()) {
       sessionId,
       openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
       resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
-      ...activity ? { activity } : {}
+      ...activity ? { activity } : {},
+      ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
+      ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
+      ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}
     };
   } catch {
     return emptySessionState(sessionId);
   }
+}
+var SUBSTANCE_MIN_TOOL_CALLS = 5;
+function sessionHasSubstance(state) {
+  if (state.resolvedPairs.length > 0) return true;
+  if ((state.corrections?.length ?? 0) > 0) return true;
+  const activity = state.activity;
+  if (activity && activity.families.length > 0 && activity.exts.length > 0) return true;
+  return (state.meaningfulToolCalls ?? 0) >= SUBSTANCE_MIN_TOOL_CALLS;
 }
 function deleteSessionState(sessionId, home = handbookHome()) {
   rmSync2(sessionFile(sessionId, home), { force: true });
@@ -260,19 +271,6 @@ function ledgerFingerprintCounts(home = handbookHome()) {
   }
   return counts;
 }
-function ledgerFingerprints(home = handbookHome()) {
-  return new Set(ledgerFingerprintCounts(home).keys());
-}
-function promoteRecurrentSignals(signals, priorFingerprints) {
-  const seen = new Set(priorFingerprints);
-  return signals.map((signal) => {
-    const recurrent = seen.has(signal.fingerprint);
-    seen.add(signal.fingerprint);
-    if (signal.kind !== "weak" || !recurrent) return signal;
-    if (signal.work) return signal;
-    return { ...signal, kind: "candidate", promotedBy: "recurrence" };
-  });
-}
 function appendSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return;
   const { clean, redacted } = sanitizeSignalsForPersistence(signals);
@@ -334,37 +332,80 @@ function workRecordFromState(state, sessionId, ts, cwd = "") {
 }
 function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync) {
   const state = loadSessionState(sessionId, home);
-  const signals = promoteRecurrentSignals(
-    [
-      ...state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
-      ...state.openErrors.map((e) => signalFromOpenError(e, sessionId, ts))
-    ],
-    ledgerFingerprints(home)
-  );
+  const signals = [
+    ...state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
+    ...state.openErrors.map((e) => signalFromOpenError(e, sessionId, ts))
+  ];
   const work = workRecordFromState(state, sessionId, ts);
   if (work) signals.push(work);
   appendSignals(signals, home);
   deleteSessionState(sessionId, home);
   return signals;
 }
+function ledgerPairsForSession(sessionId, home = handbookHome()) {
+  let raw;
+  try {
+    raw = readFileSync4(signalsFile(home), "utf8");
+  } catch {
+    return [];
+  }
+  const pairs = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed.sessionId !== sessionId || !parsed.resolvedCommand || parsed.secretRedacted) continue;
+    pairs.push({
+      fingerprint: parsed.fingerprint,
+      family: parsed.family,
+      command: parsed.command,
+      error: parsed.error,
+      resolvedCommand: parsed.resolvedCommand,
+      edits: parsed.edits ?? [],
+      ...parsed.cwd ? { cwd: parsed.cwd } : {}
+    });
+  }
+  return pairs;
+}
+
+// src/lib/harvest.ts
+var defaultHarvestConfig = {
+  enabled: true,
+  model: "haiku",
+  maxPerSession: 3,
+  minScore: 4,
+  transcriptCharCap: 4e4,
+  timeoutMs: 12e4
+};
+function loadHarvestConfig(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
+  return {
+    enabled: harvest?.enabled !== false,
+    model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
+    maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
+    minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
+    transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
+    timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
+  };
+}
 
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
   return join5(home, "pending");
 }
-function enqueuePendingSignals(signals, home = handbookHome()) {
-  if (signals.length === 0) return null;
-  const { clean } = sanitizeSignalsForPersistence(signals);
+function enqueueHarvestJob(job, home = handbookHome()) {
   mkdirSync4(pendingDir(home), { recursive: true });
-  const session = signals[0].sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
   let file = join5(pendingDir(home), `${base}.json`);
-  for (let i = 2; existsSync2(file); i++) {
-    file = join5(pendingDir(home), `${base}-${i}.json`);
-  }
   for (let i = 0; i < 50; i++) {
     try {
-      writeFileSync3(file, JSON.stringify(clean), { flag: "wx" });
+      writeFileSync3(file, JSON.stringify(job), { flag: "wx" });
       return file;
     } catch {
       file = join5(pendingDir(home), `${base}-x${i}.json`);
@@ -386,11 +427,27 @@ function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
 async function main() {
   const input = parseHookInput(await readStdin());
   if (!input?.session_id) return;
-  const signals = flushSessionEnd(input.session_id);
-  const candidates = signals.filter((s) => s.kind === "candidate");
-  if (candidates.length === 0) return;
-  if (!gateAutoEnabled()) return;
-  enqueuePendingSignals(candidates);
+  const state = loadSessionState(input.session_id);
+  const substance = sessionHasSubstance(state);
+  const transcriptPath = state.transcriptPath ?? input.transcript_path;
+  flushSessionEnd(input.session_id);
+  if (!substance) return;
+  if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
+  const pairs = ledgerPairsForSession(input.session_id);
+  const counts = ledgerFingerprintCounts();
+  const recurrence = {};
+  for (const pair of pairs) recurrence[pair.fingerprint] = counts.get(pair.fingerprint) ?? 1;
+  enqueueHarvestJob({
+    sessionId: input.session_id,
+    cwd: input.cwd ?? pairs[0]?.cwd ?? "",
+    ...transcriptPath ? { transcriptPath } : {},
+    evidence: {
+      pairs,
+      ...state.activity ? { work: state.activity } : {},
+      ...state.corrections?.length ? { corrections: state.corrections } : {},
+      recurrence
+    }
+  });
   spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
 }
 main().then(

@@ -1,56 +1,28 @@
 # TeamHandbook
 
-**Turn your team's real error→fix moments and task procedures into gated, reviewable, merge-ready skills.**
+**The things you tell Claude twice should only be said once.**
 
-TeamHandbook is a [Claude Code](https://code.claude.com) plugin. While you work, it
-quietly notices when a command failed and a later edit made it pass, decides
-whether that lesson is worth keeping, distills the ones that are into a
-spec-compliant `SKILL.md` — and opens a pull request to your team's skill repo,
-so the next person (and the next Claude session) already knows.
-
-You review a one-line "publish this?" prompt. Everything else is automatic.
-
----
-
-## Why this exists
-
-Sharing a skill with your team is already a solved problem — it's a `git push`.
-A git repo with a marketplace manifest is a Claude Code marketplace; teammates
-auto-update from it in the background. Distribution is not the gap.
-
-The gap is **judgment**: of everything that happens in a coding session, *which
-moments deserve to become a durable, team-wide instruction* — and are they even
-correct? Tools that auto-generate skills from session history exist now, and they
-mostly turn everything into a skill. An unverified, auto-written instruction is
-worse than none: it applies on every session, for the whole team, silently.
-
-TeamHandbook is the layer that makes captured lessons trustworthy enough to merge:
-
-- a **promotion gate** decides what's worth keeping (rules first, then an LLM),
-- **secret redaction** runs before anything is written to disk,
-- every skill ships with the **grounded case** that produced it, as a regression anchor,
-- and a human approves each one via an ordinary **pull request**.
-
-## What it looks like
-
-You hit a failure and fix it:
+You correct Claude mid-session — *"we never mock the DB in integration tests."*
+TeamHandbook harvests that session when it ends and, at your next session, opens with
+your own sentence and one question: keep it for yourself, put it in this repo, or
+send it to your team as a pull request. Every skill ships with the receipt it came
+from.
 
 ```
-$ npm test
-FAIL src/api.test.ts
-  400 Bad Request: unknown field 'user_id' (send camelCase)
-# …you change the DTO to camelCase, tests pass, you move on.
+TeamHandbook learned from your last session: "no-db-mocks-in-integration-tests"
+(correction, 8/10) — keep it for yourself, share it with the team, or skip:
+run /handbook:review
 ```
 
-Next time you open Claude Code, if that class of failure has recurred, you see:
+And then you choose:
 
 ```
-handbook: 1 candidate skill is awaiting your review — run /handbook:review to approve or reject.
+/handbook:review approve <slug> --to personal   # ~/.claude/skills — every project, just you
+/handbook:review approve <slug> --to project    # this repo's .claude/skills — travels with the code
+/handbook:review approve <slug> --to team       # a PR to your team's skill repo
 ```
 
-`/handbook:review` shows the distilled skill and its grounded case; you approve,
-and TeamHandbook opens a PR to your team's skill repo (with your own git identity).
-Merge it, and every teammate's Claude has it the next day.
+Nothing installs itself. Nothing reaches your team without that choice.
 
 ## Install
 
@@ -63,158 +35,206 @@ Merge it, and every teammate's Claude has it the next day.
 
 > Replace `<your-username>` with the GitHub owner this repo is hosted under.
 
-Installing from a local clone (before it is published, or for offline use):
+From a local clone (before it is published, or offline):
 
 ```
 git clone <this-repo-url> TeamHandbook
 ```
 
-then in Claude Code point the marketplace at that directory:
+then in Claude Code:
 
 ```
 /plugin marketplace add ./TeamHandbook
 /plugin install handbook@teamhandbook
 ```
 
-That's the whole install. It works **solo immediately** — captured skills are
-written to the project you're in, no team setup required.
+That's the whole install. It works **solo immediately** — no team setup required.
 
-### See it work in 2 minutes
+## What it looks like
 
-The detector deliberately waits for a lesson to *recur* before proposing a skill,
-so a fresh install is quiet. To watch the whole loop right now, stage a recurring
-error→fix on purpose — in a Claude Code session, ask Claude to:
+You are pairing with Claude on a payment service. It writes a test that mocks the
+database; you push back in one line:
 
-1. Run a command that fails with a distinctive error (e.g. a script that rejects a
-   config), fix it by editing a file, and re-run the same command until it passes.
-2. Do the same fail→fix once more (a new session works too).
-3. Run `/handbook:status` — watch `failures captured` and `pairs resolved` count up.
-4. Within a minute the gate scores the recurring pair; `/handbook:review` shows
-   the distilled skill with its grounded case. Approve it and find it in the
-   project's `.claude/skills/`. (If the queue is still empty after a minute, run
-   `/handbook:doctor` — the gate needs your `claude` CLI installed and logged in.)
+```
+you: we never mock the DB in integration tests here — use the testcontainer fixture
+```
 
-Or skip the theater: finish any real task and run `/handbook:learn` — it captures
-the procedure immediately, no recurrence needed.
+Later the same session, a command fails and you fix it:
 
-To share with a team, one person runs `/handbook:init` once; it scaffolds the
-team skill repo (a marketplace with version-bump CI) and prints the single
-command teammates run to connect. See [team setup](#team-setup).
+```
+$ ./validate.sh
+ERROR 400: field 'user_id' unknown — the gateway only accepts camelCase
+# …you rename the field, re-run, it passes.
+```
+
+The session ends. TeamHandbook makes **one** `claude -p` call — your own CLI — over a
+redacted slice of that conversation plus the error→fix pair it captured
+deterministically. Next session:
+
+```
+TeamHandbook learned from your last session: "no-db-mocks-in-integration-tests"
+(correction, 8/10) (+1 more) — keep it for yourself, share it with the team, or
+skip: run /handbook:review
+```
+
+`/handbook:review` shows each lesson with the evidence that produced it:
+
+```
+candidate: no-db-mocks-in-integration-tests  [correction]  [scope: team]  [status: pending]
+score:     8/10  (recurrence 1, unfindability 2, generality 2, durability 2, costOfError 1)
+suggested: keep for yourself (~/.claude/skills)
+
+── grounded case ──
+you said:  "we never mock the DB in integration tests here — use the testcontainer fixture"
+expect:    Integration tests start a testcontainer instead of a mock.
+```
+
+Keep it, and every future session in every project already knows. Send it to the
+team, and it arrives as an ordinary pull request — reviewed like code, merged like
+code, distributed by Claude Code's own marketplace.
+
+## Why this exists
+
+Auto-generated skills are a liability; reviewed ones compound. Tools that turn
+session history into skills mostly turn *everything* into a skill, and an
+unverified instruction is worse than none — it fires on every session, for
+everyone, silently.
+
+TeamHandbook's answer is that judgment belongs at **activation**, not production:
+
+- it reads a finished session **once** and proposes **at most three** lessons,
+- each one arrives with its **receipt** — your quoted words, the failing command,
+  the steps you took — so you can judge it in seconds,
+- hard vetoes are only the ones a human shouldn't have to make (a secret, an
+  oversized body, a duplicate, something you already muted),
+- and **you** decide where each lesson lives: your machine, this repo, or a PR.
+
+The output is a spec-compliant [Agent Skill](https://agentskills.io), so the corpus
+is portable across the ~40 tools that read `SKILL.md` — and if you delete TeamHandbook
+tomorrow, the skills and their distribution keep working.
 
 ## How it works
 
-```
-PostToolUse hook          gate                       route + review
-────────────────          ────                       ──────────────
-Bash exits ≠ 0     ─┐     rule sieves (cheap):        approved candidate →
-edit attached       ├──▶  · has a file change?    ──▶ solo: project/.claude/skills
-same command        │     · no secret (veto)          team: PR to the skills repo
-  later exits 0   ──┘     · seen ≥ N times            ─────────────────────────────
-(a resolved pair)         · size · not muted           nothing leaves the machine
-                          then LLM (your own claude):  without your approval
-                          score 5 criteria, ≥7/10
-                          distill → SKILL.md + case
-```
+<img src="docs/handbook-loop.svg" alt="The TeamHandbook loop: a coding session produces evidence and a redacted transcript slice; one harvest call through your own claude CLI proposes up to three lessons scored on five criteria, with anything under 4/10 dropped before you see it; the next session asks whether to keep each one for yourself, put it in this repo, or share it with the team." width="880">
 
-- **Capture is a hook, not a tool call.** The model won't remember to save a
-  lesson at the worst moment (a failing build, a frustrated developer); a hook is
-  deterministic and fires every time. Retrieval is model-invoked; capture is not.
-- **The gate is rules-first, LLM-second, and the rules win.** Cheap deterministic
-  checks run before any model call; a secret detection vetoes a candidate no
-  matter what the model thinks.
-- **Five gate criteria** (0–2 each, promote at ≥7/10): recurrence, unfindability
-  (can't be derived from code/tests/README), generality, durability, cost of error.
-- **Scope.** A general procedure is `scope: team` and travels to everyone; a
-  project-specific fact is scoped to that repo's git remote and only surfaces there.
-- **Grounded case.** Each skill carries the exact case that produced it and the
-  behavior that proves the fix — so when the skill is later edited, there's a
-  regression anchor, not just prose.
-
-Output is a **spec-compliant [Agent Skill](https://agentskills.io)**, so it isn't
-Claude-only — the corpus is portable across the ~40 tools that read `SKILL.md`.
+- **Capture is a hook, not a tool call.** The model won't remember to save a lesson
+  at the worst moment (a failing build, a frustrated developer); hooks fire every
+  time. Your teachings are flagged the instant you type them, so a correction in the
+  middle of a long session can't be lost.
+- **A free check decides whether the model runs at all.** A trivial session — a
+  question, a couple of `ls` calls — is never harvested and costs nothing.
+- **Five criteria** (0–2 each): recurrence, unfindability, generality, durability,
+  cost of error. A lesson needs **≥4/10** to reach your queue, and at most the top 3
+  per session do. The score decides what's worth *asking about*, not what ships.
+- **Scope.** A general lesson is `scope: team`; a repo-specific one is scoped to
+  that repo's git remote and says so in its own text.
+- **Grounded case.** Every skill carries the case that produced it and the behavior
+  that proves it — a regression anchor, not just prose.
 
 ## Knowing it's working
 
-TeamHandbook stays out of your way, but never leaves you wondering whether it's alive:
-
-- **First session after install**, it introduces itself once:
-  `TeamHandbook is active — watching this machine for error→fix moments worth keeping…`
-- **When it captured something** since your last session, a one-line heartbeat:
-  `handbook: since your last session — 3 failures watched, 1 error→fix pair captured.`
-- **When a candidate is ready**, the review prompt:
-  `handbook: 1 candidate skill is awaiting your review — run /handbook:review…`
-- **When new skills arrived** (your own approvals or teammates' merges):
+- **First session after install**, it introduces itself once and tells you exactly
+  what it reads.
+- **When it learned something**, the line above: what it learned, how it scored,
+  and the keep/share/skip question.
+- **When new skills arrived** (your approvals or teammates' merges):
   `handbook: 2 new skills available since your last session here: …`
-- **When the same kind of work keeps recurring**, a once-per-shape suggestion:
-  `handbook: you've done similar work 2 times — … run /handbook:learn…`
-- Nothing happened → it says nothing. Disable entirely with
-  `~/.teamhandbook/config.json` → `{"notify": {"sessionStart": false}}` (or just the
-  heartbeat via `{"notify": {"heartbeat": false}}`).
+- **Once a week**, what the week produced:
+  `TeamHandbook — your week: 2 skills kept, 1 shared with the team, 1 waiting for your call.`
+- Nothing happened → it says nothing. Silence it with `~/.teamhandbook/config.json` →
+  `{"notify": {"sessionStart": false}}`.
 
-`/handbook:status` shows the full picture anytime: detector counters, ledger,
-queue, and the last gate run.
+`/handbook:status` shows the full picture anytime; `/handbook:doctor` diagnoses a
+gate that can't reach your `claude` CLI.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/handbook:review` | List, show, edit-then-approve, reject, or skip pending candidates. **Nothing is published without this.** |
-| `/handbook:learn` | Manually capture an error→fix moment OR a completed task's procedure. Always queued — the gate's score rides along as advice. |
-| `/handbook:status` | Ledger, queue, detector health counters, and a since-install value recap. |
-| `/handbook:doctor` | One-command diagnosis: node, claude CLI, hooks firing, config, team repo reachability. |
+| `/handbook:review` | Review each lesson: keep it for yourself, put it in this repo, share it with the team, edit it first, or reject. **Nothing is installed or shared without this.** |
+| `/handbook:learn` | Capture something on demand — an error→fix moment or a completed task's procedure — without waiting for the session harvest. |
+| `/handbook:status` | Ledger, queue, detector counters, harvest config, and a since-install recap. |
+| `/handbook:doctor` | One-command diagnosis: node, claude CLI (probed with every model you configured), hooks firing, config, team repo, forge CLI. |
 | `/handbook:init` | Scaffold a team skill repo and print the command teammates run. |
 | `/handbook:join <url>` | Point the engine at an existing team skill repo. |
+| `/handbook:leave` | Clear the team binding (back to solo, or switch teams). Deletes no skills. |
 
 ## Privacy & security
 
-This plugin's hooks read your session, so this matters and is worth stating plainly:
+This plugin's hooks read your session, so this matters and is worth stating plainly.
 
-- **Nothing is *shared with your team* without your explicit approval.** Candidates
-  sit in a local queue; only `/handbook:review` → approve publishes (a PR, using
-  your own git credentials, or a local install).
-- **Automatic scoring/distillation runs through your own `claude` CLI.** To decide
-  and write a candidate, TeamHandbook sends its (secret-redacted) command/error text to
-  `claude -p` — the same Anthropic API your Claude Code session already uses —
-  *before* you review it. If that's not acceptable for a repo, set
-  `~/.teamhandbook/config.json` → `{"gate": {"auto": false}}`: the detector still
-  captures locally, but nothing is sent anywhere automatically, and you create
-  candidates only with the explicit `/handbook:learn`.
-- **Secret redaction runs before anything is written — including the transient
-  per-session state.** A command, error, or edit that matches a known secret pattern
-  is reduced to a content-free fingerprint (only a counter is kept), so the raw text
-  never reaches `~/.teamhandbook/` — not the session files, the ledger, a candidate, or
-  a PR. Patterns cover private keys, AWS/GitHub/GitLab/Slack/Stripe/OpenAI/Google/npm
-  tokens, JWTs, Basic-auth headers, and `KEY=value` assignments
-  ([`src/lib/secrets.ts`](src/lib/secrets.ts)). Detection is **best-effort pattern
-  matching**: a secret in an unrecognized format can slip through, so still eyeball a
-  candidate before you approve it.
-- **Gate scoring and distillation use *your* Claude** (`claude -p`), not a bundled key —
-  no third-party model, no extra credentials.
-- **No telemetry.** State lives under `~/.teamhandbook/`.
+- **The harvest reads your conversation, and sends a slice of it to your own
+  `claude` CLI.** This is the one thing to understand before installing. At the end
+  of a substantive session, TeamHandbook reads Claude Code's transcript for that
+  session and sends up to 40 000 characters of it — **including your own prompts,
+  which get 60% of that budget on purpose, because your corrections are the most
+  valuable lessons** — together with the error→fix evidence it captured. This
+  reaches Anthropic exactly as any Claude Code prompt does, and it happens *before*
+  you review anything. Tool calls, tool results, and subagent traffic are not
+  included; only conversational prose.
+  - **Turn it off** with `~/.teamhandbook/config.json` → `{"harvest": {"enabled": false}}`,
+    or disable every automatic model call with `{"gate": {"auto": false}}`. Either
+    switch is checked before a session is queued, so nothing is read or sent.
+    Candidates then come only from an explicit `/handbook:learn`.
+  - A trivial session is never harvested and costs no model call at all.
+- **Nothing is installed or shared without your explicit approval.** Candidates sit
+  in a local queue; only `/handbook:review` → approve installs a skill or opens a PR
+  (with your own git credentials).
+- **Secret redaction runs before anything is written or sent.** A captured command,
+  error, or edit that matches a known secret pattern is dropped and reduced to a
+  content-free fingerprint; a transcript line that matches is replaced in place with
+  `[redacted:<type>]` before the slice leaves the process. Patterns cover private
+  keys, AWS/GitHub/GitLab/Slack/Stripe/OpenAI/Google/npm tokens, JWTs, Basic-auth
+  headers, and `KEY=value` assignments ([`src/lib/secrets.ts`](src/lib/secrets.ts)).
+  Detection is **best-effort pattern matching**: a secret in an unrecognized format
+  can slip through, so still eyeball a candidate before you approve it.
+- **It uses *your* Claude** (`claude -p`), not a bundled key — no third-party model,
+  no extra credentials, no telemetry. State lives under `~/.teamhandbook/`.
 - Raw hook payloads are **never** written to disk unless you opt in with
   `TEAMHANDBOOK_DEBUG=1` (for schema diagnosis), because payloads can contain secrets.
 
+See [SECURITY.md](SECURITY.md) for the full data map, including the crash-salvage
+path and every file TeamHandbook writes.
+
+## Configuration
+
+Everything is optional; defaults are shown.
+
+```jsonc
+// ~/.teamhandbook/config.json
+{
+  "harvest": {
+    "enabled": true,            // false → no session is ever read or sent
+    "model": "haiku",           // model for the single per-session call
+    "maxPerSession": 3,         // hard cap on lessons proposed per session
+    "minScore": 4,              // 0-10 floor; below this an item is dropped
+    "transcriptCharCap": 40000, // max characters of conversation sent
+    "timeoutMs": 120000
+  },
+  "gate":   { "auto": true },   // false → no automatic model calls at all
+  "notify": { "sessionStart": true, "heartbeat": true }
+}
+```
+
 ## Honest limitations
 
-- Promotion requires **recurrence** (a one-off error→fix won't become a skill);
-  this is deliberate — precision over recall for v1. It also means capture is
-  conservative: TeamHandbook learns the mistakes your team makes *more than once*.
-- Automatic capture is **error-shaped** (a failing command, an edit, a passing
-  re-run). Successful work is learned through two other paths: `/handbook:learn`
-  captures a completed task's procedure (goal, ordered steps, verification) with
-  the full session context; Claude itself offers to capture a genuinely teachable
-  task the first time it happens (a plugin skill guides it — at most one offer per
-  session, never for trivia); and TeamHandbook tracks each session's **work shape**,
-  nudging once when the same kind of work recurs (default: 2nd time, configurable
-  via `notify.workNudgeThreshold`). Generation is never automatic for procedures:
-  you ask — and because you asked, a manual capture is ALWAYS distilled and
-  queued: a low gate score travels with it as advice, and the publish decision
-  stays yours at review. (The gate's hard veto applies only to the automatic
-  path, plus secrets and size limits everywhere.)
-- v1 produces **skills only**. Routing lessons to tests/lint rules/`AGENTS.md`
+- **The harvest is one model call.** A lesson buried in a very long session can be
+  missed, and the model can propose something plausible but wrong. That's exactly
+  why nothing installs itself: the floor is 4/10 because *your* decision at review
+  is the real gate, not the score.
+- **Only conversational prose is read.** A lesson that lives purely in tool output —
+  a log line you never discussed — reaches the harvest only through the
+  deterministic error→fix pairs the hooks captured.
+- **A "correction" needs you to have said it.** If you fixed Claude's approach by
+  editing the file yourself instead of telling it the rule, there's nothing to quote.
+- **Recurrence counts are per-machine.** The same trap hit on two machines scores
+  lower on recurrence than it deserves. It still gets harvested — recurrence is one
+  of five criteria, not a gate.
+- **v2 produces skills only.** Routing lessons to tests, lint rules, or `AGENTS.md`
   lines is future work.
-- `/handbook:status` shows `tool calls seen / failures captured / pairs resolved`
-  counters so you can confirm capture is working at a glance.
+- A harvest that can't reach `claude` retries up to 3 times, then parks the whole
+  session in `~/.teamhandbook/abandoned.jsonl` rather than dropping it silently;
+  `/handbook:status` reports the count.
 
 ## Team setup
 
@@ -246,27 +266,24 @@ working — there's no lock-in.
 All state lives under `~/.teamhandbook` on **each machine separately** — there is no
 sync. Practically:
 
-- **Recurrence doesn't merge across machines.** An error you hit once on your laptop
-  and once on your desktop is two single occurrences, so it won't reach the N=2
-  threshold. Team mode is the fix: merged skills reach every machine.
-- **Solo-approved skills** are written into that project's `.claude/skills/` on the
-  approving machine only. **Commit that directory** and they travel with the repo to
-  your other machines (and teammates) on the next pull.
-- Welcome, heartbeat, mutes (`reject --never`), and nudges are per-machine.
-- Point several machines at one state dir with the `TEAMHANDBOOK_HOME` env var if you
-  really want shared local state (advanced; no locking guarantees across machines).
+- **Personal approvals** land in `~/.claude/skills` on that machine only.
+- **Project approvals** land in the repo's `.claude/skills/` — **commit that
+  directory** and they travel with the repo to your other machines and teammates.
+- **Team approvals** reach every machine through the merged PR. That's the fix for
+  everything else: recurrence counts, mutes, and nudges are all per-machine.
+- Point several machines at one state dir with `TEAMHANDBOOK_HOME` if you really want
+  shared local state (advanced; no locking guarantees across machines).
 
 ## Uninstall
 
-Remove the plugin (`/plugin uninstall TeamHandbook`) and delete its local state:
-
 ```
-rm -rf ~/.teamhandbook
+/plugin uninstall TeamHandbook
+rm -rf ~/.teamhandbook                  # all TeamHandbook state
 ```
 
-That's everything — TeamHandbook keeps no other data anywhere. Skills already
-approved into projects or merged into a team repo are ordinary files/commits and
-remain yours.
+Skills you approved are ordinary files and stay where you put them:
+`~/.claude/skills/<slug>/` for personal, the repo's `.claude/skills/` for project,
+the team repo for shared. Delete those yourself if you want them gone too.
 
 ## Development
 
@@ -277,8 +294,8 @@ npm test            # vitest
 npm run typecheck
 ```
 
-`dist/` is committed on purpose: the plugin is installed by git clone, so the
-built hooks must be present.
+`dist/` is committed on purpose: the plugin is installed by git clone, so the built
+hooks must be present.
 
 ## License
 

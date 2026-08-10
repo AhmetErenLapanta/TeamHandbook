@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildSessionStartSummary,
-  pendingBatchCount,
+  pendingHarvestCount,
   pendingTeamNudge,
   diffNewSkills,
   heartbeatDelta,
@@ -12,6 +12,7 @@ import {
   loadNotifyConfig,
   seenSkillsFile,
   sessionStartNotice,
+  weeklyDigest,
 } from "./notify.js";
 import { bumpCounter } from "./counters.js";
 import { saveTeamConfig } from "./init.js";
@@ -112,9 +113,10 @@ describe("notify", () => {
     it("welcomes on the first run", () => {
       const text = buildSessionStartSummary({ pending: 0, newSkills: [], firstRun: true });
       expect(text).toContain("TeamHandbook is active");
-      expect(text).toContain("nothing is shared or published without your approval");
-      // sets the recurrence expectation and points at doctor, so quiet ≠ broken
-      expect(text).toContain("waits for an error class to recur");
+      expect(text).toContain("Nothing installs or ships without your say-so");
+      // discloses the transcript read + its kill switch up front, and points at doctor
+      expect(text).toContain("your prompts included, secrets redacted");
+      expect(text).toContain('"harvest": {"enabled": false}');
       expect(text).toContain("/handbook:doctor");
     });
 
@@ -251,7 +253,7 @@ describe("gate failure push (B3)", () => {
   });
 });
 
-describe("pendingBatchCount", () => {
+describe("pendingHarvestCount", () => {
   let home: string;
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "handbook-pbc-"));
@@ -260,21 +262,105 @@ describe("pendingBatchCount", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  function writeBatch(name: string, len: number): void {
+  function writeJob(name: string, sessionId: string): void {
     const dir = join(home, "pending");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, name), JSON.stringify(Array.from({ length: len }, (_, i) => ({ fingerprint: `f${i}` }))));
+    writeFileSync(join(dir, name), JSON.stringify({ sessionId, cwd: "/p", evidence: { pairs: [], recurrence: {} } }));
   }
 
-  it("counts pairs in *.json batches and ignores claimed and non-json entries", () => {
-    writeBatch("s-1.json", 2);
-    writeBatch("s-2.json", 3);
-    writeBatch("s-3.json.claimed-999", 4); // in-flight/orphan claim — not a queued batch
+  it("counts queued harvest jobs and ignores claimed, malformed, and non-json entries", () => {
+    writeJob("s-1.json", "s1");
+    writeJob("s-2.json", "s2");
+    writeJob("s-3.json.claimed-999", "s3"); // in-flight/orphan claim — not queued
+    writeFileSync(join(home, "pending", "broken.json"), "not json");
     writeFileSync(join(home, "pending", "note.txt"), "noise");
-    expect(pendingBatchCount(home)).toBe(5);
+    expect(pendingHarvestCount(home)).toBe(2);
   });
 
   it("is zero with no pending directory", () => {
-    expect(pendingBatchCount(home)).toBe(0);
+    expect(pendingHarvestCount(home)).toBe(0);
+  });
+});
+
+describe("harvest headline (v2 session-start ask)", () => {
+  let home: string;
+  let cwd: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-harvestline-"));
+    cwd = mkdtempSync(join(tmpdir(), "handbook-proj2-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  function harvestCandidate(slug: string, total: number): void {
+    const dir = join(candidatesDir(home), slug);
+    mkdirSync(dir, { recursive: true });
+    writeCandidateMeta(dir, {
+      slug, status: "pending", createdAt: "2026-08-10T00:00:00Z", scope: "team",
+      description: "d", fingerprint: `fp-${slug}`, sessionId: "s1",
+      gate: { total, scores: {} }, origin: "harvest", kind: "correction",
+      suggestedTarget: "personal",
+    });
+  }
+
+  it("headlines the best harvested lesson with the keep/share/skip ask", () => {
+    harvestCandidate("prefer-config-flags", 8);
+    harvestCandidate("minor-discovery", 5);
+    sessionStartNotice(cwd, home); // consume first-run welcome
+    const notice = sessionStartNotice(cwd, home)!;
+    expect(notice).toContain('TeamHandbook learned from your last session: "prefer-config-flags" (correction, 8/10)');
+    expect(notice).toContain("(+1 more)");
+    expect(notice).toContain("keep it for yourself, share it with the team, or skip");
+    // harvested items are not double-counted in the plain pending line
+    expect(notice).not.toContain("candidate skills are awaiting");
+  });
+
+  it("keeps the plain review line for non-harvest candidates", () => {
+    writePendingCandidate(home, "manual-learn");
+    sessionStartNotice(cwd, home);
+    const notice = sessionStartNotice(cwd, home)!;
+    expect(notice).toContain("1 candidate skill is awaiting your review");
+    expect(notice).not.toContain("learned from your last session");
+  });
+});
+
+describe("weeklyDigest", () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-digest-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const WEEK = 7 * 24 * 60 * 60 * 1000;
+  const t0 = Date.parse("2026-08-01T00:00:00Z");
+
+  function decided(slug: string, mode: "personal" | "team", decidedAt: string): void {
+    const dir = join(candidatesDir(home), slug);
+    mkdirSync(dir, { recursive: true });
+    writeCandidateMeta(dir, {
+      slug, status: "approved", createdAt: decidedAt, scope: "team", description: "d",
+      fingerprint: `fp-${slug}`, sessionId: "s1", gate: null, decidedAt, deliveredMode: mode,
+    });
+  }
+
+  it("starts the clock silently, then reports the week's decisions exactly once", () => {
+    expect(weeklyDigest(home, t0)).toBeNull(); // first call only baselines
+    expect(weeklyDigest(home, t0 + WEEK + 1000)).toBeNull(); // a week passed but nothing happened
+
+    decided("kept-one", "personal", new Date(t0 + WEEK + 2000).toISOString());
+    decided("shared-one", "team", new Date(t0 + WEEK + 3000).toISOString());
+    writePendingCandidate(home, "still-waiting");
+
+    const line = weeklyDigest(home, t0 + 2 * WEEK + 5000)!;
+    expect(line).toContain("your week:");
+    expect(line).toContain("1 skill kept");
+    expect(line).toContain("1 shared with the team");
+    expect(line).toContain("1 waiting for your call");
+    // not again until the next interval
+    expect(weeklyDigest(home, t0 + 2 * WEEK + 6000)).toBeNull();
   });
 });

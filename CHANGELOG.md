@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.2.0] — unreleased
+
+**Session harvest replaces the recurrence gate.** TeamHandbook stopped being an
+error-hunter and became a session-harvesting, personal-first learning layer.
+
+- **Harvest**: after every substantive session, ONE `claude -p` call over a redacted,
+  fenced slice of the session transcript (40 000 chars, 60% reserved for the user's own
+  messages) plus deterministic evidence extracts up to 3 durable lessons — `correction`
+  (an explicit teaching, quoting the user's words as the receipt), `procedure`,
+  `discovery`, `error-fix`. Scored 0–2 on five criteria with a 4/10 floor and a
+  top-3-per-session cap. A trivial session is never harvested and costs nothing.
+- **Teachings are flagged as you type them**: a `UserPromptSubmit` hook classifies
+  "we never do X here" / "always run Y first" locally so a mid-session correction can't
+  be lost to transcript slicing. Secret-bearing prompts are dropped, never stored.
+- **Three delivery targets**: `/handbook:review approve --to personal|project|team` —
+  `~/.claude/skills` (every project), the repo's `.claude/skills` (travels with the
+  code), or a PR to the team skill repo. The session-start notice asks the question
+  directly: keep it, share it, or skip.
+- **Judgment moved from production to activation**: automatic vetoes are now only
+  secret, oversize, duplicate, and muted. Nothing installs or ships without a human
+  choosing where it goes.
+- **Weekly digest**: once every 7 days, what the week produced.
+- **New privacy surface**: the harvest reads Claude Code's session transcript. Disable
+  with `{"harvest": {"enabled": false}}` or `{"gate": {"auto": false}}`. See SECURITY.md.
+- **Removed**: recurrence-promotion (K8). Recurrence is now one of five score inputs,
+  not a precondition. `/handbook:learn` keeps its 7/10 advisory score.
+- **New command**: `/handbook:leave` clears the team binding.
+
 ## [0.1.0] — unreleased
 
 Initial release.

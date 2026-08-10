@@ -171,8 +171,20 @@ function yamlQuote(value: string): string {
   return `"${escaped}"`;
 }
 
-export function assembleSkillMd(draft: DistilledDraft, scope: string, fromTask = false): string {
-  const origin = fromTask ? "completed task" : "error-to-fix session";
+/** How the skill's footer describes where it came from. `true`/`false` keep the
+ * original two-way behavior for the /handbook:learn path. */
+export type SkillOrigin = boolean | "correction" | "procedure" | "discovery" | "error-fix";
+
+const ORIGIN_TEXT: Record<string, string> = {
+  correction: "correction the developer made during a real session",
+  procedure: "completed task",
+  discovery: "convention uncovered during real work",
+  "error-fix": "error-to-fix session",
+};
+
+export function assembleSkillMd(draft: DistilledDraft, scope: string, from: SkillOrigin = false): string {
+  const origin =
+    typeof from === "string" ? (ORIGIN_TEXT[from] ?? "real session") : from ? "completed task" : "error-to-fix session";
   // Runtime scope filtering is v1.5. Until then, a project-scoped skill would load
   // and fire in every repo, so bake the boundary into the text the model reads:
   // the description (which is always in context) and the top of the body.
@@ -216,6 +228,9 @@ export interface GroundedCase {
   gate: { total: number; scores: Record<string, number> } | null;
   // present when the skill was distilled from a completed task, not an error→fix
   task?: { goal: string; steps: string[]; verification?: string };
+  // present when the skill was harvested from a user correction: the user's own
+  // words are the receipt
+  quote?: string;
 }
 
 export function buildGroundedCase(signal: Signal, verdict: GateVerdict, expect: string): GroundedCase {

@@ -140,6 +140,49 @@ function teamNudgeMarkerFile(home: string): string {
   return join(home, "nudged-team");
 }
 
+function digestMarkerFile(home: string): string {
+  return join(home, "last-digest");
+}
+
+const DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Once a week: what your Claude actually learned. The single line that makes the
+ * learning VISIBLE — the difference between a tool that quietly works and one you
+ * can feel working. Silent when the week produced nothing, and never more than
+ * once per interval.
+ */
+export function weeklyDigest(home: string = handbookHome(), now: number = Date.now()): string | null {
+  const marker = digestMarkerFile(home);
+  let since = 0;
+  try {
+    since = Date.parse(readFileSync(marker, "utf8").trim());
+  } catch {
+    // first ever call: start the clock, report nothing (a digest of "since install"
+    // would double up with the welcome)
+    writeFileAtomic(marker, new Date(now).toISOString() + "\n");
+    return null;
+  }
+  if (!Number.isFinite(since) || now - since < DIGEST_INTERVAL_MS) return null;
+  writeFileAtomic(marker, new Date(now).toISOString() + "\n");
+
+  const decided = listCandidates(home).filter(
+    (c) => c.decidedAt && Date.parse(c.decidedAt) >= since,
+  );
+  const kept = decided.filter(
+    (c) => c.status === "approved" && (c.deliveredMode === "personal" || c.deliveredMode === "solo"),
+  ).length;
+  const shared = decided.filter((c) => c.status === "approved" && c.deliveredMode === "team").length;
+  const pending = listCandidates(home, "pending").length;
+  if (kept + shared + pending === 0) return null;
+
+  const parts: string[] = [];
+  if (kept > 0) parts.push(`${kept} skill${kept === 1 ? "" : "s"} kept`);
+  if (shared > 0) parts.push(`${shared} shared with the team`);
+  if (pending > 0) parts.push(`${pending} waiting for your call`);
+  return `TeamHandbook — your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
+}
+
 export function pendingTeamNudge(home: string = handbookHome()): string | null {
   if (loadTeamConfig(home)) return null;
   if (existsSync(teamNudgeMarkerFile(home))) return null;
@@ -152,13 +195,13 @@ export function pendingTeamNudge(home: string = handbookHome()): string | null {
   );
 }
 
-/** Pairs sitting in the pending hand-off, so the notice can say "queued for the
- * gate" instead of the queue looking empty. Counts only `*.json` batches: the runner
- * drains a batch synchronously (rename → read → delete) before it starts calling
- * claude, so there is no on-disk file during the actual scoring — a file-based count
- * can only see the brief pre-drain window, never the scoring itself. Read directly to
+/** Harvest jobs sitting in the pending hand-off, so the notice can say "harvesting"
+ * instead of the queue looking empty. Counts only `*.json` job files: the runner
+ * drains a job synchronously (rename → read → delete) before it starts calling
+ * claude, so there is no on-disk file during the actual harvest — a file-based count
+ * can only see the brief pre-drain window, never the harvest itself. Read directly to
  * avoid pulling the pipeline module into the session-start hook bundle. */
-export function pendingBatchCount(home: string = handbookHome()): number {
+export function pendingHarvestCount(home: string = handbookHome()): number {
   let entries: string[];
   try {
     entries = readdirSync(join(home, "pending"));
@@ -170,9 +213,9 @@ export function pendingBatchCount(home: string = handbookHome()): number {
     if (!entry.endsWith(".json")) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(home, "pending", entry), "utf8"));
-      if (Array.isArray(parsed)) total += parsed.length;
+      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
-      // malformed / mid-write batch — ignore
+      // malformed / mid-write job — ignore
     }
   }
   return total;
@@ -212,11 +255,14 @@ export interface SummaryInputs {
   pending: number;
   // up to a couple of "slug — description" previews to make the review prompt concrete
   pendingPreviews?: string[];
+  // freshly harvested lessons awaiting the keep/share/skip decision — the headline
+  harvested?: { name: string; kind: string; total: number | null; more: number } | null;
   firstRun?: boolean;
   newSkills: string[];
   heartbeat?: HeartbeatDelta | null;
   workNudge?: string | null;
   teamNudge?: string | null;
+  digest?: string | null;
   scoring?: number;
 }
 
@@ -224,21 +270,34 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
   const {
     pending,
     pendingPreviews = [],
+    harvested = null,
     newSkills,
     firstRun = false,
     heartbeat = null,
     workNudge = null,
     teamNudge = null,
+    digest = null,
     scoring = 0,
   } = inputs;
   const lines: string[] = [];
   if (firstRun) {
     lines.push(
-      "TeamHandbook is active — watching this machine for error→fix moments and procedures worth keeping. " +
-        "Scoring runs through your own claude CLI, and nothing is shared or published without your approval. " +
-        "Automatic capture waits for an error class to recur, so an empty /handbook:review at first is normal — " +
-        "or run /handbook:learn to turn the session you just finished into a skill right now. " +
+      "TeamHandbook is active — it learns from the corrections you give, the procedures you complete, " +
+        "and the traps you hit. After each session where you did real work, it reads that session " +
+        "(your prompts included, secrets redacted) through your OWN claude CLI and tells you at your " +
+        "next session start what it learned — you decide whether to keep it, put it in the repo, or " +
+        "share it with the team. Nothing installs or ships without your say-so. Turn the reading off " +
+        'entirely with ~/.teamhandbook/config.json → {"harvest": {"enabled": false}}. ' +
         "Run /handbook:doctor once to confirm TeamHandbook can reach your claude CLI.",
+    );
+  }
+  // The harvest headline: what TeamHandbook just learned, and the one question that
+  // matters — keep it for yourself, share it with the team, or skip?
+  if (harvested) {
+    const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
+    const more = harvested.more > 0 ? ` (+${harvested.more} more)` : "";
+    lines.push(
+      `TeamHandbook learned from your last session: "${harvested.name}" (${harvested.kind}${score})${more} — keep it for yourself, share it with the team, or skip: run /handbook:review.`,
     );
   }
   if (pending > 0) {
@@ -248,9 +307,9 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
       `handbook: ${pending} ${noun} awaiting your review${preview} — run /handbook:review to approve or reject.`,
     );
   }
-  if (scoring > 0 && pending === 0) {
+  if (scoring > 0 && pending === 0 && !harvested) {
     lines.push(
-      `handbook: scoring ${scoring} captured pair${scoring === 1 ? "" : "s"} in the background — check /handbook:review shortly.`,
+      `handbook: harvesting your last session${scoring === 1 ? "" : ` (${scoring} sessions)`} in the background — check /handbook:review shortly.`,
     );
   }
   if (newSkills.length > 0) {
@@ -261,6 +320,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
   }
   if (workNudge) lines.push(workNudge);
   if (teamNudge) lines.push(teamNudge);
+  if (digest) lines.push(digest);
   // A gate outage is pushed regardless of what else is on screen — the user would
   // otherwise only discover it by running status/doctor.
   if (heartbeat && heartbeat.gateErrors > 0) {
@@ -291,7 +351,20 @@ export function sessionStartNotice(
   const config = loadNotifyConfig(home);
   if (!config.sessionStart) return null;
   const pendingCandidates = listCandidates(home, "pending");
-  const pendingPreviews = pendingCandidates
+  // Freshly harvested lessons get the headline treatment (keep/share/skip); other
+  // pending candidates (manual learns, older items) keep the plain review prompt.
+  const harvestedPending = pendingCandidates.filter((c) => c.origin === "harvest");
+  const rest = pendingCandidates.filter((c) => c.origin !== "harvest");
+  const top = harvestedPending.sort((a, b) => (b.gate?.total ?? -1) - (a.gate?.total ?? -1))[0];
+  const harvested = top
+    ? {
+        name: top.slug,
+        kind: top.kind ?? "lesson",
+        total: top.gate?.total ?? null,
+        more: harvestedPending.length - 1,
+      }
+    : null;
+  const pendingPreviews = rest
     .slice(0, 2)
     .map((c) => `${c.slug} — ${c.description.slice(0, 60)}`);
   // Watch the project's own skills AND (in team mode) the locally-pulled team
@@ -303,13 +376,15 @@ export function sessionStartNotice(
     .flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home))
     .sort();
   return buildSessionStartSummary({
-    pending: pendingCandidates.length,
+    pending: rest.length,
     pendingPreviews,
+    harvested,
     newSkills,
     firstRun: isFirstRun(home),
     heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
     workNudge: pendingWorkNudge(home),
     teamNudge: pendingTeamNudge(home),
-    scoring: pendingBatchCount(home),
+    digest: weeklyDigest(home),
+    scoring: pendingHarvestCount(home),
   });
 }

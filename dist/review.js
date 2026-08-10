@@ -4,6 +4,7 @@ import { join as join9 } from "node:path";
 
 // src/lib/deliver.ts
 import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
 import { basename as basename2, join as join6 } from "node:path";
 
 // src/lib/init.ts
@@ -462,8 +463,9 @@ function formatCandidateList(metas, now = Date.now()) {
   const lines = [`Pending candidates (${metas.length}), newest first:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
+    const kind = meta.kind ? `[${meta.kind}]  ` : "";
     lines.push(
-      `  ${i + 1}. ${meta.slug}  [${meta.scope}]  ${gate}  \xB7  ${relativeAge(meta.createdAt, now)}  \xB7  from ${originProject(meta)}`
+      `  ${i + 1}. ${meta.slug}  ${kind}[${meta.scope}]  ${gate}  \xB7  ${relativeAge(meta.createdAt, now)}  \xB7  from ${originProject(meta)}`
     );
     lines.push(`     ${meta.description}`);
   });
@@ -474,11 +476,14 @@ function formatCandidateList(metas, now = Date.now()) {
 function soloSkillsDir(projectCwd) {
   return join6(projectCwd, ".claude", "skills");
 }
+function personalSkillsDir() {
+  return join6(homedir2(), ".claude", "skills");
+}
 function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync2) {
   const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
   return soloSkillsDir(origin);
 }
-function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge) {
+function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir()) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
   const dir = join6(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
@@ -486,8 +491,42 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
   if (meta.status !== "pending") {
     return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
   }
-  if (team) return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+  const resolved = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  if (resolved === "team") {
+    if (!team) {
+      return {
+        ok: false,
+        meta,
+        error: "no team configured \u2014 run /handbook:init or /handbook:join first, or approve with --to personal"
+      };
+    }
+    return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+  }
+  if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir);
   return deliverSolo(dir, meta, fallbackCwd, decidedAt);
+}
+function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir()) {
+  const slug = uniqueSlug(meta.slug, (s) => existsSync2(join6(skillsDir, s)));
+  const target = join6(skillsDir, slug);
+  try {
+    const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
+    mkdirSync3(target, { recursive: true });
+    writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
+    if (existsSync2(join6(dir, "grounded-case.json"))) {
+      copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
+    }
+  } catch (err) {
+    return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
+  }
+  const updated = {
+    ...meta,
+    status: "approved",
+    decidedAt,
+    deliveredTo: target,
+    deliveredMode: "personal"
+  };
+  writeCandidateMeta(dir, updated);
+  return { ok: true, mode: "personal", meta: updated, deliveredTo: target };
 }
 function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
   const published = publishCandidate(dir, meta, team, git, forge);
@@ -543,10 +582,33 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   };
 }
 
+// src/lib/harvest.ts
+var defaultHarvestConfig = {
+  enabled: true,
+  model: "haiku",
+  maxPerSession: 3,
+  minScore: 4,
+  transcriptCharCap: 4e4,
+  timeoutMs: 12e4
+};
+function loadHarvestConfig(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
+  return {
+    enabled: harvest?.enabled !== false,
+    model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
+    maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
+    minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
+    transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
+    timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
+  };
+}
+
 // src/lib/notify.ts
 import { existsSync as existsSync3, readFileSync as readFileSync5, readdirSync as readdirSync2 } from "node:fs";
 import { join as join7 } from "node:path";
-function pendingBatchCount(home = handbookHome()) {
+var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
+function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
     entries = readdirSync2(join7(home, "pending"));
@@ -558,7 +620,7 @@ function pendingBatchCount(home = handbookHome()) {
     if (!entry.endsWith(".json")) continue;
     try {
       const parsed = JSON.parse(readFileSync5(join7(home, "pending", entry), "utf8"));
-      if (Array.isArray(parsed)) total += parsed.length;
+      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
   }
@@ -597,7 +659,9 @@ function lastPipelineRun(home = handbookHome()) {
 
 // src/cli/review.ts
 function usage() {
-  console.error("usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never]");
+  console.error(
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never] [--to personal|project|team]"
+  );
   process.exit(2);
 }
 function showCandidate(home, slug) {
@@ -611,16 +675,21 @@ function showCandidate(home, slug) {
   }
   const meta = readCandidateMeta(dir);
   const gate = meta?.gate;
-  const threshold = loadScoreConfig(home).threshold;
-  console.log(`candidate: ${slug}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
+  const threshold = meta?.origin === "harvest" ? loadHarvestConfig(home).minScore : loadScoreConfig(home).threshold;
+  const kind = meta?.kind ? `  [${meta.kind}]` : "";
+  console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${dir}`);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
-    const dissent = gate.total < threshold ? `  \u2014 below the ${threshold}/10 threshold` : "";
-    console.log(`gate:      ${gate.total}/10  (${scores})${dissent}`);
+    const dissent = gate.total < threshold ? `  \u2014 below the ${threshold}/10 bar` : "";
+    console.log(`score:     ${gate.total}/10  (${scores})${dissent}`);
     if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
   } else {
-    console.log("gate:      n/a");
+    console.log("score:     n/a");
+  }
+  if (meta?.suggestedTarget) {
+    const where = meta.suggestedTarget === "personal" ? "keep for yourself (~/.claude/skills)" : meta.suggestedTarget === "project" ? "this project's .claude/skills" : "share with the team (PR)";
+    console.log(`suggested: ${where}`);
   }
   console.log("");
   console.log(skillMd.trimEnd());
@@ -628,25 +697,30 @@ function showCandidate(home, slug) {
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
     const grounded = JSON.parse(readFileSync7(join9(dir, "grounded-case.json"), "utf8"));
+    if (grounded.quote) {
+      console.log(`you said:  "${grounded.quote}"`);
+    }
     if (grounded.task) {
       console.log(`goal:      ${grounded.task.goal}`);
       (grounded.task.steps ?? []).forEach((s, i) => console.log(`  step ${i + 1}:  ${s}`));
       if (grounded.task.verification) console.log(`verified:  ${grounded.task.verification}`);
-    } else {
+    } else if (grounded.command || grounded.error) {
       console.log(`failed:    ${grounded.command}`);
       console.log(`error:     ${String(grounded.error ?? "").split("\n").join("\n           ")}`);
       if (grounded.resolvedCommand) console.log(`resolved:  ${grounded.resolvedCommand}`);
       if (Array.isArray(grounded.edits) && grounded.edits.length) {
         console.log(`edits:     ${grounded.edits.join(", ")}`);
       }
+    } else if (!grounded.quote) {
+      console.log("(no command/error recorded \u2014 this lesson came from the conversation)");
     }
     if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
   } catch {
     console.log("(this candidate has no grounded case)");
   }
 }
-function approveOne(home, slug) {
-  const result = approveAndDeliver(home, slug);
+function approveOne(home, slug, to) {
+  const result = approveAndDeliver(home, slug, void 0, void 0, void 0, void 0, void 0, to);
   if (!result.ok) {
     console.error(`error (${slug}): ${result.error}`);
     return;
@@ -659,6 +733,10 @@ function approveOne(home, slug) {
       if (result.prError) console.log(`Auto-PR skipped (${result.prError}) \u2014 install/authenticate gh or glab to open PRs automatically.`);
       if (result.manualUrl) console.log(`Open the PR here: ${result.manualUrl}`);
     }
+  } else if (result.mode === "personal") {
+    console.log(
+      `Kept "${slug}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`
+    );
   } else {
     if (result.warning) console.log(`Note: ${result.warning}`);
     const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
@@ -687,16 +765,21 @@ function main() {
   const args = process.argv.slice(2);
   const never = args.includes("--never");
   const all = args.includes("--all");
-  const positional = args.filter((a) => !a.startsWith("--"));
+  const inlineTo = args.find((a) => a.startsWith("--to="));
+  const toIndex = args.indexOf("--to");
+  const toRaw = inlineTo ? inlineTo.slice("--to=".length) : toIndex !== -1 ? args[toIndex + 1] : void 0;
+  const to = toRaw === "personal" || toRaw === "project" || toRaw === "team" ? toRaw : void 0;
+  if ((toIndex !== -1 || inlineTo) && !to) usage();
+  const positional = args.filter((a, i) => !a.startsWith("--") && (toIndex === -1 || i !== toIndex + 1));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
   if (cmd === "list") {
     const pending = listCandidates(home, "pending");
     console.log(formatCandidateList(pending));
     if (pending.length === 0) {
-      const scoring = pendingBatchCount(home);
+      const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
-        console.log(`(${scoring} captured pair(s) are still being scored in the background \u2014 try again in a minute.)`);
+        console.log(`(${scoring} session(s) are still being harvested in the background \u2014 try again in a minute.)`);
       } else {
         const reject = lastPipelineRun(home)?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
         if (reject) {
@@ -720,7 +803,7 @@ function main() {
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
   for (const slug of slugs) {
-    if (cmd === "approve") approveOne(home, slug);
+    if (cmd === "approve") approveOne(home, slug, to);
     else rejectOne(home, slug, never);
   }
 }

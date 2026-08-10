@@ -1,5 +1,5 @@
 ---
-description: Show TeamHandbook health — version, detector counters, ledger, queue, since-install value recap, and config
+description: Show TeamHandbook health — version, detector counters, ledger, queue, harvest state, since-install recap, and config
 ---
 
 Show the user the current state of TeamHandbook.

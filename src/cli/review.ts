@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveAndDeliver } from "../lib/deliver.js";
+import type { DeliveryTarget } from "../lib/deliver.js";
 import {
   decideCandidate,
   formatCandidateList,
@@ -9,13 +10,16 @@ import {
   readCandidateMeta,
 } from "../lib/queue.js";
 import { loadScoreConfig } from "../lib/score.js";
-import { pendingBatchCount } from "../lib/notify.js";
+import { loadHarvestConfig } from "../lib/harvest.js";
+import { pendingHarvestCount } from "../lib/notify.js";
 import { lastPipelineRun } from "../lib/status.js";
 import { handbookHome } from "../lib/session-state.js";
 import { candidatesDir } from "../lib/skill-index.js";
 
 function usage(): never {
-  console.error("usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never]");
+  console.error(
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never] [--to personal|project|team]",
+  );
   process.exit(2);
 }
 
@@ -30,18 +34,31 @@ function showCandidate(home: string, slug: string): void {
   }
   const meta = readCandidateMeta(dir);
   const gate = meta?.gate;
-  const threshold = loadScoreConfig(home).threshold;
-  console.log(`candidate: ${slug}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
+  // A harvested lesson is measured against the harvest floor it already cleared;
+  // only a /handbook:learn capture is measured against the learn threshold.
+  const threshold =
+    meta?.origin === "harvest" ? loadHarvestConfig(home).minScore : loadScoreConfig(home).threshold;
+  const kind = meta?.kind ? `  [${meta.kind}]` : "";
+  console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${dir}`);
   if (gate) {
     const scores = Object.entries(gate.scores)
       .map(([k, v]) => `${k} ${v}`)
       .join(", ");
-    const dissent = gate.total < threshold ? `  — below the ${threshold}/10 threshold` : "";
-    console.log(`gate:      ${gate.total}/10  (${scores})${dissent}`);
+    const dissent = gate.total < threshold ? `  — below the ${threshold}/10 bar` : "";
+    console.log(`score:     ${gate.total}/10  (${scores})${dissent}`);
     if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
   } else {
-    console.log("gate:      n/a");
+    console.log("score:     n/a");
+  }
+  if (meta?.suggestedTarget) {
+    const where =
+      meta.suggestedTarget === "personal"
+        ? "keep for yourself (~/.claude/skills)"
+        : meta.suggestedTarget === "project"
+          ? "this project's .claude/skills"
+          : "share with the team (PR)";
+    console.log(`suggested: ${where}`);
   }
   console.log("");
   console.log(skillMd.trimEnd());
@@ -49,17 +66,24 @@ function showCandidate(home: string, slug: string): void {
   console.log("── grounded case ──");
   try {
     const grounded = JSON.parse(readFileSync(join(dir, "grounded-case.json"), "utf8"));
+    // A correction's receipt is the user's own sentence — show it first and
+    // verbatim; it is the strongest evidence any candidate can carry.
+    if (grounded.quote) {
+      console.log(`you said:  "${grounded.quote}"`);
+    }
     if (grounded.task) {
       console.log(`goal:      ${grounded.task.goal}`);
       (grounded.task.steps ?? []).forEach((s: string, i: number) => console.log(`  step ${i + 1}:  ${s}`));
       if (grounded.task.verification) console.log(`verified:  ${grounded.task.verification}`);
-    } else {
+    } else if (grounded.command || grounded.error) {
       console.log(`failed:    ${grounded.command}`);
       console.log(`error:     ${String(grounded.error ?? "").split("\n").join("\n           ")}`);
       if (grounded.resolvedCommand) console.log(`resolved:  ${grounded.resolvedCommand}`);
       if (Array.isArray(grounded.edits) && grounded.edits.length) {
         console.log(`edits:     ${grounded.edits.join(", ")}`);
       }
+    } else if (!grounded.quote) {
+      console.log("(no command/error recorded — this lesson came from the conversation)");
     }
     if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
   } catch {
@@ -67,8 +91,8 @@ function showCandidate(home: string, slug: string): void {
   }
 }
 
-function approveOne(home: string, slug: string): void {
-  const result = approveAndDeliver(home, slug);
+function approveOne(home: string, slug: string, to?: DeliveryTarget): void {
+  const result = approveAndDeliver(home, slug, undefined, undefined, undefined, undefined, undefined, to);
   if (!result.ok) {
     console.error(`error (${slug}): ${result.error}`);
     return;
@@ -81,6 +105,11 @@ function approveOne(home: string, slug: string): void {
       if (result.prError) console.log(`Auto-PR skipped (${result.prError}) — install/authenticate gh or glab to open PRs automatically.`);
       if (result.manualUrl) console.log(`Open the PR here: ${result.manualUrl}`);
     }
+  } else if (result.mode === "personal") {
+    console.log(
+      `Kept "${slug}" for you at ${result.deliveredTo}. ` +
+        `Claude will load it in every project from your next session.`,
+    );
   } else {
     if (result.warning) console.log(`Note: ${result.warning}`);
     const loads = result.originProject
@@ -114,16 +143,25 @@ function main(): void {
   const args = process.argv.slice(2);
   const never = args.includes("--never");
   const all = args.includes("--all");
-  const positional = args.filter((a) => !a.startsWith("--"));
+  // Accept both `--to personal` and `--to=personal`. Silently ignoring the `=`
+  // spelling would fall back to the candidate's suggested target — which is often
+  // "team" — so "keep this to myself" could publish to the team instead.
+  const inlineTo = args.find((a) => a.startsWith("--to="));
+  const toIndex = args.indexOf("--to");
+  const toRaw = inlineTo ? inlineTo.slice("--to=".length) : toIndex !== -1 ? args[toIndex + 1] : undefined;
+  const to =
+    toRaw === "personal" || toRaw === "project" || toRaw === "team" ? (toRaw as DeliveryTarget) : undefined;
+  if ((toIndex !== -1 || inlineTo) && !to) usage();
+  const positional = args.filter((a, i) => !a.startsWith("--") && (toIndex === -1 || i !== toIndex + 1));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
   if (cmd === "list") {
     const pending = listCandidates(home, "pending");
     console.log(formatCandidateList(pending));
     if (pending.length === 0) {
-      const scoring = pendingBatchCount(home);
+      const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
-        console.log(`(${scoring} captured pair(s) are still being scored in the background — try again in a minute.)`);
+        console.log(`(${scoring} session(s) are still being harvested in the background — try again in a minute.)`);
       } else {
         // An empty queue after a productive day usually means the gate scored and
         // rejected — say so, so the review screen is a signal of life, not a dead end.
@@ -151,7 +189,7 @@ function main(): void {
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
   for (const slug of slugs) {
-    if (cmd === "approve") approveOne(home, slug);
+    if (cmd === "approve") approveOne(home, slug, to);
     else rejectOne(home, slug, never);
   }
 }

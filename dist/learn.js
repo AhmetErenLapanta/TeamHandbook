@@ -163,7 +163,6 @@ function signalFromLearnPayload(payload, ts) {
 // src/lib/pipeline.ts
 import {
   appendFileSync as appendFileSync2,
-  existsSync as existsSync3,
   mkdirSync as mkdirSync5,
   readdirSync as readdirSync4,
   readFileSync as readFileSync7,
@@ -607,8 +606,14 @@ function yamlQuote(value) {
   const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
   return `"${escaped}"`;
 }
-function assembleSkillMd(draft, scope, fromTask = false) {
-  const origin = fromTask ? "completed task" : "error-to-fix session";
+var ORIGIN_TEXT = {
+  correction: "correction the developer made during a real session",
+  procedure: "completed task",
+  discovery: "convention uncovered during real work",
+  "error-fix": "error-to-fix session"
+};
+function assembleSkillMd(draft, scope, from = false) {
+  const origin = typeof from === "string" ? ORIGIN_TEXT[from] ?? "real session" : from ? "completed task" : "error-to-fix session";
   const scoped = scope !== "team";
   const guard = scoped ? ` Applies ONLY in the ${scope} repository \u2014 do not use it elsewhere.` : "";
   const description = draft.description + guard;

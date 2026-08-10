@@ -1,7 +1,7 @@
 {
   "name": "handbook",
-  "version": "0.1.0",
-  "description": "Turns real coding-session learnings — error→fix moments and task procedures — into gated, reviewable, merge-ready team skills.",
+  "version": "0.2.0",
+  "description": "Harvests durable lessons from your real coding sessions \u2014 the corrections you gave, the procedures you completed \u2014 and offers each one as a personal, project, or team skill.",
   "author": {
     "name": "Ahmet Eren Lapanta"
   },

@@ -15,7 +15,7 @@ import {
   flushResolvedPairs,
   flushSessionEnd,
   ledgerFingerprints,
-  promoteRecurrentSignals,
+  ledgerPairsForSession,
   signalsFile,
 } from "./signals.js";
 import { readCounters } from "./counters.js";
@@ -216,69 +216,26 @@ describe("ledgerFingerprints", () => {
   });
 });
 
-describe("promoteRecurrentSignals", () => {
-  function weakSignal(fingerprint: string): Signal {
-    return {
-      ts: "2026-08-08T00:00:00Z",
-      sessionId: "s1",
-      kind: "weak",
-      fingerprint,
-      family: "npm test",
-      command: "npm test",
-      error: "1 test failed",
-      cwd: "/repo",
-      count: 1,
-      edits: [],
-    };
-  }
-
-  it("promotes a weak signal whose fingerprint is already in the ledger", () => {
-    const [promoted] = promoteRecurrentSignals([weakSignal("abc123")], new Set(["abc123"]));
-    expect(promoted).toMatchObject({ kind: "candidate", promotedBy: "recurrence" });
-  });
-
-  it("leaves first-time weak signals untouched", () => {
-    const [signal] = promoteRecurrentSignals([weakSignal("abc123")], new Set(["other"]));
-    expect(signal?.kind).toBe("weak");
-    expect(signal?.promotedBy).toBeUndefined();
-  });
-
-  it("does not relabel signals that are already candidates", () => {
-    const candidate: Signal = { ...weakSignal("abc123"), kind: "candidate" };
-    const [signal] = promoteRecurrentSignals([candidate], new Set(["abc123"]));
-    expect(signal?.promotedBy).toBeUndefined();
-  });
-
-  it("treats an earlier signal in the same batch as history", () => {
-    const batch = promoteRecurrentSignals([weakSignal("abc123"), weakSignal("abc123")], new Set());
-    expect(batch.map((s) => s.kind)).toEqual(["weak", "candidate"]);
-  });
-});
-
-describe("recurrence promotion across sessions", () => {
-  function seedOpenError(sessionId: string): void {
-    const state = recordFailure(emptySessionState(sessionId), failure, "2026-08-08T00:00:00Z");
-    saveSessionState(state, home);
-  }
-
-  it("promotes a weak signal at session end when a past session logged the same fingerprint", () => {
-    seedOpenError("s1");
-    flushSessionEnd("s1", home);
-    expect(readSignals()[0]?.kind).toBe("weak");
-    seedOpenError("s2");
+describe("ledgerPairsForSession (harvest evidence)", () => {
+  it("returns only this session's resolved pairs, skipping redacted and unresolved rows", () => {
+    const editedFile = join(home, "app.ts");
+    writeFileSync(editedFile, "fixed");
+    seedResolvedPair([editedFile]);
+    flushResolvedPairs("s1", home, "2026-08-08T01:00:00Z");
+    // another session's pair + an unresolved weak row must not leak in
+    const other = recordFailure(emptySessionState("s2"), { ...failure, fingerprint: "zzz" });
+    saveSessionState(other, home);
     flushSessionEnd("s2", home);
-    expect(readSignals()[1]).toMatchObject({
-      sessionId: "s2",
-      kind: "candidate",
-      promotedBy: "recurrence",
-    });
-  });
 
-  it("promotes weak resolved pairs on Stop flush when the fingerprint recurred", () => {
-    seedOpenError("s1");
-    flushSessionEnd("s1", home);
-    seedResolvedPair([]);
-    const [signal] = flushResolvedPairs("s1", home);
-    expect(signal).toMatchObject({ kind: "candidate", promotedBy: "recurrence" });
+    const pairs = ledgerPairsForSession("s1", home);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toMatchObject({
+      fingerprint: "abc123",
+      family: "npm test",
+      resolvedCommand: "npm test",
+      cwd: "/repo",
+    });
+    expect(ledgerPairsForSession("s2", home)).toEqual([]); // open error → no pair
+    expect(ledgerPairsForSession("nope", home)).toEqual([]);
   });
 });
