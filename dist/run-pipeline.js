@@ -47,6 +47,7 @@ function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
 import { readFileSync } from "node:fs";
@@ -187,6 +188,15 @@ function parseScoreResponse(text, threshold) {
     ...isDuplicate ? { duplicateOf: duplicateOf.trim() } : {}
   };
 }
+function claudeErrorReason(err) {
+  const e = err;
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
+  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
+  return firstLine.slice(0, 200);
+}
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
@@ -205,7 +215,7 @@ async function scoreSignal(signal, occurrences, config = defaultScoreConfig, run
       config.timeoutMs
     );
   } catch (err) {
-    return { signal, outcome: "error", error: `claude invocation failed: ${String(err)}` };
+    return { signal, outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}` };
   }
   const result = parseScoreResponse(response, config.threshold);
   if (!result) return { signal, outcome: "error", error: "unparseable score response" };
@@ -330,6 +340,7 @@ function loadDistillConfig(home = handbookHome()) {
 function normalizeRemoteUrl(raw) {
   let s = raw.trim();
   if (!s) return null;
+  if (/[\x00-\x1f\x7f]/.test(s)) return null;
   const hadProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
   s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
   s = s.replace(/^[^@/]+@/, "");
@@ -431,21 +442,29 @@ function parseDistillResponse(text) {
   };
 }
 function yamlQuote(value) {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+  return `"${escaped}"`;
 }
-function assembleSkillMd(draft, scope) {
+function assembleSkillMd(draft, scope, fromTask = false) {
+  const origin = fromTask ? "completed task" : "error-to-fix session";
+  const scoped = scope !== "team";
+  const guard = scoped ? ` Applies ONLY in the ${scope} repository \u2014 do not use it elsewhere.` : "";
+  const description = draft.description + guard;
+  const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project \u2014 ignore this skill in any other repo.
+
+${draft.body}` : draft.body;
   return [
     "---",
     `name: ${draft.slug}`,
-    `description: ${yamlQuote(draft.description)}`,
+    `description: ${yamlQuote(description.slice(0, 1024))}`,
     `scope: ${yamlQuote(scope)}`,
     "---",
     "",
-    draft.body,
+    body,
     "",
     "## Grounded case",
     "",
-    "This skill was distilled from a real error-to-fix session. The originating case and its",
+    `This skill was distilled from a real ${origin}. The originating case and its`,
     "expected behavior live in [grounded-case.json](grounded-case.json) and serve as the",
     "regression gate whenever this skill is edited or challenged.",
     ""
@@ -481,7 +500,7 @@ async function distillVerdict(verdict, occurrences, config = defaultDistillConfi
       config.timeoutMs
     );
   } catch (err) {
-    return { signal, outcome: "error", error: `claude invocation failed: ${String(err)}` };
+    return { signal, outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}` };
   }
   const draft = parseDistillResponse(response);
   if (!draft) return { signal, outcome: "error", error: "unparseable distill response" };
@@ -496,7 +515,7 @@ async function distillVerdict(verdict, occurrences, config = defaultDistillConfi
     artifact: {
       slug: draft.slug,
       scope,
-      skillMd: assembleSkillMd(draft, scope),
+      skillMd: assembleSkillMd(draft, scope, !!signal.task),
       groundedCase: buildGroundedCase(signal, verdict, draft.expect)
     }
   };
@@ -528,6 +547,17 @@ function loadTeamConfig(home = handbookHome()) {
   }
   return null;
 }
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
 function marketplacesRoot() {
   return join5(homedir2(), ".claude", "plugins", "marketplaces");
 }
@@ -547,13 +577,22 @@ var FIELDS = [
   "redactionBlocked",
   "postToolUse",
   "bashFailuresCaptured",
-  "pairsResolved"
+  "pairsResolved",
+  "gateErrors",
+  "gateAbandoned"
 ];
 function countersFile(home = handbookHome()) {
   return join6(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
-  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
+  const base = {
+    redactionBlocked: 0,
+    postToolUse: 0,
+    bashFailuresCaptured: 0,
+    pairsResolved: 0,
+    gateErrors: 0,
+    gateAbandoned: 0
+  };
   try {
     const parsed = JSON.parse(readFileSync4(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
@@ -573,6 +612,27 @@ function incrementRedactionBlocked(home = handbookHome(), by = 1) {
 }
 
 // src/lib/signals.ts
+function sanitizeSignalsForPersistence(signals) {
+  let redacted = 0;
+  const clean = signals.map((s) => {
+    if (s.secretRedacted || !signalSecret(s)) return s;
+    redacted += 1;
+    return {
+      ts: s.ts,
+      sessionId: s.sessionId,
+      kind: "weak",
+      fingerprint: s.fingerprint,
+      family: "",
+      command: "",
+      error: "",
+      cwd: "",
+      count: s.count,
+      edits: [],
+      secretRedacted: true
+    };
+  });
+  return { clean, redacted };
+}
 function signalsFile(home = handbookHome()) {
   return join7(home, "signals.jsonl");
 }
@@ -598,13 +658,13 @@ function ledgerFingerprintCounts(home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
 import { basename, join as join8 } from "node:path";
 function candidateMetaFile(dir) {
   return join8(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
-  writeFileSync4(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+  writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
 }
 function candidateMetaFromArtifact(slug, artifact, verdict, createdAt) {
   return {
@@ -652,6 +712,7 @@ function sieveSignal(signal, occurrences, config = defaultGateConfig, muted = /*
   if (signal.trigger !== "manual") {
     if (muted.has(signal.fingerprint)) return drop(signal, "muted");
     if (signal.edits.length === 0) return drop(signal, "no-file-change");
+    if (!signal.resolvedCommand) return drop(signal, "never-passed");
     if (occurrences < config.repeatThreshold) {
       return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
     }
@@ -680,6 +741,26 @@ function runRuleSieves(signals, home = handbookHome(), config = defaultGateConfi
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
   return join9(home, "pending");
+}
+function enqueuePendingSignals(signals, home = handbookHome()) {
+  if (signals.length === 0) return null;
+  const { clean } = sanitizeSignalsForPersistence(signals);
+  mkdirSync5(pendingDir(home), { recursive: true });
+  const session = signals[0].sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  const base = `${session}-${Date.now()}`;
+  let file = join9(pendingDir(home), `${base}.json`);
+  for (let i = 2; existsSync3(file); i++) {
+    file = join9(pendingDir(home), `${base}-${i}.json`);
+  }
+  for (let i = 0; i < 50; i++) {
+    try {
+      writeFileSync5(file, JSON.stringify(clean), { flag: "wx" });
+      return file;
+    } catch {
+      file = join9(pendingDir(home), `${base}-x${i}.json`);
+    }
+  }
+  return null;
 }
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function reclaimStaleClaims(dir) {
@@ -736,6 +817,17 @@ function dedupSkillDirs(home, cwd, marketplacesRootDir) {
 function pipelineLogFile(home = handbookHome()) {
   return join9(home, "pipeline.log");
 }
+function abandonedFile(home = handbookHome()) {
+  return join9(home, "abandoned.jsonl");
+}
+function abandonSignal(signal, home) {
+  try {
+    mkdirSync5(home, { recursive: true });
+    appendFileSync2(abandonedFile(home), JSON.stringify(signal) + "\n");
+  } catch {
+  }
+  bumpCounter("gateAbandoned", home);
+}
 var LOG_ROTATE_BYTES = 512 * 1024;
 var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
@@ -750,6 +842,8 @@ function appendPipelineLog(summary, home, ts) {
   } catch {
   }
 }
+var MAX_SCORED_PER_RUN = 6;
+var MAX_GATE_ATTEMPTS = 3;
 async function runPipeline(signals, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   const runner = deps.runner ?? runClaudeCli;
   const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
@@ -758,38 +852,59 @@ async function runPipeline(signals, home = handbookHome(), deps = {}, now = () =
   const distillConfig = loadDistillConfig(home);
   const { passed, dropped } = runRuleSieves(signals, home);
   const counts = ledgerFingerprintCounts(home);
+  const toScore = passed.slice(0, MAX_SCORED_PER_RUN);
+  const deferred = passed.slice(MAX_SCORED_PER_RUN);
   const summary = {
     received: signals.length,
     sievedOut: dropped.length,
     scored: 0,
     rejected: 0,
     errored: 0,
+    deferred: deferred.length,
     written: [],
-    outcomes: []
+    outcomes: dropped.map((d) => ({
+      fingerprint: d.signal.fingerprint,
+      outcome: "sieved",
+      ...d.reason ? { reason: d.reason } : {},
+      ...d.detail ? { detail: d.detail } : {}
+    }))
   };
-  for (const signal of passed) {
+  const retry = [];
+  for (const signal of toScore) {
     const occurrences = counts.get(signal.fingerprint) ?? 0;
     const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
     const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
     summary.scored += 1;
-    summary.outcomes.push({
+    const log = {
       fingerprint: signal.fingerprint,
       outcome: verdict.outcome === "promote" ? "promote" : verdict.outcome === "reject" ? "reject" : "error",
       ...verdict.result ? { total: verdict.result.total } : {},
       ...verdict.result?.rationale ? { rationale: verdict.result.rationale.slice(0, 200) } : {},
-      ...verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}
-    });
+      ...verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {},
+      ...verdict.outcome === "error" && verdict.error ? { error: verdict.error.slice(0, 200) } : {}
+    };
+    summary.outcomes.push(log);
     if (verdict.outcome === "reject") {
       summary.rejected += 1;
       continue;
     }
     if (verdict.outcome === "error") {
       summary.errored += 1;
+      if (!queueRetry(signal, retry)) {
+        log.abandoned = true;
+        abandonSignal(signal, home);
+      }
       continue;
     }
     const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
     if (outcome.outcome !== "distilled" || !outcome.artifact) {
       summary.errored += 1;
+      log.outcome = "error";
+      if (outcome.error) log.error = outcome.error.slice(0, 200);
+      if (!queueRetry(signal, retry)) {
+        log.abandoned = true;
+        abandonSignal(signal, home);
+      }
       continue;
     }
     const dir = writeCandidate(outcome.artifact, home);
@@ -797,8 +912,19 @@ async function runPipeline(signals, home = handbookHome(), deps = {}, now = () =
     writeCandidateMeta(dir, candidateMetaFromArtifact(slug, outcome.artifact, verdict, now()));
     summary.written.push(slug);
   }
+  const requeue = [...deferred, ...retry];
+  if (requeue.length > 0) enqueuePendingSignals(requeue, home);
+  if (summary.errored > 0) bumpCounter("gateErrors", home);
   appendPipelineLog(summary, home, now());
   return summary;
+}
+function queueRetry(signal, retry) {
+  const attempts = (signal.attempts ?? 0) + 1;
+  if (attempts < MAX_GATE_ATTEMPTS) {
+    retry.push({ ...signal, attempts });
+    return true;
+  }
+  return false;
 }
 
 // src/cli/run-pipeline.ts

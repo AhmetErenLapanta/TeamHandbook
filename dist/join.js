@@ -33,6 +33,7 @@ function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
 import { readFileSync } from "node:fs";
@@ -71,6 +72,17 @@ function saveTeamConfig(team, home = handbookHome()) {
   config.team = team;
   writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
 function runGit(args, cwd) {
   try {
     return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
@@ -106,7 +118,7 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
   if (existing && existing.repoUrl !== url) {
     return {
       ok: false,
-      error: `already joined ${existing.repoUrl}; edit config.json to switch teams`
+      error: `already joined ${existing.repoUrl}; run /handbook:leave (or edit ${join4(home, "config.json")}) to switch teams`
     };
   }
   const workdir = mkdtempSync(join4(tmpdir(), "handbook-join-"));
@@ -148,7 +160,7 @@ function formatJoinSuccess(result) {
     "To finish, connect Claude Code to the team marketplace (built-in commands):",
     "",
     `  /plugin marketplace add ${result.url}`,
-    `  /plugin install ${result.name}`
+    `  /plugin install ${result.name}@${result.name}`
   ].join("\n");
 }
 

@@ -23,6 +23,7 @@ export type DropReason =
   | "not-candidate"
   | "secret"
   | "no-file-change"
+  | "never-passed"
   | "below-repeat-threshold"
   | "oversized"
   | "muted";
@@ -54,6 +55,9 @@ export function sieveSignal(
   if (signal.trigger !== "manual") {
     if (muted.has(signal.fingerprint)) return drop(signal, "muted");
     if (signal.edits.length === 0) return drop(signal, "no-file-change");
+    // A recurring error that was never actually fixed (a promoted open error with
+    // no resolving command) has no fix to teach — distilling it would invent one.
+    if (!signal.resolvedCommand) return drop(signal, "never-passed");
     if (occurrences < config.repeatThreshold) {
       return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
     }

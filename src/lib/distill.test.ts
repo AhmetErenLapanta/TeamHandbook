@@ -83,6 +83,15 @@ describe("normalizeRemoteUrl", () => {
   ])("returns null on %s", (_label, raw) => {
     expect(normalizeRemoteUrl(raw)).toBeNull();
   });
+
+  it.each([
+    ["embedded newline", "https://evil.com/x\nname: hijacked"],
+    ["carriage return", "https://evil.com/x\rname: hijacked"],
+    ["tab", "https://evil.com/x\tfoo"],
+    ["null byte", "https://evil.com/x\x00/y"],
+  ])("rejects a control character in the remote (%s) so it can't break the frontmatter", (_label, raw) => {
+    expect(normalizeRemoteUrl(raw)).toBeNull();
+  });
 });
 
 describe("resolveScope", () => {
@@ -169,24 +178,41 @@ describe("parseDistillResponse", () => {
 });
 
 describe("assembleSkillMd", () => {
-  it("produces spec-compliant frontmatter with the scope tag", () => {
+  it("produces spec-compliant team-scope frontmatter unchanged", () => {
     const draft = parseDistillResponse(validResponse)!;
-    const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+    const md = assembleSkillMd(draft, "team");
     expect(md.startsWith("---\nname: fix-flaky-npm-test\n")).toBe(true);
     expect(md).toContain('description: "Use when npm test fails with a stale snapshot."');
-    expect(md).toContain('scope: "gitlab.x.com/ekip/bff"');
+    expect(md).toContain('scope: "team"');
     expect(md).toContain("## Grounded case");
-    expect(md).toContain("grounded-case.json");
+    expect(md).not.toContain("Applies ONLY");
     expect(parseSkillFrontmatter(md)).toEqual({
       name: "fix-flaky-npm-test",
       description: "Use when npm test fails with a stale snapshot.",
-      scope: "gitlab.x.com/ekip/bff",
+      scope: "team",
     });
+  });
+
+  it("bakes a project-scope boundary into the description and body (v1 scope guard)", () => {
+    const draft = parseDistillResponse(validResponse)!;
+    const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+    expect(md).toContain("Applies ONLY in the gitlab.x.com/ekip/bff repository");
+    expect(md).toContain("**Scope: only the `gitlab.x.com/ekip/bff` repository.**");
+    expect(parseSkillFrontmatter(md)?.scope).toBe("gitlab.x.com/ekip/bff");
   });
 
   it("escapes quotes in the description", () => {
     const draft = { ...parseDistillResponse(validResponse)!, description: 'needs "camelCase" keys' };
     expect(assembleSkillMd(draft, "team")).toContain('description: "needs \\"camelCase\\" keys"');
+  });
+
+  it("neutralizes a newline in a scalar so it cannot inject a frontmatter field", () => {
+    const draft = { ...parseDistillResponse(validResponse)!, description: "line one\nname: hijacked" };
+    const md = assembleSkillMd(draft, "team");
+    // the injected "name:" line stays inside the quoted description scalar
+    expect(md).toContain('description: "line one\\nname: hijacked"');
+    // so the real name survives the line-based frontmatter parser
+    expect(parseSkillFrontmatter(md)?.name).toBe("fix-flaky-npm-test");
   });
 });
 

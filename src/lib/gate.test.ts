@@ -176,3 +176,16 @@ describe("muted fingerprints (explicit 'don't suggest again')", () => {
     expect(manual.pass).toBe(true);
   });
 });
+
+describe("never-passed sieve (fabricated-fix guard)", () => {
+  it("drops an automatic candidate with edits but no resolving command", () => {
+    const unresolved = candidate({ resolvedCommand: undefined });
+    expect(sieveSignal(unresolved, 5)).toMatchObject({ pass: false, reason: "never-passed" });
+  });
+  it("still passes a resolved automatic candidate", () => {
+    expect(sieveSignal(candidate({ resolvedCommand: "npm test" }), 2).pass).toBe(true);
+  });
+  it("exempts manual captures (explicit intent)", () => {
+    expect(sieveSignal(candidate({ trigger: "manual", resolvedCommand: undefined }), 1).pass).toBe(true);
+  });
+});

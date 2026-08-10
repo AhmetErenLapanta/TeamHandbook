@@ -1,6 +1,8 @@
 import type { HookInput } from "./hook-io.js";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
 import { bashFailure, isBashSuccess } from "./tool-response.js";
+import { signalSecret } from "./secrets.js";
+import { incrementRedactionBlocked } from "./counters.js";
 import {
   attachEditToOpenErrors,
   loadSessionState,
@@ -36,12 +38,16 @@ export function recordActivity(input: HookInput, home: string = handbookHome()):
   if (input.tool_name === "Bash") {
     const command = bashCommand(input);
     if (!command) return false;
+    // commandFamily can carry a secret verbatim when a token lands in the subcommand
+    // slot (`npx <tool> sk-...`); never let that shape reach the activity record on disk.
+    if (signalSecret({ command })) return false;
     family = commandFamily(command);
     if (GENERIC_FAMILIES.has(family) || family === "unknown") return false;
   } else if (EDIT_TOOLS.has(input.tool_name ?? "")) {
     const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
     const m = filePath.match(/\.([A-Za-z0-9]+)$/);
     if (!m) return false;
+    if (signalSecret({ edits: [filePath] })) return false;
     ext = `.${m[1]!.toLowerCase()}`;
   } else {
     return false;
@@ -64,6 +70,16 @@ export function captureBashFailure(input: HookInput, home: string = handbookHome
   const command = bashCommand(input);
   if (!command) return false;
   const error = normalizeErrorText(failure.errorText);
+  // A failing command/error can carry a secret (a `curl` with a bearer token, an
+  // inline `API_KEY=...`). Drop the whole occurrence rather than persist a redacted
+  // husk: a blanked open error can never pair (resolveOpenErrors matches on family),
+  // so it would silently swallow every later clean recurrence of the same error. If
+  // the error recurs WITHOUT the secret, that clean occurrence is captured fresh and
+  // pairs normally. Nothing raw ever reaches ~/.teamhandbook/.
+  if (signalSecret({ command, error })) {
+    incrementRedactionBlocked(home);
+    return false;
+  }
   const family = commandFamily(command);
   const state = loadSessionState(input.session_id, home);
   recordFailure(state, {
@@ -82,6 +98,12 @@ export function captureFileEdit(input: HookInput, home: string = handbookHome())
   if (!input.session_id || !EDIT_TOOLS.has(input.tool_name ?? "")) return false;
   const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
   if (!filePath) return false;
+  // A path is rarely secret, but signalSecret inspects edits and this path would be
+  // persisted (and later shown in the skill/PR) — drop it rather than write it.
+  if (signalSecret({ edits: [filePath] })) {
+    incrementRedactionBlocked(home);
+    return false;
+  }
   const state = loadSessionState(input.session_id, home);
   if (!attachEditToOpenErrors(state, filePath)) return false;
   saveSessionState(state, home);
@@ -100,6 +122,13 @@ export function captureBashSuccess(input: HookInput, home: string = handbookHome
   if (!command) return 0;
   const state = loadSessionState(input.session_id, home);
   if (state.openErrors.length === 0) return 0;
+  // The resolving command is the fix that ships in the skill; if it carries a secret
+  // we can neither store nor distill it, so don't pair — the error stays open (and is
+  // later flushed as a content-free weak signal).
+  if (signalSecret({ resolvedCommand: command })) {
+    incrementRedactionBlocked(home);
+    return 0;
+  }
   // Only resolve errors from the same working directory: a `npm test` pass in
   // repo B must not close an `npm test` failure opened in repo A.
   const resolved = resolveOpenErrors(state, commandFamily(command), command, input.cwd ?? "");

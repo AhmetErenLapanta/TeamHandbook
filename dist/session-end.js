@@ -27,13 +27,13 @@ import {
   existsSync as existsSync2,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync3,
-  readFileSync as readFileSync4,
+  readFileSync as readFileSync5,
   renameSync as renameSync2,
   rmSync as rmSync3,
   statSync as statSync2,
   writeFileSync as writeFileSync3
 } from "node:fs";
-import { basename, join as join4 } from "node:path";
+import { basename, join as join5 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -90,11 +90,28 @@ function deleteSessionState(sessionId, home = handbookHome()) {
   rmSync2(sessionFile(sessionId, home), { force: true });
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
+
+// src/lib/config.ts
+import { readFileSync as readFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync2(join2(home, "config.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+function gateAutoEnabled(home = handbookHome()) {
+  const gate = readConfigFile(home).gate;
+  return gate?.auto !== false;
+}
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
@@ -139,27 +156,49 @@ function signalSecret(fields) {
   );
 }
 
+// src/lib/init.ts
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
+
 // src/lib/signals.ts
 import { createHash } from "node:crypto";
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
+import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
   "postToolUse",
   "bashFailuresCaptured",
-  "pairsResolved"
+  "pairsResolved",
+  "gateErrors",
+  "gateAbandoned"
 ];
 function countersFile(home = handbookHome()) {
-  return join2(home, "counters.json");
+  return join3(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
-  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
+  const base = {
+    redactionBlocked: 0,
+    postToolUse: 0,
+    bashFailuresCaptured: 0,
+    pairsResolved: 0,
+    gateErrors: 0,
+    gateAbandoned: 0
+  };
   try {
-    const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync3(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
   } catch {
   }
@@ -199,13 +238,13 @@ function sanitizeSignalsForPersistence(signals) {
   return { clean, redacted };
 }
 function signalsFile(home = handbookHome()) {
-  return join3(home, "signals.jsonl");
+  return join4(home, "signals.jsonl");
 }
 function ledgerFingerprintCounts(home = handbookHome()) {
   const counts = /* @__PURE__ */ new Map();
   let raw;
   try {
-    raw = readFileSync3(signalsFile(home), "utf8");
+    raw = readFileSync4(signalsFile(home), "utf8");
   } catch {
     return counts;
   }
@@ -311,7 +350,7 @@ function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */
 
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
-  return join4(home, "pending");
+  return join5(home, "pending");
 }
 function enqueuePendingSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return null;
@@ -319,16 +358,16 @@ function enqueuePendingSignals(signals, home = handbookHome()) {
   mkdirSync4(pendingDir(home), { recursive: true });
   const session = signals[0].sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
-  let file = join4(pendingDir(home), `${base}.json`);
+  let file = join5(pendingDir(home), `${base}.json`);
   for (let i = 2; existsSync2(file); i++) {
-    file = join4(pendingDir(home), `${base}-${i}.json`);
+    file = join5(pendingDir(home), `${base}-${i}.json`);
   }
   for (let i = 0; i < 50; i++) {
     try {
       writeFileSync3(file, JSON.stringify(clean), { flag: "wx" });
       return file;
     } catch {
-      file = join4(pendingDir(home), `${base}-x${i}.json`);
+      file = join5(pendingDir(home), `${base}-x${i}.json`);
     }
   }
   return null;
@@ -350,6 +389,7 @@ async function main() {
   const signals = flushSessionEnd(input.session_id);
   const candidates = signals.filter((s) => s.kind === "candidate");
   if (candidates.length === 0) return;
+  if (!gateAutoEnabled()) return;
   enqueuePendingSignals(candidates);
   spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
 }

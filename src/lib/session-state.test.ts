@@ -133,3 +133,26 @@ describe("resolveOpenErrors", () => {
     expect(state.resolvedPairs).toEqual([]);
   });
 });
+
+describe("resolveOpenErrors — single most-recent (misattribution guard)", () => {
+  it("resolves only the most-recently-seen matching error, leaving the rest open", () => {
+    let state = recordFailure(emptySessionState("s1"), { ...failure, fingerprint: "old" }, "2026-08-08T00:00:00Z");
+    state = recordFailure(state, { ...failure, fingerprint: "new" }, "2026-08-08T00:05:00Z");
+    const resolved = resolveOpenErrors(state, "npm test", "npm test", "/repo", "2026-08-08T00:10:00Z");
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.fingerprint).toBe("new");
+    expect(state.openErrors.map((e) => e.fingerprint)).toEqual(["old"]);
+  });
+});
+
+describe("attachEditToOpenErrors — most-recent-N ring buffer", () => {
+  it("keeps the latest edits so a late real fix is not locked out", () => {
+    let state = recordFailure(emptySessionState("s1"), failure);
+    for (let i = 0; i < 25; i++) attachEditToOpenErrors(state, `/repo/flail-${i}.ts`);
+    attachEditToOpenErrors(state, "/repo/the-real-fix.ts");
+    const edits = state.openErrors[0]!.edits;
+    expect(edits).toContain("/repo/the-real-fix.ts");
+    expect(edits.length).toBeLessThanOrEqual(20);
+    expect(edits).not.toContain("/repo/flail-0.ts");
+  });
+});

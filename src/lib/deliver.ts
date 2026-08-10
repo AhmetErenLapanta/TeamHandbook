@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { loadTeamConfig, runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd, uniqueSlug } from "./distill.js";
@@ -32,6 +32,13 @@ export interface DeliverResult {
   prUrl?: string;
   manualUrl?: string;
   error?: string;
+  // set when solo delivery could not use the origin project and fell back to cwd
+  warning?: string;
+  // set when solo delivery landed in a DIFFERENT project than the current one (the
+  // skill was captured elsewhere) — so the "loads next session" claim can name where
+  originProject?: string;
+  // why a team PR could not be auto-opened (the branch is pushed; link is manual)
+  prError?: string;
 }
 
 export function approveAndDeliver(
@@ -65,7 +72,7 @@ function deliverToTeam(
   const published = publishCandidate(dir, meta, team, git, forge);
   if (!published.ok) return { ok: false, mode: "team", meta, error: published.error };
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
-  const updated: CandidateMeta = { ...meta, status: "approved", decidedAt, deliveredTo };
+  const updated: CandidateMeta = { ...meta, status: "approved", decidedAt, deliveredTo, deliveredMode: "team" };
   writeCandidateMeta(dir, updated);
   return {
     ok: true,
@@ -75,6 +82,7 @@ function deliverToTeam(
     branch: published.branch,
     prUrl: published.prUrl,
     manualUrl: published.manualUrl,
+    ...(published.prError ? { prError: published.prError } : {}),
   };
 }
 
@@ -84,7 +92,20 @@ function deliverSolo(
   fallbackCwd: string,
   decidedAt: string,
 ): DeliverResult {
+  // Surface a fall-back honestly: installing into the wrong project silently is
+  // worse than a warning the reviewer can act on.
+  const originGone = !!meta.cwd && !existsSync(meta.cwd);
+  const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
+  const warning =
+    originGone || noOrigin
+      ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})`
+      : undefined;
+  // The skill installs into the project where it was captured. If that is not the
+  // project the reviewer is in right now, name it — otherwise "loads next session"
+  // is false for the session they will actually open.
+  const installedProject = meta.cwd && existsSync(meta.cwd) ? meta.cwd : fallbackCwd;
+  const originProject = installedProject !== fallbackCwd ? basename(installedProject) : undefined;
   const slug = uniqueSlug(meta.slug, (s) => existsSync(join(skillsDir, s)));
   const target = join(skillsDir, slug);
   try {
@@ -105,7 +126,15 @@ function deliverSolo(
     status: "approved",
     decidedAt,
     deliveredTo: target,
+    deliveredMode: "solo",
   };
   writeCandidateMeta(dir, updated);
-  return { ok: true, mode: "solo", meta: updated, deliveredTo: target };
+  return {
+    ok: true,
+    mode: "solo",
+    meta: updated,
+    deliveredTo: target,
+    ...(warning ? { warning } : {}),
+    ...(originProject ? { originProject } : {}),
+  };
 }

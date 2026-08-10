@@ -7,7 +7,7 @@ function describeSieve(reason: string, detail?: string): string {
     return "Dropped: the case contains secret-like content; nothing was stored.";
   }
   if (reason === "oversized") {
-    return `Dropped by rule sieve: the ${detail ?? "case"} is too large to distill.`;
+    return `Dropped by rule sieve: too large to distill (${detail ?? "case"}).`;
   }
   return `Dropped by rule sieve (${reason}${detail ? `: ${detail}` : ""}).`;
 }
@@ -25,18 +25,25 @@ async function main(): Promise<number> {
       console.log(describeSieve(outcome.reason, outcome.detail));
       return 0;
     case "error":
-      console.error(`error: ${outcome.message}`);
+      console.error(
+        `error: ${outcome.message}${/doctor/.test(outcome.message) ? "" : " — run /handbook:doctor to diagnose"}`,
+      );
       return 1;
-    case "written":
+    case "written": {
+      const advice: string[] = [];
       if (outcome.belowThreshold) {
+        advice.push(
+          `scored it ${outcome.gateTotal ?? "?"}/10, below the ${outcome.threshold}/10 threshold` +
+            (outcome.rationale ? ` (${outcome.rationale})` : ""),
+        );
+      }
+      if (outcome.duplicateOf) {
+        advice.push(`thinks it duplicates existing skill "${outcome.duplicateOf}"`);
+      }
+      if (advice.length > 0) {
         console.log(
-          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}, gate ${outcome.gateTotal ?? "?"}/10 — below the ${outcome.threshold}/10 threshold).` +
-            (outcome.duplicateOf
-              ? ` The gate thinks it duplicates "${outcome.duplicateOf}".`
-              : outcome.rationale
-                ? ` The gate's concern: ${outcome.rationale}`
-                : "") +
-            ` It is queued anyway because you asked for it — the publish decision is yours in /handbook:review.`,
+          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}). The gate ${advice.join(" and ")}. ` +
+            `It is queued anyway because you asked for it — the publish decision is yours in /handbook:review.`,
         );
       } else {
         console.log(
@@ -44,6 +51,7 @@ async function main(): Promise<number> {
         );
       }
       return 0;
+    }
   }
 }
 

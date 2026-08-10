@@ -15,9 +15,9 @@ A clear description of the bug.
 1.
 2.
 
-**`/handbook:status` output**
-Paste it — the detector counters (`tool calls seen`, `failures captured`) are the
-fastest way to tell whether capture is working.
+**`/handbook:doctor` output**
+Paste it — it checks node, the claude CLI, hook activity, config, and the team
+repo in one shot. Add `/handbook:status` too if the issue is about capture.
 
 ```
 ```

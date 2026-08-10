@@ -17,8 +17,13 @@ Initial release.
 - **Distill**: promoted signals become a spec-compliant `SKILL.md` plus a
   `grounded-case.json` regression anchor, scoped to `team` or the project's git
   remote.
-- **Review & deliver**: candidates queue locally; `/handbook:review` approves
-  them; solo mode writes to the project's `.claude/skills/`, team mode opens a PR.
+- **Review & deliver**: candidates queue locally; `/handbook:review` lists,
+  shows, edits-then-approves, rejects, or skips them; solo mode writes to the
+  project's `.claude/skills/`, team mode opens a PR. Manual captures are always
+  queued — a low gate score rides along as advice, and the publish decision stays
+  with the user. A plain reject does not suppress recurrence; `reject --never`
+  mutes the fingerprint permanently, and rejected candidates are excluded from
+  the gate's dedup.
 - **Team setup**: `/handbook:init` scaffolds a marketplace repo with version-bump
   CI; `/handbook:join` connects the engine to it.
 - **Privacy**: secret redaction before any write; raw payload dumps are opt-in

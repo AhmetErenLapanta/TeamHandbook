@@ -171,6 +171,48 @@ describe("publishCandidate", () => {
         "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TeamHandbook%2Ffix-npm-test",
     });
     expect(result.prUrl).toBeUndefined();
+    // the reason the auto-PR was skipped is surfaced, not swallowed
+    expect(result.prError).toContain("command not found");
+  });
+
+  it("pins the ambient git identity onto the commit so the PR is not junk-authored", () => {
+    const calls: string[][] = [];
+    const recordingGit: GitRunner = (args) => {
+      calls.push(args);
+      if (args[0] === "config" && args[1] === "user.email") return "me@example.com\n";
+      if (args[0] === "config" && args[1] === "user.name") return "Me Dev\n";
+      return "";
+    };
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: "https://gitlab.acme.com/team/skills.git", marketplaceName: "t" },
+      recordingGit,
+      () => "https://example.com/mr/9",
+    );
+    expect(result.ok).toBe(true);
+    const commit = calls.find((c) => c.includes("commit"))!;
+    // identity is pinned with -c (the freshly cloned repo has none of its own) and
+    // precedes the commit subcommand
+    expect(commit.slice(0, 4)).toEqual(["-c", "user.name=Me Dev", "-c", "user.email=me@example.com"]);
+    expect(commit.indexOf("user.email=me@example.com")).toBeLessThan(commit.indexOf("commit"));
+  });
+
+  it("blocks the publish when git identity is unset rather than shipping a junk author", () => {
+    const unsetGit: GitRunner = (args) => {
+      // git config exits non-zero when a key is unset
+      if (args[0] === "config") throw new Error("exit status 1");
+      return "";
+    };
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: "https://gitlab.acme.com/team/skills.git", marketplaceName: "t" },
+      unsetGit,
+      () => "https://example.com/mr/9",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("user.name/user.email is not set");
   });
 
   it("publishes a candidate whose grounded-case.json is malformed, omitting the case from the body", () => {

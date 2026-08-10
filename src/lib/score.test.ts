@@ -6,6 +6,7 @@ import {
   buildScorePrompt,
   defaultScoreConfig,
   loadScoreConfig,
+  gateAutoEnabled,
   parseScoreResponse,
   scoreSignal,
 } from "./score.js";
@@ -221,5 +222,23 @@ describe("loadScoreConfig", () => {
   it("returns defaults on a corrupt config file", () => {
     writeFileSync(join(home, "config.json"), "not json");
     expect(loadScoreConfig(home)).toEqual(defaultScoreConfig);
+  });
+});
+
+describe("gateAutoEnabled", () => {
+  it("defaults to true and honors an explicit false", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "handbook-gateauto-"));
+    try {
+      expect(gateAutoEnabled(home)).toBe(true);
+      writeFileSync(join(home, "config.json"), JSON.stringify({ gate: { auto: false } }));
+      expect(gateAutoEnabled(home)).toBe(false);
+      writeFileSync(join(home, "config.json"), JSON.stringify({ gate: { auto: true } }));
+      expect(gateAutoEnabled(home)).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

@@ -17,7 +17,7 @@ import { handbookHome } from "./session-state.js";
 import type { Signal } from "./signals.js";
 import { appendSignals, ledgerFingerprintCounts, sanitizeSignalsForPersistence } from "./signals.js";
 import { signalSecret } from "./secrets.js";
-import { incrementRedactionBlocked } from "./counters.js";
+import { incrementRedactionBlocked, bumpCounter } from "./counters.js";
 import { runRuleSieves } from "./gate.js";
 import type { DropReason } from "./gate.js";
 import { loadScoreConfig, runClaudeCli, scoreSignal } from "./score.js";
@@ -127,10 +127,15 @@ function dedupSkillDirs(home: string, cwd: string, marketplacesRootDir?: string)
 
 export interface GateOutcomeLog {
   fingerprint: string;
-  outcome: "promote" | "reject" | "error";
+  outcome: "promote" | "reject" | "error" | "sieved";
   total?: number;
   rationale?: string;
   duplicateOf?: string;
+  reason?: string;
+  detail?: string;
+  error?: string;
+  // set when the signal exhausted its retries and was given up on this run
+  abandoned?: boolean;
 }
 
 export interface PipelineSummary {
@@ -139,15 +144,33 @@ export interface PipelineSummary {
   scored: number;
   rejected: number;
   errored: number;
+  deferred?: number;
   written: string[];
-  // Why each scored signal was promoted/rejected — without this a user whose
-  // candidates keep being rejected has no way to see the scores or reasons.
+  // Why each scored signal was promoted/rejected/sieved — without this a user
+  // whose candidates keep vanishing has no way to see the scores or reasons.
   outcomes?: GateOutcomeLog[];
   trigger?: "manual";
 }
 
 export function pipelineLogFile(home: string = handbookHome()): string {
   return join(home, "pipeline.log");
+}
+
+export function abandonedFile(home: string = handbookHome()): string {
+  return join(home, "abandoned.jsonl");
+}
+
+// A signal that failed the gate/distill MAX_GATE_ATTEMPTS times is given up on, but
+// never silently: keep the (already secret-sanitized) signal in abandoned.jsonl so
+// the work is recoverable, and count it so status/doctor can report the loss.
+function abandonSignal(signal: Signal, home: string): void {
+  try {
+    mkdirSync(home, { recursive: true });
+    appendFileSync(abandonedFile(home), JSON.stringify(signal) + "\n");
+  } catch {
+    // best-effort; the counter below is the durable signal that this happened
+  }
+  bumpCounter("gateAbandoned", home);
 }
 
 const LOG_ROTATE_BYTES = 512 * 1024;
@@ -167,6 +190,14 @@ function appendPipelineLog(summary: PipelineSummary, home: string, ts: string): 
   }
 }
 
+// A bad week can queue many recurring pairs; cap the gate calls per run so a
+// single detached run never fires a surprise stack of claude -p invocations
+// against the user's quota. The rest wait for the next run.
+const MAX_SCORED_PER_RUN = 6;
+// Re-try a signal whose gate/distill call failed (logged-out claude, timeout)
+// this many times across runs before giving up, instead of losing it.
+const MAX_GATE_ATTEMPTS = 3;
+
 export async function runPipeline(
   signals: Signal[],
   home: string = handbookHome(),
@@ -180,38 +211,61 @@ export async function runPipeline(
   const distillConfig = loadDistillConfig(home);
   const { passed, dropped } = runRuleSieves(signals, home);
   const counts = ledgerFingerprintCounts(home);
+  const toScore = passed.slice(0, MAX_SCORED_PER_RUN);
+  const deferred = passed.slice(MAX_SCORED_PER_RUN);
   const summary: PipelineSummary = {
     received: signals.length,
     sievedOut: dropped.length,
     scored: 0,
     rejected: 0,
     errored: 0,
+    deferred: deferred.length,
     written: [],
-    outcomes: [],
+    outcomes: dropped.map((d) => ({
+      fingerprint: d.signal.fingerprint,
+      outcome: "sieved" as const,
+      ...(d.reason ? { reason: d.reason } : {}),
+      ...(d.detail ? { detail: d.detail } : {}),
+    })),
   };
-  for (const signal of passed) {
+  const retry: Signal[] = [];
+  for (const signal of toScore) {
     const occurrences = counts.get(signal.fingerprint) ?? 0;
     const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
     const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
     summary.scored += 1;
-    summary.outcomes!.push({
+    const log: GateOutcomeLog = {
       fingerprint: signal.fingerprint,
       outcome: verdict.outcome === "promote" ? "promote" : verdict.outcome === "reject" ? "reject" : "error",
       ...(verdict.result ? { total: verdict.result.total } : {}),
       ...(verdict.result?.rationale ? { rationale: verdict.result.rationale.slice(0, 200) } : {}),
       ...(verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}),
-    });
+      ...(verdict.outcome === "error" && verdict.error ? { error: verdict.error.slice(0, 200) } : {}),
+    };
+    summary.outcomes!.push(log);
     if (verdict.outcome === "reject") {
       summary.rejected += 1;
       continue;
     }
     if (verdict.outcome === "error") {
       summary.errored += 1;
+      if (!queueRetry(signal, retry)) {
+        log.abandoned = true;
+        abandonSignal(signal, home);
+      }
       continue;
     }
     const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
     if (outcome.outcome !== "distilled" || !outcome.artifact) {
       summary.errored += 1;
+      // The gate promoted it but distillation failed; correct the log entry so the
+      // signal is recorded as errored (not a phantom "promote") with the reason.
+      log.outcome = "error";
+      if (outcome.error) log.error = outcome.error.slice(0, 200);
+      if (!queueRetry(signal, retry)) {
+        log.abandoned = true;
+        abandonSignal(signal, home);
+      }
       continue;
     }
     const dir = writeCandidate(outcome.artifact, home);
@@ -219,8 +273,21 @@ export async function runPipeline(
     writeCandidateMeta(dir, candidateMetaFromArtifact(slug, outcome.artifact, verdict, now()));
     summary.written.push(slug);
   }
+  // hold the deferred-but-clean signals and the retryable failures for next run
+  const requeue = [...deferred, ...retry];
+  if (requeue.length > 0) enqueuePendingSignals(requeue, home);
+  if (summary.errored > 0) bumpCounter("gateErrors", home);
   appendPipelineLog(summary, home, now());
   return summary;
+}
+
+function queueRetry(signal: Signal, retry: Signal[]): boolean {
+  const attempts = (signal.attempts ?? 0) + 1;
+  if (attempts < MAX_GATE_ATTEMPTS) {
+    retry.push({ ...signal, attempts });
+    return true;
+  }
+  return false;
 }
 
 export type ManualOutcome =
@@ -272,7 +339,8 @@ export async function runManualSignal(
     summary.sievedOut = 1;
     return finish({ stage: "sieved", reason: "secret", detail: secret });
   }
-  appendSignals([signal], home);
+  // Sieve BEFORE the ledger append: an oversized capture must not park its full
+  // content in signals.jsonl, and a retried capture must not inflate recurrence.
   const { passed, dropped } = runRuleSieves([signal], home);
   if (passed.length === 0) {
     summary.sievedOut = 1;
@@ -283,19 +351,24 @@ export async function runManualSignal(
       ...(decision.detail ? { detail: decision.detail } : {}),
     });
   }
+  appendSignals([signal], home);
   const occurrences = ledgerFingerprintCounts(home).get(signal.fingerprint) ?? 1;
   const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
   const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
   summary.scored = 1;
-  if (verdict.outcome === "error") {
+  // A scoring failure only aborts when the model itself is unreachable (distill
+  // would fail the same way). An unparseable score reply still lets the user's
+  // explicit capture proceed — with gate: null attached.
+  if (verdict.outcome === "error" && !(verdict.error ?? "").includes("unparseable")) {
     summary.errored = 1;
     return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
   }
   // The user explicitly asked for this skill, so it is ALWAYS distilled and
-  // queued; a low gate score travels with it as advice. The share decision —
+  // queued; the gate's dissent travels with it as advice. The share decision —
   // publish to the team or not — is the user's, at /handbook:review.
-  const belowThreshold = verdict.outcome === "reject";
-  if (belowThreshold) summary.rejected = 1;
+  const total = verdict.result?.total ?? null;
+  const belowThreshold = total !== null && total < scoreConfig.threshold;
+  const duplicateOf = verdict.result?.duplicateOf;
   const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
   if (outcome.outcome !== "distilled" || !outcome.artifact) {
     summary.errored = 1;
@@ -308,16 +381,16 @@ export async function runManualSignal(
   return finish({
     stage: "written",
     slug,
-    gateTotal: verdict.result?.total ?? null,
+    gateTotal: total,
     scope: outcome.artifact.scope,
     ...(belowThreshold
       ? {
           belowThreshold: true,
           threshold: scoreConfig.threshold,
           ...(verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}),
-          ...(verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}),
         }
       : {}),
+    ...(duplicateOf ? { duplicateOf } : {}),
   });
 }
 

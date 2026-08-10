@@ -24,3 +24,5 @@ the skeleton with version-bump CI, and records the repo URL in the local TeamHan
    repo or missing SSH access.
 
 Never create or push to a repository the user has not explicitly confirmed.
+
+Note: teammates who only want to USE the team's skills (not capture their own) do not need TeamHandbook at all — they run the two built-in `/plugin` commands the CLI prints, and the team plugin ships a tiny hook that shows them new-skill notices.

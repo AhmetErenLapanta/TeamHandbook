@@ -165,8 +165,9 @@ describe("queue", () => {
       writeCandidateDir(home, meta({ slug: "newer", createdAt: "2026-08-08T02:00:00Z" }));
       writeCandidateDir(home, meta({ slug: "older", createdAt: "2026-08-08T01:00:00Z" }));
       writeCandidateDir(home, meta({ slug: "done", status: "approved" }));
-      expect(listCandidates(home, "pending").map((m) => m.slug)).toEqual(["older", "newer"]);
-      expect(listCandidates(home).map((m) => m.slug)).toEqual(["done", "older", "newer"]);
+      expect(listCandidates(home, "pending").map((m) => m.slug)).toEqual(["newer", "older"]);
+      // newest first; "done" has the default createdAt shared with fix-npm-test
+      expect(new Set(listCandidates(home).map((m) => m.slug))).toEqual(new Set(["done", "older", "newer"]));
     });
 
     it("skips stray files and unreadable directories in the queue", () => {
@@ -222,11 +223,12 @@ describe("queue", () => {
 
   describe("formatCandidateList", () => {
     it("prints slug, scope, gate score, and description per candidate", () => {
-      const text = formatCandidateList([meta(), meta({ slug: "other", gate: null })]);
-      expect(text).toContain("Pending candidates (2):");
+      const text = formatCandidateList([meta(), meta({ slug: "other", gate: null })], Date.parse("2026-08-08T00:00:00Z"));
+      expect(text).toContain("Pending candidates (2), newest first:");
       expect(text).toContain("1. fix-npm-test  [team]  gate 8/10");
       expect(text).toContain("Use when npm test fails with a stale snapshot.");
       expect(text).toContain("2. other  [team]  gate n/a");
+      expect(text).toMatch(/ago/);
     });
 
     it("says so when there is nothing pending", () => {
@@ -260,5 +262,16 @@ describe("reject semantics", () => {
     } finally {
       rmSync(home2, { recursive: true, force: true });
     }
+  });
+});
+
+describe("formatCandidateList age + origin", () => {
+  it("shows relative age and origin project", () => {
+    const text = formatCandidateList(
+      [meta({ createdAt: "2026-08-08T00:00:00Z", cwd: "/Users/me/payments-service" })],
+      Date.parse("2026-08-08T03:00:00Z"),
+    );
+    expect(text).toContain("3h ago");
+    expect(text).toContain("from payments-service");
   });
 });

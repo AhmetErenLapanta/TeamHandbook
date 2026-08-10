@@ -11,6 +11,12 @@ export interface Counters {
   postToolUse: number;
   bashFailuresCaptured: number;
   pairsResolved: number;
+  // pipeline runs that hit a gate/distill error (e.g. logged-out claude) — drives
+  // the "N gate runs failed" failure-push at session start
+  gateErrors: number;
+  // captured pairs given up on after MAX_GATE_ATTEMPTS failed gate runs — surfaced
+  // in status/doctor so the loss is never silent (originals kept in abandoned.jsonl)
+  gateAbandoned: number;
 }
 
 const FIELDS: Array<keyof Counters> = [
@@ -18,6 +24,8 @@ const FIELDS: Array<keyof Counters> = [
   "postToolUse",
   "bashFailuresCaptured",
   "pairsResolved",
+  "gateErrors",
+  "gateAbandoned",
 ];
 
 export function countersFile(home: string = handbookHome()): string {
@@ -25,7 +33,14 @@ export function countersFile(home: string = handbookHome()): string {
 }
 
 export function readCounters(home: string = handbookHome()): Counters {
-  const base: Counters = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
+  const base: Counters = {
+    redactionBlocked: 0,
+    postToolUse: 0,
+    bashFailuresCaptured: 0,
+    pairsResolved: 0,
+    gateErrors: 0,
+    gateAbandoned: 0,
+  };
   try {
     const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;

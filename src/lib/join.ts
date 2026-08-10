@@ -40,7 +40,7 @@ export function joinTeamRepo(
   if (existing && existing.repoUrl !== url) {
     return {
       ok: false,
-      error: `already joined ${existing.repoUrl}; edit config.json to switch teams`,
+      error: `already joined ${existing.repoUrl}; run /handbook:leave (or edit ${join(home, "config.json")}) to switch teams`,
     };
   }
   const workdir = mkdtempSync(join(tmpdir(), "handbook-join-"));
@@ -83,6 +83,6 @@ export function formatJoinSuccess(result: JoinResult): string {
     "To finish, connect Claude Code to the team marketplace (built-in commands):",
     "",
     `  /plugin marketplace add ${result.url}`,
-    `  /plugin install ${result.name}`,
+    `  /plugin install ${result.name}@${result.name}`,
   ].join("\n");
 }

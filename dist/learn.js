@@ -209,6 +209,7 @@ function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
 import { readFileSync } from "node:fs";
@@ -349,6 +350,15 @@ function parseScoreResponse(text, threshold) {
     ...isDuplicate ? { duplicateOf: duplicateOf.trim() } : {}
   };
 }
+function claudeErrorReason(err) {
+  const e = err;
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
+  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
+  return firstLine.slice(0, 200);
+}
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
@@ -367,7 +377,7 @@ async function scoreSignal(signal, occurrences, config = defaultScoreConfig, run
       config.timeoutMs
     );
   } catch (err) {
-    return { signal, outcome: "error", error: `claude invocation failed: ${String(err)}` };
+    return { signal, outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}` };
   }
   const result = parseScoreResponse(response, config.threshold);
   if (!result) return { signal, outcome: "error", error: "unparseable score response" };
@@ -492,6 +502,7 @@ function loadDistillConfig(home = handbookHome()) {
 function normalizeRemoteUrl(raw) {
   let s = raw.trim();
   if (!s) return null;
+  if (/[\x00-\x1f\x7f]/.test(s)) return null;
   const hadProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
   s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
   s = s.replace(/^[^@/]+@/, "");
@@ -593,21 +604,29 @@ function parseDistillResponse(text) {
   };
 }
 function yamlQuote(value) {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+  return `"${escaped}"`;
 }
-function assembleSkillMd(draft, scope) {
+function assembleSkillMd(draft, scope, fromTask = false) {
+  const origin = fromTask ? "completed task" : "error-to-fix session";
+  const scoped = scope !== "team";
+  const guard = scoped ? ` Applies ONLY in the ${scope} repository \u2014 do not use it elsewhere.` : "";
+  const description = draft.description + guard;
+  const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project \u2014 ignore this skill in any other repo.
+
+${draft.body}` : draft.body;
   return [
     "---",
     `name: ${draft.slug}`,
-    `description: ${yamlQuote(draft.description)}`,
+    `description: ${yamlQuote(description.slice(0, 1024))}`,
     `scope: ${yamlQuote(scope)}`,
     "---",
     "",
-    draft.body,
+    body,
     "",
     "## Grounded case",
     "",
-    "This skill was distilled from a real error-to-fix session. The originating case and its",
+    `This skill was distilled from a real ${origin}. The originating case and its`,
     "expected behavior live in [grounded-case.json](grounded-case.json) and serve as the",
     "regression gate whenever this skill is edited or challenged.",
     ""
@@ -643,7 +662,7 @@ async function distillVerdict(verdict, occurrences, config = defaultDistillConfi
       config.timeoutMs
     );
   } catch (err) {
-    return { signal, outcome: "error", error: `claude invocation failed: ${String(err)}` };
+    return { signal, outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}` };
   }
   const draft = parseDistillResponse(response);
   if (!draft) return { signal, outcome: "error", error: "unparseable distill response" };
@@ -658,7 +677,7 @@ async function distillVerdict(verdict, occurrences, config = defaultDistillConfi
     artifact: {
       slug: draft.slug,
       scope,
-      skillMd: assembleSkillMd(draft, scope),
+      skillMd: assembleSkillMd(draft, scope, !!signal.task),
       groundedCase: buildGroundedCase(signal, verdict, draft.expect)
     }
   };
@@ -690,6 +709,17 @@ function loadTeamConfig(home = handbookHome()) {
   }
   return null;
 }
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
 function marketplacesRoot() {
   return join5(homedir2(), ".claude", "plugins", "marketplaces");
 }
@@ -709,13 +739,22 @@ var FIELDS = [
   "redactionBlocked",
   "postToolUse",
   "bashFailuresCaptured",
-  "pairsResolved"
+  "pairsResolved",
+  "gateErrors",
+  "gateAbandoned"
 ];
 function countersFile(home = handbookHome()) {
   return join6(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
-  const base = { redactionBlocked: 0, postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 };
+  const base = {
+    redactionBlocked: 0,
+    postToolUse: 0,
+    bashFailuresCaptured: 0,
+    pairsResolved: 0,
+    gateErrors: 0,
+    gateAbandoned: 0
+  };
   try {
     const parsed = JSON.parse(readFileSync4(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
@@ -789,13 +828,13 @@ function appendSignals(signals, home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
 import { basename, join as join8 } from "node:path";
 function candidateMetaFile(dir) {
   return join8(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
-  writeFileSync4(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+  writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
 }
 function candidateMetaFromArtifact(slug, artifact, verdict, createdAt) {
   return {
@@ -843,6 +882,7 @@ function sieveSignal(signal, occurrences, config = defaultGateConfig, muted = /*
   if (signal.trigger !== "manual") {
     if (muted.has(signal.fingerprint)) return drop(signal, "muted");
     if (signal.edits.length === 0) return drop(signal, "no-file-change");
+    if (!signal.resolvedCommand) return drop(signal, "never-passed");
     if (occurrences < config.repeatThreshold) {
       return drop(signal, "below-repeat-threshold", `${occurrences}/${config.repeatThreshold}`);
     }
@@ -918,7 +958,6 @@ async function runManualSignal(signal, home = handbookHome(), deps = {}, now = (
     summary.sievedOut = 1;
     return finish({ stage: "sieved", reason: "secret", detail: secret });
   }
-  appendSignals([signal], home);
   const { passed, dropped } = runRuleSieves([signal], home);
   if (passed.length === 0) {
     summary.sievedOut = 1;
@@ -929,16 +968,18 @@ async function runManualSignal(signal, home = handbookHome(), deps = {}, now = (
       ...decision.detail ? { detail: decision.detail } : {}
     });
   }
+  appendSignals([signal], home);
   const occurrences = ledgerFingerprintCounts(home).get(signal.fingerprint) ?? 1;
   const existing = listSkills(dedupSkillDirs(home, signal.cwd, deps.marketplacesRoot));
   const verdict = await scoreSignal(signal, occurrences, scoreConfig, runner, existing);
   summary.scored = 1;
-  if (verdict.outcome === "error") {
+  if (verdict.outcome === "error" && !(verdict.error ?? "").includes("unparseable")) {
     summary.errored = 1;
     return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
   }
-  const belowThreshold = verdict.outcome === "reject";
-  if (belowThreshold) summary.rejected = 1;
+  const total = verdict.result?.total ?? null;
+  const belowThreshold = total !== null && total < scoreConfig.threshold;
+  const duplicateOf = verdict.result?.duplicateOf;
   const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
   if (outcome.outcome !== "distilled" || !outcome.artifact) {
     summary.errored = 1;
@@ -951,14 +992,14 @@ async function runManualSignal(signal, home = handbookHome(), deps = {}, now = (
   return finish({
     stage: "written",
     slug,
-    gateTotal: verdict.result?.total ?? null,
+    gateTotal: total,
     scope: outcome.artifact.scope,
     ...belowThreshold ? {
       belowThreshold: true,
       threshold: scoreConfig.threshold,
-      ...verdict.result?.rationale ? { rationale: verdict.result.rationale } : {},
-      ...verdict.result?.duplicateOf ? { duplicateOf: verdict.result.duplicateOf } : {}
-    } : {}
+      ...verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}
+    } : {},
+    ...duplicateOf ? { duplicateOf } : {}
   });
 }
 
@@ -968,7 +1009,7 @@ function describeSieve(reason, detail) {
     return "Dropped: the case contains secret-like content; nothing was stored.";
   }
   if (reason === "oversized") {
-    return `Dropped by rule sieve: the ${detail ?? "case"} is too large to distill.`;
+    return `Dropped by rule sieve: too large to distill (${detail ?? "case"}).`;
   }
   return `Dropped by rule sieve (${reason}${detail ? `: ${detail}` : ""}).`;
 }
@@ -985,12 +1026,23 @@ async function main() {
       console.log(describeSieve(outcome.reason, outcome.detail));
       return 0;
     case "error":
-      console.error(`error: ${outcome.message}`);
+      console.error(
+        `error: ${outcome.message}${/doctor/.test(outcome.message) ? "" : " \u2014 run /handbook:doctor to diagnose"}`
+      );
       return 1;
-    case "written":
+    case "written": {
+      const advice = [];
       if (outcome.belowThreshold) {
+        advice.push(
+          `scored it ${outcome.gateTotal ?? "?"}/10, below the ${outcome.threshold}/10 threshold` + (outcome.rationale ? ` (${outcome.rationale})` : "")
+        );
+      }
+      if (outcome.duplicateOf) {
+        advice.push(`thinks it duplicates existing skill "${outcome.duplicateOf}"`);
+      }
+      if (advice.length > 0) {
         console.log(
-          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}, gate ${outcome.gateTotal ?? "?"}/10 \u2014 below the ${outcome.threshold}/10 threshold).` + (outcome.duplicateOf ? ` The gate thinks it duplicates "${outcome.duplicateOf}".` : outcome.rationale ? ` The gate's concern: ${outcome.rationale}` : "") + ` It is queued anyway because you asked for it \u2014 the publish decision is yours in /handbook:review.`
+          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}). The gate ${advice.join(" and ")}. It is queued anyway because you asked for it \u2014 the publish decision is yours in /handbook:review.`
         );
       } else {
         console.log(
@@ -998,6 +1050,7 @@ async function main() {
         );
       }
       return 0;
+    }
   }
 }
 main().then(

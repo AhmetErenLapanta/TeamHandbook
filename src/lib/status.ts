@@ -1,13 +1,36 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
 import { readCounters } from "./counters.js";
 import { listCandidates } from "./queue.js";
+import { pendingBatchCount } from "./notify.js";
 import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadNotifyConfig } from "./notify.js";
 import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
+
+/**
+ * The installed plugin's version, for support/bug reports. The bundle runs from
+ * <plugin-root>/dist and the source tests from <root>/src/lib, so walk up a
+ * couple of levels looking for .claude-plugin/plugin.json.
+ */
+export function pluginVersion(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const up of ["..", "../.."]) {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(join(here, up, ".claude-plugin", "plugin.json"), "utf8"),
+      );
+      if (typeof parsed?.version === "string") return parsed.version;
+    } catch {
+      // keep walking
+    }
+  }
+  return "unknown";
+}
 
 export interface LedgerStats {
   total: number;
@@ -63,13 +86,52 @@ export function lastPipelineRun(
   return null;
 }
 
+export interface PipelineAggregate {
+  runs: number;
+  written: number;
+  rejected: number;
+  errored: number;
+  sievedOut: number;
+}
+
+export function pipelineAggregate(home: string = handbookHome()): PipelineAggregate {
+  const agg: PipelineAggregate = { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 };
+  let raw: string;
+  try {
+    raw = readFileSync(pipelineLogFile(home), "utf8");
+  } catch {
+    return agg;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const p = JSON.parse(line);
+      agg.runs += 1;
+      agg.written += Array.isArray(p.written) ? p.written.length : 0;
+      agg.rejected += Number(p.rejected) || 0;
+      agg.errored += Number(p.errored) || 0;
+      agg.sievedOut += Number(p.sievedOut) || 0;
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return agg;
+}
+
 export interface StatusReport {
   home: string;
+  version: string;
   ledger: LedgerStats;
   queue: { pending: number; approved: number; rejected: number };
   redactionBlocked: number;
+  // cumulative value scoreboard — the user's ready-made "was it worth it" line
+  sinceInstall: { approved: number; teamShared: number; pairsCaptured: number; secretsBlocked: number };
   detector: { postToolUse: number; bashFailuresCaptured: number; pairsResolved: number };
   lastRun: (PipelineSummary & { ts: string }) | null;
+  pipeline: PipelineAggregate;
+  scoringNow: number;
+  // captured pairs given up on after repeated gate failures — never silent
+  abandoned: number;
   config: {
     gateModel: string;
     gateThreshold: number;
@@ -84,8 +146,13 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   const score = loadScoreConfig(home);
   const distill = loadDistillConfig(home);
   const counters = readCounters(home);
+  const approved = candidates.filter((c) => c.status === "approved");
+  // delivery mode is persisted at approval time — inferring it from the
+  // deliveredTo string misclassifies local-path team repos and Windows paths
+  const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
   return {
     home,
+    version: pluginVersion(),
     ledger: ledgerStats(home),
     queue: {
       pending: count("pending"),
@@ -93,12 +160,21 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
       rejected: count("rejected"),
     },
     redactionBlocked: counters.redactionBlocked,
+    sinceInstall: {
+      approved: approved.length,
+      teamShared,
+      pairsCaptured: counters.pairsResolved,
+      secretsBlocked: counters.redactionBlocked,
+    },
     detector: {
       postToolUse: counters.postToolUse,
       bashFailuresCaptured: counters.bashFailuresCaptured,
       pairsResolved: counters.pairsResolved,
     },
     lastRun: lastPipelineRun(home),
+    pipeline: pipelineAggregate(home),
+    scoringNow: pendingBatchCount(home),
+    abandoned: counters.gateAbandoned,
     config: {
       gateModel: score.model,
       gateThreshold: score.threshold,
@@ -118,24 +194,43 @@ function formatLastRejection(lastRun: (PipelineSummary & { ts: string }) | null)
   return [`Last rejection:  ${score} — ${why}`];
 }
 
+function formatLastError(lastRun: (PipelineSummary & { ts: string }) | null): string[] {
+  const errored = lastRun?.outcomes?.filter((o) => o.outcome === "error").at(-1);
+  if (!errored) return [];
+  return [`Last error:      ${errored.error ?? "(no reason recorded)"} — run /handbook:doctor`];
+}
+
 export function formatStatus(report: StatusReport): string {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
-    `TeamHandbook status  (${report.home})`,
+    `TeamHandbook status  (v${report.version}, ${report.home})`,
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
+    `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error→fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun
       ? `Last gate run:   ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} — ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written`
       : "Last gate run:   never",
     ...formatLastRejection(lastRun),
+    ...formatLastError(lastRun),
+    `Gate pipeline:   ${report.pipeline.runs} run(s) in log — ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} captured pair(s) given up after repeated gate failures (kept in abandoned.jsonl) — run /handbook:doctor`] : []),
+    ...(report.scoringNow > 0 ? [`Scoring now:     ${report.scoringNow} captured pair(s) queued for the background gate`] : []),
     "",
     `Config:          gate model "${config.gateModel}" (threshold ${config.gateThreshold}/10), distill model ${config.distillModel}, session-start notice ${config.sessionStartNotice ? "on" : "off"}`,
   ];
   if (queue.pending > 0) {
     lines.push("", `Run /handbook:review to review the ${queue.pending} pending candidate(s).`);
+  } else if (report.sinceInstall.approved === 0) {
+    // Nothing approved yet and nothing waiting: keep the getting-started guidance
+    // reachable even if the one-time welcome scrolled past unseen.
+    lines.push(
+      "",
+      "No skills yet — normal early on: automatic capture waits for an error class to recur. " +
+        "Run /handbook:learn after a task to make one now, or /handbook:doctor to confirm the gate can reach claude.",
+    );
   }
   return lines.join("\n");
 }

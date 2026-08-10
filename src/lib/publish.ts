@@ -102,21 +102,31 @@ function openPr(
   body: string,
   repoDir: string,
   forge: ForgeRunner,
-): string | null {
+): { url: string | null; error?: string } {
   const host = hostFromUrl(repoUrl);
   try {
-    if (host && host.includes("github")) {
-      return extractUrl(forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir));
+    const out =
+      host && host.includes("github")
+        ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir)
+        : forge(
+            "glab",
+            ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+            repoDir,
+          );
+    return { url: extractUrl(out) };
+  } catch (err) {
+    // The branch is already pushed, so this is a soft failure (fall back to a manual
+    // link) — but surface WHY, so the user isn't left guessing that gh/glab just
+    // needs installing or `gh auth login`.
+    const e = err as { code?: string; stderr?: string; message?: string };
+    const tool = host && host.includes("github") ? "gh" : "glab";
+    let reason: string;
+    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
+    else {
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      reason = (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
     }
-    return extractUrl(
-      forge(
-        "glab",
-        ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
-        repoDir,
-      ),
-    );
-  } catch {
-    return null;
+    return { url: null, error: reason };
   }
 }
 
@@ -127,6 +137,8 @@ export interface PublishOutcome {
   prUrl?: string;
   manualUrl?: string;
   error?: string;
+  // why the forge CLI couldn't auto-open the PR (branch is pushed; link is manual)
+  prError?: string;
 }
 
 export function publishCandidate(
@@ -149,6 +161,35 @@ export function publishCandidate(
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
+  // Preflight the git identity. The PR commit runs inside the freshly cloned team
+  // repo, which inherits neither the user's per-repo local identity nor (if unset)
+  // any global one, so validating the current repo's identity is not enough — we
+  // capture the ambient name+email here and pin them onto the commit with -c. Git
+  // needs BOTH, so an unset name is as fatal as an unset email. `git config` exits
+  // non-zero when a key is unset (→ throw); a runner that doesn't capture stdout
+  // returns undefined, in which case we can't tell and proceed without pinning.
+  const readIdentity = (key: string): string | void => {
+    try {
+      return git(["config", key], process.cwd());
+    } catch {
+      return "";
+    }
+  };
+  const email = readIdentity("user.email");
+  const name = readIdentity("user.name");
+  const unset = (v: string | void): boolean => typeof v === "string" && v.trim() === "";
+  if (unset(email) || unset(name)) {
+    return {
+      ok: false,
+      error:
+        "git user.name/user.email is not set — the PR would have a junk author. Run " +
+        "`git config --global user.name \"Your Name\"` and `git config --global user.email you@example.com`, then approve again.",
+    };
+  }
+  const identityArgs =
+    typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== ""
+      ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`]
+      : [];
   const workdir = mkdtempSync(join(tmpdir(), "handbook-publish-"));
   const repoDir = join(workdir, "repo");
   try {
@@ -197,19 +238,20 @@ export function publishCandidate(
         );
       }
       git(["add", "-A"], repoDir);
-      git(["commit", "-m", title], repoDir);
+      git([...identityArgs, "commit", "-m", title], repoDir);
       git(["push", "-u", "origin", branch], repoDir);
     } catch (err) {
       return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir));
-    const prUrl = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (prUrl) return { ok: true, branch, skillDir, prUrl };
+    const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
+    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url };
     return {
       ok: true,
       branch,
       skillDir,
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined,
+      ...(pr.error ? { prError: pr.error } : {}),
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });
