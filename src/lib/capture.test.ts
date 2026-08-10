@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureBashFailure, captureBashSuccess, captureFileEdit, recordActivity } from "./capture.js";
+import {
+  captureBashFailure,
+  captureBashSuccess,
+  captureCorrection,
+  captureFileEdit,
+  recordActivity,
+} from "./capture.js";
 import { loadSessionState } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import type { HookInput } from "./hook-io.js";
@@ -231,5 +237,50 @@ describe("secret redaction at the session boundary", () => {
   it("does not record activity for a secret-bearing command (recordActivity guard)", () => {
     expect(recordActivity(bashSuccess({ tool_input: { command: `deploy ${SECRET}` } }), home)).toBe(false);
     sessionHasNoSecret();
+  });
+});
+
+describe("harvest evidence: transcriptPath + meaningfulToolCalls", () => {
+  it("records the transcript path from any capture event", () => {
+    captureBashFailure(bashFailure({ transcript_path: "/tmp/t.jsonl" }), home);
+    expect(loadSessionState("s1", home).transcriptPath).toBe("/tmp/t.jsonl");
+  });
+
+  it("counts meaningful tool calls across repeats (not just novel activity)", () => {
+    const build = bashSuccess({
+      tool_input: { command: "cargo build" },
+      transcript_path: "/tmp/t.jsonl",
+    });
+    recordActivity(build, home);
+    recordActivity(build, home); // same family again — still a meaningful call
+    recordActivity(bashSuccess({ tool_input: { command: "ls" } }), home); // generic → not counted
+    const state = loadSessionState("s1", home);
+    expect(state.meaningfulToolCalls).toBe(2);
+    expect(state.transcriptPath).toBe("/tmp/t.jsonl");
+    expect(state.activity?.families).toEqual(["cargo build"]);
+  });
+});
+
+describe("captureCorrection (deterministic teaching pre-flagging)", () => {
+  function promptInput(prompt: string): HookInput {
+    return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt, transcript_path: "/tmp/t.jsonl" };
+  }
+
+  it("records a teaching-shaped prompt into session state with its transcript path", () => {
+    expect(captureCorrection(promptInput("we never use Lombok in this repo"), home)).toBe(true);
+    const state = loadSessionState("s1", home);
+    expect(state.corrections).toEqual([
+      expect.objectContaining({ kind: "convention", text: "we never use Lombok in this repo" }),
+    ]);
+    expect(state.transcriptPath).toBe("/tmp/t.jsonl");
+  });
+
+  it("ignores ordinary prompts, missing prompts, and secret-bearing teachings", () => {
+    expect(captureCorrection(promptInput("add a test for the parser"), home)).toBe(false);
+    expect(captureCorrection({ session_id: "s1" }, home)).toBe(false);
+    expect(
+      captureCorrection(promptInput("always use Bearer sk-proj-abcdef1234567890ABCDEFGH"), home),
+    ).toBe(false);
+    expect(loadSessionState("s1", home).corrections).toBeUndefined();
   });
 });

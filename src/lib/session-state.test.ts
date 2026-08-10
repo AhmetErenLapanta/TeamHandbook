@@ -10,6 +10,7 @@ import {
   recordFailure,
   resolveOpenErrors,
   saveSessionState,
+  sessionHasSubstance,
 } from "./session-state.js";
 
 let home: string;
@@ -154,5 +155,42 @@ describe("attachEditToOpenErrors — most-recent-N ring buffer", () => {
     expect(edits).toContain("/repo/the-real-fix.ts");
     expect(edits.length).toBeLessThanOrEqual(20);
     expect(edits).not.toContain("/repo/flail-0.ts");
+  });
+});
+
+describe("harvest evidence fields + substance check", () => {
+  it("round-trips transcriptPath, meaningfulToolCalls, and harvestedAt", () => {
+    const state = emptySessionState("s1");
+    state.transcriptPath = "/tmp/session.jsonl";
+    state.meaningfulToolCalls = 7;
+    state.harvestedAt = "2026-08-10T10:00:00Z";
+    saveSessionState(state, home);
+    expect(loadSessionState("s1", home)).toMatchObject({
+      transcriptPath: "/tmp/session.jsonl",
+      meaningfulToolCalls: 7,
+      harvestedAt: "2026-08-10T10:00:00Z",
+    });
+  });
+
+  it("classifies substance: pair OR full activity shape OR enough tool calls", () => {
+    expect(sessionHasSubstance(emptySessionState("s1"))).toBe(false);
+
+    const withPair = recordFailure(emptySessionState("s1"), failure);
+    resolveOpenErrors(withPair, "npm test", "npm test", "/repo");
+    expect(sessionHasSubstance(withPair)).toBe(true);
+
+    const withActivity = emptySessionState("s2");
+    withActivity.activity = { families: ["npm test"], exts: [".ts"] };
+    expect(sessionHasSubstance(withActivity)).toBe(true);
+
+    const familiesOnly = emptySessionState("s3");
+    familiesOnly.activity = { families: ["npm test"], exts: [] };
+    expect(sessionHasSubstance(familiesOnly)).toBe(false);
+
+    const busy = emptySessionState("s4");
+    busy.meaningfulToolCalls = 5;
+    expect(sessionHasSubstance(busy)).toBe(true);
+    busy.meaningfulToolCalls = 4;
+    expect(sessionHasSubstance(busy)).toBe(false);
   });
 });

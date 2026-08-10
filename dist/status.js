@@ -171,19 +171,6 @@ function loadScoreConfig(home = handbookHome()) {
   };
 }
 
-// src/lib/distill.ts
-var defaultDistillConfig = {
-  model: "",
-  timeoutMs: 12e4
-};
-function loadDistillConfig(home = handbookHome()) {
-  const distill = readConfigFile(home).distill;
-  return {
-    model: typeof distill?.model === "string" ? distill.model : defaultDistillConfig.model,
-    timeoutMs: typeof distill?.timeoutMs === "number" && distill.timeoutMs > 0 ? distill.timeoutMs : defaultDistillConfig.timeoutMs
-  };
-}
-
 // src/lib/init.ts
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -205,7 +192,8 @@ function loadNotifyConfig(home = handbookHome()) {
     heartbeat: notify?.heartbeat !== false
   };
 }
-function pendingBatchCount(home = handbookHome()) {
+var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
+function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
     entries = readdirSync3(join7(home, "pending"));
@@ -217,11 +205,33 @@ function pendingBatchCount(home = handbookHome()) {
     if (!entry.endsWith(".json")) continue;
     try {
       const parsed = JSON.parse(readFileSync4(join7(home, "pending", entry), "utf8"));
-      if (Array.isArray(parsed)) total += parsed.length;
+      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
   }
   return total;
+}
+
+// src/lib/harvest.ts
+var defaultHarvestConfig = {
+  enabled: true,
+  model: "haiku",
+  maxPerSession: 3,
+  minScore: 4,
+  transcriptCharCap: 4e4,
+  timeoutMs: 12e4
+};
+function loadHarvestConfig(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
+  return {
+    enabled: harvest?.enabled !== false,
+    model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
+    maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
+    minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
+    transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
+    timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
+  };
 }
 
 // src/lib/pipeline.ts
@@ -314,7 +324,7 @@ function gatherStatus(home = handbookHome()) {
   const candidates = listCandidates(home);
   const count = (status) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
-  const distill = loadDistillConfig(home);
+  const harvest = loadHarvestConfig(home);
   const counters = readCounters(home);
   const approved = candidates.filter((c) => c.status === "approved");
   const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
@@ -341,12 +351,14 @@ function gatherStatus(home = handbookHome()) {
     },
     lastRun: lastPipelineRun(home),
     pipeline: pipelineAggregate(home),
-    scoringNow: pendingBatchCount(home),
+    scoringNow: pendingHarvestCount(home),
     abandoned: counters.gateAbandoned,
     config: {
-      gateModel: score.model,
-      gateThreshold: score.threshold,
-      distillModel: distill.model || "(default)",
+      harvestModel: harvest.model,
+      harvestEnabled: harvest.enabled,
+      harvestFloor: harvest.minScore,
+      harvestMax: harvest.maxPerSession,
+      learnThreshold: score.threshold,
       sessionStartNotice: loadNotifyConfig(home).sessionStart
     }
   };
@@ -373,21 +385,21 @@ function formatStatus(report) {
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error\u2192fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
-    lastRun ? `Last gate run:   ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} \u2014 ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last gate run:   never",
+    lastRun ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} \u2014 ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last harvest:    never",
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
-    `Gate pipeline:   ${report.pipeline.runs} run(s) in log \u2014 ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
-    ...report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} captured pair(s) given up after repeated gate failures (kept in abandoned.jsonl) \u2014 run /handbook:doctor`] : [],
-    ...report.scoringNow > 0 ? [`Scoring now:     ${report.scoringNow} captured pair(s) queued for the background gate`] : [],
+    `Harvest runs:    ${report.pipeline.runs} run(s) in log \u2014 ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    ...report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) \u2014 run /handbook:doctor`] : [],
+    ...report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : [],
     "",
-    `Config:          gate model "${config.gateModel}" (threshold ${config.gateThreshold}/10), distill model ${config.distillModel}, session-start notice ${config.sessionStartNotice ? "on" : "off"}`
+    config.harvestEnabled ? `Config:          harvest model "${config.harvestModel}" (floor ${config.harvestFloor}/10, max ${config.harvestMax}/session), learn threshold ${config.learnThreshold}/10, session-start notice ${config.sessionStartNotice ? "on" : "off"}` : `Config:          harvest DISABLED (sessions are never read or sent); learn threshold ${config.learnThreshold}/10, session-start notice ${config.sessionStartNotice ? "on" : "off"}`
   ];
   if (queue.pending > 0) {
     lines.push("", `Run /handbook:review to review the ${queue.pending} pending candidate(s).`);
   } else if (report.sinceInstall.approved === 0) {
     lines.push(
       "",
-      "No skills yet \u2014 normal early on: automatic capture waits for an error class to recur. Run /handbook:learn after a task to make one now, or /handbook:doctor to confirm the gate can reach claude."
+      "No skills yet \u2014 normal early on: TeamHandbook harvests a session after it ends, so finish a real session and check back. /handbook:learn captures something right now; /handbook:doctor confirms TeamHandbook can reach your claude CLI."
     );
   }
   return lines.join("\n");

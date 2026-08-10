@@ -1,7 +1,7 @@
 {
   "name": "teamhandbook",
-  "version": "0.1.0",
-  "description": "Judgment layer for session-generated Claude Code skills: capture error→fix moments and task procedures, gate them, distill merge-ready SKILL.md artifacts.",
+  "version": "0.2.0",
+  "description": "Harvests durable lessons from your real coding sessions — the corrections you gave, the procedures you completed — and offers each one as a personal, project, or team skill.",
   "type": "module",
   "private": true,
   "license": "Apache-2.0",

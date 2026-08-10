@@ -1,4 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadTeamConfig, runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
@@ -14,6 +15,14 @@ export function soloSkillsDir(projectCwd: string): string {
   return join(projectCwd, ".claude", "skills");
 }
 
+/** User-level skills: Claude Code loads these in every project. The "keep it for
+ * yourself" home for general lessons. */
+export function personalSkillsDir(): string {
+  return join(homedir(), ".claude", "skills");
+}
+
+export type DeliveryTarget = "personal" | "project" | "team";
+
 export function resolveDeliveryDir(
   meta: CandidateMeta,
   fallbackCwd: string,
@@ -25,7 +34,7 @@ export function resolveDeliveryDir(
 
 export interface DeliverResult {
   ok: boolean;
-  mode?: "solo" | "team";
+  mode?: "solo" | "personal" | "team";
   meta?: CandidateMeta;
   deliveredTo?: string;
   branch?: string;
@@ -49,6 +58,8 @@ export function approveAndDeliver(
   team: TeamConfig | null = loadTeamConfig(home),
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  target?: DeliveryTarget,
+  personalDir: string = personalSkillsDir(),
 ): DeliverResult {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
   const dir = join(candidatesDir(home), slug);
@@ -57,8 +68,52 @@ export function approveAndDeliver(
   if (meta.status !== "pending") {
     return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
   }
-  if (team) return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+  // The per-skill decision: an explicit --to wins, then the harvest's suggestion,
+  // then the legacy default (team when configured, else the project).
+  const resolved: DeliveryTarget = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  if (resolved === "team") {
+    if (!team) {
+      return {
+        ok: false,
+        meta,
+        error: "no team configured — run /handbook:init or /handbook:join first, or approve with --to personal",
+      };
+    }
+    return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+  }
+  if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir);
   return deliverSolo(dir, meta, fallbackCwd, decidedAt);
+}
+
+/** Install into the user-level skills dir: available in every project, only for
+ * this user. No origin-project logic — personal skills follow the person. */
+export function deliverPersonal(
+  dir: string,
+  meta: CandidateMeta,
+  decidedAt: string,
+  skillsDir: string = personalSkillsDir(),
+): DeliverResult {
+  const slug = uniqueSlug(meta.slug, (s) => existsSync(join(skillsDir, s)));
+  const target = join(skillsDir, slug);
+  try {
+    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
+    if (existsSync(join(dir, "grounded-case.json"))) {
+      copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));
+    }
+  } catch (err) {
+    return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
+  }
+  const updated: CandidateMeta = {
+    ...meta,
+    status: "approved",
+    decidedAt,
+    deliveredTo: target,
+    deliveredMode: "personal",
+  };
+  writeCandidateMeta(dir, updated);
+  return { ok: true, mode: "personal", meta: updated, deliveredTo: target };
 }
 
 function deliverToTeam(

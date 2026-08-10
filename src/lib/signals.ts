@@ -149,19 +149,6 @@ export function workRecurrences(home: string = handbookHome()): WorkRecurrence[]
   return [...byFp.values()];
 }
 
-export function promoteRecurrentSignals(signals: Signal[], priorFingerprints: Set<string>): Signal[] {
-  const seen = new Set(priorFingerprints);
-  return signals.map((signal) => {
-    const recurrent = seen.has(signal.fingerprint);
-    seen.add(signal.fingerprint);
-    if (signal.kind !== "weak" || !recurrent) return signal;
-    // work-shape records are recurrence COUNTERS, not skill material: recurring
-    // ones trigger the session-start nudge, never an automatic candidate
-    if (signal.work) return signal;
-    return { ...signal, kind: "candidate", promotedBy: "recurrence" };
-  });
-}
-
 export function appendSignals(signals: Signal[], home: string = handbookHome()): void {
   if (signals.length === 0) return;
   const { clean, redacted } = sanitizeSignalsForPersistence(signals);
@@ -217,10 +204,7 @@ export function flushResolvedPairs(
 ): Signal[] {
   const state = loadSessionState(sessionId, home);
   if (state.resolvedPairs.length === 0) return [];
-  const signals = promoteRecurrentSignals(
-    state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
-    ledgerFingerprints(home),
-  );
+  const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
   appendSignals(signals, home);
   state.resolvedPairs = [];
   saveSessionState(state, home);
@@ -268,16 +252,59 @@ export function flushSessionEnd(
   fileExists: (path: string) => boolean = existsSync,
 ): Signal[] {
   const state = loadSessionState(sessionId, home);
-  const signals = promoteRecurrentSignals(
-    [
-      ...state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
-      ...state.openErrors.map((e) => signalFromOpenError(e, sessionId, ts)),
-    ],
-    ledgerFingerprints(home),
-  );
+  const signals = [
+    ...state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
+    ...state.openErrors.map((e) => signalFromOpenError(e, sessionId, ts)),
+  ];
   const work = workRecordFromState(state, sessionId, ts);
   if (work) signals.push(work);
   appendSignals(signals, home);
   deleteSessionState(sessionId, home);
   return signals;
+}
+
+/**
+ * Evidence for the harvest: this session's resolved pairs as recorded in the
+ * ledger. Stop flushes pairs turn by turn, so at session end the ledger — not the
+ * session file — holds the full set.
+ */
+export function ledgerPairsForSession(
+  sessionId: string,
+  home: string = handbookHome(),
+): Array<{
+  fingerprint: string;
+  family: string;
+  command: string;
+  error: string;
+  resolvedCommand: string;
+  edits: string[];
+  cwd?: string;
+}> {
+  let raw: string;
+  try {
+    raw = readFileSync(signalsFile(home), "utf8");
+  } catch {
+    return [];
+  }
+  const pairs = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed: Signal;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed.sessionId !== sessionId || !parsed.resolvedCommand || parsed.secretRedacted) continue;
+    pairs.push({
+      fingerprint: parsed.fingerprint,
+      family: parsed.family,
+      command: parsed.command,
+      error: parsed.error,
+      resolvedCommand: parsed.resolvedCommand,
+      edits: parsed.edits ?? [],
+      ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
+    });
+  }
+  return pairs;
 }

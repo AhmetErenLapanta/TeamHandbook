@@ -5,9 +5,9 @@ import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
 import { readCounters } from "./counters.js";
 import { listCandidates } from "./queue.js";
-import { pendingBatchCount } from "./notify.js";
+import { pendingHarvestCount } from "./notify.js";
 import { loadScoreConfig } from "./score.js";
-import { loadDistillConfig } from "./distill.js";
+import { loadHarvestConfig } from "./harvest.js";
 import { loadNotifyConfig } from "./notify.js";
 import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
@@ -133,9 +133,11 @@ export interface StatusReport {
   // captured pairs given up on after repeated gate failures — never silent
   abandoned: number;
   config: {
-    gateModel: string;
-    gateThreshold: number;
-    distillModel: string;
+    harvestModel: string;
+    harvestEnabled: boolean;
+    harvestFloor: number;
+    harvestMax: number;
+    learnThreshold: number;
     sessionStartNotice: boolean;
   };
 }
@@ -144,7 +146,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   const candidates = listCandidates(home);
   const count = (status: string) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
-  const distill = loadDistillConfig(home);
+  const harvest = loadHarvestConfig(home);
   const counters = readCounters(home);
   const approved = candidates.filter((c) => c.status === "approved");
   // delivery mode is persisted at approval time — inferring it from the
@@ -173,12 +175,14 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
     },
     lastRun: lastPipelineRun(home),
     pipeline: pipelineAggregate(home),
-    scoringNow: pendingBatchCount(home),
+    scoringNow: pendingHarvestCount(home),
     abandoned: counters.gateAbandoned,
     config: {
-      gateModel: score.model,
-      gateThreshold: score.threshold,
-      distillModel: distill.model || "(default)",
+      harvestModel: harvest.model,
+      harvestEnabled: harvest.enabled,
+      harvestFloor: harvest.minScore,
+      harvestMax: harvest.maxPerSession,
+      learnThreshold: score.threshold,
       sessionStartNotice: loadNotifyConfig(home).sessionStart,
     },
   };
@@ -211,15 +215,17 @@ export function formatStatus(report: StatusReport): string {
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error→fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun
-      ? `Last gate run:   ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} — ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written`
-      : "Last gate run:   never",
+      ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} — ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written`
+      : "Last harvest:    never",
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
-    `Gate pipeline:   ${report.pipeline.runs} run(s) in log — ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
-    ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} captured pair(s) given up after repeated gate failures (kept in abandoned.jsonl) — run /handbook:doctor`] : []),
-    ...(report.scoringNow > 0 ? [`Scoring now:     ${report.scoringNow} captured pair(s) queued for the background gate`] : []),
+    `Harvest runs:    ${report.pipeline.runs} run(s) in log — ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) — run /handbook:doctor`] : []),
+    ...(report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : []),
     "",
-    `Config:          gate model "${config.gateModel}" (threshold ${config.gateThreshold}/10), distill model ${config.distillModel}, session-start notice ${config.sessionStartNotice ? "on" : "off"}`,
+    config.harvestEnabled
+      ? `Config:          harvest model "${config.harvestModel}" (floor ${config.harvestFloor}/10, max ${config.harvestMax}/session), learn threshold ${config.learnThreshold}/10, session-start notice ${config.sessionStartNotice ? "on" : "off"}`
+      : `Config:          harvest DISABLED (sessions are never read or sent); learn threshold ${config.learnThreshold}/10, session-start notice ${config.sessionStartNotice ? "on" : "off"}`,
   ];
   if (queue.pending > 0) {
     lines.push("", `Run /handbook:review to review the ${queue.pending} pending candidate(s).`);
@@ -228,8 +234,9 @@ export function formatStatus(report: StatusReport): string {
     // reachable even if the one-time welcome scrolled past unseen.
     lines.push(
       "",
-      "No skills yet — normal early on: automatic capture waits for an error class to recur. " +
-        "Run /handbook:learn after a task to make one now, or /handbook:doctor to confirm the gate can reach claude.",
+      "No skills yet — normal early on: TeamHandbook harvests a session after it ends, so finish a real " +
+        "session and check back. /handbook:learn captures something right now; /handbook:doctor confirms " +
+        "TeamHandbook can reach your claude CLI.",
     );
   }
   return lines.join("\n");

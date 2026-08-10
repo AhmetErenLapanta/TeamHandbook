@@ -20,7 +20,12 @@ export interface CandidateMeta {
   gate: { total: number; scores: Record<string, number>; rationale?: string } | null;
   decidedAt?: string;
   deliveredTo?: string;
-  deliveredMode?: "solo" | "team";
+  deliveredMode?: "solo" | "personal" | "team";
+  // how this candidate came to exist and what it is — drives the review wording
+  origin?: "harvest" | "manual" | "recurrence";
+  kind?: "procedure" | "correction" | "error-fix" | "discovery";
+  // default answer to "keep it, or share it?" — derived from scope + team config
+  suggestedTarget?: "personal" | "project" | "team";
 }
 
 const STATUSES: CandidateStatus[] = ["pending", "approved", "rejected"];
@@ -207,8 +212,9 @@ export function formatCandidateList(metas: CandidateMeta[], now: number = Date.n
   const lines = [`Pending candidates (${metas.length}), newest first:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
+    const kind = meta.kind ? `[${meta.kind}]  ` : "";
     lines.push(
-      `  ${i + 1}. ${meta.slug}  [${meta.scope}]  ${gate}  ·  ${relativeAge(meta.createdAt, now)}  ·  from ${originProject(meta)}`,
+      `  ${i + 1}. ${meta.slug}  ${kind}[${meta.scope}]  ${gate}  ·  ${relativeAge(meta.createdAt, now)}  ·  from ${originProject(meta)}`,
     );
     lines.push(`     ${meta.description}`);
   });

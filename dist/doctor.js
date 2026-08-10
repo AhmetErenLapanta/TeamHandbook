@@ -132,10 +132,35 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 
+// src/lib/harvest.ts
+var defaultHarvestConfig = {
+  enabled: true,
+  model: "haiku",
+  maxPerSession: 3,
+  minScore: 4,
+  transcriptCharCap: 4e4,
+  timeoutMs: 12e4
+};
+function loadHarvestConfig(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
+  return {
+    enabled: harvest?.enabled !== false,
+    model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
+    maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
+    minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
+    transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
+    timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
+  };
+}
+
 // src/lib/status.ts
 import { readFileSync as readFileSync3 } from "node:fs";
 import { dirname, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// src/lib/notify.ts
+var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/pipeline.ts
 import { basename, join as join4 } from "node:path";
@@ -211,9 +236,10 @@ function checkClaudeCli(run, home) {
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
     return fail("claude CLI", `found, but \`claude --version\` failed or timed out: ${message}`);
   }
+  const harvestModel = loadHarvestConfig(home).model;
   const gateModel = loadScoreConfig(home).model;
   const distillModel = loadDistillConfig(home).model;
-  const models = distillModel && distillModel !== gateModel ? [gateModel, distillModel] : [gateModel];
+  const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
   for (const model of models) {
     try {
       const reply = run("claude", ["-p", "Reply with exactly: OK", ...model ? ["--model", model] : []], 3e4);
@@ -228,13 +254,13 @@ function checkClaudeCli(run, home) {
       }
       return fail(
         "claude CLI",
-        `logged in, but \`claude -p --model ${model}\` failed \u2014 is that model valid? (config.json gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
+        `logged in, but \`claude -p --model ${model}\` failed \u2014 is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
       );
     }
   }
   return ok(
     "claude CLI",
-    models.length > 1 ? "installed and authenticated (gate + distill models reachable)" : "installed and authenticated"
+    models.length > 1 ? `installed and authenticated (${models.length} configured models reachable)` : "installed and authenticated"
   );
 }
 function checkGitIdentity(home, run) {

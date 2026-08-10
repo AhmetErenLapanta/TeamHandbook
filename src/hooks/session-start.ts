@@ -1,32 +1,61 @@
 import { fileURLToPath } from "node:url";
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
 import { sessionStartNotice } from "../lib/notify.js";
-import { cleanupStaleSessionFiles, orphanedSessionIds } from "../lib/session-state.js";
-import { flushResolvedPairs } from "../lib/signals.js";
-import { enqueuePendingSignals, spawnPipelineRunner } from "../lib/pipeline.js";
+import {
+  cleanupStaleSessionFiles,
+  loadSessionState,
+  orphanedSessionIds,
+  saveSessionState,
+  sessionHasSubstance,
+} from "../lib/session-state.js";
+import { flushResolvedPairs, ledgerFingerprintCounts, ledgerPairsForSession } from "../lib/signals.js";
+import { enqueueHarvestJob, spawnPipelineRunner } from "../lib/pipeline.js";
 import { gateAutoEnabled } from "../lib/score.js";
+import { loadHarvestConfig } from "../lib/harvest.js";
 
 /**
  * Salvage sessions that ended without SessionEnd firing (rage-quit, crash): flush
- * their resolved pairs into the ledger and queue any candidates for scoring —
- * otherwise hours of captured error→fix work would be deleted unprocessed.
+ * their evidence and harvest them — otherwise a whole session's lessons would
+ * evaporate unprocessed.
  *
  * A stale mtime cannot distinguish a crashed session from a live-but-idle one, so
- * we use flushResolvedPairs (not flushSessionEnd): it only emits already-completed
- * pairs, clears them from state, and never deletes the file or touches openErrors.
- * Salvaging a live session by mistake then costs at most scoring its finished pairs
- * a little early — exactly what the Stop hook does at every turn — not wiping its
- * in-flight state. cleanupStaleSessionFiles (7d) handles file hygiene.
+ * everything here is NON-destructive: flushResolvedPairs keeps the session file and
+ * its open errors, and the harvestedAt marker (not deletion) provides idempotency.
+ * Salvaging a live session by mistake costs at most harvesting its finished work a
+ * little early. cleanupStaleSessionFiles (7d) handles file hygiene.
  */
 function salvageOrphans(currentSessionId?: string): void {
-  const orphans = orphanedSessionIds().filter((id) => id !== currentSessionId);
-  const candidates = orphans.flatMap((id) => flushResolvedPairs(id).filter((s) => s.kind === "candidate"));
-  if (candidates.length === 0) return;
-  // gate.auto=false: recovery stays local; nothing is sent to claude -p unless the
-  // user explicitly runs /handbook:learn
-  if (!gateAutoEnabled()) return;
-  enqueuePendingSignals(candidates);
-  spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
+  if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
+  let enqueued = 0;
+  for (const id of orphanedSessionIds()) {
+    if (id === currentSessionId) continue;
+    const state = loadSessionState(id);
+    if (state.harvestedAt) continue; // already salvaged once
+    flushResolvedPairs(id); // evidence into the ledger, session file untouched
+    const fresh = loadSessionState(id);
+    fresh.harvestedAt = new Date().toISOString();
+    saveSessionState(fresh);
+    if (!sessionHasSubstance(state)) continue;
+    const pairs = ledgerPairsForSession(id);
+    const counts = ledgerFingerprintCounts();
+    const recurrence: Record<string, number> = {};
+    for (const pair of pairs) recurrence[pair.fingerprint] = counts.get(pair.fingerprint) ?? 1;
+    enqueueHarvestJob({
+      sessionId: id,
+      cwd: pairs[0]?.cwd ?? "",
+      ...(state.transcriptPath ? { transcriptPath: state.transcriptPath } : {}),
+      evidence: {
+        pairs,
+        ...(state.activity ? { work: state.activity } : {}),
+        ...(state.corrections?.length ? { corrections: state.corrections } : {}),
+        recurrence,
+      },
+    });
+    enqueued += 1;
+  }
+  if (enqueued > 0) {
+    spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
+  }
 }
 
 async function main(): Promise<void> {

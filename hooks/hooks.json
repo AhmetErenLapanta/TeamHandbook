@@ -51,6 +51,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/user-prompt-submit.js\""
+          }
+        ]
+      }
     ]
   }
 }

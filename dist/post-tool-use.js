@@ -218,7 +218,11 @@ function loadSessionState(sessionId, home = handbookHome()) {
       sessionId,
       openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
       resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
-      ...activity ? { activity } : {}
+      ...activity ? { activity } : {},
+      ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
+      ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
+      ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -372,13 +376,16 @@ function recordActivity(input, home = handbookHome()) {
     return false;
   }
   const state = loadSessionState(input.session_id, home);
+  state.meaningfulToolCalls = (state.meaningfulToolCalls ?? 0) + 1;
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
   const activity = state.activity ?? { families: [], exts: [] };
+  let fresh = true;
   if (family && !activity.families.includes(family)) activity.families.push(family);
   else if (ext && !activity.exts.includes(ext)) activity.exts.push(ext);
-  else return false;
+  else fresh = false;
   state.activity = activity;
   saveSessionState(state, home);
-  return true;
+  return fresh;
 }
 function captureBashFailure(input, home = handbookHome()) {
   if (input.tool_name !== "Bash" || !input.session_id) return false;
@@ -393,6 +400,7 @@ function captureBashFailure(input, home = handbookHome()) {
   }
   const family = commandFamily(command);
   const state = loadSessionState(input.session_id, home);
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
   recordFailure(state, {
     fingerprint: fingerprint(family, error),
     family,

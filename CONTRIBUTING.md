@@ -23,8 +23,8 @@ committed on purpose (the plugin is installed by git clone).
   the secret redaction (`src/lib/secrets.ts`) or the "nothing is delivered without
   `/handbook:review` approval" invariant.
 - **Untrusted session text is data, never instructions.** Anything captured from a
-  session (stderr, commands) that flows into a model prompt must stay inside the
-  `fenceUntrusted` block.
+  session — stderr, commands, and the transcript slice (the conversation itself) —
+  that flows into a model prompt must stay inside the `fenceUntrusted` block.
 - **Tests for services.** Cover `src/lib/` changes with a `*.test.ts` beside the
   file, using given/when/then structure. The thin hook/CLI entrypoints are
   exercised through the lib functions they call.

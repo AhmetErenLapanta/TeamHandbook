@@ -275,3 +275,13 @@ describe("formatCandidateList age + origin", () => {
     expect(text).toContain("from payments-service");
   });
 });
+
+describe("formatCandidateList kind badge (v2)", () => {
+  it("shows the harvest kind next to the scope", () => {
+    const text = formatCandidateList(
+      [meta({ kind: "correction", origin: "harvest" })],
+      Date.parse("2026-08-08T01:00:00Z"),
+    );
+    expect(text).toContain("[correction]  [team]");
+  });
+});

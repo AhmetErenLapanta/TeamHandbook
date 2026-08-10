@@ -1,9 +1,10 @@
-import { drainPendingSignals, runPipeline } from "../lib/pipeline.js";
+import { drainHarvestJobs, runHarvestJob } from "../lib/pipeline.js";
 
 async function main(): Promise<void> {
-  const signals = drainPendingSignals();
-  if (signals.length === 0) return;
-  await runPipeline(signals);
+  const jobs = drainHarvestJobs();
+  for (const job of jobs) {
+    await runHarvestJob(job);
+  }
 }
 
 main().then(

@@ -228,3 +228,53 @@ describe("approveAndDeliver (team mode)", () => {
     expect(existsSync(soloSkillsDir(project))).toBe(false);
   });
 });
+
+describe("three-way delivery (v2)", () => {
+  it("keeps a candidate personally in the user-level skills dir", () => {
+    const dir = seedCandidate(meta({ suggestedTarget: "personal" }));
+    const personal = mkdtempSync(join(tmpdir(), "handbook-personal-"));
+    try {
+      const result = approveAndDeliver(
+        home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+        null, undefined, undefined, undefined, personal,
+      );
+      expect(result).toMatchObject({ ok: true, mode: "personal" });
+      expect(result.deliveredTo).toBe(join(personal, "fix-npm-test"));
+      expect(existsSync(join(personal, "fix-npm-test", "SKILL.md"))).toBe(true);
+      expect(readCandidateMeta(dir)?.deliveredMode).toBe("personal");
+    } finally {
+      rmSync(personal, { recursive: true, force: true });
+    }
+  });
+
+  it("an explicit --to project overrides a team config", () => {
+    saveTeamConfig({ repoUrl: "git@unreachable:x/y.git", marketplaceName: "t" }, home);
+    seedCandidate(meta());
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, undefined, "project",
+    );
+    expect(result.mode).toBe("solo");
+    expect(result.deliveredTo).toBe(join(soloSkillsDir(project), "fix-npm-test"));
+  });
+
+  it("refuses --to team without a team config, pointing at the fix", () => {
+    seedCandidate(meta());
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "team",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no team configured");
+    expect(result.error).toContain("--to personal");
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+  });
+
+  it("follows the harvest's suggestedTarget when no explicit target is given", () => {
+    seedCandidate(meta({ suggestedTarget: "project" }));
+    // even with a team configured, the suggestion wins over the legacy default
+    saveTeamConfig({ repoUrl: "git@unreachable:x/y.git", marketplaceName: "t" }, home);
+    const result = approveAndDeliver(home, "fix-npm-test", "/fallback");
+    expect(result.mode).toBe("solo");
+  });
+});

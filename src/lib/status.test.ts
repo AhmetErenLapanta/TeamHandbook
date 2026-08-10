@@ -105,9 +105,11 @@ describe("gatherStatus / formatStatus", () => {
       scoringNow: 0,
       abandoned: 0,
       config: {
-        gateModel: "haiku",
-        gateThreshold: 7,
-        distillModel: "(default)",
+        harvestModel: "haiku",
+        harvestEnabled: true,
+        harvestFloor: 4,
+        harvestMax: 3,
+        learnThreshold: 7,
         sessionStartNotice: true,
       },
     });
@@ -137,8 +139,8 @@ describe("gatherStatus / formatStatus", () => {
     seedCandidate("skill-a", "pending");
     const text = formatStatus(gatherStatus(home));
     expect(text).toContain("1 pending, 0 approved, 0 rejected");
-    expect(text).toContain("Last gate run:   never");
-    expect(text).toContain('gate model "haiku" (threshold 7/10)');
+    expect(text).toContain("Last harvest:    never");
+    expect(text).toContain('harvest model "haiku" (floor 4/10, max 3/session)');
     expect(text).toContain("/handbook:review");
   });
 
@@ -180,6 +182,6 @@ describe("gatherStatus / formatStatus", () => {
     writeFileSync(join(home, "counters.json"), JSON.stringify({ gateAbandoned: 2 }));
     const text = formatStatus(gatherStatus(home));
     expect(text).toContain("Abandoned:");
-    expect(text).toContain("2 captured pair(s) given up");
+    expect(text).toContain("2 session harvest(s) given up");
   });
 });
