@@ -225,11 +225,11 @@ Everything is optional; defaults are shown.
 {
   "harvest": {
     "enabled": true,            // false → no session is ever read or sent
-    "model": "haiku",           // model for the single per-session call
+    "model": "sonnet",          // model for the single per-session call ("haiku" is cheaper, and misses more)
     "maxPerSession": 3,         // hard cap on lessons proposed per session
     "minScore": 4,              // 0-10 floor; below this an item is dropped
     "transcriptCharCap": 40000, // max characters of conversation sent
-    "timeoutMs": 120000
+    "timeoutMs": 180000
   },
   "gate":   { "auto": true },   // false → no automatic model calls at all
   "notify": { "sessionStart": true, "heartbeat": true }
@@ -238,8 +238,12 @@ Everything is optional; defaults are shown.
 
 ## Honest limitations
 
-- **The harvest is one model call.** A lesson buried in a very long session can be
-  missed, and the model can propose something plausible but wrong. That's exactly
+- **The harvest is one model call, and the model matters.** On an identical prompt
+  from a real session, the default (`sonnet`) proposed the developer's stated rule
+  3 times out of 3 and `haiku` 1 in 3 — one call per substantive session is the
+  price of the promise, and the model is a one-line config change if you want it
+  cheaper. A lesson buried in a very long session can still be missed, and the model
+  can propose something plausible but wrong. That's exactly
   why nothing installs itself: the floor is 4/10 because *your* decision at review
   is the real gate, not the score.
 - **Only conversational prose is read.** A lesson that lives purely in tool output —
@@ -252,7 +256,9 @@ Everything is optional; defaults are shown.
   It still gets harvested: recurrence is one of five criteria, not a gate.
 - **Repeat matching is word overlap, not understanding.** Two phrasings of the same
   rule match when they share most of their content words. A lesson restated in
-  completely different words reads as new — a missed repeat, never a false one.
+  completely different words reads as new, and so does a terse rule ("readonly
+  transactions only") restated without one of its few words. The bias is deliberate:
+  a missed repeat, never a false one.
 - **v2 produces skills only.** Routing lessons to tests, lint rules, or `AGENTS.md`
   lines is future work.
 - **Usage counts start when you install this version.** Skills you kept earlier show

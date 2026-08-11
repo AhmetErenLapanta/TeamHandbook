@@ -9,6 +9,7 @@ import {
   formatCandidateList,
   isSafeSlug,
   listCandidates,
+  patchPendingCandidate,
   loadMutedFingerprints,
   readCandidateMeta,
   writeCandidateMeta,
@@ -247,6 +248,42 @@ describe("queue", () => {
 
     expect(listed.map((c) => c.slug)).toContain("hand-edited");
     expect(listed.find((c) => c.slug === "hand-edited")?.createdAt).toBe("");
+  });
+
+  it("given a candidate approved while a background harvest was in flight, when patched, then the approval is not undone", () => {
+    const dir = join(home, "candidates", "already-kept");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "candidate.json"),
+      JSON.stringify({
+        status: "approved",
+        description: "d",
+        scope: "repo",
+        createdAt: "2026-08-01T00:00:00Z",
+        deliveredMode: "personal",
+        deliveredTo: "/u/.claude/skills/already-kept",
+      }),
+    );
+
+    const patched = patchPendingCandidate(home, "already-kept", { taughtBefore: 3 });
+
+    expect(patched).toBe(false);
+    const meta = readCandidateMeta(dir);
+    expect(meta?.status).toBe("approved");
+    expect(meta?.deliveredMode).toBe("personal");
+    expect(meta?.taughtBefore).toBeUndefined();
+  });
+
+  it("given a candidate still pending, when patched, then the amendment lands", () => {
+    const dir = join(home, "candidates", "still-waiting");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "candidate.json"),
+      JSON.stringify({ status: "pending", description: "d", scope: "repo", createdAt: "2026-08-01T00:00:00Z" }),
+    );
+
+    expect(patchPendingCandidate(home, "still-waiting", { taughtBefore: 3 })).toBe(true);
+    expect(readCandidateMeta(dir)?.taughtBefore).toBe(3);
   });
 });
 

@@ -125,6 +125,25 @@ export function readCandidateMeta(dir: string): CandidateMeta | null {
   return synthesizeMeta(dir);
 }
 
+/**
+ * Amend a candidate only while it is still pending. The harvest runs in a background
+ * process, so between reading the queue and writing to it the user may have approved
+ * the very candidate a fresh notice told them to review — and a blind write would
+ * reinstate the meta as read: pending again, with the delivery it was approved to
+ * erased. Re-read at the last moment, the same guard decideCandidate uses.
+ */
+export function patchPendingCandidate(
+  home: string,
+  slug: string,
+  patch: Partial<CandidateMeta>,
+): boolean {
+  const dir = join(candidatesDir(home), slug);
+  const current = readCandidateMeta(dir);
+  if (!current || current.status !== "pending") return false;
+  writeCandidateMeta(dir, { ...current, ...patch });
+  return true;
+}
+
 export function listCandidates(
   home: string = handbookHome(),
   status?: CandidateStatus,

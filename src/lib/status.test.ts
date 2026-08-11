@@ -106,7 +106,7 @@ describe("gatherStatus / formatStatus", () => {
       abandoned: 0,
       usage: { fired: 0, totalUses: 0, topSkill: null, known: 0 },
       config: {
-        harvestModel: "haiku",
+        harvestModel: "sonnet",
         harvestEnabled: true,
         harvestFloor: 4,
         harvestMax: 3,
@@ -141,7 +141,7 @@ describe("gatherStatus / formatStatus", () => {
     const text = formatStatus(gatherStatus(home));
     expect(text).toContain("1 pending, 0 approved, 0 rejected");
     expect(text).toContain("Last harvest:    never");
-    expect(text).toContain('harvest model "haiku" (floor 4/10, max 3/session)');
+    expect(text).toContain('harvest model "sonnet" (floor 4/10, max 3/session)');
     expect(text).toContain("/handbook:review");
   });
 

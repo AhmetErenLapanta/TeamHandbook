@@ -135,6 +135,12 @@ export function looksKeyBearing(text: string): boolean {
  * outweighs early smalltalk); assistant prose fills the rest, also newest-first.
  * The selection is then re-emitted in chronological order so the model reads a
  * coherent conversation.
+ *
+ * A message too big for what is left is SKIPPED, not a stop: stopping there threw
+ * away every older message, including the short ones the budget could still afford
+ * — and a teaching is short ("we never mock the db here") while the brief that
+ * exhausted the budget is long. Measured over the real transcripts on one machine,
+ * stopping lost user messages in 13 sessions (worst: 6 of them) that fit.
  */
 export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): string {
   const pick = new Map<number, string>();
@@ -143,7 +149,7 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
     const entry = entries[i]!;
     if (entry.role !== "user") continue;
     const text = cap(entry.text, PER_USER_CAP);
-    if (text.length > remaining) break;
+    if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
   }
@@ -152,7 +158,7 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
     const entry = entries[i]!;
     if (entry.role !== "assistant") continue;
     const text = cap(entry.text, PER_ASSISTANT_CAP);
-    if (text.length > remaining) break;
+    if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
   }
