@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
 import { readCounters } from "./counters.js";
+import { readSkillUsage, handbookSkills, summarizeUsage } from "./usage.js";
 import { listCandidates } from "./queue.js";
 import { pendingHarvestCount } from "./notify.js";
 import { loadScoreConfig } from "./score.js";
@@ -132,6 +133,14 @@ export interface StatusReport {
   scoringNow: number;
   // captured pairs given up on after repeated gate failures — never silent
   abandoned: number;
+  // the only honest evidence a kept skill did anything: how often it actually fired
+  usage: {
+    fired: number;
+    totalUses: number;
+    topSkill: { slug: string; count: number } | null;
+    // every skill TeamHandbook put on this machine, approvals and team pulls alike
+    known: number;
+  };
   config: {
     harvestModel: string;
     harvestEnabled: boolean;
@@ -149,6 +158,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   const harvest = loadHarvestConfig(home);
   const counters = readCounters(home);
   const approved = candidates.filter((c) => c.status === "approved");
+  const known = handbookSkills(home);
   // delivery mode is persisted at approval time — inferring it from the
   // deliveredTo string misclassifies local-path team repos and Windows paths
   const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
@@ -177,6 +187,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
     pipeline: pipelineAggregate(home),
     scoringNow: pendingHarvestCount(home),
     abandoned: counters.gateAbandoned,
+    usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length },
     config: {
       harvestModel: harvest.model,
       harvestEnabled: harvest.enabled,
@@ -220,6 +231,14 @@ export function formatStatus(report: StatusReport): string {
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
     `Harvest runs:    ${report.pipeline.runs} run(s) in log — ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    ...(report.usage.known > 0
+      ? [
+          report.usage.totalUses > 0
+            ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` +
+              (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} ×${report.usage.topSkill.count})` : "")
+            : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet — they load by description, so this fills in as the situations come up`,
+        ]
+      : []),
     ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) — run /handbook:doctor`] : []),
     ...(report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : []),
     "",
@@ -235,8 +254,8 @@ export function formatStatus(report: StatusReport): string {
     lines.push(
       "",
       "No skills yet — normal early on: TeamHandbook harvests a session after it ends, so finish a real " +
-        "session and check back. /handbook:learn captures something right now; /handbook:doctor confirms " +
-        "TeamHandbook can reach your claude CLI.",
+        "session and check back. /handbook:demo walks the whole loop in two minutes, /handbook:learn " +
+        "captures something right now, and /handbook:doctor confirms TeamHandbook can reach your claude CLI.",
     );
   }
   return lines.join("\n");

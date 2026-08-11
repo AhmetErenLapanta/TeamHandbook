@@ -88,6 +88,48 @@ describe("parseHarvestResponse", () => {
   it("accepts an empty array as a valid answer", () => {
     expect(parseHarvestResponse("[]")).toEqual([]);
   });
+  it("given prose after the array containing a bracket, when parsed, then the array is still read", () => {
+    const raw =
+      '```json\n[]\n```\n\nNothing new here — see [the earlier note] for why.';
+
+    expect(parseHarvestResponse(raw)).toEqual([]);
+  });
+
+  it("given a bracket in the prose BEFORE the array, when parsed, then the real array is found", () => {
+    const item = {
+      kind: "correction",
+      name: "n",
+      description: "Use when ...",
+      body: "b",
+      expect: "e",
+      scope: "team",
+      scores: { recurrence: 1, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      total: 5,
+    };
+    const raw = `Looking at [the session] I found this:\n\n[${JSON.stringify(item)}]`;
+
+    expect(parseHarvestResponse(raw)).toHaveLength(1);
+  });
+
+  it("given a body containing brackets and escaped quotes, when parsed, then the array is not cut short", () => {
+    const item = {
+      kind: "discovery",
+      name: "n",
+      description: "Use when ...",
+      body: 'see [docs](x) and the \\"quoted\\" ] bracket',
+      expect: "e",
+      scope: "team",
+      scores: { recurrence: 1, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      total: 5,
+    };
+
+    expect(parseHarvestResponse(JSON.stringify([item]))).toHaveLength(1);
+  });
+
+  it("given a reply with no array at all, when parsed, then it fails closed", () => {
+    expect(parseHarvestResponse("I could not find anything worth keeping.")).toBeNull();
+  });
+
 });
 
 describe("sieveHarvestItems", () => {
@@ -291,6 +333,104 @@ describe("harvestSession (end to end with a fake runner)", () => {
     expect(seenPrompt).not.toContain("sk-proj-");
     expect(seenPrompt).toContain("[redacted:");
     expect(summary.redactedLines).toBe(1);
+  });
+
+  it("given the same lesson taught in an earlier session, when harvested again, then the candidate carries the repeat count", async () => {
+    const teach = (text: string) => ({
+      ...job(),
+      evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
+    });
+    const deps = (name: string) => ({
+      runner: async () => JSON.stringify([rawItem({ name, quote: "never mock the database, use testcontainers" })]),
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+
+    await harvestSession(teach("we never use mocks for the database here, use testcontainers"), home, deps("first-pass"));
+    await harvestSession(teach("don't mock the database — use testcontainers"), home, deps("second-pass"));
+
+    expect(readCandidateMeta(join(candidatesDir(home), "first-pass"))?.taughtBefore).toBeUndefined();
+    expect(readCandidateMeta(join(candidatesDir(home), "second-pass"))?.taughtBefore).toBe(1);
+  });
+
+  it("given a repeated teaching, when the prompt is built, then the model is told how many earlier sessions taught it", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence: {
+        ...evidence,
+        corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text: "never mock the database" }],
+        echoes: [{ text: "never mock the database", priorSessions: 2, firstAt: "2026-07-01T00:00:00Z" }],
+      },
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).toContain("taught this in 2 earlier sessions, first on 2026-07-01");
+  });
+
+  it("given a re-teaching that produced nothing new, when harvested, then the pending candidate it duplicates is marked as repeated", async () => {
+    const teach = (text: string, sessionId: string) => ({
+      ...job({ sessionId }),
+      evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
+    });
+    const withReply = (reply: string) => ({
+      runner: async () => reply,
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+    const item = rawItem({
+      name: "no-db-mocks",
+      description: "Use when writing database tests — use testcontainers instead of mocks.",
+      quote: undefined,
+    });
+
+    await harvestSession(
+      teach("in this repo we never mock the database, use testcontainers", "s1"),
+      home,
+      withReply(JSON.stringify([item])),
+    );
+    await harvestSession(
+      teach("don't mock the database — use testcontainers instead", "s2"),
+      home,
+      withReply("[]"),
+    );
+
+    expect(readCandidateMeta(join(candidatesDir(home), "no-db-mocks"))?.taughtBefore).toBe(2);
+  });
+
+  it("given an unrelated pending candidate, when a repeat is recorded, then it is left alone", async () => {
+    const withReply = (reply: string) => ({
+      runner: async () => reply,
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+    const teach = (text: string, sessionId: string) => ({
+      ...job({ sessionId }),
+      evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
+    });
+    const unrelated = rawItem({
+      name: "run-migrations-first",
+      description: "Use when deploying the api to staging.",
+      quote: undefined,
+    });
+
+    await harvestSession(
+      teach("in this repo we never mock the database, use testcontainers", "s1"),
+      home,
+      withReply(JSON.stringify([unrelated])),
+    );
+    const repeat = await harvestSession(
+      teach("don't mock the database — use testcontainers instead", "s2"),
+      home,
+      withReply("[]"),
+    );
+
+    expect(repeat.outcome).toBe("harvested");
+    expect(readCandidateMeta(join(candidatesDir(home), "run-migrations-first"))?.taughtBefore).toBeUndefined();
   });
 });
 

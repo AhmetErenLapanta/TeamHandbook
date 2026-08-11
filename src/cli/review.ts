@@ -60,6 +60,12 @@ function showCandidate(home: string, slug: string): void {
           : "share with the team (PR)";
     console.log(`suggested: ${where}`);
   }
+  // Repetition is the strongest argument for keeping a lesson and the one the user
+  // can confirm from memory — so it sits with the score, not inside the quote block
+  // that only corrections have.
+  if (meta?.taughtBefore) {
+    console.log(`repeated:  you have told Claude this in ${meta.taughtBefore + 1} sessions`);
+  }
   console.log("");
   console.log(skillMd.trimEnd());
   console.log("");

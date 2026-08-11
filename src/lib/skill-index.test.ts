@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   candidatesDir,
@@ -86,10 +87,12 @@ describe("listExistingSkills", () => {
 });
 
 describe("defaultSkillDirs", () => {
-  it("covers the candidate queue and the project's local skills", () => {
+  it("covers the queue, this project, and the user-level skills", () => {
+    // the personal dir matters: a lesson you KEPT must not be proposed again
     expect(defaultSkillDirs("/home/u/.teamhandbook", "/repo")).toEqual([
       candidatesDir("/home/u/.teamhandbook"),
       join("/repo", ".claude", "skills"),
+      join(homedir(), ".claude", "skills"),
     ]);
   });
 });
@@ -107,6 +110,23 @@ describe("rejected candidates and dedup", () => {
       const names = listExistingSkills([dir]).map((s) => s.name);
       expect(names).toContain("kept-skill");
       expect(names).not.toContain("gone-skill");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("only a pending candidate blocks a new proposal", () => {
+  it("ignores approved and rejected candidates, so a deleted skill can be learned again", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-queue-"));
+    try {
+      const rows: Array<[string, string]> = [["kept", "approved"], ["dropped", "rejected"], ["waiting", "pending"]];
+      for (const [slug, status] of rows) {
+        mkdirSync(join(dir, slug), { recursive: true });
+        writeFileSync(join(dir, slug, "SKILL.md"), `---\nname: ${slug}\ndescription: "d"\n---\n\nBody.\n`);
+        writeFileSync(join(dir, slug, "candidate.json"), JSON.stringify({ slug, status }));
+      }
+      expect(listExistingSkills([dir]).map((s) => s.name)).toEqual(["waiting"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

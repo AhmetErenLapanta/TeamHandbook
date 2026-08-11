@@ -268,13 +268,13 @@ describe("pendingHarvestCount", () => {
     writeFileSync(join(dir, name), JSON.stringify({ sessionId, cwd: "/p", evidence: { pairs: [], recurrence: {} } }));
   }
 
-  it("counts queued harvest jobs and ignores claimed, malformed, and non-json entries", () => {
+  it("counts queued AND in-flight harvests, ignoring malformed and non-json entries", () => {
     writeJob("s-1.json", "s1");
     writeJob("s-2.json", "s2");
-    writeJob("s-3.json.claimed-999", "s3"); // in-flight/orphan claim — not queued
+    writeJob("s-3.json.claimed-999", "s3"); // in flight: a runner holds this claim
     writeFileSync(join(home, "pending", "broken.json"), "not json");
     writeFileSync(join(home, "pending", "note.txt"), "noise");
-    expect(pendingHarvestCount(home)).toBe(2);
+    expect(pendingHarvestCount(home)).toBe(3);
   });
 
   it("is zero with no pending directory", () => {
@@ -362,5 +362,95 @@ describe("weeklyDigest", () => {
     expect(line).toContain("1 waiting for your call");
     // not again until the next interval
     expect(weeklyDigest(home, t0 + 2 * WEEK + 6000)).toBeNull();
+  });
+});
+
+describe("an honest empty harvest is not silence", () => {
+  it("says it found nothing rather than showing a blank screen", () => {
+    const text = buildSessionStartSummary({ pending: 0, newSkills: [], harvestedNothing: true })!;
+    expect(text).toContain("found nothing worth keeping");
+    expect(text).toContain("normal answer, not a failure");
+  });
+
+  it("stays quiet about it when there is a real lesson to show instead", () => {
+    const text = buildSessionStartSummary({
+      pending: 0,
+      newSkills: [],
+      harvestedNothing: true,
+      harvested: { name: "x", kind: "correction", total: 8, more: 0 },
+    })!;
+    expect(text).not.toContain("found nothing");
+    expect(text).toContain("learned from your last session");
+  });
+});
+
+describe("harvest headline with a repeated teaching", () => {
+  const base = { pending: 0, newSkills: [] };
+
+  it("given a lesson taught for the first time, when announced, then it does not claim repetition", () => {
+    const out = buildSessionStartSummary({
+      ...base,
+      harvested: { name: "no-db-mocks", kind: "correction", total: 8, more: 0 },
+    });
+
+    expect(out).not.toContain("sessions");
+  });
+
+  it("given a lesson the developer has taught before, when announced, then the headline says how many sessions", () => {
+    const out = buildSessionStartSummary({
+      ...base,
+      harvested: { name: "no-db-mocks", kind: "correction", total: 8, more: 0, taughtBefore: 2 },
+    });
+
+    expect(out).toContain("TeamHandbook learned something you have now told Claude in 3 sessions");
+  });
+});
+
+describe("pending queue with a lesson taught again", () => {
+  it("given a pending candidate the developer keeps re-teaching, when announced, then the wait is the point", () => {
+    const out = buildSessionStartSummary({
+      pending: 1,
+      newSkills: [],
+      pendingRepeats: 3,
+    });
+
+    expect(out).toContain("told Claude one of these in 3 sessions now, and it is still waiting");
+  });
+
+  it("given pending candidates taught only once, when announced, then it stays the plain reminder", () => {
+    const out = buildSessionStartSummary({ pending: 2, newSkills: [] });
+
+    expect(out).toContain("run /handbook:review to approve or reject");
+    expect(out).not.toContain("sessions now");
+  });
+});
+
+describe("which harvested lesson gets the headline", () => {
+  it("given a repeated lesson and a higher-scoring one-off, when announced, then the repeated one leads", () => {
+    const home = mkdtempSync(join(tmpdir(), "handbook-headline-"));
+    const write = (slug: string, total: number, taughtBefore?: number) => {
+      mkdirSync(join(home, "candidates", slug), { recursive: true });
+      writeFileSync(
+        join(home, "candidates", slug, "candidate.json"),
+        JSON.stringify({
+          status: "pending",
+          origin: "harvest",
+          kind: "correction",
+          description: "d",
+          scope: "team",
+          createdAt: "2026-08-01T00:00:00Z",
+          gate: { total, scores: {} },
+          ...(taughtBefore ? { taughtBefore } : {}),
+        }),
+      );
+    };
+    write("said-once", 10);
+    write("said-four-times", 6, 3);
+
+    const notice = sessionStartNotice(home, home);
+
+    expect(notice).toContain('"said-four-times"');
+    expect(notice).toContain("you have now told Claude in 4 sessions");
+    rmSync(home, { recursive: true, force: true });
   });
 });

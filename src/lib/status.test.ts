@@ -104,6 +104,7 @@ describe("gatherStatus / formatStatus", () => {
       pipeline: { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 },
       scoringNow: 0,
       abandoned: 0,
+      usage: { fired: 0, totalUses: 0, topSkill: null, known: 0 },
       config: {
         harvestModel: "haiku",
         harvestEnabled: true,

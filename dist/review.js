@@ -206,8 +206,8 @@ function buildPrBody(meta, grounded) {
       "",
       "## Grounded case",
       "",
-      "This skill was distilled from a real completed task; the case below ships with it",
-      "as its regression gate.",
+      "This skill was distilled from a real completed task. The case below ships with it as",
+      "the evidence to review it against \u2014 nothing re-runs it automatically.",
       "",
       `- goal: ${grounded.task.goal}`,
       ...grounded.task.steps.map((s, i) => `- step ${i + 1}: ${s}`),
@@ -220,8 +220,8 @@ function buildPrBody(meta, grounded) {
       "",
       "## Grounded case",
       "",
-      "This skill was distilled from a real error-to-fix session; the case below ships with it",
-      "as its regression gate.",
+      "This skill was distilled from a real error-to-fix session. The case below ships with",
+      "it as the evidence to review it against \u2014 nothing re-runs it automatically.",
       "",
       `- failed command: \`${grounded.command}\``,
       `- error (normalized): \`${grounded.error}\``,
@@ -405,7 +405,11 @@ function readCandidateMeta(dir) {
   try {
     const parsed = JSON.parse(readFileSync3(candidateMetaFile(dir), "utf8"));
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
-      return { ...parsed, slug: basename(dir) };
+      return {
+        ...parsed,
+        slug: basename(dir),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
+      };
     }
   } catch {
   }
@@ -631,7 +635,7 @@ function pendingHarvestCount(home = handbookHome()) {
   }
   let total = 0;
   for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
+    if (!entry.includes(".json")) continue;
     try {
       const parsed = JSON.parse(readFileSync5(join7(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
@@ -704,6 +708,9 @@ function showCandidate(home, slug) {
   if (meta?.suggestedTarget) {
     const where = meta.suggestedTarget === "personal" ? "keep for yourself (~/.claude/skills)" : meta.suggestedTarget === "project" ? "this project's .claude/skills" : "share with the team (PR)";
     console.log(`suggested: ${where}`);
+  }
+  if (meta?.taughtBefore) {
+    console.log(`repeated:  you have told Claude this in ${meta.taughtBefore + 1} sessions`);
   }
   console.log("");
   console.log(skillMd.trimEnd());
