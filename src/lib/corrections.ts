@@ -43,6 +43,27 @@ export function teachingKind(prompt: string): string | null {
   return null;
 }
 
+/**
+ * The sentence that states the rule, not the whole message. Real teachings arrive
+ * welded to an errand — "we never mock the database here, use testcontainers. Now
+ * add a field to the DTO." — and carrying the errand along blunts everything
+ * downstream: the model weighs the wrong words, and two phrasings of one rule stop
+ * looking alike because their errands differ.
+ *
+ * A short opener ("no, that's wrong.") is the correction, not the rule, so the
+ * sentence after it comes too.
+ */
+export function teachingSentence(prompt: string, kind: string): string {
+  const pattern = TEACHING_PATTERNS.find((p) => p.name === kind);
+  if (!pattern) return prompt;
+  const sentences = prompt.split(/\n+|(?<=[.!?])\s+/).filter((s) => s.trim());
+  const i = sentences.findIndex((s) => pattern.re.test(s));
+  if (i === -1) return prompt; // the rule straddles a boundary: keep the whole thing
+  const rule = sentences[i]!.trim();
+  const next = sentences[i + 1]?.trim();
+  return rule.length < 40 && next ? `${rule} ${next}` : rule;
+}
+
 export interface CorrectionNote {
   at: string;
   kind: string;
@@ -69,7 +90,7 @@ export function noteCorrection(
   // scan the WHOLE prompt before truncating: a token straddling the cut would
   // otherwise leave a sub-threshold prefix on disk
   if (detectSecret(full)) return null;
-  const text = full.slice(0, MAX_TEXT_CHARS);
+  const text = teachingSentence(full, kind).slice(0, MAX_TEXT_CHARS);
   if (notes.some((n) => n.text === text)) return null; // repeated verbatim; already noted
   const next = [...notes, { at, kind, text }];
   return next.length > MAX_CORRECTIONS ? next.slice(-MAX_CORRECTIONS) : next;

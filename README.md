@@ -129,7 +129,8 @@ tomorrow, the skills and their distribution keep working.
 - **Scope.** A general lesson is `scope: team`; a repo-specific one is scoped to
   that repo's git remote and says so in its own text.
 - **Grounded case.** Every skill carries the case that produced it and the behavior
-  that proves it — a regression anchor, not just prose.
+  that would show it still holds — evidence you can check it against, not just prose.
+  (Nothing re-runs it for you; it is there for the moment a skill is challenged.)
 
 ## Knowing it's working
 
@@ -144,6 +145,18 @@ tomorrow, the skills and their distribution keep working.
 - Nothing happened → it says nothing. Silence it with `~/.teamhandbook/config.json` →
   `{"notify": {"sessionStart": false}}`.
 
+**And whether the skills are actually used.** Claude Code reports a skill invocation
+to the same hook TeamHandbook already listens on, so `/handbook:status` can tell you
+which kept lessons earn their place:
+
+```
+Skills in use:   3/5 have fired, 22 times total (most used: no-db-mocks ×11)
+```
+
+A name and a count — no arguments, no file contents, and it never leaves your
+machine. It is the one number here you didn't produce by clicking something, which
+makes it the only honest answer to *"is this thing worth keeping installed?"*
+
 `/handbook:status` shows the full picture anytime; `/handbook:doctor` diagnoses a
 gate that can't reach your `claude` CLI.
 
@@ -152,8 +165,9 @@ gate that can't reach your `claude` CLI.
 | Command | What it does |
 |---|---|
 | `/handbook:review` | Review each lesson: keep it for yourself, put it in this repo, share it with the team, edit it first, or reject. **Nothing is installed or shared without this.** |
+| `/handbook:demo` | Walk the whole loop in about two minutes on a scratch project — a teaching you type yourself, a real failure, and the review screen quoting you back. |
 | `/handbook:learn` | Capture something on demand — an error→fix moment or a completed task's procedure — without waiting for the session harvest. |
-| `/handbook:status` | Ledger, queue, detector counters, harvest config, and a since-install recap. |
+| `/handbook:status` | Ledger, queue, detector counters, how often your skills actually fired, harvest config, and a since-install recap. |
 | `/handbook:doctor` | One-command diagnosis: node, claude CLI (probed with every model you configured), hooks firing, config, team repo, forge CLI. |
 | `/handbook:init` | Scaffold a team skill repo and print the command teammates run. |
 | `/handbook:join <url>` | Point the engine at an existing team skill repo. |
@@ -233,11 +247,17 @@ Everything is optional; defaults are shown.
   deterministic error→fix pairs the hooks captured.
 - **A "correction" needs you to have said it.** If you fixed Claude's approach by
   editing the file yourself instead of telling it the rule, there's nothing to quote.
-- **Recurrence counts are per-machine.** The same trap hit on two machines scores
-  lower on recurrence than it deserves. It still gets harvested — recurrence is one
-  of five criteria, not a gate.
+- **Recurrence counts are per-machine.** Repeats are matched locally — the same
+  teaching given on your laptop and your desktop counts as two firsts, not a repeat.
+  It still gets harvested: recurrence is one of five criteria, not a gate.
+- **Repeat matching is word overlap, not understanding.** Two phrasings of the same
+  rule match when they share most of their content words. A lesson restated in
+  completely different words reads as new — a missed repeat, never a false one.
 - **v2 produces skills only.** Routing lessons to tests, lint rules, or `AGENTS.md`
   lines is future work.
+- **Usage counts start when you install this version.** Skills you kept earlier show
+  as never fired until they next come up, so read a fresh zero as "no data yet"
+  rather than "useless".
 - A harvest that can't reach `claude` retries up to 3 times, then parks the whole
   session in `~/.teamhandbook/abandoned.jsonl` rather than dropping it silently;
   `/handbook:status` reports the count.

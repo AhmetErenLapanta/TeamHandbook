@@ -40,9 +40,22 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   case, and its metadata.
 - `counters.json`, `pipeline.log` — activity counters and one line per harvest run
   (what was produced, sieved, or errored). `pipeline.log` is rotated, never deleted.
+- `teachings.json` — what you have already taught, so a rule you give twice is
+  recognized as a repeat instead of scored as a guess. Holds the content words of
+  each teaching, a count, and a 160-character sample of your own sentence — the same
+  text the session files already keep, behind the same secret scan, capped at the
+  200 most recent. Local only.
+- `skill-usage.json` — how many times each skill has fired, and when. Claude Code
+  reports a skill invocation to the same hook TeamHandbook already listens on, so this
+  is a name and a count: no arguments, no file contents, no prompt. The hook sees
+  **every** skill you invoke, including ones from other plugins, and the file records
+  them all; what `/handbook:status` reports on is deliberately narrower — only the
+  skills TeamHandbook itself delivered or pulled from your team repo, because counting
+  the others would credit TeamHandbook with work it did not do. Either way it never
+  leaves your machine.
 - `config.json` — your settings. `muted.json` — fingerprints silenced by
   `reject --never`. Notice state (`welcomed`, `notified-counters.json`,
-  `nudged-work.json`, `nudged-team`, `last-digest`, `seen-skills.json`) — what has
+  `nudged-team`, `last-digest`, `seen-skills.json`) — what has
   already been shown to you, so a notice never repeats.
 - `debug/` — raw hook payloads, written only when you set `TEAMHANDBOOK_DEBUG=1`.
 - `abandoned.jsonl` — a harvest job that failed to reach `claude` three times is

@@ -452,6 +452,56 @@ function captureBashSuccess(input, home = handbookHome()) {
   return resolved.length;
 }
 
+// src/lib/usage.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+import { basename, join as join3 } from "node:path";
+
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+
+// src/lib/init.ts
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
+
+// src/lib/usage.ts
+function usageFile(home = handbookHome()) {
+  return join3(home, "skill-usage.json");
+}
+function readSkillUsage(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync3(usageFile(home), "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const usage = {};
+    for (const [slug, value] of Object.entries(parsed)) {
+      const entry = value;
+      if (typeof entry?.count === "number" && typeof entry?.lastAt === "string") {
+        usage[slug] = { count: entry.count, lastAt: entry.lastAt };
+      }
+    }
+    return usage;
+  } catch {
+    return {};
+  }
+}
+function recordSkillUse(slug, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString()) {
+  if (!slug) return;
+  const usage = readSkillUsage(home);
+  const prior = usage[slug];
+  usage[slug] = { count: (prior?.count ?? 0) + 1, lastAt: at };
+  writeFileAtomic(usageFile(home), JSON.stringify(usage, null, 2) + "\n");
+}
+
 // src/hooks/post-tool-use.ts
 async function main() {
   const raw = await readStdin();
@@ -459,6 +509,11 @@ async function main() {
   const input = parseHookInput(raw);
   if (!input) return;
   bumpCounter("postToolUse");
+  if (input.tool_name === "Skill") {
+    const slug = typeof input.tool_input?.skill === "string" ? input.tool_input.skill : "";
+    recordSkillUse(slug);
+    return;
+  }
   recordActivity(input);
   if (captureBashFailure(input)) {
     bumpCounter("bashFailuresCaptured");

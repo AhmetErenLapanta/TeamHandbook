@@ -127,7 +127,7 @@ export function buildDistillPrompt(signal: Signal, occurrences: number): string 
     "- name: short kebab-case identifier, max 64 chars",
     "- description: single line, max 1024 chars, must state the trigger situation",
     ...bodyRule,
-    "- expect: the observable outcome that proves it was done right (used as a regression gate)",
+    "- expect: the observable outcome that proves it was done right (the evidence a reader checks it against)",
   ].join("\n");
 }
 
@@ -205,9 +205,10 @@ export function assembleSkillMd(draft: DistilledDraft, scope: string, from: Skil
     "",
     "## Grounded case",
     "",
-    `This skill was distilled from a real ${origin}. The originating case and its`,
-    "expected behavior live in [grounded-case.json](grounded-case.json) and serve as the",
-    "regression gate whenever this skill is edited or challenged.",
+    `This skill was distilled from a real ${origin}. The case that produced it — and the`,
+    "behavior that would show it still holds — is in [grounded-case.json](grounded-case.json).",
+    "Nothing re-runs it automatically: it is there so a human or an agent can check this",
+    "skill against its evidence when it is edited, challenged, or suspected of being stale.",
     "",
   ].join("\n");
 }

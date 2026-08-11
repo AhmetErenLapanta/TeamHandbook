@@ -4,7 +4,10 @@ import { handbookHome } from "./session-state.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { fenceUntrusted } from "./prompt-safety.js";
 import { signalSecret } from "./secrets.js";
+import { maybeDumpPayload } from "./counters.js";
 import { claudeErrorReason, runClaudeCli } from "./score.js";
+import { contentWords, recordAndMatchTeachings, sameTeaching } from "./teachings.js";
+import type { Echo } from "./teachings.js";
 import type { ClaudeRunner } from "./score.js";
 import {
   assembleSkillMd,
@@ -80,6 +83,9 @@ export interface HarvestEvidence {
   // teaching-shaped prompts flagged deterministically as the user typed them, so a
   // mid-session correction survives transcript slicing
   corrections?: Array<{ at: string; kind: string; text: string }>;
+  // how many EARLIER sessions taught each of those — the model cannot see past
+  // sessions, so without this the recurrence score for a teaching is a guess
+  echoes?: Echo[];
 }
 
 export interface HarvestJob {
@@ -112,6 +118,50 @@ export interface HarvestItem {
 }
 
 const CRITERIA = ["recurrence", "unfindability", "generality", "durability", "costOfError"];
+
+/**
+ * A repeat that produced nothing new still matters. The usual reason the harvest
+ * returns [] on a re-teaching is that a candidate for it is already pending — and
+ * "you have now told Claude this twice, and the skill for it is still waiting for
+ * your call" is the strongest honest reason to go review it. Matched on the
+ * candidate's own description, which is what it claims to be about.
+ */
+function markRepeatsOnPending(home: string, echoes: Echo[] | undefined, sessionId: string): void {
+  const repeats = (echoes ?? []).filter((e) => e.priorSessions > 0);
+  if (repeats.length === 0) return;
+  for (const meta of listCandidates(home, "pending")) {
+    if (meta.sessionId === sessionId) continue; // this session's own candidate already carries it
+    const words = contentWords(meta.description);
+    const echo = repeats.find((e) => sameTeaching(words, contentWords(e.text)));
+    if (!echo || (meta.taughtBefore ?? 0) >= echo.priorSessions + 1) continue;
+    writeCandidateMeta(join(candidatesDir(home), meta.slug), {
+      ...meta,
+      taughtBefore: echo.priorSessions + 1,
+    });
+  }
+}
+
+/** Tie a proposed lesson back to the repeated teaching that produced it, so the
+ * review can say "you have told Claude this twice" instead of only scoring it
+ * higher in private. Matched on the quote, since that is the model's own claim
+ * about which words it came from. */
+function echoFor(
+  item: HarvestItem,
+  echoes: Echo[] | undefined,
+): { taughtBefore: number } | null {
+  if (!item.quote || !echoes?.length) return null;
+  const words = contentWords(item.quote);
+  const match = echoes.find((e) => e.priorSessions > 0 && sameTeaching(words, contentWords(e.text)));
+  return match ? { taughtBefore: match.priorSessions } : null;
+}
+
+/** Repetition across sessions is the single strongest reason to turn a teaching into
+ * a skill, and it is the one thing a one-session model call cannot observe. */
+function echoNote(text: string, echoes: Echo[] | undefined): string {
+  const echo = echoes?.find((e) => e.text === text);
+  if (!echo || echo.priorSessions < 1) return "";
+  return ` [the developer taught this in ${echo.priorSessions} earlier session${echo.priorSessions === 1 ? "" : "s"}, first on ${echo.firstAt.slice(0, 10)}]`;
+}
 
 export function buildHarvestPrompt(input: {
   slice: string;
@@ -154,6 +204,8 @@ export function buildHarvestPrompt(input: {
     "- One-off trivia, personal preferences without team value, and anything derivable",
     "  from the repo's own README/tests score low.",
     `- Score each item 0-2 on: ${CRITERIA.join(", ")}.`,
+    "- recurrence is evidence, not a hunch: score it 2 only when a pair is marked as",
+    "  recurred or a teaching is marked as taught in earlier sessions.",
     '- scope: "team" for knowledge that travels anywhere; "project" for facts specific',
     "  to this repository.",
     "",
@@ -165,7 +217,9 @@ export function buildHarvestPrompt(input: {
       "recent review decisions": decisionsText,
       "conversation (sliced)": slice || "(transcript unavailable)",
       "teachings the user typed (flagged verbatim — strongest candidates)":
-        (evidence.corrections ?? []).map((c) => `- [${c.kind}] ${c.text}`).join("\n") || "(none)",
+        (evidence.corrections ?? [])
+          .map((c) => `- [${c.kind}] ${c.text}${echoNote(c.text, evidence.echoes)}`)
+          .join("\n") || "(none)",
       "resolved error→fix pairs": pairsText || "(none)",
       "session work shape": input.evidence.work
         ? `families: ${input.evidence.work.families.join(", ")}; file types: ${input.evidence.work.exts.join(", ")}`
@@ -238,18 +292,51 @@ function parseItem(raw: unknown): HarvestItem | null {
 
 /** Strict parse of the harvest reply. Unparseable → null (fail closed, caller logs
  * an error); individually invalid items are dropped, valid ones survive. */
-export function parseHarvestResponse(raw: string): HarvestItem[] | null {
-  const start = raw.indexOf("[");
-  const end = raw.lastIndexOf("]");
-  if (start === -1 || end <= start) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return null;
+/** The balanced end of the JSON array starting at `from`, string literals respected. */
+function balancedArrayAt(raw: string, from: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = from; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "[") depth += 1;
+    else if (ch === "]" && --depth === 0) return raw.slice(from, i + 1);
   }
-  if (!Array.isArray(parsed)) return null;
-  return parsed.map(parseItem).filter((i): i is HarvestItem => i !== null);
+  return null;
+}
+
+/**
+ * Models routinely wrap the array in a ```json fence and add a sentence explaining
+ * themselves. Reading from the first "[" to the LAST "]" swallowed any bracket in
+ * that trailing sentence — a markdown link, a "[TeamHandbook]" — and lost the whole
+ * session as unparseable. Take the balanced close instead, and when a bracket in the
+ * prose came first, try the next one. Still fail-closed: no valid array, no items.
+ */
+export function parseHarvestResponse(raw: string): HarvestItem[] | null {
+  for (
+    let attempt = 0, from = raw.indexOf("[");
+    attempt < 5 && from !== -1;
+    attempt += 1, from = raw.indexOf("[", from + 1)
+  ) {
+    const candidate = balancedArrayAt(raw, from);
+    if (!candidate) continue;
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (Array.isArray(parsed)) {
+        return parsed.map(parseItem).filter((i): i is HarvestItem => i !== null);
+      }
+    } catch {
+      // that bracket opened inside prose; try the next one
+    }
+  }
+  return null;
 }
 
 // ── sieves ──────────────────────────────────────────────────────────────────
@@ -383,13 +470,23 @@ export async function harvestSession(
 
   const dirs = deps.skillDirs ? deps.skillDirs(home, job.cwd) : defaultHarvestSkillDirs(home, job.cwd);
   const existingSkills = deps.listSkills ? deps.listSkills(dirs) : listSkillsSafe(dirs);
+  // Descriptions, not just slugs: told only "testcontainers-postgres-tests: pending"
+  // the model cannot tell what that candidate already covers, and proposes a
+  // near-duplicate of it — which is how a review queue fills up with the same lesson.
   const recentDecisions = listCandidates(home)
     .slice(0, 20)
-    .map((c) => `- ${c.slug}: ${c.status}`);
+    .map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
+
+  // match before prompting, and in one call: this both reads the memory of past
+  // teachings and folds this session into it
+  const evidence: HarvestEvidence = {
+    ...job.evidence,
+    echoes: recordAndMatchTeachings((job.evidence.corrections ?? []).map((c) => c.text), home),
+  };
 
   const prompt = buildHarvestPrompt({
     slice,
-    evidence: job.evidence,
+    evidence,
     existingSkills,
     recentDecisions,
     maxItems: config.maxPerSession,
@@ -398,6 +495,9 @@ export async function harvestSession(
   let response: string;
   try {
     response = await runner(prompt, config.model, config.timeoutMs);
+    // "it learned nothing" and "it broke" look identical from the outside; with
+    // TEAMHANDBOOK_DEBUG=1 the reply that decided it is on disk to read
+    maybeDumpPayload(response, home);
   } catch (err) {
     return { outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}`, written: [] };
   }
@@ -453,10 +553,13 @@ export async function harvestSession(
       // routing off that would suggest publishing a one-repo rule to everyone.
       suggestedTarget:
         item.scope === "project" ? "project" : suggestedTargetFor(scope, teamConfigured),
+      ...(echoFor(item, evidence.echoes) ?? {}),
     };
     writeCandidateMeta(dir, meta);
     written.push(slug);
   }
+
+  markRepeatsOnPending(home, evidence.echoes, job.sessionId);
 
   return {
     outcome: "harvested",

@@ -235,6 +235,19 @@ describe("queue", () => {
       expect(formatCandidateList([])).toBe("No pending candidates.");
     });
   });
+
+  it("given a candidate.json without createdAt, when listing, then it is still listed instead of crashing the queue", () => {
+    mkdirSync(join(home, "candidates", "hand-edited"), { recursive: true });
+    writeFileSync(
+      join(home, "candidates", "hand-edited", "candidate.json"),
+      JSON.stringify({ status: "pending", description: "d", scope: "repo" }),
+    );
+
+    const listed = listCandidates(home);
+
+    expect(listed.map((c) => c.slug)).toContain("hand-edited");
+    expect(listed.find((c) => c.slug === "hand-edited")?.createdAt).toBe("");
+  });
 });
 
 describe("reject semantics", () => {

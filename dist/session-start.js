@@ -21,7 +21,7 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync6, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -40,7 +40,7 @@ function writeFileAtomic(file, data) {
 }
 
 // src/lib/notify.ts
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -239,10 +239,10 @@ function parseSkillFrontmatter(md) {
   const scope = fields.get("scope");
   return { name, description, ...scope ? { scope } : {} };
 }
-function isRejectedCandidate(dir, entry) {
+function isDecidedCandidate(dir, entry) {
   try {
     const meta = JSON.parse(readFileSync4(join4(dir, entry, "candidate.json"), "utf8"));
-    return meta?.status === "rejected";
+    return meta?.status === "rejected" || meta?.status === "approved";
   } catch {
     return false;
   }
@@ -257,7 +257,7 @@ function listExistingSkills(dirs) {
       continue;
     }
     for (const entry of entries) {
-      if (isRejectedCandidate(dir, entry)) continue;
+      if (isDecidedCandidate(dir, entry)) continue;
       let raw;
       try {
         raw = readFileSync4(join4(dir, entry, "SKILL.md"), "utf8");
@@ -389,7 +389,11 @@ function readCandidateMeta(dir) {
   try {
     const parsed = JSON.parse(readFileSync5(candidateMetaFile(dir), "utf8"));
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
-      return { ...parsed, slug: basename(dir) };
+      return {
+        ...parsed,
+        slug: basename(dir),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
+      };
     }
   } catch {
   }
@@ -410,6 +414,41 @@ function listCandidates(home = handbookHome(), status) {
   );
 }
 
+// src/lib/usage.ts
+import { readFileSync as readFileSync6 } from "node:fs";
+import { basename as basename2, join as join7 } from "node:path";
+function usageFile(home = handbookHome()) {
+  return join7(home, "skill-usage.json");
+}
+function readSkillUsage(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync6(usageFile(home), "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const usage = {};
+    for (const [slug, value] of Object.entries(parsed)) {
+      const entry = value;
+      if (typeof entry?.count === "number" && typeof entry?.lastAt === "string") {
+        usage[slug] = { count: entry.count, lastAt: entry.lastAt };
+      }
+    }
+    return usage;
+  } catch {
+    return {};
+  }
+}
+function handbookSkills(home = handbookHome()) {
+  const delivered = listCandidates(home, "approved").filter((c) => c.deliveredMode === "personal" || c.deliveredMode === "solo").map((c) => c.deliveredTo ? basename2(c.deliveredTo) : c.slug);
+  const teamDir = teamSkillsDir(home);
+  const fromTeam = teamDir ? listExistingSkills([teamDir]).map((s) => s.name) : [];
+  return [.../* @__PURE__ */ new Set([...delivered, ...fromTeam])];
+}
+function summarizeUsage(usage, known) {
+  const relevant = known.filter((slug) => usage[slug]);
+  const totalUses = relevant.reduce((sum, slug) => sum + usage[slug].count, 0);
+  const top = relevant.map((slug) => ({ slug, count: usage[slug].count })).sort((a, b) => b.count - a.count)[0];
+  return { fired: relevant.length, totalUses, topSkill: top ?? null };
+}
+
 // src/lib/notify.ts
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
@@ -419,7 +458,7 @@ function loadNotifyConfig(home = handbookHome()) {
   };
 }
 function welcomeMarkerFile(home) {
-  return join7(home, "welcomed");
+  return join8(home, "welcomed");
 }
 function isFirstRun(home = handbookHome()) {
   const marker = welcomeMarkerFile(home);
@@ -428,13 +467,13 @@ function isFirstRun(home = handbookHome()) {
   return true;
 }
 function heartbeatSnapshotFile(home) {
-  return join7(home, "notified-counters.json");
+  return join8(home, "notified-counters.json");
 }
 function heartbeatDelta(home = handbookHome()) {
   const current = readCounters(home);
   let prior = { bashFailuresCaptured: 0, pairsResolved: 0, gateErrors: 0 };
   try {
-    const parsed = JSON.parse(readFileSync6(heartbeatSnapshotFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(heartbeatSnapshotFile(home), "utf8"));
     prior = {
       bashFailuresCaptured: Number(parsed?.bashFailuresCaptured) || 0,
       pairsResolved: Number(parsed?.pairsResolved) || 0,
@@ -462,17 +501,17 @@ function heartbeatDelta(home = handbookHome()) {
 }
 var TEAM_NUDGE_APPROVALS = 3;
 function teamNudgeMarkerFile(home) {
-  return join7(home, "nudged-team");
+  return join8(home, "nudged-team");
 }
 function digestMarkerFile(home) {
-  return join7(home, "last-digest");
+  return join8(home, "last-digest");
 }
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function weeklyDigest(home = handbookHome(), now = Date.now()) {
   const marker = digestMarkerFile(home);
   let since = 0;
   try {
-    since = Date.parse(readFileSync6(marker, "utf8").trim());
+    since = Date.parse(readFileSync7(marker, "utf8").trim());
   } catch {
     writeFileAtomic(marker, new Date(now).toISOString() + "\n");
     return null;
@@ -492,6 +531,12 @@ function weeklyDigest(home = handbookHome(), now = Date.now()) {
   if (kept > 0) parts.push(`${kept} skill${kept === 1 ? "" : "s"} kept`);
   if (shared > 0) parts.push(`${shared} shared with the team`);
   if (pending > 0) parts.push(`${pending} waiting for your call`);
+  const usage = summarizeUsage(readSkillUsage(home), handbookSkills(home));
+  if (usage.totalUses > 0) {
+    parts.push(
+      `your skills fired ${usage.totalUses} time${usage.totalUses === 1 ? "" : "s"}` + (usage.topSkill ? ` (${usage.topSkill.slug} most of all)` : "")
+    );
+  }
   return `TeamHandbook \u2014 your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
 }
 function pendingTeamNudge(home = handbookHome()) {
@@ -505,15 +550,15 @@ function pendingTeamNudge(home = handbookHome()) {
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync5(join7(home, "pending"));
+    entries = readdirSync5(join8(home, "pending"));
   } catch {
     return 0;
   }
   let total = 0;
   for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
+    if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync6(join7(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync7(join8(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -521,11 +566,11 @@ function pendingHarvestCount(home = handbookHome()) {
   return total;
 }
 function seenSkillsFile(home = handbookHome()) {
-  return join7(home, "seen-skills.json");
+  return join8(home, "seen-skills.json");
 }
 function readSeenSkills(home) {
   try {
-    const parsed = JSON.parse(readFileSync6(seenSkillsFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(seenSkillsFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     return parsed;
   } catch {
@@ -546,6 +591,7 @@ function buildSessionStartSummary(inputs) {
     pending,
     pendingPreviews = [],
     harvested = null,
+    harvestedNothing = false,
     newSkills,
     firstRun = false,
     heartbeat = null,
@@ -561,21 +607,28 @@ function buildSessionStartSummary(inputs) {
   }
   if (firstRun) {
     lines.push(
-      'TeamHandbook is active \u2014 it learns from the corrections you give, the procedures you complete, and the traps you hit. After each session where you did real work, it reads that session (your prompts included, secrets redacted) through your OWN claude CLI and tells you at your next session start what it learned \u2014 you decide whether to keep it, put it in the repo, or share it with the team. Nothing installs or ships without your say-so. Turn the reading off entirely with ~/.teamhandbook/config.json \u2192 {"harvest": {"enabled": false}}. Run /handbook:doctor once to confirm TeamHandbook can reach your claude CLI.'
+      'TeamHandbook is active \u2014 it learns from the corrections you give, the procedures you complete, and the traps you hit. After each session where you did real work, it reads that session (your prompts included, secrets redacted) through your OWN claude CLI and tells you at your next session start what it learned \u2014 you decide whether to keep it, put it in the repo, or share it with the team. Nothing installs or ships without your say-so. Turn the reading off entirely with ~/.teamhandbook/config.json \u2192 {"harvest": {"enabled": false}}. Want to see the whole loop in two minutes instead of waiting? Run /handbook:demo. And /handbook:doctor once confirms TeamHandbook can reach your claude CLI.'
     );
   }
   if (harvested) {
     const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
     const more = harvested.more > 0 ? ` (+${harvested.more} more)` : "";
+    const repeats = (harvested.taughtBefore ?? 0) + 1;
+    const lead = repeats > 1 ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions` : "TeamHandbook learned from your last session";
     lines.push(
-      `TeamHandbook learned from your last session: "${harvested.name}" (${harvested.kind}${score})${more} \u2014 keep it for yourself, share it with the team, or skip: run /handbook:review.`
+      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} \u2014 keep it for yourself, share it with the team, or skip: run /handbook:review.`
     );
   }
   if (pending > 0) {
     const noun = pending === 1 ? "candidate skill is" : "candidate skills are";
     const preview = pendingPreviews.length > 0 ? ` (${pendingPreviews.join("; ")})` : "";
+    const repeated = inputs.pendingRepeats ?? 0;
+    const nag = repeated > 0 ? ` \u2014 you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.` : " \u2014 run /handbook:review to approve or reject.";
+    lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
+  }
+  if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {
     lines.push(
-      `handbook: ${pending} ${noun} awaiting your review${preview} \u2014 run /handbook:review to approve or reject.`
+      "handbook: read your last session and found nothing worth keeping \u2014 that's a normal answer, not a failure. Run /handbook:learn if there was something it missed."
     );
   }
   if (scoring > 0 && pending === 0 && !harvested) {
@@ -608,32 +661,56 @@ function buildSessionStartSummary(inputs) {
   }
   return lines.length > 0 ? lines.join("\n") : null;
 }
+function lastHarvestFoundNothing(home) {
+  let raw;
+  try {
+    raw = readFileSync7(join8(home, "pipeline.log"), "utf8");
+  } catch {
+    return false;
+  }
+  const lines = raw.split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const run = JSON.parse(lines[i]);
+      if (!run?.harvest) continue;
+      return !run.harvest.skipped && Array.isArray(run.written) && run.written.length === 0 && !run.errored;
+    } catch {
+    }
+  }
+  return false;
+}
 function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   const config = loadNotifyConfig(home);
   if (!config.sessionStart) return null;
   const pendingCandidates = listCandidates(home, "pending");
   const harvestedPending = pendingCandidates.filter((c) => c.origin === "harvest");
   const rest = pendingCandidates.filter((c) => c.origin !== "harvest");
-  const top = harvestedPending.sort((a, b) => (b.gate?.total ?? -1) - (a.gate?.total ?? -1))[0];
+  const top = harvestedPending.sort(
+    (a, b) => (b.taughtBefore ?? 0) - (a.taughtBefore ?? 0) || (b.gate?.total ?? -1) - (a.gate?.total ?? -1)
+  )[0];
   const harvested = top ? {
     name: top.slug,
     kind: top.kind ?? "lesson",
     total: top.gate?.total ?? null,
-    more: harvestedPending.length - 1
+    more: harvestedPending.length - 1,
+    ...top.taughtBefore ? { taughtBefore: top.taughtBefore } : {}
   } : null;
+  const pendingRepeats = Math.max(0, ...rest.map((c) => c.taughtBefore ? c.taughtBefore + 1 : 0));
   const pendingPreviews = rest.slice(0, 2).map((c) => `${c.slug} \u2014 ${c.description.slice(0, 60)}`);
-  const watchedDirs = [join7(cwd, ".claude", "skills")];
+  const watchedDirs = [join8(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
   const newSkills = watchedDirs.flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home)).sort();
   return buildSessionStartSummary({
     pending: rest.length,
     pendingPreviews,
+    pendingRepeats,
     harvested,
     newSkills,
     firstRun: isFirstRun(home),
     heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
     teamNudge: pendingTeamNudge(home),
+    harvestedNothing: lastHarvestFoundNothing(home),
     digest: weeklyDigest(home),
     configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home)
@@ -641,8 +718,8 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
 }
 
 // src/lib/signals.ts
-import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync7 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync8 } from "node:fs";
+import { join as join9 } from "node:path";
 function sanitizeSignalsForPersistence(signals) {
   let redacted = 0;
   const clean = signals.map((s) => {
@@ -665,13 +742,13 @@ function sanitizeSignalsForPersistence(signals) {
   return { clean, redacted };
 }
 function signalsFile(home = handbookHome()) {
-  return join8(home, "signals.jsonl");
+  return join9(home, "signals.jsonl");
 }
 function ledgerFingerprintCounts(home = handbookHome()) {
   const counts = /* @__PURE__ */ new Map();
   let raw;
   try {
-    raw = readFileSync7(signalsFile(home), "utf8");
+    raw = readFileSync8(signalsFile(home), "utf8");
   } catch {
     return counts;
   }
@@ -724,7 +801,7 @@ function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__
 function ledgerPairsForSession(sessionId, home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync7(signalsFile(home), "utf8");
+    raw = readFileSync8(signalsFile(home), "utf8");
   } catch {
     return [];
   }
@@ -757,14 +834,14 @@ import {
   appendFileSync as appendFileSync2,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync6,
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   renameSync as renameSync2,
   rmSync as rmSync3,
   statSync as statSync2,
   utimesSync,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename2, join as join9 } from "node:path";
+import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/harvest.ts
 var defaultHarvestConfig = {
@@ -791,19 +868,19 @@ function loadHarvestConfig(home = handbookHome()) {
 
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
-  return join9(home, "pending");
+  return join10(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
   mkdirSync4(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
-  let file = join9(pendingDir(home), `${base}.json`);
+  let file = join10(pendingDir(home), `${base}.json`);
   for (let i = 0; i < 50; i++) {
     try {
       writeFileSync4(file, JSON.stringify(job), { flag: "wx" });
       return file;
     } catch {
-      file = join9(pendingDir(home), `${base}-x${i}.json`);
+      file = join10(pendingDir(home), `${base}-x${i}.json`);
     }
   }
   return null;

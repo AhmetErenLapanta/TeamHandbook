@@ -205,7 +205,7 @@ plugin marketplace; every merge reaches all subscribed teammates automatically.
 Every merge to the default branch bumps the plugin version via CI
 (\`scripts/bump-version.mjs\`), which triggers Claude Code's background marketplace
 update on each teammate's machine. Skills live under \`skills/\`, one directory per
-skill (\`SKILL.md\` plus its \`grounded-case.json\` regression anchor).
+skill (\`SKILL.md\` plus the \`grounded-case.json\` evidence it was distilled from).
 
 > **CI setup (required for the above to work):** ${ciSetup} With it unset, merges do
 > not bump the version and teammates silently stop receiving updates.

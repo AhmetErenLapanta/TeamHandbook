@@ -175,7 +175,7 @@ import {
 import { basename as basename2, join as join9 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir2, tmpdir } from "node:os";
+import { homedir as homedir3, tmpdir } from "node:os";
 import { dirname as dirname2, join as join5 } from "node:path";
 
 // src/lib/distill.ts
@@ -409,12 +409,13 @@ async function scoreSignal(signal, occurrences, config = defaultScoreConfig, run
 
 // src/lib/skill-index.ts
 import { readdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
 import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
   return join3(home, "candidates");
 }
 function defaultSkillDirs(home = handbookHome(), cwd = process.cwd()) {
-  return [candidatesDir(home), join3(cwd, ".claude", "skills")];
+  return [candidatesDir(home), join3(cwd, ".claude", "skills"), join3(homedir2(), ".claude", "skills")];
 }
 function parseSkillFrontmatter(md) {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
@@ -435,10 +436,10 @@ function parseSkillFrontmatter(md) {
   const scope = fields.get("scope");
   return { name, description, ...scope ? { scope } : {} };
 }
-function isRejectedCandidate(dir, entry) {
+function isDecidedCandidate(dir, entry) {
   try {
     const meta = JSON.parse(readFileSync2(join3(dir, entry, "candidate.json"), "utf8"));
-    return meta?.status === "rejected";
+    return meta?.status === "rejected" || meta?.status === "approved";
   } catch {
     return false;
   }
@@ -453,7 +454,7 @@ function listExistingSkills(dirs) {
       continue;
     }
     for (const entry of entries) {
-      if (isRejectedCandidate(dir, entry)) continue;
+      if (isDecidedCandidate(dir, entry)) continue;
       let raw;
       try {
         raw = readFileSync2(join3(dir, entry, "SKILL.md"), "utf8");
@@ -612,7 +613,7 @@ function buildDistillPrompt(signal, occurrences) {
     "- name: short kebab-case identifier, max 64 chars",
     "- description: single line, max 1024 chars, must state the trigger situation",
     ...bodyRule,
-    "- expect: the observable outcome that proves it was done right (used as a regression gate)"
+    "- expect: the observable outcome that proves it was done right (the evidence a reader checks it against)"
   ].join("\n");
 }
 function parseDistillResponse(text) {
@@ -666,9 +667,10 @@ ${draft.body}` : draft.body;
     "",
     "## Grounded case",
     "",
-    `This skill was distilled from a real ${origin}. The originating case and its`,
-    "expected behavior live in [grounded-case.json](grounded-case.json) and serve as the",
-    "regression gate whenever this skill is edited or challenged.",
+    `This skill was distilled from a real ${origin}. The case that produced it \u2014 and the`,
+    "behavior that would show it still holds \u2014 is in [grounded-case.json](grounded-case.json).",
+    "Nothing re-runs it automatically: it is there so a human or an agent can check this",
+    "skill against its evidence when it is edited, challenged, or suspected of being stale.",
     ""
   ].join("\n");
 }
@@ -761,7 +763,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join5(homedir2(), ".claude", "plugins", "marketplaces");
+  return join5(homedir3(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);

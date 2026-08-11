@@ -26,6 +26,9 @@ export interface CandidateMeta {
   kind?: "procedure" | "correction" | "error-fix" | "discovery";
   // default answer to "keep it, or share it?" — derived from scope + team config
   suggestedTarget?: "personal" | "project" | "team";
+  // how many sessions this lesson was taught in before the one that produced it —
+  // the "you have said this twice" evidence, absent when it is the first time
+  taughtBefore?: number;
 }
 
 const STATUSES: CandidateStatus[] = ["pending", "approved", "rejected"];
@@ -107,7 +110,14 @@ export function readCandidateMeta(dir: string): CandidateMeta | null {
       typeof parsed.description === "string" &&
       typeof parsed.scope === "string"
     ) {
-      return { ...parsed, slug: basename(dir) };
+      // the slug is the directory, and createdAt is normalized here rather than
+      // trusted: it is sorted on, so one hand-edited or older-schema file without
+      // it would take down every command that lists the queue
+      return {
+        ...parsed,
+        slug: basename(dir),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
+      };
     }
   } catch {
     // fall through to synthesis from the artifact files

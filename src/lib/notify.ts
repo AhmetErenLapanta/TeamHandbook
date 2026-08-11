@@ -6,6 +6,7 @@ import { configIsBroken, readConfigFile } from "./config.js";
 import { readCounters } from "./counters.js";
 import { loadTeamConfig, teamSkillsDir } from "./init.js";
 import { listCandidates } from "./queue.js";
+import { readSkillUsage, handbookSkills, summarizeUsage } from "./usage.js";
 import { listExistingSkills } from "./skill-index.js";
 
 export interface NotifyConfig {
@@ -136,6 +137,15 @@ export function weeklyDigest(home: string = handbookHome(), now: number = Date.n
   if (kept > 0) parts.push(`${kept} skill${kept === 1 ? "" : "s"} kept`);
   if (shared > 0) parts.push(`${shared} shared with the team`);
   if (pending > 0) parts.push(`${pending} waiting for your call`);
+  // decisions are the user's own clicks; usage is the only line that reports back
+  // something they did NOT do — whether a kept skill actually fired
+  const usage = summarizeUsage(readSkillUsage(home), handbookSkills(home));
+  if (usage.totalUses > 0) {
+    parts.push(
+      `your skills fired ${usage.totalUses} time${usage.totalUses === 1 ? "" : "s"}` +
+        (usage.topSkill ? ` (${usage.topSkill.slug} most of all)` : ""),
+    );
+  }
   return `TeamHandbook — your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
 }
 
@@ -151,12 +161,10 @@ export function pendingTeamNudge(home: string = handbookHome()): string | null {
   );
 }
 
-/** Harvest jobs sitting in the pending hand-off, so the notice can say "harvesting"
- * instead of the queue looking empty. Counts only `*.json` job files: the runner
- * drains a job synchronously (rename → read → delete) before it starts calling
- * claude, so there is no on-disk file during the actual harvest — a file-based count
- * can only see the brief pre-drain window, never the harvest itself. Read directly to
- * avoid pulling the pipeline module into the session-start hook bundle. */
+/** Sessions waiting for, or currently in, the background harvest. A runner holds its
+ * claim (`<job>.json.claimed-<pid>`) for the whole harvest, so both shapes count:
+ * queued and in flight. Read directly to avoid pulling the pipeline module into the
+ * session-start hook bundle. */
 export function pendingHarvestCount(home: string = handbookHome()): number {
   let entries: string[];
   try {
@@ -166,7 +174,7 @@ export function pendingHarvestCount(home: string = handbookHome()): number {
   }
   let total = 0;
   for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
+    if (!entry.includes(".json")) continue; // *.json and *.json.claimed-<pid>
     try {
       const parsed = JSON.parse(readFileSync(join(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
@@ -211,8 +219,21 @@ export interface SummaryInputs {
   pending: number;
   // up to a couple of "slug — description" previews to make the review prompt concrete
   pendingPreviews?: string[];
+  // the highest repeat count among the pending queue — a lesson taught again while
+  // its candidate sits unreviewed
+  pendingRepeats?: number;
   // freshly harvested lessons awaiting the keep/share/skip decision — the headline
-  harvested?: { name: string; kind: string; total: number | null; more: number } | null;
+  harvested?: {
+    name: string;
+    kind: string;
+    total: number | null;
+    more: number;
+    // sessions this was already taught in — the promise on the tin, made visible
+    taughtBefore?: number;
+  } | null;
+  // the last harvest ran and honestly found nothing worth keeping. Silence here
+  // reads as "the product is broken", which is the point most users would quit.
+  harvestedNothing?: boolean;
   firstRun?: boolean;
   newSkills: string[];
   heartbeat?: HeartbeatDelta | null;
@@ -228,6 +249,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     pending,
     pendingPreviews = [],
     harvested = null,
+    harvestedNothing = false,
     newSkills,
     firstRun = false,
     heartbeat = null,
@@ -250,7 +272,8 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
         "next session start what it learned — you decide whether to keep it, put it in the repo, or " +
         "share it with the team. Nothing installs or ships without your say-so. Turn the reading off " +
         'entirely with ~/.teamhandbook/config.json → {"harvest": {"enabled": false}}. ' +
-        "Run /handbook:doctor once to confirm TeamHandbook can reach your claude CLI.",
+        "Want to see the whole loop in two minutes instead of waiting? Run /handbook:demo. " +
+        "And /handbook:doctor once confirms TeamHandbook can reach your claude CLI.",
     );
   }
   // The harvest headline: what TeamHandbook just learned, and the one question that
@@ -258,15 +281,34 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
   if (harvested) {
     const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
     const more = harvested.more > 0 ? ` (+${harvested.more} more)` : "";
+    // The whole promise is "what you say twice, you say once". When it really is
+    // the second time, lead with that — it is the moment the product justifies
+    // itself, and it is the developer's own evidence, not a score they must trust.
+    const repeats = (harvested.taughtBefore ?? 0) + 1;
+    const lead =
+      repeats > 1
+        ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions`
+        : "TeamHandbook learned from your last session";
     lines.push(
-      `TeamHandbook learned from your last session: "${harvested.name}" (${harvested.kind}${score})${more} — keep it for yourself, share it with the team, or skip: run /handbook:review.`,
+      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} — keep it for yourself, share it with the team, or skip: run /handbook:review.`,
     );
   }
   if (pending > 0) {
     const noun = pending === 1 ? "candidate skill is" : "candidate skills are";
     const preview = pendingPreviews.length > 0 ? ` (${pendingPreviews.join("; ")})` : "";
+    // a lesson still waiting while the developer keeps re-teaching it is the one
+    // queue item worth interrupting for
+    const repeated = inputs.pendingRepeats ?? 0;
+    const nag =
+      repeated > 0
+        ? ` — you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.`
+        : " — run /handbook:review to approve or reject.";
+    lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
+  }
+  if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {
     lines.push(
-      `handbook: ${pending} ${noun} awaiting your review${preview} — run /handbook:review to approve or reject.`,
+      "handbook: read your last session and found nothing worth keeping — that's a normal " +
+        "answer, not a failure. Run /handbook:learn if there was something it missed.",
     );
   }
   if (scoring > 0 && pending === 0 && !harvested) {
@@ -304,6 +346,28 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
+/** Did the most recent run actually harvest a session and write nothing? Reading the
+ * run log directly keeps the pipeline module out of the session-start bundle. */
+function lastHarvestFoundNothing(home: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(join(home, "pipeline.log"), "utf8");
+  } catch {
+    return false;
+  }
+  const lines = raw.split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const run = JSON.parse(lines[i]!);
+      if (!run?.harvest) continue; // manual runs don't answer this question
+      return !run.harvest.skipped && Array.isArray(run.written) && run.written.length === 0 && !run.errored;
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return false;
+}
+
 export function sessionStartNotice(
   cwd: string,
   home: string = handbookHome(),
@@ -316,15 +380,23 @@ export function sessionStartNotice(
   // pending candidates (manual learns, older items) keep the plain review prompt.
   const harvestedPending = pendingCandidates.filter((c) => c.origin === "harvest");
   const rest = pendingCandidates.filter((c) => c.origin !== "harvest");
-  const top = harvestedPending.sort((a, b) => (b.gate?.total ?? -1) - (a.gate?.total ?? -1))[0];
+  // A lesson the developer keeps re-teaching outranks a higher-scoring one they
+  // said once: repetition is their own evidence that it matters, and it is the
+  // whole promise on the tin.
+  const top = harvestedPending.sort(
+    (a, b) =>
+      (b.taughtBefore ?? 0) - (a.taughtBefore ?? 0) || (b.gate?.total ?? -1) - (a.gate?.total ?? -1),
+  )[0];
   const harvested = top
     ? {
         name: top.slug,
         kind: top.kind ?? "lesson",
         total: top.gate?.total ?? null,
         more: harvestedPending.length - 1,
+        ...(top.taughtBefore ? { taughtBefore: top.taughtBefore } : {}),
       }
     : null;
+  const pendingRepeats = Math.max(0, ...rest.map((c) => (c.taughtBefore ? c.taughtBefore + 1 : 0)));
   const pendingPreviews = rest
     .slice(0, 2)
     .map((c) => `${c.slug} — ${c.description.slice(0, 60)}`);
@@ -339,11 +411,13 @@ export function sessionStartNotice(
   return buildSessionStartSummary({
     pending: rest.length,
     pendingPreviews,
+    pendingRepeats,
     harvested,
     newSkills,
     firstRun: isFirstRun(home),
     heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
     teamNudge: pendingTeamNudge(home),
+    harvestedNothing: lastHarvestFoundNothing(home),
     digest: weeklyDigest(home),
     configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home),

@@ -86,6 +86,16 @@ function teachingKind(prompt) {
   }
   return null;
 }
+function teachingSentence(prompt, kind) {
+  const pattern = TEACHING_PATTERNS.find((p) => p.name === kind);
+  if (!pattern) return prompt;
+  const sentences = prompt.split(/\n+|(?<=[.!?])\s+/).filter((s) => s.trim());
+  const i = sentences.findIndex((s) => pattern.re.test(s));
+  if (i === -1) return prompt;
+  const rule = sentences[i].trim();
+  const next = sentences[i + 1]?.trim();
+  return rule.length < 40 && next ? `${rule} ${next}` : rule;
+}
 var MAX_CORRECTIONS = 10;
 var MAX_TEXT_CHARS = 400;
 function noteCorrection(notes, prompt, at = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -93,7 +103,7 @@ function noteCorrection(notes, prompt, at = (/* @__PURE__ */ new Date()).toISOSt
   if (!kind) return null;
   const full = prompt.trim();
   if (detectSecret(full)) return null;
-  const text = full.slice(0, MAX_TEXT_CHARS);
+  const text = teachingSentence(full, kind).slice(0, MAX_TEXT_CHARS);
   if (notes.some((n) => n.text === text)) return null;
   const next = [...notes, { at, kind, text }];
   return next.length > MAX_CORRECTIONS ? next.slice(-MAX_CORRECTIONS) : next;
