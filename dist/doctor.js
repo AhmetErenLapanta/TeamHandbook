@@ -1,6 +1,6 @@
 // src/lib/doctor.ts
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync as mkdirSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync4, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync4, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join6 } from "node:path";
 
@@ -46,14 +46,27 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/config.ts
-import { readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join3(home, "config.json");
+}
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync2(join3(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync2(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
   }
 }
 
@@ -145,7 +158,8 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    enabled: harvest?.enabled !== false,
+    // fail closed on a broken config — see configIsBroken
+    enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
     minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
@@ -285,15 +299,21 @@ function checkHomeWritable(home) {
 }
 function checkConfig(home) {
   const file = join6(home, "config.json");
-  if (!existsSync(file)) return ok("config", "no config.json (defaults apply)");
+  if (!existsSync2(file)) return ok("config", "no config.json (defaults apply)");
   try {
     const parsed = JSON.parse(readFileSync4(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return fail("config", "config.json is not a JSON object \u2014 it is being IGNORED (defaults apply)");
+      return fail(
+        "config",
+        "config.json is not a JSON object \u2014 automatic harvesting is OFF until it is (the privacy switches fail closed); every other setting falls back to its default"
+      );
     }
     return ok("config", "config.json valid");
   } catch {
-    return fail("config", "config.json is not valid JSON \u2014 it is being IGNORED (defaults apply)");
+    return fail(
+      "config",
+      "config.json is not valid JSON \u2014 automatic harvesting is OFF until it parses (the privacy switches fail closed); every other setting falls back to its default"
+    );
   }
 }
 function checkHooks(home) {

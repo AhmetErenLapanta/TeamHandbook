@@ -84,7 +84,14 @@ var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
-  { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
+  // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
+  // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
+  // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
+  { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
+  // PuTTY .ppk keys are not PEM-armored at all
+  { name: "putty-key", re: /^\s*(?:PuTTY-User-Key-File-\d|Private-Lines:|Private-MAC:)/m },
+  { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
   { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
   { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
   { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
@@ -98,6 +105,10 @@ var SECRET_PATTERNS = [
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
   { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  // common credential shapes the generic keyword rule misses
+  { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
+  { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
+  { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
   {
     // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
     // which \b cannot match between two word chars.

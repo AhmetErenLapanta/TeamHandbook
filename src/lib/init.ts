@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 import { handbookHome } from "./session-state.js";
-import { readConfigFile } from "./config.js";
+import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 
 // git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
@@ -36,7 +36,23 @@ export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null
   return null;
 }
 
+export class BrokenConfigError extends Error {
+  constructor(home: string) {
+    super(
+      `${join(home, "config.json")} exists but is not valid JSON. TeamHandbook will not ` +
+        "rewrite it, because doing so would silently discard settings you wrote — " +
+        "including the privacy switches, which are currently failing closed. Fix the " +
+        "JSON (or delete the file) and try again.",
+    );
+    this.name = "BrokenConfigError";
+  }
+}
+
+/** Read-modify-write of config.json. REFUSES on a broken file: readConfigFile
+ * collapses one to {}, so writing would erase whatever the user actually had —
+ * exactly the `{"harvest":{"enabled":false}}` opt-out that made it broken-looking. */
 export function saveTeamConfig(team: TeamConfig, home: string = handbookHome()): void {
+  if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   config.team = team;
   writeFileAtomic(join(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
@@ -45,6 +61,7 @@ export function saveTeamConfig(team: TeamConfig, home: string = handbookHome()):
 /** Drop the team binding (the escape hatch for a wrong URL or a team switch),
  * leaving every other config key intact. Returns the repo that was left, if any. */
 export function clearTeamConfig(home: string = handbookHome()): string | null {
+  if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   const previous = (config.team as TeamConfig | undefined)?.repoUrl ?? null;
   if (!("team" in config)) return null;
@@ -316,6 +333,9 @@ export function initTeamRepo(
   const marketplaceName = slugifySkillName(name ?? repoNameFromUrl(url) ?? "");
   if (!marketplaceName) {
     return { ok: false, error: `cannot derive a marketplace name from "${url}"; pass --name` };
+  }
+  if (configIsBroken(home)) {
+    return { ok: false, error: new BrokenConfigError(home).message };
   }
   if (loadTeamConfig(home)) {
     return {

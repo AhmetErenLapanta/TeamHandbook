@@ -7,6 +7,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
@@ -78,7 +79,17 @@ function reclaimStaleClaims(dir: string): void {
   }
 }
 
-export function drainHarvestJobs(home: string = handbookHome()): HarvestJob[] {
+export interface ClaimedJob {
+  job: HarvestJob;
+  /** the claimed file; delete it only AFTER the job has been processed */
+  claimedFile: string;
+}
+
+export function releaseHarvestJob(claimedFile: string): void {
+  rmSync(claimedFile, { force: true });
+}
+
+export function drainHarvestJobs(home: string = handbookHome()): ClaimedJob[] {
   reclaimStaleClaims(pendingDir(home));
   let entries: string[];
   try {
@@ -86,24 +97,35 @@ export function drainHarvestJobs(home: string = handbookHome()): HarvestJob[] {
   } catch {
     return [];
   }
-  const jobs: HarvestJob[] = [];
+  const jobs: ClaimedJob[] = [];
   for (const entry of entries.filter((e) => e.endsWith(".json")).sort()) {
     const file = join(pendingDir(home), entry);
     const claimed = `${file}.claimed-${process.pid}`;
     try {
       renameSync(file, claimed);
+      // rename PRESERVES mtime, so staleness would be measured from enqueue time —
+      // a job that waited 10 min in the queue would be reclaimable the instant it is
+      // claimed, handing the same session to two runners. Stamp the claim instead.
+      const claimedAt = new Date();
+      utimesSync(claimed, claimedAt, claimedAt);
     } catch {
       continue; // another runner claimed this job first
     }
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(readFileSync(claimed, "utf8"));
-      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string" && parsed.evidence) {
-        jobs.push(parsed);
-      }
+      parsed = JSON.parse(readFileSync(claimed, "utf8"));
     } catch {
-      // malformed job: dropped; its evidence remains in the ledger
+      rmSync(claimed, { force: true }); // malformed: evidence remains in the ledger
+      continue;
     }
-    rmSync(claimed, { force: true });
+    const job = parsed as HarvestJob;
+    if (job && typeof job === "object" && typeof job.sessionId === "string" && job.evidence) {
+      // NOT deleted here: a runner killed mid-harvest must leave the claim behind so
+      // reclaimStaleClaims can put the whole session back in the queue
+      jobs.push({ job, claimedFile: claimed });
+    } else {
+      rmSync(claimed, { force: true });
+    }
   }
   return jobs;
 }
@@ -142,7 +164,6 @@ export interface PipelineSummary {
   scored: number;
   rejected: number;
   errored: number;
-  deferred?: number;
   written: string[];
   // Why each item was written/dropped — without this a user whose candidates keep
   // vanishing has no way to see the scores or reasons.
@@ -217,7 +238,9 @@ export async function runHarvestJob(
     },
     outcomes: [
       ...(summary.dropped ?? []).map((d) => ({
-        fingerprint: d.name,
+        // an item dropped FOR containing a secret must not have its name logged —
+        // the name is model output derived from the same text
+        fingerprint: d.reason === "secret" ? "(redacted)" : d.name,
         outcome: "sieved" as const,
         reason: d.reason,
       })),
@@ -299,7 +322,7 @@ export async function runManualSignal(
     const decision = dropped[0]!;
     return finish({
       stage: "sieved",
-      reason: decision.reason ?? "not-candidate",
+      reason: decision.reason ?? "oversized",
       ...(decision.detail ? { detail: decision.detail } : {}),
     });
   }

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadHarvestConfig } from "./harvest.js";
 import {
   buildScorePrompt,
   defaultScoreConfig,
@@ -36,17 +37,17 @@ const fullMarks =
 describe("buildScorePrompt", () => {
   it("includes the candidate facts and the ledger occurrence count", () => {
     const prompt = buildScorePrompt(candidate(), 4);
-    expect(prompt).toContain("failed command: npm test");
-    expect(prompt).toContain("error (normalized): 1 test failed");
-    expect(prompt).toContain("files edited for the fix: /repo/app.ts");
+    expect(prompt).toContain("failed command:\n  npm test");
+    expect(prompt).toContain("error (normalized):\n  1 test failed");
+    expect(prompt).toContain("files edited for the fix:\n  /repo/app.ts");
     expect(prompt).toContain("seen in the local ledger: 4");
     expect(prompt).toContain("occurrences within the session: 3");
   });
 
   it("marks missing resolution and edits explicitly", () => {
     const prompt = buildScorePrompt(candidate({ resolvedCommand: undefined, edits: [] }), 1);
-    expect(prompt).toContain("resolving command: (none recorded)");
-    expect(prompt).toContain("files edited for the fix: (none)");
+    expect(prompt).toContain("resolving command:\n  (none recorded)");
+    expect(prompt).toContain("files edited for the fix:\n  (none)");
   });
 
   it("demands a JSON-only reply covering all five criteria", () => {
@@ -66,7 +67,7 @@ describe("buildScorePrompt", () => {
       { name: "fix-npm-cache", description: "Use when npm install fails on a stale cache." },
     ]);
     expect(prompt).toContain("Existing skills already available to the team");
-    expect(prompt).toContain("fix-npm-cache: Use when npm install fails on a stale cache.");
+    expect(prompt).toContain("fix-npm-cache:\n  Use when npm install fails on a stale cache.");
     expect(prompt).toContain('"duplicateOf"');
   });
 });
@@ -237,6 +238,24 @@ describe("gateAutoEnabled", () => {
       expect(gateAutoEnabled(home)).toBe(false);
       writeFileSync(join(home, "config.json"), JSON.stringify({ gate: { auto: true } }));
       expect(gateAutoEnabled(home)).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("gateAutoEnabled fail-closed (B4)", () => {
+  it("returns false when config.json exists but cannot be parsed", () => {
+    const home = mkdtempSync(join(tmpdir(), "handbook-cfg-"));
+    try {
+      // a hand-edited file with a trailing comma must never silently re-enable sending
+      writeFileSync(join(home, "config.json"), '{"harvest":{"enabled":false},"gate":{"auto":false},}');
+      expect(gateAutoEnabled(home)).toBe(false);
+      expect(loadHarvestConfig(home).enabled).toBe(false);
+      // a MISSING file is the normal first-run state → defaults (enabled)
+      rmSync(join(home, "config.json"));
+      expect(gateAutoEnabled(home)).toBe(true);
+      expect(loadHarvestConfig(home).enabled).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

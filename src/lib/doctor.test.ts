@@ -102,7 +102,7 @@ describe("runDoctor", () => {
     writeFileSync(join(home, "config.json"), "{not json");
     const report = runDoctor(home, happyRunner);
     expect(byName(report, "config").level).toBe("fail");
-    expect(byName(report, "config").detail).toContain("IGNORED");
+    expect(byName(report, "config").detail).toContain("harvesting is OFF");
   });
 
   it("checks a configured team repo and fails loudly when unreachable", () => {

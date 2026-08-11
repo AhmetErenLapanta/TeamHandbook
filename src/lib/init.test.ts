@@ -241,3 +241,23 @@ describe("formatInitSuccess", () => {
     expect(text).toContain("/plugin install acme-skills");
   });
 });
+
+describe("a broken config.json is never overwritten (it holds the privacy switches)", () => {
+  it("refuses to save or clear the team binding rather than erase the user's opt-out", () => {
+    const optOut = '{"harvest":{"enabled":false},"gate":{"auto":false},}'; // trailing comma
+    writeFileSync(join(home, "config.json"), optOut);
+    expect(() => saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "t" }, home)).toThrow(
+      /not valid JSON/,
+    );
+    expect(() => clearTeamConfig(home)).toThrow(/not valid JSON/);
+    // the bytes that carry the opt-out are still there
+    expect(readFileSync(join(home, "config.json"), "utf8")).toBe(optOut);
+  });
+
+  it("initTeamRepo refuses instead of silently rewriting the file", () => {
+    writeFileSync(join(home, "config.json"), '{"harvest":{"enabled":false},}');
+    const result = initTeamRepo("git@x.com:a/b.git", "b", home, () => {});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("not valid JSON");
+  });
+});

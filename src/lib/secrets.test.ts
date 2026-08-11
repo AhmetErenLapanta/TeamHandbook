@@ -39,3 +39,33 @@ describe("detectSecret", () => {
     expect(detectSecret(text)).toBeNull();
   });
 });
+
+describe("armored key variants (regression: only PEM 'PRIVATE KEY' was caught)", () => {
+  it.each([
+    ["PGP block", "-----BEGIN PGP PRIVATE KEY BLOCK-----"],
+    ["putty file header", "PuTTY-User-Key-File-3: ssh-rsa"],
+    ["putty private lines", "Private-Lines: 14"],
+    ["age secret key", "AGE-SECRET-KEY-1QQPQZRFR9Q0YV2M9DTKZ0T4GSXH7C2XQ5RRAM9NLZ7WQABCDEFGHIJKLMNOP"],
+  ])("detects %s", (_label, text) => {
+    expect(detectSecret(text)).not.toBeNull();
+  });
+
+  it("does not flag a public certificate (not a secret, routine in TLS work)", () => {
+    expect(detectSecret("-----BEGIN CERTIFICATE-----")).toBeNull();
+  });
+});
+
+describe("common credential shapes beyond the generic keyword rule", () => {
+  it.each([
+    ["a postgres env password", "PGPASSWORD=hunter2 psql -h db"],
+    ["a DB_PASS env line", "DB_PASS=s3cr3tvalue"],
+    ["curl basic auth", "curl -u admin:letmein https://api.internal/health"],
+    ["mysql inline password", "mysql -uroot -psup3rs3cret mydb"],
+  ])("detects %s", (_label, text) => {
+    expect(detectSecret(text)).not.toBeNull();
+  });
+
+  it("does not flag ordinary prose that merely mentions a password", () => {
+    expect(detectSecret("the password reset flow is broken, please look at it")).toBeNull();
+  });
+});

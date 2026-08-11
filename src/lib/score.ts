@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { handbookHome } from "./session-state.js";
-import { readConfigFile } from "./config.js";
+import { configIsBroken, readConfigFile } from "./config.js";
 import type { Signal } from "./signals.js";
 import type { SkillSummary } from "./skill-index.js";
 import { fenceUntrusted } from "./prompt-safety.js";
@@ -37,6 +37,9 @@ export const defaultScoreConfig: ScoreConfig = {
  * Candidates then come only from the explicit /handbook:learn.
  */
 export function gateAutoEnabled(home: string = handbookHome()): boolean {
+  // Fail CLOSED on a broken config: the user wrote something we cannot read, and
+  // guessing "yes, send everything" is the one wrong answer here.
+  if (configIsBroken(home)) return false;
   const gate = readConfigFile(home).gate as Record<string, unknown> | undefined;
   return gate?.auto !== false;
 }

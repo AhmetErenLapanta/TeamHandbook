@@ -127,9 +127,9 @@ describe("slugifySkillName", () => {
 describe("buildDistillPrompt", () => {
   it("includes the case facts and the ledger occurrence count", () => {
     const prompt = buildDistillPrompt(candidate(), 4);
-    expect(prompt).toContain("failed command: npm test");
-    expect(prompt).toContain("error (normalized): 1 test failed");
-    expect(prompt).toContain("files edited for the fix: /repo/src/app.ts");
+    expect(prompt).toContain("failed command:\n  npm test");
+    expect(prompt).toContain("error (normalized):\n  1 test failed");
+    expect(prompt).toContain("files edited for the fix:\n  /repo/src/app.ts");
     expect(prompt).toContain("seen in the local ledger: 4");
   });
 

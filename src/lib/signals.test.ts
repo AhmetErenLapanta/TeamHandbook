@@ -14,7 +14,7 @@ import {
   appendSignals,
   flushResolvedPairs,
   flushSessionEnd,
-  ledgerFingerprints,
+  ledgerFingerprintCounts,
   ledgerPairsForSession,
   signalsFile,
 } from "./signals.js";
@@ -172,7 +172,7 @@ describe("secret redaction at persistence (Decision T)", () => {
     expect(written.error).toBe("");
     expect(readCounters(home).redactionBlocked).toBe(1);
     // fingerprint survives, so recurrence counting still works
-    expect(ledgerFingerprints(home).has("fp-secret")).toBe(true);
+    expect(ledgerFingerprintCounts(home).has("fp-secret")).toBe(true);
   });
 
   it("passes clean signals through untouched", () => {
@@ -184,9 +184,9 @@ describe("secret redaction at persistence (Decision T)", () => {
   });
 });
 
-describe("ledgerFingerprints", () => {
+describe("ledgerFingerprintCounts", () => {
   it("returns an empty set when the ledger does not exist", () => {
-    expect(ledgerFingerprints(home).size).toBe(0);
+    expect(ledgerFingerprintCounts(home).size).toBe(0);
   });
 
   it("collects fingerprints and skips malformed or fingerprint-less lines", () => {
@@ -194,7 +194,7 @@ describe("ledgerFingerprints", () => {
       signalsFile(home),
       ['{"fingerprint":"abc123"}', "not json", '{"kind":"weak"}', '{"fingerprint":"def456"}', ""].join("\n"),
     );
-    expect(ledgerFingerprints(home)).toEqual(new Set(["abc123", "def456"]));
+    expect([...ledgerFingerprintCounts(home).keys()].sort()).toEqual(["abc123", "def456"]);
   });
 
   it("reads back fingerprints written by appendSignals", () => {
@@ -212,7 +212,7 @@ describe("ledgerFingerprints", () => {
     };
     appendSignals([signal], home);
     appendSignals([{ ...signal, fingerprint: "def456" }], home);
-    expect(ledgerFingerprints(home)).toEqual(new Set(["abc123", "def456"]));
+    expect([...ledgerFingerprintCounts(home).keys()].sort()).toEqual(["abc123", "def456"]);
   });
 });
 

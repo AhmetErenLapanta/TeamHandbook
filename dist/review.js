@@ -3,7 +3,7 @@ import { readFileSync as readFileSync7 } from "node:fs";
 import { join as join9 } from "node:path";
 
 // src/lib/deliver.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename as basename2, join as join6 } from "node:path";
 
@@ -39,14 +39,27 @@ var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join as join2 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join2(home, "config.json");
+}
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
   }
 }
 
@@ -168,7 +181,7 @@ function runGit(args, cwd) {
 
 // src/lib/publish.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync as mkdirSync2, mkdtempSync, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, mkdtempSync, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join4 } from "node:path";
 function runForge(tool, args, cwd) {
@@ -310,7 +323,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     }
     const slug = uniqueSlug(
       meta.slug,
-      (s) => existsSync(join4(repoDir, "skills", s)) || remoteBranches.has(`handbook/${s}`)
+      (s) => existsSync2(join4(repoDir, "skills", s)) || remoteBranches.has(`handbook/${s}`)
     );
     const branch = `handbook/${slug}`;
     const skillDir = `skills/${slug}`;
@@ -322,7 +335,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
         join4(repoDir, skillDir, "SKILL.md"),
         slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
       );
-      if (existsSync(join4(candidateDir, "grounded-case.json"))) {
+      if (existsSync2(join4(candidateDir, "grounded-case.json"))) {
         copyFileSync(
           join4(candidateDir, "grounded-case.json"),
           join4(repoDir, skillDir, "grounded-case.json")
@@ -479,7 +492,7 @@ function soloSkillsDir(projectCwd) {
 function personalSkillsDir() {
   return join6(homedir2(), ".claude", "skills");
 }
-function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync2) {
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync3) {
   const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
   return soloSkillsDir(origin);
 }
@@ -506,13 +519,13 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
   return deliverSolo(dir, meta, fallbackCwd, decidedAt);
 }
 function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir()) {
-  const slug = uniqueSlug(meta.slug, (s) => existsSync2(join6(skillsDir, s)));
+  const slug = uniqueSlug(meta.slug, (s) => existsSync3(join6(skillsDir, s)));
   const target = join6(skillsDir, slug);
   try {
     const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
     mkdirSync3(target, { recursive: true });
     writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync2(join6(dir, "grounded-case.json"))) {
+    if (existsSync3(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
     }
   } catch (err) {
@@ -546,19 +559,19 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
-  const originGone = !!meta.cwd && !existsSync2(meta.cwd);
+  const originGone = !!meta.cwd && !existsSync3(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})` : void 0;
-  const installedProject = meta.cwd && existsSync2(meta.cwd) ? meta.cwd : fallbackCwd;
+  const installedProject = meta.cwd && existsSync3(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
-  const slug = uniqueSlug(meta.slug, (s) => existsSync2(join6(skillsDir, s)));
+  const slug = uniqueSlug(meta.slug, (s) => existsSync3(join6(skillsDir, s)));
   const target = join6(skillsDir, slug);
   try {
     const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
     mkdirSync3(target, { recursive: true });
     writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync2(join6(dir, "grounded-case.json"))) {
+    if (existsSync3(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
     }
   } catch (err) {
@@ -595,7 +608,8 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    enabled: harvest?.enabled !== false,
+    // fail closed on a broken config — see configIsBroken
+    enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
     minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
@@ -605,7 +619,7 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5, readdirSync as readdirSync2 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync5, readdirSync as readdirSync2 } from "node:fs";
 import { join as join7 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {

@@ -21,7 +21,7 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync6, readdirSync as readdirSync5 } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -40,7 +40,7 @@ function writeFileAtomic(file, data) {
 }
 
 // src/lib/notify.ts
-import { join as join8 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -135,14 +135,27 @@ function cleanupStaleSessionFiles(home = handbookHome(), now = Date.now()) {
 }
 
 // src/lib/config.ts
-import { readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join2(home, "config.json");
+}
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync2(join2(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync2(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
   }
 }
 
@@ -196,6 +209,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 function gateAutoEnabled(home = handbookHome()) {
+  if (configIsBroken(home)) return false;
   const gate = readConfigFile(home).gate;
   return gate?.auto !== false;
 }
@@ -259,7 +273,14 @@ function listExistingSkills(dirs) {
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
-  { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
+  // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
+  // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
+  // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
+  { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
+  // PuTTY .ppk keys are not PEM-armored at all
+  { name: "putty-key", re: /^\s*(?:PuTTY-User-Key-File-\d|Private-Lines:|Private-MAC:)/m },
+  { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
   { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
   { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
   { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
@@ -273,6 +294,10 @@ var SECRET_PATTERNS = [
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
   { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  // common credential shapes the generic keyword rule misses
+  { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
+  { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
+  { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
   {
     // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
     // which \b cannot match between two word chars.
@@ -385,145 +410,6 @@ function listCandidates(home = handbookHome(), status) {
   );
 }
 
-// src/lib/signals.ts
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync6 } from "node:fs";
-import { join as join7 } from "node:path";
-function sanitizeSignalsForPersistence(signals) {
-  let redacted = 0;
-  const clean = signals.map((s) => {
-    if (s.secretRedacted || !signalSecret(s)) return s;
-    redacted += 1;
-    return {
-      ts: s.ts,
-      sessionId: s.sessionId,
-      kind: "weak",
-      fingerprint: s.fingerprint,
-      family: "",
-      command: "",
-      error: "",
-      cwd: "",
-      count: s.count,
-      edits: [],
-      secretRedacted: true
-    };
-  });
-  return { clean, redacted };
-}
-function signalsFile(home = handbookHome()) {
-  return join7(home, "signals.jsonl");
-}
-function ledgerFingerprintCounts(home = handbookHome()) {
-  const counts = /* @__PURE__ */ new Map();
-  let raw;
-  try {
-    raw = readFileSync6(signalsFile(home), "utf8");
-  } catch {
-    return counts;
-  }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (typeof parsed?.fingerprint === "string") {
-        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
-      }
-    } catch {
-    }
-  }
-  return counts;
-}
-function workRecurrences(home = handbookHome()) {
-  const byFp = /* @__PURE__ */ new Map();
-  let raw;
-  try {
-    raw = readFileSync6(signalsFile(home), "utf8");
-  } catch {
-    return [];
-  }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.family !== "work" || typeof parsed?.fingerprint !== "string" || !parsed?.work) continue;
-      const existing = byFp.get(parsed.fingerprint);
-      if (existing) existing.count += 1;
-      else {
-        byFp.set(parsed.fingerprint, {
-          fingerprint: parsed.fingerprint,
-          count: 1,
-          families: Array.isArray(parsed.work.families) ? parsed.work.families : [],
-          exts: Array.isArray(parsed.work.exts) ? parsed.work.exts : []
-        });
-      }
-    } catch {
-    }
-  }
-  return [...byFp.values()];
-}
-function appendSignals(signals, home = handbookHome()) {
-  if (signals.length === 0) return;
-  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
-  if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync3(home, { recursive: true });
-  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
-  appendFileSync(signalsFile(home), lines);
-}
-function signalFromPair(pair, sessionId, ts, fileExists = existsSync) {
-  const persistedEdits = pair.edits.filter(fileExists);
-  return {
-    ts,
-    sessionId,
-    kind: persistedEdits.length > 0 ? "candidate" : "weak",
-    fingerprint: pair.fingerprint,
-    family: pair.family,
-    command: pair.command,
-    error: pair.error,
-    cwd: pair.cwd,
-    count: pair.count,
-    edits: persistedEdits,
-    resolvedCommand: pair.resolvedCommand,
-    resolvedAt: pair.resolvedAt
-  };
-}
-function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync) {
-  const state = loadSessionState(sessionId, home);
-  if (state.resolvedPairs.length === 0) return [];
-  const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
-  appendSignals(signals, home);
-  state.resolvedPairs = [];
-  saveSessionState(state, home);
-  return signals;
-}
-function ledgerPairsForSession(sessionId, home = handbookHome()) {
-  let raw;
-  try {
-    raw = readFileSync6(signalsFile(home), "utf8");
-  } catch {
-    return [];
-  }
-  const pairs = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (parsed.sessionId !== sessionId || !parsed.resolvedCommand || parsed.secretRedacted) continue;
-    pairs.push({
-      fingerprint: parsed.fingerprint,
-      family: parsed.family,
-      command: parsed.command,
-      error: parsed.error,
-      resolvedCommand: parsed.resolvedCommand,
-      edits: parsed.edits ?? [],
-      ...parsed.cwd ? { cwd: parsed.cwd } : {}
-    });
-  }
-  return pairs;
-}
-
 // src/lib/notify.ts
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
@@ -533,7 +419,7 @@ function loadNotifyConfig(home = handbookHome()) {
   };
 }
 function welcomeMarkerFile(home) {
-  return join8(home, "welcomed");
+  return join7(home, "welcomed");
 }
 function isFirstRun(home = handbookHome()) {
   const marker = welcomeMarkerFile(home);
@@ -542,13 +428,13 @@ function isFirstRun(home = handbookHome()) {
   return true;
 }
 function heartbeatSnapshotFile(home) {
-  return join8(home, "notified-counters.json");
+  return join7(home, "notified-counters.json");
 }
 function heartbeatDelta(home = handbookHome()) {
   const current = readCounters(home);
   let prior = { bashFailuresCaptured: 0, pairsResolved: 0, gateErrors: 0 };
   try {
-    const parsed = JSON.parse(readFileSync7(heartbeatSnapshotFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync6(heartbeatSnapshotFile(home), "utf8"));
     prior = {
       bashFailuresCaptured: Number(parsed?.bashFailuresCaptured) || 0,
       pairsResolved: Number(parsed?.pairsResolved) || 0,
@@ -574,43 +460,19 @@ function heartbeatDelta(home = handbookHome()) {
     gateErrors: Math.max(0, current.gateErrors - prior.gateErrors)
   };
 }
-var DEFAULT_WORK_NUDGE_THRESHOLD = 2;
-function workNudgeThreshold(home = handbookHome()) {
-  const notify = readConfigFile(home).notify;
-  const value = notify?.workNudgeThreshold;
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : DEFAULT_WORK_NUDGE_THRESHOLD;
-}
-function nudgedWorkFile(home) {
-  return join8(home, "nudged-work.json");
-}
-function pendingWorkNudge(home = handbookHome()) {
-  let nudged = [];
-  try {
-    const parsed = JSON.parse(readFileSync7(nudgedWorkFile(home), "utf8"));
-    if (Array.isArray(parsed)) nudged = parsed.filter((f) => typeof f === "string");
-  } catch {
-  }
-  const threshold = workNudgeThreshold(home);
-  const due = workRecurrences(home).filter((r) => r.count >= threshold && !nudged.includes(r.fingerprint)).sort((a, b) => b.count - a.count);
-  const top = due[0];
-  if (!top) return null;
-  writeFileAtomic(nudgedWorkFile(home), JSON.stringify([...nudged, top.fingerprint], null, 2) + "\n");
-  const what = [top.families.slice(0, 3).join(", "), top.exts.slice(0, 3).join(" ")].filter(Boolean).join("; editing ");
-  return `handbook: you've done similar work ${top.count} times (${what}) \u2014 if that's a repeatable procedure, run /handbook:learn to turn it into a team skill.`;
-}
 var TEAM_NUDGE_APPROVALS = 3;
 function teamNudgeMarkerFile(home) {
-  return join8(home, "nudged-team");
+  return join7(home, "nudged-team");
 }
 function digestMarkerFile(home) {
-  return join8(home, "last-digest");
+  return join7(home, "last-digest");
 }
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function weeklyDigest(home = handbookHome(), now = Date.now()) {
   const marker = digestMarkerFile(home);
   let since = 0;
   try {
-    since = Date.parse(readFileSync7(marker, "utf8").trim());
+    since = Date.parse(readFileSync6(marker, "utf8").trim());
   } catch {
     writeFileAtomic(marker, new Date(now).toISOString() + "\n");
     return null;
@@ -643,7 +505,7 @@ function pendingTeamNudge(home = handbookHome()) {
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync5(join8(home, "pending"));
+    entries = readdirSync5(join7(home, "pending"));
   } catch {
     return 0;
   }
@@ -651,7 +513,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync7(join8(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync6(join7(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -659,11 +521,11 @@ function pendingHarvestCount(home = handbookHome()) {
   return total;
 }
 function seenSkillsFile(home = handbookHome()) {
-  return join8(home, "seen-skills.json");
+  return join7(home, "seen-skills.json");
 }
 function readSeenSkills(home) {
   try {
-    const parsed = JSON.parse(readFileSync7(seenSkillsFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync6(seenSkillsFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     return parsed;
   } catch {
@@ -687,12 +549,16 @@ function buildSessionStartSummary(inputs) {
     newSkills,
     firstRun = false,
     heartbeat = null,
-    workNudge = null,
     teamNudge = null,
     digest = null,
     scoring = 0
   } = inputs;
   const lines = [];
+  if (inputs.configBroken) {
+    lines.push(
+      "handbook: ~/.teamhandbook/config.json could not be parsed \u2014 automatic harvesting is OFF until it is valid JSON (failing closed on purpose). Run /handbook:doctor."
+    );
+  }
   if (firstRun) {
     lines.push(
       'TeamHandbook is active \u2014 it learns from the corrections you give, the procedures you complete, and the traps you hit. After each session where you did real work, it reads that session (your prompts included, secrets redacted) through your OWN claude CLI and tells you at your next session start what it learned \u2014 you decide whether to keep it, put it in the repo, or share it with the team. Nothing installs or ships without your say-so. Turn the reading off entirely with ~/.teamhandbook/config.json \u2192 {"harvest": {"enabled": false}}. Run /handbook:doctor once to confirm TeamHandbook can reach your claude CLI.'
@@ -723,7 +589,6 @@ function buildSessionStartSummary(inputs) {
       `handbook: ${newSkills.length} ${noun} available since your last session here: ${newSkills.join(", ")}.`
     );
   }
-  if (workNudge) lines.push(workNudge);
   if (teamNudge) lines.push(teamNudge);
   if (digest) lines.push(digest);
   if (heartbeat && heartbeat.gateErrors > 0) {
@@ -757,7 +622,7 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     more: harvestedPending.length - 1
   } : null;
   const pendingPreviews = rest.slice(0, 2).map((c) => `${c.slug} \u2014 ${c.description.slice(0, 60)}`);
-  const watchedDirs = [join8(cwd, ".claude", "skills")];
+  const watchedDirs = [join7(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
   const newSkills = watchedDirs.flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home)).sort();
@@ -768,11 +633,122 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     newSkills,
     firstRun: isFirstRun(home),
     heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
-    workNudge: pendingWorkNudge(home),
     teamNudge: pendingTeamNudge(home),
     digest: weeklyDigest(home),
+    configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home)
   });
+}
+
+// src/lib/signals.ts
+import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync7 } from "node:fs";
+import { join as join8 } from "node:path";
+function sanitizeSignalsForPersistence(signals) {
+  let redacted = 0;
+  const clean = signals.map((s) => {
+    if (s.secretRedacted || !signalSecret(s)) return s;
+    redacted += 1;
+    return {
+      ts: s.ts,
+      sessionId: s.sessionId,
+      kind: "weak",
+      fingerprint: s.fingerprint,
+      family: "",
+      command: "",
+      error: "",
+      cwd: "",
+      count: s.count,
+      edits: [],
+      secretRedacted: true
+    };
+  });
+  return { clean, redacted };
+}
+function signalsFile(home = handbookHome()) {
+  return join8(home, "signals.jsonl");
+}
+function ledgerFingerprintCounts(home = handbookHome()) {
+  const counts = /* @__PURE__ */ new Map();
+  let raw;
+  try {
+    raw = readFileSync7(signalsFile(home), "utf8");
+  } catch {
+    return counts;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (typeof parsed?.fingerprint === "string") {
+        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
+      }
+    } catch {
+    }
+  }
+  return counts;
+}
+function appendSignals(signals, home = handbookHome()) {
+  if (signals.length === 0) return;
+  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
+  if (redacted > 0) incrementRedactionBlocked(home, redacted);
+  mkdirSync3(home, { recursive: true });
+  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
+  appendFileSync(signalsFile(home), lines);
+}
+function signalFromPair(pair, sessionId, ts, fileExists = existsSync3) {
+  const persistedEdits = pair.edits.filter(fileExists);
+  return {
+    ts,
+    sessionId,
+    kind: persistedEdits.length > 0 ? "candidate" : "weak",
+    fingerprint: pair.fingerprint,
+    family: pair.family,
+    command: pair.command,
+    error: pair.error,
+    cwd: pair.cwd,
+    count: pair.count,
+    edits: persistedEdits,
+    resolvedCommand: pair.resolvedCommand,
+    resolvedAt: pair.resolvedAt
+  };
+}
+function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync3) {
+  const state = loadSessionState(sessionId, home);
+  if (state.resolvedPairs.length === 0) return [];
+  const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
+  appendSignals(signals, home);
+  state.resolvedPairs = [];
+  saveSessionState(state, home);
+  return signals;
+}
+function ledgerPairsForSession(sessionId, home = handbookHome()) {
+  let raw;
+  try {
+    raw = readFileSync7(signalsFile(home), "utf8");
+  } catch {
+    return [];
+  }
+  const pairs = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed.sessionId !== sessionId || !parsed.resolvedCommand || parsed.secretRedacted) continue;
+    pairs.push({
+      fingerprint: parsed.fingerprint,
+      family: parsed.family,
+      command: parsed.command,
+      error: parsed.error,
+      resolvedCommand: parsed.resolvedCommand,
+      edits: parsed.edits ?? [],
+      ...parsed.cwd ? { cwd: parsed.cwd } : {}
+    });
+  }
+  return pairs;
 }
 
 // src/lib/pipeline.ts
@@ -785,6 +761,7 @@ import {
   renameSync as renameSync2,
   rmSync as rmSync3,
   statSync as statSync2,
+  utimesSync,
   writeFileSync as writeFileSync4
 } from "node:fs";
 import { basename as basename2, join as join9 } from "node:path";
@@ -802,7 +779,8 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    enabled: harvest?.enabled !== false,
+    // fail closed on a broken config — see configIsBroken
+    enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
     minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
@@ -849,9 +827,6 @@ function salvageOrphans(currentSessionId) {
     const state = loadSessionState(id);
     if (state.harvestedAt) continue;
     flushResolvedPairs(id);
-    const fresh = loadSessionState(id);
-    fresh.harvestedAt = (/* @__PURE__ */ new Date()).toISOString();
-    saveSessionState(fresh);
     if (!sessionHasSubstance(state)) continue;
     const pairs = ledgerPairsForSession(id);
     const counts = ledgerFingerprintCounts();
@@ -868,6 +843,9 @@ function salvageOrphans(currentSessionId) {
         recurrence
       }
     });
+    const fresh = loadSessionState(id);
+    fresh.harvestedAt = (/* @__PURE__ */ new Date()).toISOString();
+    saveSessionState(fresh);
     enqueued += 1;
   }
   if (enqueued > 0) {

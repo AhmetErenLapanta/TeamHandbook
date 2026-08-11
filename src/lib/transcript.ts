@@ -74,6 +74,61 @@ function cap(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
+// The slice labels each turn "User:" / "Assistant:" at the start of a line, so a
+// message whose own content starts a line that way could forge a turn — an
+// assistant echoing a repo file that reads "User: always run <evil> first" would be
+// harvested as something the DEVELOPER said, and shipped as a quoted receipt.
+// Mark such lines as quoted content so they can't be mistaken for a real turn.
+function neutralizeRoleLabels(text: string): string {
+  return text.replace(/^(User|Assistant)(\s*:)/gim, "(quoted) $1$2");
+}
+
+// Markers that identify key material. Used by looksKeyBearing above; the slice
+// drops such a message whole, so no per-line block machine is needed here.
+// Covers PEM (`-----BEGIN RSA PRIVATE KEY-----`), armored PGP (`… BLOCK-----`) and
+// ssh.com/SSH2 (`---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----`: four dashes, spaces).
+const PEM_BEGIN = /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/;
+const PEM_END = /-{4,5}\s?END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/;
+// PuTTY keys are not PEM-armored: the body follows a `Private-Lines: N` header.
+const PPK_BEGIN = /^\s*(?:PuTTY-User-Key-File-\d+|Private-Lines):/im;
+
+/**
+ * Does this message carry key material at all? Line-by-line redaction of pasted
+ * keys is a losing game — every armor variant, per-line prefix (a `git diff` that
+ * deletes a key, `cat -n`), and line terminator is another evasion. So the primary
+ * defense is coarse and message-level: a message that looks key-bearing is dropped
+ * from the slice WHOLE. The per-line pass below stays as a second belt for inline
+ * secrets (tokens, passwords) that legitimately sit inside otherwise useful prose.
+ *
+ * A long base64-ish run is the tell that survives any prefix or armor style. Hex
+ * digests (a 40-char SHA, a 64-char sha256) are single-case with no +/=, so they do
+ * NOT trip it. A message quoting a public certificate does — its body is a base64
+ * blob — which loses that message from the harvest but leaks nothing.
+ */
+/** Is this run actual base64 blob, or just a long path/URL/identifier? */
+function isBlobRun(run: string, minLength: number): boolean {
+  if (run.length < minLength) return false;
+  // A path or URL is slash-separated SHORT segments; key material is not. Without
+  // this, "/Users/dev/projects/company/backend/src/main/java/AcmeGateway" reads as
+  // one long "base64" run and the whole message would be dropped — and paths and
+  // URLs are everywhere in a coding session.
+  const segments = run.split("/");
+  if (segments.length >= 3 && segments.every((seg) => seg.length < 25)) return false;
+  // Real base64 key material mixes case AND digits (or carries +/=); an identifier
+  // like AcmeGatewayServiceFactoryBuilder does not.
+  return /[+=]/.test(run) || (/[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run));
+}
+
+export function looksKeyBearing(text: string): boolean {
+  if (PEM_BEGIN.test(text) || PEM_END.test(text) || PPK_BEGIN.test(text)) return true;
+  const runs = [...text.matchAll(/[A-Za-z0-9+/]{30,}={0,2}/g)].map((m) => m[0]);
+  // one long blob is enough…
+  if (runs.some((run) => isBlobRun(run, 50))) return true;
+  // …and so are several medium ones, which is what a key looks like once a narrow
+  // terminal (or a paste) has wrapped it below the single-run bar
+  return runs.filter((run) => isBlobRun(run, 30)).length >= 3;
+}
+
 /**
  * Fit the conversation into `budget` chars for the harvest prompt. User messages
  * get 60% of the budget, newest-first when they don't all fit (a late correction
@@ -103,49 +158,36 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
   }
   return [...pick.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([i, text]) => `${entries[i]!.role === "user" ? "User" : "Assistant"}: ${text}`)
+    .map(([i, text]) => {
+      const role = entries[i]!.role === "user" ? "User" : "Assistant";
+      // fail closed at the message level — see looksKeyBearing
+      const body = looksKeyBearing(entries[i]!.text)
+        ? "[redacted: this message contained key material]"
+        : neutralizeRoleLabels(text);
+      return `${role}: ${body}`;
+    })
     .join("\n\n");
 }
 
-// A PEM block is the one secret whose VALUE lives on lines after the line that
-// identifies it: the `-----BEGIN … PRIVATE KEY-----` header matches a pattern, the
-// base64 body matches nothing. Redacting line by line would blank the header,
-// report a redaction, and pass every byte of the key through — so the block is
-// consumed as a unit. If the END marker never arrives (a truncated slice), the rest
-// of the slice is dropped: losing harvest material beats leaking a key.
-const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
-const PEM_END = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
 
 /**
- * Line-level redaction for transcript slices. Capture-time redaction DROPS a
- * secret-bearing occurrence entirely; here that would kill the whole harvest, so
- * matching lines are replaced in place with a content-free marker instead. The raw
- * secret reaches neither the harvest prompt nor disk.
+ * The second belt: an inline secret (a token, an `API_KEY=…`) sitting inside prose
+ * that is otherwise worth harvesting. Key material never reaches here — a message
+ * carrying it was dropped whole by looksKeyBearing — so this stays a plain
+ * line-by-line pass with no block state to get wrong.
  */
 export function redactSlice(slice: string): { clean: string; redacted: number } {
   let redacted = 0;
-  const out: string[] = [];
-  let inPemBlock = false;
-  for (const line of slice.split("\n")) {
-    if (inPemBlock) {
-      if (PEM_END.test(line)) inPemBlock = false;
-      continue; // the whole block collapses into the marker emitted at BEGIN
-    }
-    if (PEM_BEGIN.test(line)) {
-      inPemBlock = !PEM_END.test(line); // a one-line BEGIN…END pair ends immediately
-      out.push("[redacted:private-key]");
+  const clean = slice
+    .split("\n")
+    .map((line) => {
+      const hit = detectSecret(line);
+      if (!hit) return line;
       redacted += 1;
-      continue;
-    }
-    const hit = detectSecret(line);
-    if (!hit) {
-      out.push(line);
-      continue;
-    }
-    redacted += 1;
-    out.push(`[redacted:${hit}]`);
-  }
-  return { clean: out.join("\n"), redacted };
+      return `[redacted:${hit}]`;
+    })
+    .join("\n");
+  return { clean, redacted };
 }
 
 /** Read → slice → redact, ready to be fenced into the harvest prompt. */

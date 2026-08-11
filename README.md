@@ -174,8 +174,14 @@ This plugin's hooks read your session, so this matters and is worth stating plai
   included; only conversational prose.
   - **Turn it off** with `~/.teamhandbook/config.json` → `{"harvest": {"enabled": false}}`,
     or disable every automatic model call with `{"gate": {"auto": false}}`. Either
-    switch is checked before a session is queued, so nothing is read or sent.
-    Candidates then come only from an explicit `/handbook:learn`.
+    switch is checked before a session is queued, so the transcript is never read
+    and nothing is sent; candidates then come only from an explicit
+    `/handbook:learn`. To be precise about what they do *not* stop: the local
+    hooks keep capturing evidence to `~/.teamhandbook/` (the failing command, the fix,
+    and teaching-shaped prompts), because that costs nothing and leaves your
+    machine only through a harvest you have re-enabled or a `/handbook:learn` you
+    ran. If the config file cannot be parsed, both switches fail **closed** and the
+    session-start notice says so.
   - A trivial session is never harvested and costs no model call at all.
 - **Nothing is installed or shared without your explicit approval.** Candidates sit
   in a local queue; only `/handbook:review` → approve installs a skill or opens a PR
