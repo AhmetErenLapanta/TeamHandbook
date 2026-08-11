@@ -217,6 +217,30 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).toContain("old-skill");
     expect(prompt).toContain("empty array [] is a valid");
   });
+
+  it("given a teaching was flagged, when the prompt is built, then the model is told an empty answer needs a reason", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence: { ...evidence, corrections: [{ at: "x", kind: "convention", text: "we never use Lombok" }] },
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).toContain("stated a rule in their OWN words");
+  });
+
+  it("given no teaching was flagged, when the prompt is built, then that instruction is absent", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence: { ...evidence, corrections: [] },
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).not.toContain("stated a rule in their OWN words");
+  });
 });
 
 describe("harvestSession (end to end with a fake runner)", () => {

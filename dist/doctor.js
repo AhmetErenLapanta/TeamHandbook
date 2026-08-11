@@ -148,11 +148,21 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
 // src/lib/harvest.ts
 var defaultHarvestConfig = {
   enabled: true,
-  model: "haiku",
+  // Measured, not assumed: on an identical prompt from a real session, haiku
+  // proposed the developer's stated rule 1 time in 3 and sonnet 3 in 3. The whole
+  // product is "every session teaches it something"; a default that stays silent
+  // two thirds of the time fails that. One call per session, and
+  // {"harvest": {"model": "haiku"}} is still there for whoever wants it cheaper.
+  model: "sonnet",
   maxPerSession: 3,
   minScore: 4,
   transcriptCharCap: 4e4,
-  timeoutMs: 12e4
+  // Latency is dominated by how much the model writes, not by the slice: a 31k-char
+  // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
+  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // degrade to a smaller answer, it burns an attempt and can park the session in
+  // abandoned.jsonl. This is the value the yield measurement was run at.
+  timeoutMs: 18e4
 };
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;

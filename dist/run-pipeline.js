@@ -468,6 +468,13 @@ function readCandidateMeta(dir) {
   }
   return synthesizeMeta(dir);
 }
+function patchPendingCandidate(home, slug, patch) {
+  const dir = join7(candidatesDir(home), slug);
+  const current = readCandidateMeta(dir);
+  if (!current || current.status !== "pending") return false;
+  writeCandidateMeta(dir, { ...current, ...patch });
+  return true;
+}
 function listCandidates(home = handbookHome(), status) {
   const base = candidatesDir(home);
   let entries;
@@ -704,7 +711,7 @@ function sliceTranscript(entries, budget = 4e4) {
     const entry = entries[i];
     if (entry.role !== "user") continue;
     const text = cap(entry.text, PER_USER_CAP);
-    if (text.length > remaining) break;
+    if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
   }
@@ -713,7 +720,7 @@ function sliceTranscript(entries, budget = 4e4) {
     const entry = entries[i];
     if (entry.role !== "assistant") continue;
     const text = cap(entry.text, PER_ASSISTANT_CAP);
-    if (text.length > remaining) break;
+    if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
   }
@@ -741,11 +748,21 @@ function buildTranscriptSlice(path, budget = 4e4) {
 // src/lib/harvest.ts
 var defaultHarvestConfig = {
   enabled: true,
-  model: "haiku",
+  // Measured, not assumed: on an identical prompt from a real session, haiku
+  // proposed the developer's stated rule 1 time in 3 and sonnet 3 in 3. The whole
+  // product is "every session teaches it something"; a default that stays silent
+  // two thirds of the time fails that. One call per session, and
+  // {"harvest": {"model": "haiku"}} is still there for whoever wants it cheaper.
+  model: "sonnet",
   maxPerSession: 3,
   minScore: 4,
   transcriptCharCap: 4e4,
-  timeoutMs: 12e4
+  // Latency is dominated by how much the model writes, not by the slice: a 31k-char
+  // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
+  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // degrade to a smaller answer, it burns an attempt and can park the session in
+  // abandoned.jsonl. This is the value the yield measurement was run at.
+  timeoutMs: 18e4
 };
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
@@ -770,10 +787,7 @@ function markRepeatsOnPending(home, echoes, sessionId) {
     const words = contentWords(meta.description);
     const echo = repeats.find((e) => sameTeaching(words, contentWords(e.text)));
     if (!echo || (meta.taughtBefore ?? 0) >= echo.priorSessions + 1) continue;
-    writeCandidateMeta(join9(candidatesDir(home), meta.slug), {
-      ...meta,
-      taughtBefore: echo.priorSessions + 1
-    });
+    patchPendingCandidate(home, meta.slug, { taughtBefore: echo.priorSessions + 1 });
   }
 }
 function echoFor(item, echoes) {
@@ -811,6 +825,16 @@ function buildHarvestPrompt(input) {
     "   [pair:...] id.",
     "",
     "Rules:",
+    ...(evidence.corrections?.length ?? 0) > 0 ? [
+      // A teaching was detected deterministically — a human typed a rule in their
+      // own words. Returning nothing then is the failure mode that makes this
+      // product feel broken, and it is not a judgment call the model should be
+      // making loosely. This does not manufacture lessons: it fires only when a
+      // rule was literally stated, and the exceptions below still apply.
+      "- The developer stated a rule in their OWN words this session (see flagged",
+      "  teachings). Propose it as a correction unless an existing skill already",
+      "  covers it, or it holds only for the one task they were doing."
+    ] : [],
     "- Produce NOTHING that overlaps an existing skill listed below.",
     "- Do not invent: every item must be grounded in the session data. When unsure,",
     "  leave it out \u2014 an empty list is a valid answer.",

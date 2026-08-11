@@ -86,6 +86,29 @@ describe("sliceTranscript", () => {
     expect(first).toBeGreaterThanOrEqual(0); // chronological among the picked tail
   });
 
+  it("keeps an older short teaching that still fits after a long message did not", () => {
+    // budget 4000 → user share 2400. Newest-first: the two 1000-char briefs fit and
+    // leave ~400; the next brief does not. The teaching behind it is 30 chars and the
+    // budget can still afford it — stopping at the first message that does not fit
+    // would drop the highest-value line in the session.
+    const entries: TranscriptEntry[] = [
+      { role: "user", text: "we never mock the db here" },
+      ...Array.from({ length: 3 }, (_, i) => ({ role: "user" as const, text: `brief-${i} ${"x".repeat(1_000)}` })),
+    ];
+    const slice = sliceTranscript(entries, 4_000);
+    expect(slice).toContain("we never mock the db here");
+    expect(slice).toContain("brief-2");
+  });
+
+  it("does not spend more than the user share even when it skips past a big message", () => {
+    const entries: TranscriptEntry[] = Array.from({ length: 40 }, (_, i) => ({
+      role: "user" as const,
+      text: `msg-${i} ${"x".repeat(i % 2 === 0 ? 900 : 100)}`,
+    }));
+    const slice = sliceTranscript(entries, 4_000);
+    expect(slice.length).toBeLessThanOrEqual(2_400 + 40 * "User: \n\n".length);
+  });
+
   it("caps oversized messages instead of dropping them", () => {
     const entries: TranscriptEntry[] = [{ role: "user", text: "y".repeat(5_000) }];
     const slice = sliceTranscript(entries, 40_000);
