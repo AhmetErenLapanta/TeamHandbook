@@ -1,9 +1,14 @@
-import { drainHarvestJobs, runHarvestJob } from "../lib/pipeline.js";
+import { drainHarvestJobs, releaseHarvestJob, runHarvestJob } from "../lib/pipeline.js";
 
 async function main(): Promise<void> {
-  const jobs = drainHarvestJobs();
-  for (const job of jobs) {
-    await runHarvestJob(job);
+  for (const { job, claimedFile } of drainHarvestJobs()) {
+    try {
+      await runHarvestJob(job);
+    } finally {
+      // release only after the job has been processed (or has queued its own retry):
+      // a runner killed mid-harvest leaves the claim for reclaimStaleClaims
+      releaseHarvestJob(claimedFile);
+    }
   }
 }
 

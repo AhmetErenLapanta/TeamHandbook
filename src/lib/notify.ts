@@ -2,12 +2,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { join } from "node:path";
 import { handbookHome } from "./session-state.js";
-import { readConfigFile } from "./config.js";
+import { configIsBroken, readConfigFile } from "./config.js";
 import { readCounters } from "./counters.js";
 import { loadTeamConfig, teamSkillsDir } from "./init.js";
 import { listCandidates } from "./queue.js";
 import { listExistingSkills } from "./skill-index.js";
-import { workRecurrences } from "./signals.js";
 
 export interface NotifyConfig {
   sessionStart: boolean;
@@ -86,49 +85,6 @@ export function heartbeatDelta(home: string = handbookHome()): HeartbeatDelta {
     pairs: Math.max(0, current.pairsResolved - prior.pairsResolved),
     gateErrors: Math.max(0, current.gateErrors - prior.gateErrors),
   };
-}
-
-// T3: when the same shape of work keeps recurring across sessions, suggest — once
-// per shape — turning the procedure into a skill. A suggestion, never automatic
-// generation: the user runs /handbook:learn with full session context. The
-// threshold trades earliness against confidence; since each shape nudges at most
-// once, a low default mainly changes WHEN you're asked, not how often.
-const DEFAULT_WORK_NUDGE_THRESHOLD = 2;
-
-export function workNudgeThreshold(home: string = handbookHome()): number {
-  const notify = readConfigFile(home).notify as Record<string, unknown> | undefined;
-  const value = notify?.workNudgeThreshold;
-  return typeof value === "number" && Number.isInteger(value) && value >= 1
-    ? value
-    : DEFAULT_WORK_NUDGE_THRESHOLD;
-}
-
-function nudgedWorkFile(home: string): string {
-  return join(home, "nudged-work.json");
-}
-
-export function pendingWorkNudge(home: string = handbookHome()): string | null {
-  let nudged: string[] = [];
-  try {
-    const parsed = JSON.parse(readFileSync(nudgedWorkFile(home), "utf8"));
-    if (Array.isArray(parsed)) nudged = parsed.filter((f) => typeof f === "string");
-  } catch {
-    // nothing nudged yet
-  }
-  const threshold = workNudgeThreshold(home);
-  const due = workRecurrences(home)
-    .filter((r) => r.count >= threshold && !nudged.includes(r.fingerprint))
-    .sort((a, b) => b.count - a.count);
-  const top = due[0];
-  if (!top) return null;
-  writeFileAtomic(nudgedWorkFile(home), JSON.stringify([...nudged, top.fingerprint], null, 2) + "\n");
-  const what = [top.families.slice(0, 3).join(", "), top.exts.slice(0, 3).join(" ")]
-    .filter(Boolean)
-    .join("; editing ");
-  return (
-    `handbook: you've done similar work ${top.count} times (${what}) — if that's a ` +
-    `repeatable procedure, run /handbook:learn to turn it into a team skill.`
-  );
 }
 
 // Growth bridge: once the product has proven itself solo (a few approved skills)
@@ -260,9 +216,10 @@ export interface SummaryInputs {
   firstRun?: boolean;
   newSkills: string[];
   heartbeat?: HeartbeatDelta | null;
-  workNudge?: string | null;
   teamNudge?: string | null;
   digest?: string | null;
+  // config.json exists but is unparseable — the kill switches failed closed
+  configBroken?: boolean;
   scoring?: number;
 }
 
@@ -274,12 +231,17 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     newSkills,
     firstRun = false,
     heartbeat = null,
-    workNudge = null,
     teamNudge = null,
     digest = null,
     scoring = 0,
   } = inputs;
   const lines: string[] = [];
+  if (inputs.configBroken) {
+    lines.push(
+      "handbook: ~/.teamhandbook/config.json could not be parsed — automatic harvesting is " +
+        "OFF until it is valid JSON (failing closed on purpose). Run /handbook:doctor.",
+    );
+  }
   if (firstRun) {
     lines.push(
       "TeamHandbook is active — it learns from the corrections you give, the procedures you complete, " +
@@ -318,7 +280,6 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
       `handbook: ${newSkills.length} ${noun} available since your last session here: ${newSkills.join(", ")}.`,
     );
   }
-  if (workNudge) lines.push(workNudge);
   if (teamNudge) lines.push(teamNudge);
   if (digest) lines.push(digest);
   // A gate outage is pushed regardless of what else is on screen — the user would
@@ -382,9 +343,9 @@ export function sessionStartNotice(
     newSkills,
     firstRun: isFirstRun(home),
     heartbeat: config.heartbeat ? heartbeatDelta(home) : null,
-    workNudge: pendingWorkNudge(home),
     teamNudge: pendingTeamNudge(home),
     digest: weeklyDigest(home),
+    configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home),
   });
 }

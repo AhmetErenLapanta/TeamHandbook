@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   abandonedFile,
   drainHarvestJobs,
+  releaseHarvestJob,
   enqueueHarvestJob,
   pendingDir,
   pipelineLogFile,
@@ -100,7 +101,10 @@ describe("harvest job hand-off", () => {
     enqueueHarvestJob(job(home), home);
     enqueueHarvestJob(job(home, { sessionId: "s2" }), home);
     const drained = drainHarvestJobs(home);
-    expect(drained.map((j) => j.sessionId).sort()).toEqual(["s1", "s2"]);
+    expect(drained.map((c) => c.job.sessionId).sort()).toEqual(["s1", "s2"]);
+    // the claim is held until the runner releases it, so a killed runner keeps the job
+    expect(readdirSync(pendingDir(home)).every((f) => f.includes(".claimed-"))).toBe(true);
+    for (const c of drained) releaseHarvestJob(c.claimedFile);
     expect(drainHarvestJobs(home)).toEqual([]);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
@@ -111,6 +115,7 @@ describe("harvest job hand-off", () => {
     writeFileSync(join(pendingDir(home), "zz-wrong-shape.json"), JSON.stringify({ nope: true }));
     const drained = drainHarvestJobs(home);
     expect(drained).toHaveLength(1);
+    for (const c of drained) releaseHarvestJob(c.claimedFile);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
 
@@ -121,7 +126,9 @@ describe("harvest job hand-off", () => {
     renameSync(join(pendingDir(home), entry), claimed);
     const old = new Date(Date.now() - 11 * 60 * 1000);
     utimesSync(claimed, old, old);
-    expect(drainHarvestJobs(home)).toHaveLength(1);
+    const reclaimed = drainHarvestJobs(home);
+    expect(reclaimed).toHaveLength(1);
+    for (const c of reclaimed) releaseHarvestJob(c.claimedFile);
     expect(readdirSync(pendingDir(home))).toEqual([]);
   });
 
@@ -169,7 +176,8 @@ describe("runHarvestJob", () => {
     await runHarvestJob(job(home), home, { ...deps, runner: down });
     const requeued = drainHarvestJobs(home);
     expect(requeued).toHaveLength(1);
-    expect(requeued[0]!.attempts).toBe(1);
+    expect(requeued[0]!.job.attempts).toBe(1);
+    for (const c of requeued) releaseHarvestJob(c.claimedFile);
     expect(readCounters(home).gateErrors).toBe(1);
 
     await runHarvestJob({ ...job(home), attempts: 2 }, home, { ...deps, runner: down });

@@ -7,11 +7,9 @@ import { runManualSignal } from "./pipeline.js";
 import { sieveSignal } from "./gate.js";
 import { buildScorePrompt } from "./score.js";
 import { buildDistillPrompt } from "./distill.js";
-import { flushSessionEnd, workRecordFromState, workRecurrences } from "./signals.js";
 import type { Signal } from "./signals.js";
 import { recordActivity } from "./capture.js";
 import { saveSessionState, emptySessionState } from "./session-state.js";
-import { pendingWorkNudge } from "./notify.js";
 import { candidatesDir } from "./skill-index.js";
 import type { ClaudeRunner } from "./score.js";
 
@@ -59,7 +57,7 @@ describe("procedure learning (T2 task mode)", () => {
       "/repo",
     );
     const signal = signalFromLearnPayload(payload!, "2026-08-08T00:00:00Z");
-    const decision = sieveSignal(signal, 1);
+    const decision = sieveSignal(signal);
     expect(decision.pass).toBe(false);
     expect(decision.reason).toBe("secret");
   });
@@ -98,69 +96,3 @@ describe("procedure learning (T2 task mode)", () => {
   });
 });
 
-describe("repeated-work detection (T3)", () => {
-  function sessionWithActivity(id: string): void {
-    const state = emptySessionState(id);
-    saveSessionState(state, home);
-    for (const cmd of ["./gradlew test", "npm run build"]) {
-      recordActivity(
-        { session_id: id, tool_name: "Bash", tool_input: { command: cmd }, hook_event_name: "PostToolUse" },
-        home,
-      );
-    }
-    recordActivity(
-      { session_id: id, tool_name: "Edit", tool_input: { file_path: "/repo/src/A.kt" }, hook_event_name: "PostToolUse" },
-      home,
-    );
-  }
-
-  it("records a work shape at session end and counts recurrences", () => {
-    for (const id of ["s1", "s2", "s3"]) {
-      sessionWithActivity(id);
-      flushSessionEnd(id, home);
-    }
-    const rec = workRecurrences(home);
-    expect(rec).toHaveLength(1);
-    expect(rec[0]!.count).toBe(3);
-    expect(rec[0]!.families).toContain("gradlew test");
-    expect(rec[0]!.exts).toContain(".kt");
-  });
-
-  it("keeps work records weak — they are recurrence counters, never skill material", () => {
-    const work = workRecordFromState(
-      { activity: { families: ["gradlew test"], exts: [".kt"] } },
-      "s1",
-      "2026-08-08T00:00:00Z",
-    )!;
-    expect(work.kind).toBe("weak");
-    expect(work.work).toBeDefined();
-  });
-
-  it("nudges once per work shape at the default threshold (2)", () => {
-    for (const id of ["s1", "s2"]) {
-      sessionWithActivity(id);
-      flushSessionEnd(id, home);
-    }
-    const nudge = pendingWorkNudge(home);
-    expect(nudge).toContain("similar work 2 times");
-    expect(nudge).toContain("/handbook:learn");
-    expect(pendingWorkNudge(home)).toBeNull();
-  });
-
-  it("honors a configured nudge threshold", () => {
-    writeFileSync(join(home, "config.json"), JSON.stringify({ notify: { workNudgeThreshold: 4 } }));
-    for (const id of ["s1", "s2", "s3"]) {
-      sessionWithActivity(id);
-      flushSessionEnd(id, home);
-    }
-    expect(pendingWorkNudge(home)).toBeNull();
-  });
-
-  it("stays silent below the threshold and for command-only sessions", () => {
-    sessionWithActivity("s1");
-    flushSessionEnd("s1", home);
-    expect(pendingWorkNudge(home)).toBeNull();
-    const none = workRecordFromState({ activity: { families: ["npm test"], exts: [] } }, "s", "t");
-    expect(none).toBeNull();
-  });
-});

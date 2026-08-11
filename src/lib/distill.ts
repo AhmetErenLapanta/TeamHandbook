@@ -288,7 +288,7 @@ export async function distillVerdict(
   if (!draft) return { signal, outcome: "error", error: "unparseable distill response" };
   // Defense in depth: the model could echo a secret-shaped string into the body
   // even though the inputs were screened. Fail closed if so.
-  if (signalSecret({ command: draft.body, error: draft.description })) {
+  if (signalSecret({ command: draft.body, error: draft.description, edits: [draft.expect] })) {
     return { signal, outcome: "error", error: "distilled output contained secret-like content" };
   }
   const generality = verdict.result?.scores.generality ?? 0;

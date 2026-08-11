@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSafeGitUrl, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { assertSafeGitUrl, BrokenConfigError, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { configIsBroken } from "./config.js";
 import type { GitRunner } from "./init.js";
 import { handbookHome } from "./session-state.js";
 
@@ -35,6 +36,9 @@ export function joinTeamRepo(
     assertSafeGitUrl(url);
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
+  if (configIsBroken(home)) {
+    return { ok: false, error: new BrokenConfigError(home).message };
   }
   const existing = loadTeamConfig(home);
   if (existing && existing.repoUrl !== url) {

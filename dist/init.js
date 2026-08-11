@@ -33,14 +33,27 @@ var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join as join2 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join2(home, "config.json");
+}
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync(join2(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
   }
 }
 
@@ -89,7 +102,16 @@ function loadTeamConfig(home = handbookHome()) {
   }
   return null;
 }
+var BrokenConfigError = class extends Error {
+  constructor(home) {
+    super(
+      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+    );
+    this.name = "BrokenConfigError";
+  }
+};
 function saveTeamConfig(team, home = handbookHome()) {
+  if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   config.team = team;
   writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
@@ -299,6 +321,9 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   const marketplaceName = slugifySkillName(name ?? repoNameFromUrl(url) ?? "");
   if (!marketplaceName) {
     return { ok: false, error: `cannot derive a marketplace name from "${url}"; pass --name` };
+  }
+  if (configIsBroken(home)) {
+    return { ok: false, error: new BrokenConfigError(home).message };
   }
   if (loadTeamConfig(home)) {
     return {

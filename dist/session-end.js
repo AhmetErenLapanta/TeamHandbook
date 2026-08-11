@@ -30,6 +30,7 @@ import {
   renameSync as renameSync2,
   rmSync as rmSync3,
   statSync as statSync2,
+  utimesSync,
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { basename, join as join5 } from "node:path";
@@ -104,14 +105,27 @@ var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join2(home, "config.json");
+}
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync2(join2(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync2(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
   }
 }
 
@@ -120,13 +134,21 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 function gateAutoEnabled(home = handbookHome()) {
+  if (configIsBroken(home)) return false;
   const gate = readConfigFile(home).gate;
   return gate?.auto !== false;
 }
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
-  { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
+  // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
+  // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
+  // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
+  { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
+  // PuTTY .ppk keys are not PEM-armored at all
+  { name: "putty-key", re: /^\s*(?:PuTTY-User-Key-File-\d|Private-Lines:|Private-MAC:)/m },
+  { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
   { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
   { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
   { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
@@ -140,6 +162,10 @@ var SECRET_PATTERNS = [
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
   { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  // common credential shapes the generic keyword rule misses
+  { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
+  { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
+  { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
   {
     // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
     // which \b cannot match between two word chars.
@@ -181,8 +207,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
 );
 
 // src/lib/signals.ts
-import { createHash } from "node:crypto";
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
 import { join as join4 } from "node:path";
 
 // src/lib/counters.ts
@@ -279,7 +304,7 @@ function appendSignals(signals, home = handbookHome()) {
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
-function signalFromPair(pair, sessionId, ts, fileExists = existsSync) {
+function signalFromPair(pair, sessionId, ts, fileExists = existsSync2) {
   const persistedEdits = pair.edits.filter(fileExists);
   return {
     ts,
@@ -310,34 +335,12 @@ function signalFromOpenError(error, sessionId, ts) {
     edits: error.edits
   };
 }
-function workRecordFromState(state, sessionId, ts, cwd = "") {
-  const activity = state.activity;
-  if (!activity || activity.families.length === 0 || activity.exts.length === 0) return null;
-  const families = [...activity.families].sort();
-  const exts = [...activity.exts].sort();
-  const fingerprint = createHash("sha256").update(`work:${families.join(",")}:${exts.join(",")}`).digest("hex").slice(0, 16);
-  return {
-    ts,
-    sessionId,
-    kind: "weak",
-    fingerprint,
-    family: "work",
-    command: "",
-    error: "",
-    cwd,
-    count: 1,
-    edits: [],
-    work: { families, exts }
-  };
-}
-function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync) {
+function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync2) {
   const state = loadSessionState(sessionId, home);
   const signals = [
     ...state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists)),
     ...state.openErrors.map((e) => signalFromOpenError(e, sessionId, ts))
   ];
-  const work = workRecordFromState(state, sessionId, ts);
-  if (work) signals.push(work);
   appendSignals(signals, home);
   deleteSessionState(sessionId, home);
   return signals;
@@ -385,7 +388,8 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    enabled: harvest?.enabled !== false,
+    // fail closed on a broken config — see configIsBroken
+    enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
     minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
@@ -429,9 +433,10 @@ async function main() {
   if (!input?.session_id) return;
   const state = loadSessionState(input.session_id);
   const substance = sessionHasSubstance(state);
+  const alreadyHarvested = !!state.harvestedAt;
   const transcriptPath = state.transcriptPath ?? input.transcript_path;
   flushSessionEnd(input.session_id);
-  if (!substance) return;
+  if (!substance || alreadyHarvested) return;
   if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
   const pairs = ledgerPairsForSession(input.session_id);
   const counts = ledgerFingerprintCounts();

@@ -131,11 +131,19 @@ function checkConfig(home: string): DoctorCheck {
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return fail("config", "config.json is not a JSON object — it is being IGNORED (defaults apply)");
+      return fail(
+        "config",
+        "config.json is not a JSON object — automatic harvesting is OFF until it is " +
+          "(the privacy switches fail closed); every other setting falls back to its default",
+      );
     }
     return ok("config", "config.json valid");
   } catch {
-    return fail("config", "config.json is not valid JSON — it is being IGNORED (defaults apply)");
+    return fail(
+      "config",
+      "config.json is not valid JSON — automatic harvesting is OFF until it parses " +
+        "(the privacy switches fail closed); every other setting falls back to its default",
+    );
   }
 }
 

@@ -138,18 +138,31 @@ function listCandidates(home = handbookHome(), status) {
 }
 
 // src/lib/notify.ts
-import { existsSync, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/config.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+import { existsSync, readFileSync as readFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join6(home, "config.json");
+}
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync3(join6(home, "config.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync3(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync3(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
   }
 }
 
@@ -225,7 +238,8 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    enabled: harvest?.enabled !== false,
+    // fail closed on a broken config — see configIsBroken
+    enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
     minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,

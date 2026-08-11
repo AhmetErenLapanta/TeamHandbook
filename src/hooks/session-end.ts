@@ -13,9 +13,13 @@ async function main(): Promise<void> {
   // path and the substance evidence.
   const state = loadSessionState(input.session_id);
   const substance = sessionHasSubstance(state);
+  // salvage may already have harvested this session (laptop sleep > 3h, then the
+  // original window closes) — a second harvest is a second claude call and up to
+  // 3 more candidates against a documented cap of 3
+  const alreadyHarvested = !!state.harvestedAt;
   const transcriptPath = state.transcriptPath ?? input.transcript_path;
   flushSessionEnd(input.session_id);
-  if (!substance) return; // trivial session — no claude call, by design
+  if (!substance || alreadyHarvested) return; // trivial or already harvested — no claude call
   // gate.auto=false / harvest.enabled=false: capture stays local; nothing is sent
   // to claude -p unless the user explicitly runs /handbook:learn
   if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;

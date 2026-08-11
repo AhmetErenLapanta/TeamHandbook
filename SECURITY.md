@@ -32,7 +32,7 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 - `sessions/` — per-session working state: the failing command and its fix, the
   transcript path, and any flagged teachings. Kept until the session ends or is
   salvaged.
-- `signals.jsonl` — the evidence ledger (captured error→fix pairs and work shapes).
+- `signals.jsonl` — the evidence ledger of captured error→fix pairs.
 - `pending/` — harvest jobs waiting for the background runner: one file per session
   holding its id, cwd, the **path** to its transcript, and the captured evidence.
   The runner claims a job by rename and deletes it before calling `claude`.
@@ -79,9 +79,16 @@ Two things, and only these:
    session's work shape. This reaches Anthropic exactly as any Claude Code prompt
    does. Disable it with `{"harvest": {"enabled": false}}`, or disable every
    automatic model call with `{"gate": {"auto": false}}`, in
-   `~/.teamhandbook/config.json`; both are checked before a session is queued, so
-   nothing is read or sent. `/handbook:learn` still works and sends only what you
-   asked it to capture.
+   `~/.teamhandbook/config.json`; both are checked before a session is queued, so the
+   transcript is never read and nothing is sent. `/handbook:learn` still works and
+   sends only what you asked it to capture.
+   - Precisely: those switches stop the SENDING, not the local capture. The
+     `PostToolUse` and `UserPromptSubmit` hooks keep writing evidence into
+     `~/.teamhandbook/` (secret-redacted, as above) so the history is there if you turn
+     harvesting back on. If you want no local capture either, uninstall the plugin.
+   - If `config.json` exists but cannot be parsed, both switches fail **closed** —
+     a trailing comma in a hand-edited file must never silently re-enable sending —
+     and the next session-start notice tells you.
    - A session with no substance (no error→fix pair, no teaching, no real work) is
      never harvested and costs no model call at all.
 2. **On your approval:** `/handbook:review` → approve installs the skill locally or

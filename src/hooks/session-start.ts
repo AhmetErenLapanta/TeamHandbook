@@ -32,9 +32,9 @@ function salvageOrphans(currentSessionId?: string): void {
     const state = loadSessionState(id);
     if (state.harvestedAt) continue; // already salvaged once
     flushResolvedPairs(id); // evidence into the ledger, session file untouched
-    const fresh = loadSessionState(id);
-    fresh.harvestedAt = new Date().toISOString();
-    saveSessionState(fresh);
+    // Only stamp a session we ACTUALLY harvest. Stamping first would mark an idle
+    // orphan that has no substance yet, and SessionEnd — which now skips a stamped
+    // session — would then drop that session's real work, silently and forever.
     if (!sessionHasSubstance(state)) continue;
     const pairs = ledgerPairsForSession(id);
     const counts = ledgerFingerprintCounts();
@@ -51,6 +51,9 @@ function salvageOrphans(currentSessionId?: string): void {
         recurrence,
       },
     });
+    const fresh = loadSessionState(id);
+    fresh.harvestedAt = new Date().toISOString();
+    saveSessionState(fresh);
     enqueued += 1;
   }
   if (enqueued > 0) {
