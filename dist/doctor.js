@@ -247,6 +247,7 @@ function checkNode() {
   const major = Number(process.versions.node.split(".")[0]);
   return major >= 18 ? ok("node", `${process.version} (\u2265 18 required)`) : fail("node", `${process.version} \u2014 TeamHandbook needs Node \u2265 18`);
 }
+var PROBE_TIMEOUT_MS = 6e4;
 function checkClaudeCli(run, home) {
   try {
     run("claude", ["--version"], 15e3);
@@ -266,7 +267,7 @@ function checkClaudeCli(run, home) {
   const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
   for (const model of models) {
     try {
-      const reply = run("claude", ["-p", "Reply with exactly: OK", ...model ? ["--model", model] : []], 3e4);
+      const reply = run("claude", ["-p", "Reply with exactly: OK", ...model ? ["--model", model] : []], PROBE_TIMEOUT_MS);
       if (!/\bok\b/i.test(reply)) {
         return warn("claude CLI", `installed, but a probe with model "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`);
       }
@@ -275,6 +276,12 @@ function checkClaudeCli(run, home) {
       const lower = message.toLowerCase();
       if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
         return fail("claude CLI", "installed but NOT logged in \u2014 run `claude` and /login; the gate cannot score until then");
+      }
+      if (err?.code === "ETIMEDOUT" || lower.includes("etimedout")) {
+        return warn(
+          "claude CLI",
+          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s \u2014 usually a cold start; re-run this check`
+        );
       }
       return fail(
         "claude CLI",

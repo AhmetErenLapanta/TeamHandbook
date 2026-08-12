@@ -52,6 +52,11 @@ function checkNode(): DoctorCheck {
     : fail("node", `${process.version} — TeamHandbook needs Node ≥ 18`);
 }
 
+// The harvest itself allows 180s. This probe only asks for "OK", but it is often the
+// first headless call on a cold machine, and 30s was short enough to fail on a healthy
+// install.
+const PROBE_TIMEOUT_MS = 60_000;
+
 function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
   try {
     run("claude", ["--version"], 15_000);
@@ -77,7 +82,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
   const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
   for (const model of models) {
     try {
-      const reply = run("claude", ["-p", "Reply with exactly: OK", ...(model ? ["--model", model] : [])], 30_000);
+      const reply = run("claude", ["-p", "Reply with exactly: OK", ...(model ? ["--model", model] : [])], PROBE_TIMEOUT_MS);
       if (!/\bok\b/i.test(reply)) {
         return warn("claude CLI", `installed, but a probe with model "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`);
       }
@@ -86,6 +91,15 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
       const lower = message.toLowerCase();
       if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
         return fail("claude CLI", "installed but NOT logged in — run `claude` and /login; the gate cannot score until then");
+      }
+      // A timeout says nothing about the model, and the first headless call after an
+      // install is the slowest one a machine ever makes. Reporting it as a failure sent
+      // the first-run reader to edit config.json over a model that was fine.
+      if ((err as { code?: string })?.code === "ETIMEDOUT" || lower.includes("etimedout")) {
+        return warn(
+          "claude CLI",
+          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s — usually a cold start; re-run this check`,
+        );
       }
       return fail(
         "claude CLI",

@@ -76,6 +76,25 @@ describe("runDoctor", () => {
     expect(doctorExitCode(report)).toBe(1);
   });
 
+  it("given the probe times out on a cold machine, when diagnosed, then it does not blame the model", () => {
+    const slowProbe: CommandRunner = (cmd, args) => {
+      if (cmd === "claude" && args[0] === "-p") {
+        const err = new Error("spawnSync claude ETIMEDOUT") as Error & { code: string };
+        err.code = "ETIMEDOUT";
+        throw err;
+      }
+      if (cmd === "claude") return "2.1.0 (Claude Code)";
+      throw new Error(`unexpected command ${cmd}`);
+    };
+
+    const report = runDoctor(home, slowProbe);
+
+    expect(byName(report, "claude CLI").level).toBe("warn");
+    expect(byName(report, "claude CLI").detail).toContain("cold start");
+    expect(byName(report, "claude CLI").detail).not.toContain("is that model valid");
+    expect(doctorExitCode(report)).toBe(0);
+  });
+
   it("warns about abandoned pairs so the loss is visible", () => {
     bumpCounter("gateAbandoned", home, 2);
     const report = runDoctor(home, happyRunner);
