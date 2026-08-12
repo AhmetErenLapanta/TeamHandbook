@@ -40,6 +40,10 @@ across all your projects, so scoping it to one repository hides the thing it loo
 Not project scope, which installs it for everyone who clones the repo
 ([why](SECURITY.md#install-it-for-yourself-not-for-your-teammates)).
 
+Then restart Claude Code, so the hooks load, and run `/handbook:doctor` to confirm it
+can reach your `claude` CLI. Running it before the restart reports the hooks as not
+firing, correctly: they are not, yet.
+
 That's the whole install. It works **solo immediately** - no team setup required.
 
 ## Nothing ships until you say so
