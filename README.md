@@ -2,20 +2,20 @@
 
 **The team handbook that writes itself.**
 
-You explain a rule to Claude. So do four teammates, in four other sessions. Five lessons
-learned, and each one stays with the person who learned it. It should be five lessons
-the whole team has.
+You explain a rule to Claude. Your teammates explain theirs, in their own sessions.
+Everybody learns something today, and nobody else finds out. What one of you learns
+should belong to all of you.
 
-TeamHandbook works in the background of every session - noticing the rule the moment you
-type it, the command that failed, the fix that followed. When the session ends it turns
-what it saw into one question:
+TeamHandbook works in the background of every session, noticing the rule the moment you
+type it, the command that failed, the fix that followed. It reads the session once it
+ends, and your next one opens with what it found:
 
 ```
 handbook learned from your last session: "no-db-mocks-in-integration-tests"
 (correction, 8/10) - run /handbook:review
 ```
 
-Nothing is kept until you answer. When you do, you choose who gets it:
+Nothing is kept until you say so, and you decide who gets it:
 
 - **just you** - loads in every project you open, goes no further
 - **this repo** - committed next to the code, for anyone who works on it
