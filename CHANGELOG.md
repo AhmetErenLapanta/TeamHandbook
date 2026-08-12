@@ -4,7 +4,40 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [0.2.0] — unreleased
+## [0.3.0] - 2026-08-12
+
+**A rule counts in any language, and the first run tells the truth.** Everything here
+came out of installing the published plugin and using it, not out of the test suite.
+
+- **Teaching detection no longer reads English only.** The list of English phrases that
+  decided what a teaching was is gone: every prompt that could carry a lesson is
+  recorded, and which of them states a rule is the model's call. Matching lost its
+  English stemmer's monopoly too, so an agglutinative suffix
+  ("mocklama"/"mocklamayız") is one word, and the tokenizer stopped deleting the
+  letters it could not fold. Probed against a real session, eighteen Turkish prompts
+  used to produce zero flags.
+- **Recurrence is measured after the call, not asked for before it.** A lesson whose
+  quote echoes an earlier session, or whose pair recurred in the ledger, is scored 2
+  because that was measured locally.
+- **A lesson learned from an umbrella directory keeps its repository.** Opening Claude
+  Code one level above your checkouts left a project-specific rule labelled `team`, and
+  shipped without its "only in this repository" guard. Scope now comes from the files
+  the session actually edited, and refuses to guess when they span two repos.
+- **The harvest stopped reading this plugin's own command text as the developer's
+  words.** A slash command expands into the transcript as a user turn; the demo's body
+  told the model it was watching a staged exercise, and the model believed it.
+- **The demo hands its work to a clean session.** Narrating the harvest inside the
+  session it wants harvested produced a lesson in 1 run out of 3; the same work done
+  in an ordinary session produces it 3 out of 3.
+- **The first `/handbook:doctor` after an install no longer blames your model** for a
+  probe that merely timed out on a cold machine, and the README says to restart before
+  running it.
+- **"Add it to this repo" is now "add it to this project"**, which is what that option
+  has always done, and is correct in a directory that is not a repository.
+- **Install scope is documented**: user scope, and why project scope installs the
+  harvest for everyone who clones the repo.
+
+## [0.2.0]
 
 **Session harvest replaces the recurrence gate.** TeamHandbook stopped being an
 error-hunter and became a session-harvesting, personal-first learning layer.

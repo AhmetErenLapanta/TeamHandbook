@@ -1,7 +1,7 @@
 {
   "name": "handbook",
-  "version": "0.2.0",
-  "description": "The team handbook that writes itself — the corrections you give Claude, captured once and shared with your team as reviewed skills.",
+  "version": "0.3.0",
+  "description": "The team handbook that writes itself \u2014 the corrections you give Claude, captured once and shared with your team as reviewed skills.",
   "author": {
     "name": "Ahmet Eren Lapanta"
   },
