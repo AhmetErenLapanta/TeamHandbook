@@ -1,43 +1,90 @@
 ---
-description: See TeamHandbook learn something from a real session, end to end, in about two minutes
+description: Watch TeamHandbook learn something from a real session, end to end, in about five minutes
 ---
 
-You are running TeamHandbook's guided demo. The point is for the user to WATCH the loop
-work on a real session — a teaching they give plus a real failure they fix — and end at
-`/handbook:review` with a lesson that quotes them back. Use a scratch directory so
-nothing touches their project.
+You are setting up TeamHandbook's guided demo. Your job in THIS session is only to
+prepare it and hand the user their next two steps. Do not do the work yourself here.
 
-1. Explain in one line what is about to happen, then create a scratch project:
-   ```
-   mkdir -p /tmp/handbook-demo && cd /tmp/handbook-demo && git init -q -b main
-   git remote add origin git@example.com:demo/payments.git
-   ```
-2. Write a fixture that fails for a reason worth learning — a validator that rejects
-   snake_case config:
-   - `config.json` containing `{ "user_id": "abc-123", "amount": 100 }`
-   - `validate.sh` (chmod +x) that greps for `user_id`, prints
-     `ERROR 400: field 'user_id' unknown — the gateway only accepts camelCase` to
-     stderr and exits 1 when found, else prints `config OK`.
-3. Ask the user to type ONE teaching into the chat themselves, verbatim, so it is
-   genuinely theirs — suggest:
-   `we always use camelCase in gateway configs here, never snake_case`
-   Wait for them to send it. (This is what the harvest will quote back; you typing it
-   would defeat the demo.)
-4. Run `./validate.sh` with Bash (it fails), fix `config.json` with Edit (rename the
-   field to `userId`), then run `./validate.sh` again (it passes).
-5. Tell the user the harvest runs when this session ENDS, so the demo needs one of:
-   - end the session and start a new one (the real path — the next session opens with
-     "TeamHandbook learned from your last session…"), or
-   - run `/handbook:learn` now — but say plainly what it does NOT do: the manual
-     path captures only the failure and its fix, so that candidate has no
-     `correction` kind and no `you said:` quote. Only ending the session produces
-     those.
-   Ask which they prefer and follow it.
-6. When a candidate exists, run `/handbook:review` and walk them through it: point out
-   the `kind`, the score, the suggested destination, and — if they took the
-   end-the-session path — the `you said:` line carrying their own words. Then let them
-   choose keep / share / skip as usual.
-7. Offer to clean up: `rm -rf /tmp/handbook-demo`.
+Why the split, if the user asks: the harvest reads the conversation a session produced.
+A session spent talking about TeamHandbook is a session about TeamHandbook, and a model
+reading it back concludes, correctly, that it was watching a staged exercise rather than
+someone working. Measured on a real transcript: the demo that narrated itself produced a
+lesson in 1 run out of 3, while the same work done in an ordinary session produced it 3
+out of 3. So the demo hands the work to a clean session. That is also the honest thing
+to show, since it is what the product actually does all day.
 
-If `/handbook:doctor` reports a problem at any point (no `claude` on PATH, not logged
-in), stop and relay it — the harvest cannot run without it.
+## Step 1, here: build the scratch project
+
+Create it with ONE Bash call, exactly as written. One call is deliberate: `mkdir` and
+`chmod` are too generic to count as work, so this session stays under the substance bar
+and never spends a model call harvesting itself. Writing the two files with the Write
+tool instead would cross it.
+
+```bash
+mkdir -p /tmp/handbook-demo && cd /tmp/handbook-demo && git init -q -b main 2>/dev/null; git remote remove origin 2>/dev/null; git remote add origin git@example.com:demo/payments.git; cat > config.json <<'EOF'
+{
+  "user_id": "abc-123",
+  "amount": 100
+}
+EOF
+cat > validate.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if grep -q '"user_id"' config.json; then
+  echo "ERROR 400: field 'user_id' unknown - the gateway only accepts camelCase" >&2
+  exit 1
+fi
+echo "config OK"
+EOF
+chmod +x validate.sh && ls
+```
+
+## Step 2: send the work to a NEW session
+
+Print this, changing nothing inside the code blocks:
+
+> The scratch project is ready at `/tmp/handbook-demo`: a config using `user_id`, and a
+> validator that rejects it.
+>
+> Quit this session with `/exit`, then start Claude Code in that directory:
+>
+> ```
+> cd /tmp/handbook-demo && claude
+> ```
+>
+> Paste this as your first message and let it work:
+>
+> ```
+> we always use camelCase in gateway configs here, never snake_case. run ./validate.sh, fix whatever it rejects, then run it again
+> ```
+>
+> When it prints `config OK`, quit that session too. TeamHandbook harvests it as it
+> closes: your rule, the command that failed, and the fix that followed.
+
+Then stop. Do not offer to do the work here instead, and do not reach for
+`/handbook:learn` as a shortcut: the manual path captures the failure and its fix, so
+the candidate arrives with no `correction` kind and no `you said:` quote, which is the
+half of the demo worth watching.
+
+## Step 3: tell them what to look for when they come back
+
+> Start Claude Code in `/tmp/handbook-demo` once more. It should open with:
+>
+> ```
+> TeamHandbook learned from your last session: "..." (correction, 8/10) - run /handbook:review
+> ```
+>
+> Run `/handbook:review` and read the candidate:
+>
+> - `kind: correction`, which only the session-end path produces
+> - the score, and which of the five criteria earned it
+> - `you said:`, carrying your own sentence, quoted back as the reason the lesson exists
+>
+> Then keep it, put it in the repo, or skip it.
+>
+> If that opening line does not appear, give the background harvest a few seconds and
+> start a session again. `/handbook:status` shows whether it ran, and `/handbook:doctor`
+> says whether it could reach your `claude` CLI at all.
+
+Clean up whenever they ask: `rm -rf /tmp/handbook-demo`. Leave it until after the
+review, since the candidate's grounded case points at it.
