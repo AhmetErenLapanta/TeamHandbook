@@ -193,4 +193,14 @@ describe("harvest evidence fields + substance check", () => {
     busy.meaningfulToolCalls = 4;
     expect(sessionHasSubstance(busy)).toBe(false);
   });
+
+  it("given a session that only typed prompts, when classified, then it is not substance and costs no model call", () => {
+    const chatting = emptySessionState("s5");
+    chatting.corrections = [
+      { at: "2026-08-11T00:00:00Z", text: "what does this function actually do" },
+      { at: "2026-08-11T00:01:00Z", text: "ok and where is it called from" },
+    ];
+
+    expect(sessionHasSubstance(chatting)).toBe(false);
+  });
 });

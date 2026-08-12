@@ -59,53 +59,24 @@ function detectSecret(text) {
 }
 
 // src/lib/corrections.ts
-var TEACHING_PATTERNS = [
-  // house style: "we never use X", "in this repo we ...", "our convention is"
-  { name: "convention", re: /\b(?:we (?:never|always|only)?\s*(?:use|don'?t use|prefer|avoid)|in this (?:repo|project|codebase)|our (?:convention|standard|rule)|the (?:convention|standard) here)\b/i },
-  // explicit correction of the assistant: "no, ...", "that's wrong", "actually, ..."
-  // (the leading forms end in punctuation, so they must NOT be wrapped in \b — a
-  // trailing word boundary after a comma can never match ordinary prose)
-  {
-    name: "correction",
-    re: /(?:^|\s)(?:no|nope|actually|wrong)\s*[,.!:]|\b(?:that'?s (?:wrong|not right|not how)|that is wrong|instead of that|don'?t do that)\b/i
-  },
-  // preference stated as a directive: "use X instead of Y", "prefer X over Y"
-  { name: "preference", re: /\b(?:use \w[\w.-]* instead|prefer \w[\w.-]* over|switch to \w[\w.-]*|stop using \w[\w.-]*)\b/i },
-  // absolute rules: "always run make fmt", "never commit to main", "don't use var".
-  // "I don't know why this fails" is a question, not a rule — exclude first person.
-  { name: "rule", re: /\b(?:always|never|must|make sure to|be sure to)\b|(?<!\bI\s)(?<!\bwe\s)\b(?:don'?t|do not)\b/i }
-];
 var MIN_CHARS = 12;
 var MAX_CHARS = 600;
-function teachingKind(prompt) {
+function isDeveloperProse(text) {
+  return !text.startsWith("/") && !text.startsWith("<") && !text.startsWith("[");
+}
+function couldTeach(prompt) {
   const text = prompt.trim();
-  if (text.length < MIN_CHARS || text.length > MAX_CHARS) return null;
-  if (text.startsWith("/") || text.startsWith("<")) return null;
-  for (const { name, re } of TEACHING_PATTERNS) {
-    if (re.test(text)) return name;
-  }
-  return null;
+  return text.length >= MIN_CHARS && text.length <= MAX_CHARS && isDeveloperProse(text);
 }
-function teachingSentence(prompt, kind) {
-  const pattern = TEACHING_PATTERNS.find((p) => p.name === kind);
-  if (!pattern) return prompt;
-  const sentences = prompt.split(/\n+|(?<=[.!?])\s+/).filter((s) => s.trim());
-  const i = sentences.findIndex((s) => pattern.re.test(s));
-  if (i === -1) return prompt;
-  const rule = sentences[i].trim();
-  const next = sentences[i + 1]?.trim();
-  return rule.length < 40 && next ? `${rule} ${next}` : rule;
-}
-var MAX_CORRECTIONS = 10;
+var MAX_CORRECTIONS = 40;
 var MAX_TEXT_CHARS = 400;
 function noteCorrection(notes, prompt, at = (/* @__PURE__ */ new Date()).toISOString()) {
-  const kind = teachingKind(prompt);
-  if (!kind) return null;
+  if (!couldTeach(prompt)) return null;
   const full = prompt.trim();
   if (detectSecret(full)) return null;
-  const text = teachingSentence(full, kind).slice(0, MAX_TEXT_CHARS);
+  const text = full.slice(0, MAX_TEXT_CHARS);
   if (notes.some((n) => n.text === text)) return null;
-  const next = [...notes, { at, kind, text }];
+  const next = [...notes, { at, text }];
   return next.length > MAX_CORRECTIONS ? next.slice(-MAX_CORRECTIONS) : next;
 }
 

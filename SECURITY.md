@@ -8,10 +8,15 @@ This document states exactly what it reads, what it writes, and where data goes.
 - **`PostToolUse` hook input:** the tool name, the command or file path, and the
   command result (exit code / output). This is how it detects an error followed by a
   fix. The transcript path Claude Code supplies is recorded for later.
-- **`UserPromptSubmit` input:** the prompt you just typed, checked locally against a
-  small set of "teaching" patterns ("we never do X here", "always run Y first"). A
-  matching prompt is stored in the session's local state so the harvest can't miss
-  it; a prompt containing a secret is dropped and never stored. Nothing is sent
+- **`UserPromptSubmit` input:** the prompt you just typed. Any prompt long enough to
+  carry a lesson and short enough not to be a task brief (12–600 characters, and not a
+  slash command or a notice the harness injected) is stored in the session's local
+  state, so the harvest cannot miss a rule you stated mid-session. It used to store
+  only prompts matching a list of English phrases; that list is gone, because deciding
+  which sentence states a rule is something the model does in any language and a phrase
+  list only ever did it in one. **The practical effect is that more of your prompts are
+  written to local state than before** — bounded to the 40 most recent per session, and
+  a prompt containing a secret is still dropped and never stored. Nothing is sent
   anywhere by this hook.
 - **`SessionEnd`: the session id, the working directory, and the path to Claude
   Code's transcript file for that session.** If the session did real work, that path
@@ -40,11 +45,15 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   case, and its metadata.
 - `counters.json`, `pipeline.log` — activity counters and one line per harvest run
   (what was produced, sieved, or errored). `pipeline.log` is rotated, never deleted.
-- `teachings.json` — what you have already taught, so a rule you give twice is
-  recognized as a repeat instead of scored as a guess. Holds the content words of
-  each teaching, a count, and a 160-character sample of your own sentence — the same
-  text the session files already keep, behind the same secret scan, capped at the
-  200 most recent. Local only.
+- `teachings.json` — what you have already said, so a rule you give twice is
+  recognized as a repeat instead of scored as a guess. Holds the content words of each
+  recorded prompt, a count, and a 160-character sample of your own sentence — the same
+  text the session files already keep, behind the same secret scan, capped at the 2000
+  most recent — about three months. Since prompts are no longer pre-filtered by an
+  English phrase list, this file now holds ordinary prompts alongside rules; nothing is
+  ever read out of it except by matching against a lesson the model has already
+  proposed, so what it remembers only surfaces when it is the thing you taught. Local
+  only.
 - `skill-usage.json` — how many times each skill has fired, and when. Claude Code
   reports a skill invocation to the same hook TeamHandbook already listens on, so this
   is a name and a count: no arguments, no file contents, no prompt. The hook sees

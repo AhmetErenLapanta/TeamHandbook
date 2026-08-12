@@ -1,97 +1,68 @@
 import { detectSecret } from "./secrets.js";
 
-// A user prompt that TEACHES — "we never use X here", "always run Y first", "no,
-// that's wrong, do Z" — is the highest-value lesson in a session: a human, stating
-// a rule, in their own words. The harvest model looks for these on its own, but
-// flagging them deterministically at the moment they are typed means a teaching in
-// the middle of a long session can never be lost to slicing, and the harvest gets
-// them as evidence rather than having to notice them.
+// A user prompt that TEACHES — "we never use X here", "always run Y first", "burada
+// db'yi asla mocklamayız" — is the highest-value lesson in a session: a human, stating
+// a rule, in their own words. This file used to try to spot them as they were typed,
+// with a list of English phrases. That worked in English and nowhere else: probed
+// against a real session, eighteen Turkish prompts produced zero flags, so the half of
+// the tagline that is supposed to be measured could never fire for a developer who
+// teaches in their own language. Adding a second list would only move the wall.
+//
+// So nothing here decides what a teaching is any more. Every prompt that could
+// plausibly be one is recorded, and which of them states a rule is settled later by
+// the model, which reads any language without being told about it. This file is left
+// with the two judgements that need no language at all: is this prose the developer
+// typed, and is it safe to write down.
 
-// Ordered most-specific first: "we never use X here" is a house CONVENTION even
-// though it also contains the word "never", so the convention pattern must win.
-const TEACHING_PATTERNS: Array<{ name: string; re: RegExp }> = [
-  // house style: "we never use X", "in this repo we ...", "our convention is"
-  { name: "convention", re: /\b(?:we (?:never|always|only)?\s*(?:use|don'?t use|prefer|avoid)|in this (?:repo|project|codebase)|our (?:convention|standard|rule)|the (?:convention|standard) here)\b/i },
-  // explicit correction of the assistant: "no, ...", "that's wrong", "actually, ..."
-  // (the leading forms end in punctuation, so they must NOT be wrapped in \b — a
-  // trailing word boundary after a comma can never match ordinary prose)
-  {
-    name: "correction",
-    re: /(?:^|\s)(?:no|nope|actually|wrong)\s*[,.!:]|\b(?:that'?s (?:wrong|not right|not how)|that is wrong|instead of that|don'?t do that)\b/i,
-  },
-  // preference stated as a directive: "use X instead of Y", "prefer X over Y"
-  { name: "preference", re: /\b(?:use \w[\w.-]* instead|prefer \w[\w.-]* over|switch to \w[\w.-]*|stop using \w[\w.-]*)\b/i },
-  // absolute rules: "always run make fmt", "never commit to main", "don't use var".
-  // "I don't know why this fails" is a question, not a rule — exclude first person.
-  { name: "rule", re: /\b(?:always|never|must|make sure to|be sure to)\b|(?<!\bI\s)(?<!\bwe\s)\b(?:don'?t|do not)\b/i },
-];
-
-// Prompts shorter than this are almost always acks ("ok", "go on", "yes") and
-// longer than this are usually task briefs, not rules.
+// Shorter than this is almost always an ack ("ok", "devam", "yes"); longer is a task
+// brief rather than a rule. Both bounds are about shape, not vocabulary.
 const MIN_CHARS = 12;
 const MAX_CHARS = 600;
 
-/** The kind of teaching this prompt looks like, or null when it is ordinary work. */
-export function teachingKind(prompt: string): string | null {
-  const text = prompt.trim();
-  if (text.length < MIN_CHARS || text.length > MAX_CHARS) return null;
-  // slash commands, pasted output, and local-command echoes are not teachings
-  if (text.startsWith("/") || text.startsWith("<")) return null;
-  for (const { name, re } of TEACHING_PATTERNS) {
-    if (re.test(text)) return name;
-  }
-  return null;
+/**
+ * Not the developer's own prose: slash commands, pasted XML/HTML, and the bracketed
+ * notices the harness itself injects ("[Request interrupted by user]"). The last one is
+ * not hypothetical — across the transcripts on one machine it was the single most
+ * repeated "prompt" of all, by a factor of thirteen.
+ */
+function isDeveloperProse(text: string): boolean {
+  return !text.startsWith("/") && !text.startsWith("<") && !text.startsWith("[");
 }
 
-/**
- * The sentence that states the rule, not the whole message. Real teachings arrive
- * welded to an errand — "we never mock the database here, use testcontainers. Now
- * add a field to the DTO." — and carrying the errand along blunts everything
- * downstream: the model weighs the wrong words, and two phrasings of one rule stop
- * looking alike because their errands differ.
- *
- * A short opener ("no, that's wrong.") is the correction, not the rule, so the
- * sentence after it comes too.
- */
-export function teachingSentence(prompt: string, kind: string): string {
-  const pattern = TEACHING_PATTERNS.find((p) => p.name === kind);
-  if (!pattern) return prompt;
-  const sentences = prompt.split(/\n+|(?<=[.!?])\s+/).filter((s) => s.trim());
-  const i = sentences.findIndex((s) => pattern.re.test(s));
-  if (i === -1) return prompt; // the rule straddles a boundary: keep the whole thing
-  const rule = sentences[i]!.trim();
-  const next = sentences[i + 1]?.trim();
-  return rule.length < 40 && next ? `${rule} ${next}` : rule;
+/** Could this prompt carry a lesson? A question of shape only — no language is read. */
+export function couldTeach(prompt: string): boolean {
+  const text = prompt.trim();
+  return text.length >= MIN_CHARS && text.length <= MAX_CHARS && isDeveloperProse(text);
 }
 
 export interface CorrectionNote {
   at: string;
-  kind: string;
   text: string;
 }
 
-// Keep the most recent few: they are hints for the harvest, not an archive.
-export const MAX_CORRECTIONS = 10;
+// Every candidate prompt in a session, not a hand-picked few, so the record of what
+// was said is the model's to interpret. Bounded because a session state file is not an
+// archive of the conversation — the transcript already is one.
+export const MAX_CORRECTIONS = 40;
 const MAX_TEXT_CHARS = 400;
 
 /**
- * Record a teaching-shaped prompt, if it is one. Secret-bearing prompts are
- * dropped entirely (same fail-closed rule as capture): the note would otherwise
- * put raw prompt text on disk.
+ * Record a prompt that could carry a lesson. Secret-bearing prompts are dropped
+ * entirely (the same fail-closed rule as capture): the note would otherwise put raw
+ * prompt text on disk.
  */
 export function noteCorrection(
   notes: CorrectionNote[],
   prompt: string,
   at: string = new Date().toISOString(),
 ): CorrectionNote[] | null {
-  const kind = teachingKind(prompt);
-  if (!kind) return null;
+  if (!couldTeach(prompt)) return null;
   const full = prompt.trim();
   // scan the WHOLE prompt before truncating: a token straddling the cut would
   // otherwise leave a sub-threshold prefix on disk
   if (detectSecret(full)) return null;
-  const text = teachingSentence(full, kind).slice(0, MAX_TEXT_CHARS);
+  const text = full.slice(0, MAX_TEXT_CHARS);
   if (notes.some((n) => n.text === text)) return null; // repeated verbatim; already noted
-  const next = [...notes, { at, kind, text }];
+  const next = [...notes, { at, text }];
   return next.length > MAX_CORRECTIONS ? next.slice(-MAX_CORRECTIONS) : next;
 }

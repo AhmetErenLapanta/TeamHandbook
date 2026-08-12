@@ -299,9 +299,25 @@ function writeSkeleton(dir, files) {
     writeFileSync2(target, content);
   }
 }
+function nonInteractiveEnv(base = process.env) {
+  return {
+    ...base,
+    GIT_TERMINAL_PROMPT: "0",
+    GLAB_NO_PROMPT: "1",
+    GH_PROMPT_DISABLED: "1",
+    NO_COLOR: "1"
+  };
+}
+var GIT_TIMEOUT_MS = 12e4;
 function runGit(args, cwd) {
   try {
-    return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+    return execFileSync("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      env: nonInteractiveEnv(),
+      timeout: GIT_TIMEOUT_MS
+    });
   } catch (err) {
     const stderr = err?.stderr;
     if (typeof stderr === "string" && stderr.trim()) {

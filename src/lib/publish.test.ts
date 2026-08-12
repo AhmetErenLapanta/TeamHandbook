@@ -103,7 +103,7 @@ describe("manualPrUrl", () => {
       "https://github.com/acme/skills/pull/new/handbook/x",
     );
     expect(manualPrUrl("git@gitlab.acme.com:team/skills.git", "handbook/x")).toBe(
-      "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TeamHandbook%2Fx",
+      "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=handbook%2Fx",
     );
     expect(manualPrUrl("nonsense", "handbook/x")).toBeNull();
   });
@@ -168,7 +168,7 @@ describe("publishCandidate", () => {
       ok: true,
       branch: "handbook/fix-npm-test",
       manualUrl:
-        "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TeamHandbook%2Ffix-npm-test",
+        "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=handbook%2Ffix-npm-test",
     });
     expect(result.prUrl).toBeUndefined();
     // the reason the auto-PR was skipped is surfaced, not swallowed

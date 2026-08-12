@@ -93,7 +93,6 @@ function loadSessionState(sessionId, home = handbookHome()) {
 var SUBSTANCE_MIN_TOOL_CALLS = 5;
 function sessionHasSubstance(state) {
   if (state.resolvedPairs.length > 0) return true;
-  if ((state.corrections?.length ?? 0) > 0) return true;
   const activity = state.activity;
   if (activity && activity.families.length > 0 && activity.exts.length > 0) return true;
   return (state.meaningfulToolCalls ?? 0) >= SUBSTANCE_MIN_TOOL_CALLS;
