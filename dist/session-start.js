@@ -536,7 +536,7 @@ function weeklyDigest(home = handbookHome(), now = Date.now()) {
       `your skills fired ${usage.totalUses} time${usage.totalUses === 1 ? "" : "s"}` + (usage.topSkill ? ` (${usage.topSkill.slug} most of all)` : "")
     );
   }
-  return `TeamHandbook \u2014 your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
+  return `TeamHandbook - your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
 }
 function pendingTeamNudge(home = handbookHome()) {
   if (loadTeamConfig(home)) return null;
@@ -544,7 +544,7 @@ function pendingTeamNudge(home = handbookHome()) {
   const approved = listCandidates(home, "approved").length;
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), (/* @__PURE__ */ new Date()).toISOString() + "\n");
-  return `handbook: ${approved} approved skills live only on this machine \u2014 one /handbook:init shares them with your team (teammates get every future merge automatically).`;
+  return `handbook: ${approved} approved skills live only on this machine - one /handbook:init shares them with your team (teammates get every future merge automatically).`;
 }
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
@@ -601,12 +601,12 @@ function buildSessionStartSummary(inputs) {
   const lines = [];
   if (inputs.configBroken) {
     lines.push(
-      "handbook: ~/.teamhandbook/config.json could not be parsed \u2014 automatic harvesting is OFF until it is valid JSON (failing closed on purpose). Run /handbook:doctor."
+      "handbook: ~/.teamhandbook/config.json could not be parsed - automatic harvesting is OFF until it is valid JSON (failing closed on purpose). Run /handbook:doctor."
     );
   }
   if (firstRun) {
     lines.push(
-      'TeamHandbook is active \u2014 it learns from the corrections you give, the procedures you complete, and the traps you hit. After each session where you did real work, it reads that session (your prompts included, secrets redacted) through your OWN claude CLI and tells you at your next session start what it learned \u2014 you decide whether to keep it, put it in the repo, or share it with the team. Nothing installs or ships without your say-so. Turn the reading off entirely with ~/.teamhandbook/config.json \u2192 {"harvest": {"enabled": false}}. Want to see the whole loop in two minutes instead of waiting? Run /handbook:demo. And /handbook:doctor once confirms TeamHandbook can reach your claude CLI.'
+      'TeamHandbook is active - it learns from the corrections you give, the procedures you complete, and the traps you hit. After each session where you did real work, it reads that session (your prompts included, secrets redacted) through your OWN claude CLI and tells you at your next session start what it learned - you decide whether to keep it, put it in the repo, or share it with the team. Nothing installs or ships without your say-so. Turn the reading off entirely with ~/.teamhandbook/config.json \u2192 {"harvest": {"enabled": false}}. Want to see the whole loop in two minutes instead of waiting? Run /handbook:demo. And /handbook:doctor once confirms TeamHandbook can reach your claude CLI.'
     );
   }
   if (harvested) {
@@ -615,14 +615,14 @@ function buildSessionStartSummary(inputs) {
     const repeats = (harvested.taughtBefore ?? 0) + 1;
     const lead = repeats > 1 ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions` : "TeamHandbook learned from your last session";
     lines.push(
-      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} \u2014 keep it for yourself, share it with the team, or skip: run /handbook:review.`
+      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this repo, or share it with the team: run /handbook:review.`
     );
   }
   if (pending > 0) {
     const noun = pending === 1 ? "candidate skill is" : "candidate skills are";
     const preview = pendingPreviews.length > 0 ? ` (${pendingPreviews.join("; ")})` : "";
     const repeated = inputs.pendingRepeats ?? 0;
-    const nag = repeated > 0 ? ` \u2014 you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.` : " \u2014 run /handbook:review to approve or reject.";
+    const nag = repeated > 0 ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.` : " \u2014 run /handbook:review to approve or reject.";
     lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
   }
   if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {

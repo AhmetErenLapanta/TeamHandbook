@@ -1,5 +1,5 @@
 ---
-description: Review what TeamHandbook learned — keep each lesson for yourself, share it with the team, or reject it
+description: Review what TeamHandbook learned — keep each lesson for yourself, add it to this repo, share it with the team, or reject it
 ---
 
 You are running TeamHandbook's review flow. Pending skill candidates were harvested from real
@@ -17,8 +17,10 @@ user's approval.
       description, scope, score (and its rationale, especially when low — the score is
       advice the user should see), and the grounded case (for a correction, that is the
       user's own quoted words). Quote the full SKILL.md body only if the user asks.
-   c. Ask the user the three-way question: **keep it for yourself, share it with the team,
-      or reject?** (Editing first and skipping are also fine.)
+   c. Ask the user who gets it, naming all three destinations — a destination the
+      question never mentions is one nobody picks: **keep it for yourself (`--to personal`),
+      add it to this repo (`--to project`), share it with the team (`--to team`), or
+      reject?** (Editing first and skipping are also fine.)
    d. **Edit first**: if the user wants changes ("step 3 is wrong", "add a warning about X"),
       edit the candidate's `SKILL.md` in place (it lives in the directory shown by `show`;
       keep the frontmatter `name:` unchanged), show the diff, and then continue to their

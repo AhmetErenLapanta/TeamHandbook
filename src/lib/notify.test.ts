@@ -137,7 +137,7 @@ describe("notify", () => {
         newSkills: [],
         heartbeat: { failures: 3, pairs: 1, gateErrors: 0 },
       });
-      expect(withPending).not.toContain("since your last session —");
+      expect(withPending).not.toContain("since your last session -");
     });
   });
 
@@ -312,7 +312,7 @@ describe("harvest headline (v2 session-start ask)", () => {
     const notice = sessionStartNotice(cwd, home)!;
     expect(notice).toContain('TeamHandbook learned from your last session: "prefer-config-flags" (correction, 8/10)');
     expect(notice).toContain("(+1 more)");
-    expect(notice).toContain("keep it for yourself, share it with the team, or skip");
+    expect(notice).toContain("keep it for yourself, add it to this repo, or share it with the team");
     // harvested items are not double-counted in the plain pending line
     expect(notice).not.toContain("candidate skills are awaiting");
   });
