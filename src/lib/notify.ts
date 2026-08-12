@@ -146,7 +146,7 @@ export function weeklyDigest(home: string = handbookHome(), now: number = Date.n
         (usage.topSkill ? ` (${usage.topSkill.slug} most of all)` : ""),
     );
   }
-  return `TeamHandbook — your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
+  return `TeamHandbook - your week: ${parts.join(", ")}. Run /handbook:status for the full picture.`;
 }
 
 export function pendingTeamNudge(home: string = handbookHome()): string | null {
@@ -156,7 +156,7 @@ export function pendingTeamNudge(home: string = handbookHome()): string | null {
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), new Date().toISOString() + "\n");
   return (
-    `handbook: ${approved} approved skills live only on this machine — one ` +
+    `handbook: ${approved} approved skills live only on this machine - one ` +
     `/handbook:init shares them with your team (teammates get every future merge automatically).`
   );
 }
@@ -260,16 +260,16 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
   const lines: string[] = [];
   if (inputs.configBroken) {
     lines.push(
-      "handbook: ~/.teamhandbook/config.json could not be parsed — automatic harvesting is " +
+      "handbook: ~/.teamhandbook/config.json could not be parsed - automatic harvesting is " +
         "OFF until it is valid JSON (failing closed on purpose). Run /handbook:doctor.",
     );
   }
   if (firstRun) {
     lines.push(
-      "TeamHandbook is active — it learns from the corrections you give, the procedures you complete, " +
+      "TeamHandbook is active - it learns from the corrections you give, the procedures you complete, " +
         "and the traps you hit. After each session where you did real work, it reads that session " +
         "(your prompts included, secrets redacted) through your OWN claude CLI and tells you at your " +
-        "next session start what it learned — you decide whether to keep it, put it in the repo, or " +
+        "next session start what it learned - you decide whether to keep it, put it in the repo, or " +
         "share it with the team. Nothing installs or ships without your say-so. Turn the reading off " +
         'entirely with ~/.teamhandbook/config.json → {"harvest": {"enabled": false}}. ' +
         "Want to see the whole loop in two minutes instead of waiting? Run /handbook:demo. " +
@@ -277,7 +277,8 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     );
   }
   // The harvest headline: what TeamHandbook just learned, and the one question that
-  // matters — keep it for yourself, share it with the team, or skip?
+  // matters — who gets it: just you, this repo, or the whole team? All three are
+  // named, because a destination the notice never mentions is one nobody picks.
   if (harvested) {
     const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
     const more = harvested.more > 0 ? ` (+${harvested.more} more)` : "";
@@ -290,7 +291,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
         ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions`
         : "TeamHandbook learned from your last session";
     lines.push(
-      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} — keep it for yourself, share it with the team, or skip: run /handbook:review.`,
+      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this repo, or share it with the team: run /handbook:review.`,
     );
   }
   if (pending > 0) {
@@ -301,7 +302,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     const repeated = inputs.pendingRepeats ?? 0;
     const nag =
       repeated > 0
-        ? ` — you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.`
+        ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.`
         : " — run /handbook:review to approve or reject.";
     lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
   }
