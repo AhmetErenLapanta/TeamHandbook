@@ -615,7 +615,7 @@ function buildSessionStartSummary(inputs) {
     const repeats = (harvested.taughtBefore ?? 0) + 1;
     const lead = repeats > 1 ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions` : "TeamHandbook learned from your last session";
     lines.push(
-      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this repo, or share it with the team: run /handbook:review.`
+      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this project, or share it with the team: run /handbook:review.`
     );
   }
   if (pending > 0) {

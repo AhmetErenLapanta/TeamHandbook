@@ -277,7 +277,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     );
   }
   // The harvest headline: what TeamHandbook just learned, and the one question that
-  // matters — who gets it: just you, this repo, or the whole team? All three are
+  // matters — who gets it: just you, this project, or the whole team? All three are
   // named, because a destination the notice never mentions is one nobody picks.
   if (harvested) {
     const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
@@ -291,7 +291,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
         ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions`
         : "TeamHandbook learned from your last session";
     lines.push(
-      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this repo, or share it with the team: run /handbook:review.`,
+      `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this project, or share it with the team: run /handbook:review.`,
     );
   }
   if (pending > 0) {
