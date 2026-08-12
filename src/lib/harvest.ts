@@ -13,6 +13,7 @@ import {
   assembleSkillMd,
   gitRemoteUrl,
   normalizeRemoteUrl,
+  remoteUrlForEdits,
   slugifySkillName,
   uniqueSlug,
   writeCandidate,
@@ -538,7 +539,13 @@ export async function harvestSession(
   });
 
   const teamConfigured = !!loadTeamConfig(home);
-  const remote = deps.remoteUrl ? deps.remoteUrl(job.cwd) : gitRemoteUrl(job.cwd);
+  const lookupRemote = deps.remoteUrl ?? gitRemoteUrl;
+  const remote =
+    lookupRemote(job.cwd) ??
+    remoteUrlForEdits(
+      job.evidence.pairs.flatMap((p) => p.edits),
+      lookupRemote,
+    );
   const normalizedRemote = remote ? normalizeRemoteUrl(remote) : null;
   const written: string[] = [];
   for (const item of kept) {

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { readConfigFile } from "./config.js";
 import { claudeErrorReason, runClaudeCli } from "./score.js";
@@ -65,6 +65,35 @@ export function gitRemoteUrl(cwd: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The repository a session actually worked in, read from the files it edited.
+ *
+ * Asking the session cwd for a remote assumes Claude Code was opened inside the
+ * repo. Plenty of developers open it one level up, on the directory that holds
+ * every checkout — there is no remote there, a project-specific lesson silently
+ * collapses to `scope: team`, and it ships without the "only in this repository"
+ * guard. The edits know better: they are absolute paths into the real checkout.
+ *
+ * Ambiguity is not guessed. Edits spanning two repositories, or none, return null
+ * and the caller keeps the old behaviour — a wrong repository name in the guard is
+ * worse than no guard, because it reads as verified.
+ */
+export function remoteUrlForEdits(
+  paths: string[],
+  lookup: (cwd: string) => string | null = gitRemoteUrl,
+): string | null {
+  // Only absolute paths: a relative one would send `git -C` at whatever directory
+  // the detached runner happens to sit in, and answer for the wrong repository.
+  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname(p)));
+  const remotes = new Set<string>();
+  for (const dir of dirs) {
+    const remote = lookup(dir);
+    if (remote) remotes.add(remote);
+    if (remotes.size > 1) return null;
+  }
+  return remotes.size === 1 ? [...remotes][0]! : null;
 }
 
 export function resolveScope(generality: number, normalizedRemote: string | null): string {
@@ -293,7 +322,8 @@ export async function distillVerdict(
     return { signal, outcome: "error", error: "distilled output contained secret-like content" };
   }
   const generality = verdict.result?.scores.generality ?? 0;
-  const scope = resolveScope(generality, normalizeRemoteUrl(remoteUrl(signal.cwd) ?? ""));
+  const remote = remoteUrl(signal.cwd) ?? remoteUrlForEdits(signal.edits, remoteUrl);
+  const scope = resolveScope(generality, normalizeRemoteUrl(remote ?? ""));
   return {
     signal,
     outcome: "distilled",
