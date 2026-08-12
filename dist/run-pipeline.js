@@ -14,12 +14,12 @@ import { basename as basename2, join as join10 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname2, join as join5 } from "node:path";
+import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -281,6 +281,16 @@ function gitRemoteUrl(cwd) {
   } catch {
     return null;
   }
+}
+function remoteUrlForEdits(paths, lookup = gitRemoteUrl) {
+  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname2(p)));
+  const remotes = /* @__PURE__ */ new Set();
+  for (const dir of dirs) {
+    const remote = lookup(dir);
+    if (remote) remotes.add(remote);
+    if (remotes.size > 1) return null;
+  }
+  return remotes.size === 1 ? [...remotes][0] : null;
 }
 function slugifySkillName(name) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/g, "");
@@ -1051,7 +1061,11 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     maxPerSession: config.maxPerSession
   });
   const teamConfigured = !!loadTeamConfig(home);
-  const remote = deps.remoteUrl ? deps.remoteUrl(job.cwd) : gitRemoteUrl(job.cwd);
+  const lookupRemote = deps.remoteUrl ?? gitRemoteUrl;
+  const remote = lookupRemote(job.cwd) ?? remoteUrlForEdits(
+    job.evidence.pairs.flatMap((p) => p.edits),
+    lookupRemote
+  );
   const normalizedRemote = remote ? normalizeRemoteUrl(remote) : null;
   const written = [];
   for (const item of kept) {

@@ -12,6 +12,7 @@ import {
   normalizeRemoteUrl,
   parseDistillResponse,
   relativizeEdits,
+  remoteUrlForEdits,
   resolveScope,
   slugifySkillName,
   writeCandidate,
@@ -105,6 +106,45 @@ describe("resolveScope", () => {
 
   it("falls back to team when no remote is available", () => {
     expect(resolveScope(0, null)).toBe("team");
+  });
+});
+
+describe("remoteUrlForEdits", () => {
+  const umbrella: Record<string, string> = {
+    "/dev/work/mcp-server/src": "git@gitlab.com:acme/mcp-server.git",
+    "/dev/work/mcp-server/test": "git@gitlab.com:acme/mcp-server.git",
+    "/dev/work/ai-client/src": "git@gitlab.com:acme/ai-client.git",
+  };
+  const lookup = (dir: string) => umbrella[dir] ?? null;
+
+  it("finds the repository when every edit lands in the same checkout", () => {
+    const remote = remoteUrlForEdits(
+      ["/dev/work/mcp-server/src/Tool.kt", "/dev/work/mcp-server/test/ToolTest.kt"],
+      lookup,
+    );
+
+    expect(remote).toBe("git@gitlab.com:acme/mcp-server.git");
+  });
+
+  it("refuses to guess when the session edited two repositories", () => {
+    const remote = remoteUrlForEdits(
+      ["/dev/work/mcp-server/src/Tool.kt", "/dev/work/ai-client/src/Chat.kt"],
+      lookup,
+    );
+
+    expect(remote).toBeNull();
+  });
+
+  it("returns null when no edit is inside a repository", () => {
+    expect(remoteUrlForEdits(["/tmp/scratch/note.md"], lookup)).toBeNull();
+  });
+
+  it("returns null when there were no edits at all", () => {
+    expect(remoteUrlForEdits([], lookup)).toBeNull();
+  });
+
+  it("ignores relative paths, which would resolve against the runner's own directory", () => {
+    expect(remoteUrlForEdits(["src/Tool.kt"], () => "git@gitlab.com:acme/wrong.git")).toBeNull();
   });
 });
 

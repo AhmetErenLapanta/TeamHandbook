@@ -176,12 +176,12 @@ import { basename as basename2, join as join9 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname2, join as join5 } from "node:path";
+import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir } from "node:os";
@@ -564,6 +564,16 @@ function gitRemoteUrl(cwd) {
     return null;
   }
 }
+function remoteUrlForEdits(paths, lookup = gitRemoteUrl) {
+  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname2(p)));
+  const remotes = /* @__PURE__ */ new Set();
+  for (const dir of dirs) {
+    const remote = lookup(dir);
+    if (remote) remotes.add(remote);
+    if (remotes.size > 1) return null;
+  }
+  return remotes.size === 1 ? [...remotes][0] : null;
+}
 function resolveScope(generality, normalizedRemote) {
   if (generality >= 2 || !normalizedRemote) return "team";
   return normalizedRemote;
@@ -712,7 +722,8 @@ async function distillVerdict(verdict, occurrences, config = defaultDistillConfi
     return { signal, outcome: "error", error: "distilled output contained secret-like content" };
   }
   const generality = verdict.result?.scores.generality ?? 0;
-  const scope = resolveScope(generality, normalizeRemoteUrl(remoteUrl(signal.cwd) ?? ""));
+  const remote = remoteUrl(signal.cwd) ?? remoteUrlForEdits(signal.edits, remoteUrl);
+  const scope = resolveScope(generality, normalizeRemoteUrl(remote ?? ""));
   return {
     signal,
     outcome: "distilled",

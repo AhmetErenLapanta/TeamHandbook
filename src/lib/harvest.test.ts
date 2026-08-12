@@ -306,6 +306,61 @@ describe("harvestSession (end to end with a fake runner)", () => {
     );
   });
 
+  it("scopes to the edited repository when the session was opened on the umbrella directory", async () => {
+    const reply = JSON.stringify([rawItem({ scope: "project", name: "repo-specific-rule" })]);
+    const umbrellaJob = job({
+      cwd: "/dev/work",
+      evidence: {
+        ...evidence,
+        pairs: [{ ...evidence.pairs[0]!, edits: ["/dev/work/mcp-server/src/Tool.kt"] }],
+      },
+    });
+
+    const summary = await harvestSession(umbrellaJob, home, {
+      runner: async () => reply,
+      remoteUrl: (dir) =>
+        dir === "/dev/work/mcp-server/src" ? "git@gitlab.acme.com:team/mcp-server.git" : null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+
+    expect(summary.written).toEqual(["repo-specific-rule"]);
+    expect(readCandidateMeta(join(candidatesDir(home), "repo-specific-rule"))?.scope).toBe(
+      "gitlab.acme.com/team/mcp-server",
+    );
+  });
+
+  it("stays on team scope when the umbrella session edited two repositories", async () => {
+    const reply = JSON.stringify([rawItem({ scope: "project", name: "cross-repo-rule" })]);
+    const umbrellaJob = job({
+      cwd: "/dev/work",
+      evidence: {
+        ...evidence,
+        pairs: [
+          {
+            ...evidence.pairs[0]!,
+            edits: ["/dev/work/mcp-server/src/Tool.kt", "/dev/work/ai-client/src/Chat.kt"],
+          },
+        ],
+      },
+    });
+
+    const summary = await harvestSession(umbrellaJob, home, {
+      runner: async () => reply,
+      remoteUrl: (dir) =>
+        dir === "/dev/work/mcp-server/src"
+          ? "git@gitlab.acme.com:team/mcp-server.git"
+          : dir === "/dev/work/ai-client/src"
+            ? "git@gitlab.acme.com:team/ai-client.git"
+            : null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+
+    expect(summary.written).toEqual(["cross-repo-rule"]);
+    expect(readCandidateMeta(join(candidatesDir(home), "cross-repo-rule"))?.scope).toBe("team");
+  });
+
   it("skips when there is neither transcript nor evidence", async () => {
     const summary = await harvestSession(
       { sessionId: "s1", cwd: home, evidence: { pairs: [], recurrence: {} } },
