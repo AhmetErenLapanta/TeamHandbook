@@ -141,6 +141,22 @@ instruction can never steer the harvest. Review the source before installing, as
 would any plugin. TeamHandbook is open source (Apache-2.0) specifically so this is
 auditable.
 
+### Install it for yourself, not for your teammates
+
+Claude Code can install a plugin at three scopes. Two of them are yours alone: user
+scope writes to `~/.claude/settings.json`, local scope to a repository's gitignored
+`.claude/settings.local.json`. The third, project scope, writes to the repository's
+committed `.claude/settings.json`, which means everyone who clones that repository gets
+the plugin enabled without being asked.
+
+Do not install TeamHandbook that way. Its hooks read the conversation of whoever is
+sitting at the keyboard and send a slice of it to that person's own `claude`. Deciding
+that this is an acceptable trade is exactly the decision this document exists to let
+someone make for themselves, and a committed settings file makes it for them. "Nothing
+is installed or shared without your approval" is a promise about the skills this
+produces; project scope is the one place where the plugin itself could arrive
+unannounced. Send your team the install commands and let each person run them.
+
 ## Reporting a vulnerability
 
 Please open a GitHub issue for non-sensitive reports, or use GitHub's private
