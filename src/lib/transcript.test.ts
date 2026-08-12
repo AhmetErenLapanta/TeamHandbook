@@ -26,6 +26,23 @@ const user = (content: unknown) => ({ type: "user", isSidechain: false, message:
 const assistant = (content: unknown[]) => ({ type: "assistant", isSidechain: false, message: { role: "assistant", content } });
 
 describe("readTranscriptTexts", () => {
+  it("given a slash command expanded into the transcript, when read, then its body is not the developer's words", () => {
+    // Verified against a real session: running /handbook:demo writes the command's own
+    // markdown as a user turn with isMeta true. Read as prose it is a set of
+    // instructions addressed to the model, and it opens with "You are running
+    // TeamHandbook's guided demo" — which is how the harvest of that very demo
+    // concluded it was watching a staged exercise and proposed nothing.
+    const file = writeJsonl([
+      { ...user("You are running TeamHandbook's guided demo. The point is for the user to WATCH"), isMeta: true },
+      user("we always use camelCase in gateway configs here, never snake_case"),
+    ]);
+
+    const texts = readTranscriptTexts(file).map((e) => e.text);
+
+    expect(texts).toEqual(["we always use camelCase in gateway configs here, never snake_case"]);
+  });
+
+
   it("extracts human prose and assistant text, skipping tool traffic and bookkeeping", () => {
     const file = writeJsonl([
       { type: "mode", mode: "normal" },

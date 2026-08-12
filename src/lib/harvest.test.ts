@@ -231,7 +231,7 @@ describe("buildHarvestPrompt", () => {
       maxItems: 3,
     });
 
-    expect(prompt).toContain("typed in EARLIER sessions");
+    expect(prompt).toContain("typed in earlier sessions too");
     expect(prompt).toContain("we never use Lombok");
   });
 
@@ -248,7 +248,7 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).toContain("keep the developer's own");
   });
 
-  it("given prompts that were never repeated, when the prompt is built, then none of them are held up as candidates", () => {
+  it("given a prompt that was never repeated, when the prompt is built, then it is still handed over verbatim", () => {
     const prompt = buildHarvestPrompt({
       slice: "",
       evidence: { ...evidence, corrections: [{ at: "x", text: "we never use Lombok" }] },
@@ -257,7 +257,10 @@ describe("buildHarvestPrompt", () => {
       maxItems: 3,
     });
 
-    expect(prompt).not.toContain("typed in EARLIER sessions");
+    // the guarantee this block exists for: a rule stated ONCE, which slicing can drop
+    expect(prompt).toContain("we never use Lombok");
+    expect(prompt).toContain("rule rather than asking for a task");
+    expect(prompt).not.toContain("typed in earlier sessions too");
   });
 
   it("given no teaching was flagged, when the prompt is built, then that instruction is absent", () => {

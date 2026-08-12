@@ -6,7 +6,8 @@ import { detectSecret } from "./secrets.js";
 // type "user" | "assistant" with message.content either a plain string (human
 // prompt) or an array of blocks (text / tool_use / tool_result / thinking / …).
 // Everything else (attachment, system, mode, file-history-*, queue-operation,
-// ai-title, …) is bookkeeping. isSidechain: true marks subagent traffic.
+// ai-title, …) is bookkeeping. isSidechain: true marks subagent traffic, and
+// isMeta: true marks a line Claude Code injected rather than a human typing it.
 
 export interface TranscriptEntry {
   role: "user" | "assistant";
@@ -52,6 +53,7 @@ export function readTranscriptTexts(path: string): TranscriptEntry[] {
     let parsed: {
       type?: unknown;
       isSidechain?: unknown;
+      isMeta?: unknown;
       message?: { role?: unknown; content?: unknown };
     };
     try {
@@ -60,6 +62,15 @@ export function readTranscriptTexts(path: string): TranscriptEntry[] {
       continue;
     }
     if (parsed.isSidechain === true) continue;
+    // A slash command expands into the transcript as a user turn carrying the
+    // command's own markdown, and the `<command-name>` wrapper that survives the
+    // markup filter is only half of it: the expanded body is plain prose with no
+    // markup at all. Read as the developer's words it is worse than noise, because
+    // it is a set of instructions addressed to the model. Harvesting the demo of
+    // this very plugin, the slice opened with "You are running TeamHandbook's guided
+    // demo", the model concluded it was watching a staged exercise, and the one real
+    // teaching in that session went unproposed. isMeta marks every such line.
+    if (parsed.isMeta === true) continue;
     if (parsed.type !== "user" && parsed.type !== "assistant") continue;
     const role = parsed.type;
     for (const text of textBlocks(parsed.message?.content)) {
