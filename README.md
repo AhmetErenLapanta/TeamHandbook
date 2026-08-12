@@ -18,7 +18,7 @@ handbook learned from your last session: "no-db-mocks-in-integration-tests"
 Nothing is kept until you say so, and you decide who gets it:
 
 - **just you** - loads in every project you open, goes no further
-- **this repo** - committed next to the code, for anyone who works on it
+- **this project** - written beside the code, for anyone who works in that directory
 - **the whole team** - a pull request to your handbook repo: everyone, every project
 
 **That third one is where it compounds.** Five developers, one lesson each a week: by
@@ -64,7 +64,7 @@ Then you choose where it lives:
 
 ```
 /handbook:review approve <slug> --to personal   # ~/.claude/skills - every project, just you
-/handbook:review approve <slug> --to project    # this repo's .claude/skills - travels with the code
+/handbook:review approve <slug> --to project    # this project's .claude/skills - commit it and it travels
 /handbook:review approve <slug> --to team       # a pull request to your team's handbook
 ```
 

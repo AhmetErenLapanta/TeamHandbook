@@ -312,7 +312,7 @@ describe("harvest headline (v2 session-start ask)", () => {
     const notice = sessionStartNotice(cwd, home)!;
     expect(notice).toContain('TeamHandbook learned from your last session: "prefer-config-flags" (correction, 8/10)');
     expect(notice).toContain("(+1 more)");
-    expect(notice).toContain("keep it for yourself, add it to this repo, or share it with the team");
+    expect(notice).toContain("keep it for yourself, add it to this project, or share it with the team");
     // harvested items are not double-counted in the plain pending line
     expect(notice).not.toContain("candidate skills are awaiting");
   });
