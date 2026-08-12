@@ -7,7 +7,7 @@
     {
       "name": "handbook",
       "source": "./",
-      "description": "Turns real coding-session learnings — error→fix moments and task procedures — into gated, reviewable, merge-ready team skills."
+      "description": "The team handbook that writes itself — the corrections you give Claude, captured once and shared with your team as reviewed skills."
     }
   ]
 }

@@ -4,14 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
 import type { GroundedCase } from "./distill.js";
-import { assertSafeGitUrl, hostFromUrl, runGit } from "./init.js";
+import { assertSafeGitUrl, hostFromUrl, nonInteractiveEnv, runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 
 export type ForgeRunner = (tool: "gh" | "glab", args: string[], cwd: string) => string;
 
+export const FORGE_TIMEOUT_MS = 60_000;
+
 export function runForge(tool: "gh" | "glab", args: string[], cwd: string): string {
-  return execFileSync(tool, args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  return execFileSync(tool, args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    env: nonInteractiveEnv(),
+    timeout: FORGE_TIMEOUT_MS,
+  });
 }
 
 export function buildPrTitle(slug: string): string {

@@ -101,8 +101,12 @@ const SUBSTANCE_MIN_TOOL_CALLS = 5;
 
 export function sessionHasSubstance(state: SessionState): boolean {
   if (state.resolvedPairs.length > 0) return true;
-  // one explicit teaching is enough on its own: a human stated a rule
-  if ((state.corrections?.length ?? 0) > 0) return true;
+  // Recorded prompts are deliberately NOT a leg of this. They used to be, back when a
+  // prompt only got recorded if it matched a teaching pattern — one of those meant a
+  // human had stated a rule, which is substance by itself. Now every prompt long
+  // enough to carry a lesson is recorded, so counting them here would make "a question
+  // and two ls calls" a harvest, and the promise that a trivial session costs nothing
+  // is one this file is what enforces.
   const activity = state.activity;
   if (activity && activity.families.length > 0 && activity.exts.length > 0) return true;
   return (state.meaningfulToolCalls ?? 0) >= SUBSTANCE_MIN_TOOL_CALLS;

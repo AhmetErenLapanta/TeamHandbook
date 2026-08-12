@@ -11,11 +11,32 @@ import {
   hostFromUrl,
   initTeamRepo,
   loadTeamConfig,
+  nonInteractiveEnv,
   repoNameFromUrl,
   saveTeamConfig,
   skeletonFiles,
   writeSkeleton,
 } from "./init.js";
+
+describe("nonInteractiveEnv", () => {
+  it("given a shell that would prompt, when a forge or git call is built, then every prompt is disabled", () => {
+    const env = nonInteractiveEnv({ PATH: "/usr/bin" });
+
+    expect(env).toMatchObject({
+      GIT_TERMINAL_PROMPT: "0",
+      GLAB_NO_PROMPT: "1",
+      GH_PROMPT_DISABLED: "1",
+      NO_COLOR: "1",
+    });
+  });
+
+  it("given the caller's environment, when it is extended, then PATH and the rest survive", () => {
+    const env = nonInteractiveEnv({ PATH: "/usr/bin", HOME: "/home/dev" });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/dev");
+  });
+});
 
 describe("teamSkillsDir", () => {
   it("is null without a team config and resolves under the marketplaces root with one", () => {

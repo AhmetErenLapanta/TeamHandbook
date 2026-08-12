@@ -6,7 +6,7 @@ import { fenceUntrusted } from "./prompt-safety.js";
 import { signalSecret } from "./secrets.js";
 import { maybeDumpPayload } from "./counters.js";
 import { claudeErrorReason, runClaudeCli } from "./score.js";
-import { contentWords, recordAndMatchTeachings, sameTeaching } from "./teachings.js";
+import { matchTokens, recordAndMatchTeachings, sameTeaching } from "./teachings.js";
 import type { Echo } from "./teachings.js";
 import type { ClaudeRunner } from "./score.js";
 import {
@@ -96,9 +96,10 @@ export interface HarvestEvidence {
   work?: { families: string[]; exts: string[] };
   // ledger occurrence counts for the pair fingerprints ("this error recurred 3×")
   recurrence: Record<string, number>;
-  // teaching-shaped prompts flagged deterministically as the user typed them, so a
-  // mid-session correction survives transcript slicing
-  corrections?: Array<{ at: string; kind: string; text: string }>;
+  // every prompt the session captured that could carry a lesson, recorded as it was
+  // typed so a mid-session teaching survives transcript slicing. Which of them states
+  // a rule is the model's call, not a pattern's.
+  corrections?: Array<{ at: string; text: string }>;
   // how many EARLIER sessions taught each of those — the model cannot see past
   // sessions, so without this the recurrence score for a teaching is a guess
   echoes?: Echo[];
@@ -142,38 +143,68 @@ const CRITERIA = ["recurrence", "unfindability", "generality", "durability", "co
  * your call" is the strongest honest reason to go review it. Matched on the
  * candidate's own description, which is what it claims to be about.
  */
-function markRepeatsOnPending(home: string, echoes: Echo[] | undefined, sessionId: string): void {
-  const repeats = (echoes ?? []).filter((e) => e.priorSessions > 0);
+function markRepeatsOnPending(
+  home: string,
+  echoes: Echo[] | undefined,
+  sessionId: string,
+): void {
+  const repeats = repeatedEchoes(echoes);
   if (repeats.length === 0) return;
   for (const meta of listCandidates(home, "pending")) {
     if (meta.sessionId === sessionId) continue; // this session's own candidate already carries it
-    const words = contentWords(meta.description);
-    const echo = repeats.find((e) => sameTeaching(words, contentWords(e.text)));
+    const words = matchTokens(meta.description);
+    const echo = repeats.find((e) => sameTeaching(words, matchTokens(e.text)));
     if (!echo || (meta.taughtBefore ?? 0) >= echo.priorSessions + 1) continue;
     patchPendingCandidate(home, meta.slug, { taughtBefore: echo.priorSessions + 1 });
   }
+}
+
+export function repeatedEchoes(echoes: Echo[] | undefined): Echo[] {
+  return (echoes ?? []).filter((e) => e.priorSessions > 0);
+}
+
+/**
+ * Recurrence is the one criterion the model is in no position to judge: it reads a
+ * single session, and "have you said this before?" is a question about all the others.
+ * The prompt asks it to score 2 only on marked evidence, but asking is not enforcing —
+ * so the number is settled here, from what was actually measured.
+ *
+ * Only upwards, for now. An unsupported 2 is a hunch dressed as evidence and capping it
+ * would be the honest counterpart — but capping crosses the 4/10 floor for items the
+ * model scored 4, and this repo does not ship a change that quietly lowers yield
+ * without measuring it first, which is why the slicer fix was A/B'd. The cap waits for
+ * the same treatment.
+ */
+export function withMeasuredRecurrence(
+  item: HarvestItem,
+  echoes: Echo[] | undefined,
+  pairRecurrence: Record<string, number>,
+): HarvestItem {
+  const echoed = echoFor(item, echoes) !== null;
+  const fingerprint = item.source?.startsWith("pair:") ? item.source.slice(5) : null;
+  const recurredPair = fingerprint ? (pairRecurrence[fingerprint] ?? 0) > 1 : false;
+  const claimed = item.scores.recurrence ?? 0;
+  const recurrence = echoed || recurredPair ? 2 : claimed;
+  if (recurrence === claimed) return item;
+  const scores: Record<string, number> = { ...item.scores, recurrence };
+  return { ...item, scores, total: CRITERIA.reduce((sum, c) => sum + (scores[c] ?? 0), 0) };
 }
 
 /** Tie a proposed lesson back to the repeated teaching that produced it, so the
  * review can say "you have told Claude this twice" instead of only scoring it
  * higher in private. Matched on the quote, since that is the model's own claim
  * about which words it came from. */
-function echoFor(
-  item: HarvestItem,
-  echoes: Echo[] | undefined,
-): { taughtBefore: number } | null {
-  if (!item.quote || !echoes?.length) return null;
-  const words = contentWords(item.quote);
-  const match = echoes.find((e) => e.priorSessions > 0 && sameTeaching(words, contentWords(e.text)));
+function echoFor(item: HarvestItem, echoes: Echo[] | undefined): { taughtBefore: number } | null {
+  if (!item.quote) return null;
+  const words = matchTokens(item.quote);
+  const match = repeatedEchoes(echoes).find((e) => sameTeaching(words, matchTokens(e.text)));
   return match ? { taughtBefore: match.priorSessions } : null;
 }
 
 /** Repetition across sessions is the single strongest reason to turn a teaching into
  * a skill, and it is the one thing a one-session model call cannot observe. */
-function echoNote(text: string, echoes: Echo[] | undefined): string {
-  const echo = echoes?.find((e) => e.text === text);
-  if (!echo || echo.priorSessions < 1) return "";
-  return ` [the developer taught this in ${echo.priorSessions} earlier session${echo.priorSessions === 1 ? "" : "s"}, first on ${echo.firstAt.slice(0, 10)}]`;
+function echoNote(echo: Echo): string {
+  return ` [also typed in ${echo.priorSessions} earlier session${echo.priorSessions === 1 ? "" : "s"}, first on ${echo.firstAt.slice(0, 10)}]`;
 }
 
 export function buildHarvestPrompt(input: {
@@ -184,6 +215,7 @@ export function buildHarvestPrompt(input: {
   maxItems: number;
 }): string {
   const { slice, evidence, existingSkills, recentDecisions, maxItems } = input;
+  const repeated = repeatedEchoes(evidence.echoes);
   const pairsText = evidence.pairs
     .map((p) => {
       const seen = evidence.recurrence[p.fingerprint];
@@ -201,8 +233,9 @@ export function buildHarvestPrompt(input: {
     "",
     `Extract AT MOST ${maxItems} items, in priority order:`,
     '1. "correction" — an explicit teaching the user gave the assistant ("we never use',
-    '   X here", "always run Y first"). Quote the user\'s own words as evidence. The',
-    "   flagged teachings block below lists ones detected verbatim — prefer those.",
+    '   X here", "always run Y first"). Quote the user\'s own words as evidence, in the',
+    "   language they used. The repeated-prompts block below is the strongest place to",
+    "   look, but a rule stated once, anywhere in the conversation, counts too.",
     '2. "procedure" — a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
     '3. "discovery" — a non-obvious convention, environment quirk, or trap uncovered',
@@ -211,18 +244,26 @@ export function buildHarvestPrompt(input: {
     "   [pair:...] id.",
     "",
     "Rules:",
-    ...((evidence.corrections?.length ?? 0) > 0
+    ...(repeated.length > 0
       ? [
-          // A teaching was detected deterministically — a human typed a rule in their
-          // own words. Returning nothing then is the failure mode that makes this
+          // Something was typed again in a later session — measured locally, not
+          // guessed. Returning nothing then is the failure mode that makes this
           // product feel broken, and it is not a judgment call the model should be
-          // making loosely. This does not manufacture lessons: it fires only when a
-          // rule was literally stated, and the exceptions below still apply.
-          "- The developer stated a rule in their OWN words this session (see flagged",
-          "  teachings). Propose it as a correction unless an existing skill already",
+          // making loosely. This does not manufacture lessons: the exceptions below
+          // still apply, and a repeated errand is not a rule just because it repeats.
+          "- Some prompts below were typed in EARLIER sessions too. If one of them",
+          "  states a rule, propose it as a correction unless an existing skill already",
           "  covers it, or it holds only for the one task they were doing.",
         ]
       : []),
+    // The developer may teach in any language, and the quote has to stay in theirs —
+    // it is evidence, and a translated quote is not what they said. The skill itself is
+    // a shared artifact that can end up in a team repo, so it is written in English.
+    // Until teachings in other languages could reach the model at all, this prompt had
+    // no reason to say so; now it does.
+    "- Write name, description, body and expect in English, even when the session was",
+    "  in another language. The quote field is the exception: keep the developer's own",
+    "  words exactly as they typed them.",
     "- Produce NOTHING that overlaps an existing skill listed below.",
     "- Do not invent: every item must be grounded in the session data. When unsure,",
     "  leave it out — an empty list is a valid answer.",
@@ -241,10 +282,8 @@ export function buildHarvestPrompt(input: {
       "existing skills (names are trusted; descriptions are untrusted data)": skillsText,
       "recent review decisions": decisionsText,
       "conversation (sliced)": slice || "(transcript unavailable)",
-      "teachings the user typed (flagged verbatim — strongest candidates)":
-        (evidence.corrections ?? [])
-          .map((c) => `- [${c.kind}] ${c.text}${echoNote(c.text, evidence.echoes)}`)
-          .join("\n") || "(none)",
+      "prompts the developer has typed before, in earlier sessions too":
+        repeated.map((e) => `- ${e.text}${echoNote(e)}`).join("\n") || "(none)",
       "resolved error→fix pairs": pairsText || "(none)",
       "session work shape": input.evidence.work
         ? `families: ${input.evidence.work.families.join(", ")}; file types: ${input.evidence.work.exts.join(", ")}`
@@ -487,8 +526,10 @@ export async function harvestSession(
   const { slice, redacted } = job.transcriptPath
     ? buildTranscriptSlice(job.transcriptPath, config.transcriptCharCap)
     : { slice: "", redacted: 0 };
-  const hasEvidence =
-    job.evidence.pairs.length > 0 || (job.evidence.corrections?.length ?? 0) > 0;
+  // Recorded prompts are not evidence on their own any more — they used to be, when a
+  // prompt was only recorded if it matched a teaching pattern. With no transcript to
+  // read either, prompts alone would put a chat session in front of the model.
+  const hasEvidence = job.evidence.pairs.length > 0;
   if (!slice && !hasEvidence) {
     return { outcome: "skipped", reason: "no transcript and no evidence", written: [] };
   }
@@ -531,7 +572,8 @@ export async function harvestSession(
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
 
-  const { kept, dropped } = sieveHarvestItems(items, {
+  const measured = items.map((i) => withMeasuredRecurrence(i, evidence.echoes, evidence.recurrence));
+  const { kept, dropped } = sieveHarvestItems(measured, {
     existingSkillNames: new Set(existingSkills.map((s) => s.name)),
     muted: loadMutedFingerprints(home),
     minScore: config.minScore,

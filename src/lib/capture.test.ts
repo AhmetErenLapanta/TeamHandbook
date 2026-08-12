@@ -261,23 +261,31 @@ describe("harvest evidence: transcriptPath + meaningfulToolCalls", () => {
   });
 });
 
-describe("captureCorrection (deterministic teaching pre-flagging)", () => {
+describe("captureCorrection (recording what the developer typed)", () => {
   function promptInput(prompt: string): HookInput {
     return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt, transcript_path: "/tmp/t.jsonl" };
   }
 
-  it("records a teaching-shaped prompt into session state with its transcript path", () => {
+  it("records a prompt into session state with its transcript path", () => {
     expect(captureCorrection(promptInput("we never use Lombok in this repo"), home)).toBe(true);
     const state = loadSessionState("s1", home);
     expect(state.corrections).toEqual([
-      expect.objectContaining({ kind: "convention", text: "we never use Lombok in this repo" }),
+      expect.objectContaining({ text: "we never use Lombok in this repo" }),
     ]);
     expect(state.transcriptPath).toBe("/tmp/t.jsonl");
   });
 
-  it("ignores ordinary prompts, missing prompts, and secret-bearing teachings", () => {
-    expect(captureCorrection(promptInput("add a test for the parser"), home)).toBe(false);
+  it("records a rule typed in any language, not only the ones a pattern list knows", () => {
+    expect(captureCorrection(promptInput("burada db'yi asla mocklamayız"), home)).toBe(true);
+    expect(loadSessionState("s1", home).corrections).toEqual([
+      expect.objectContaining({ text: "burada db'yi asla mocklamayız" }),
+    ]);
+  });
+
+  it("ignores acks, missing prompts, harness notices, and secret-bearing prompts", () => {
+    expect(captureCorrection(promptInput("ok thanks"), home)).toBe(false);
     expect(captureCorrection({ session_id: "s1" }, home)).toBe(false);
+    expect(captureCorrection(promptInput("[Request interrupted by user]"), home)).toBe(false);
     expect(
       captureCorrection(promptInput("always use Bearer sk-proj-abcdef1234567890ABCDEFGH"), home),
     ).toBe(false);

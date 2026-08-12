@@ -1,7 +1,7 @@
 {
   "name": "handbook",
   "version": "0.2.0",
-  "description": "Harvests durable lessons from your real coding sessions \u2014 the corrections you gave, the procedures you completed \u2014 and offers each one as a personal, project, or team skill.",
+  "description": "The team handbook that writes itself — the corrections you give Claude, captured once and shared with your team as reviewed skills.",
   "author": {
     "name": "Ahmet Eren Lapanta"
   },

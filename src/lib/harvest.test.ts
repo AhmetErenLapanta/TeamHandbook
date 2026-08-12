@@ -218,16 +218,46 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).toContain("empty array [] is a valid");
   });
 
-  it("given a teaching was flagged, when the prompt is built, then the model is told an empty answer needs a reason", () => {
+  it("given a prompt repeated across sessions, when the prompt is built, then the model is pushed to look at it", () => {
     const prompt = buildHarvestPrompt({
       slice: "",
-      evidence: { ...evidence, corrections: [{ at: "x", kind: "convention", text: "we never use Lombok" }] },
+      evidence: {
+        ...evidence,
+        corrections: [{ at: "x", text: "we never use Lombok" }],
+        echoes: [{ text: "we never use Lombok", priorSessions: 1, firstAt: "2026-07-01T00:00:00Z" }],
+      },
       existingSkills: [],
       recentDecisions: [],
       maxItems: 3,
     });
 
-    expect(prompt).toContain("stated a rule in their OWN words");
+    expect(prompt).toContain("typed in EARLIER sessions");
+    expect(prompt).toContain("we never use Lombok");
+  });
+
+  it("given the session may have been in any language, when the prompt is built, then the skill is asked for in English and the quote is not", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence,
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).toContain("in English, even when the session was");
+    expect(prompt).toContain("keep the developer's own");
+  });
+
+  it("given prompts that were never repeated, when the prompt is built, then none of them are held up as candidates", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence: { ...evidence, corrections: [{ at: "x", text: "we never use Lombok" }] },
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).not.toContain("typed in EARLIER sessions");
   });
 
   it("given no teaching was flagged, when the prompt is built, then that instruction is absent", () => {
@@ -268,7 +298,10 @@ describe("harvestSession (end to end with a fake runner)", () => {
       skillDirs: () => [],
     });
     expect(summary.outcome).toBe("harvested");
-    expect(summary.written).toEqual(["prefer-config-feature-flags", "fix-npm-snapshot"]);
+    // the error-fix item now outranks the correction: its pair recurred 3× in the
+    // ledger, which is measured evidence, so recurrence is set to 2 rather than left
+    // at whatever the model claimed
+    expect(summary.written).toEqual(["fix-npm-snapshot", "prefer-config-feature-flags"]);
 
     const dir = join(candidatesDir(home), "prefer-config-feature-flags");
     const meta = readCandidateMeta(dir)!;
@@ -370,6 +403,34 @@ describe("harvestSession (end to end with a fake runner)", () => {
     expect(summary.outcome).toBe("skipped");
   });
 
+  it("given recorded prompts but no transcript and no pair, when harvested, then no model call is made", async () => {
+    let called = false;
+
+    const summary = await harvestSession(
+      {
+        sessionId: "s1",
+        cwd: home,
+        evidence: {
+          pairs: [],
+          recurrence: {},
+          corrections: [{ at: "2026-08-11T00:00:00Z", text: "what does this function do" }],
+        },
+      },
+      home,
+      {
+        runner: async () => {
+          called = true;
+          return "[]";
+        },
+        listSkills: () => [],
+        skillDirs: () => [],
+      },
+    );
+
+    expect(summary.outcome).toBe("skipped");
+    expect(called).toBe(false);
+  });
+
   it("fails closed on an unparseable reply and a dead runner", async () => {
     const bad = await harvestSession(job(), home, {
       runner: async () => "no lessons today, sorry!",
@@ -438,7 +499,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
       slice: "",
       evidence: {
         ...evidence,
-        corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text: "never mock the database" }],
+        corrections: [{ at: "2026-08-01T00:00:00Z", text: "never mock the database" }],
         echoes: [{ text: "never mock the database", priorSessions: 2, firstAt: "2026-07-01T00:00:00Z" }],
       },
       existingSkills: [],
@@ -446,7 +507,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
       maxItems: 3,
     });
 
-    expect(prompt).toContain("taught this in 2 earlier sessions, first on 2026-07-01");
+    expect(prompt).toContain("also typed in 2 earlier sessions, first on 2026-07-01");
   });
 
   it("given a re-teaching that produced nothing new, when harvested, then the pending candidate it duplicates is marked as repeated", async () => {

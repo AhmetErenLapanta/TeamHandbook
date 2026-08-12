@@ -275,9 +275,38 @@ export function writeSkeleton(dir: string, files: Record<string, string>): void 
 
 export type GitRunner = (args: string[], cwd: string) => string | void;
 
+/**
+ * Nothing run on the user's behalf may stop to ask a question. These calls happen
+ * from a slash command or a detached hook, where a prompt has no one to answer it —
+ * git would wait on a username, glab on a confirmation, and the publish would hang
+ * instead of failing. Every one of them fails with a reason instead.
+ *
+ * NO_COLOR is not cosmetic here: the PR URL is recovered from the tool's stdout with
+ * a regex, and an ANSI escape wrapped around it would be captured as part of the URL.
+ */
+export function nonInteractiveEnv(
+  base: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  return {
+    ...base,
+    GIT_TERMINAL_PROMPT: "0",
+    GLAB_NO_PROMPT: "1",
+    GH_PROMPT_DISABLED: "1",
+    NO_COLOR: "1",
+  };
+}
+
+export const GIT_TIMEOUT_MS = 120_000;
+
 export function runGit(args: string[], cwd: string): string {
   try {
-    return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+    return execFileSync("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      env: nonInteractiveEnv(),
+      timeout: GIT_TIMEOUT_MS,
+    });
   } catch (err) {
     // Surface git's actual reason (e.g. "Permission denied (publickey)") instead
     // of the bare "Command failed: git …" — the difference between a five-second
