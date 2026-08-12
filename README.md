@@ -35,16 +35,10 @@ your team's. Whoever joins next month starts there too, on their first day.
 /plugin install handbook@teamhandbook
 ```
 
-Claude Code will ask where to install it. Choose **"Install for you (user scope)"**,
-the default. A lesson shows up wherever you happen to be working, and repeats are
-counted across all of your projects, so scoping the plugin to one repository is what
-stops it seeing that you have said the same thing twice.
-
-Pick "in this repo only (local scope)" if you would rather try it in one place first.
-Do not pick "for all collaborators (project scope)": that commits the install into the
-repository and turns the harvest on for everyone who clones it. What the harvest reads
-is each person's own conversation, so it should be each person's own decision. Send
-them these two commands instead.
+Choose **"Install for you (user scope)"** when Claude Code asks: repeats are counted
+across all your projects, so scoping it to one repository hides the thing it looks for.
+Not project scope, which installs it for everyone who clones the repo
+([why](SECURITY.md#install-it-for-yourself-not-for-your-teammates)).
 
 That's the whole install. It works **solo immediately** - no team setup required.
 
