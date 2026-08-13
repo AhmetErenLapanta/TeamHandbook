@@ -9,7 +9,7 @@ Why the split, if the user asks: the harvest reads the conversation a session pr
 A session spent talking about TeamHandbook is a session about TeamHandbook, and a model
 reading it back concludes, correctly, that it was watching a staged exercise rather than
 someone working. Measured on a real transcript: the demo that narrated itself produced a
-lesson in 1 run out of 3, while the same work done in an ordinary session produced it 3
+skill in 1 run out of 3, while the same work done in an ordinary session produced it 3
 out of 3. So the demo hands the work to a clean session. That is also the honest thing
 to show, since it is what the product actually does all day.
 
@@ -78,7 +78,7 @@ half of the demo worth watching.
 >
 > - `kind: correction`, which only the session-end path produces
 > - the score, and which of the five criteria earned it
-> - `you said:`, carrying your own sentence, quoted back as the reason the lesson exists
+> - `you said:`, carrying your own sentence, quoted back as the reason the skill exists
 >
 > Then keep it, put it in the repo, or skip it.
 >

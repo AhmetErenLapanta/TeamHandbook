@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.1] - 2026-08-13
+
+- **Review asks with buttons, not with prose.** Every verdict is a multiple-choice
+  question now, up to four candidates in one dialog, so clearing the queue is picking
+  rather than typing `--to personal` back once per skill. The whole queue is shown before
+  the first question, so nobody answers three to find out there were six. Rejecting asks
+  one follow-up: just this time, or never again.
+- **The session-start line leads with how many are waiting**, and how long the oldest has
+  waited once that stops being "just now". One line competes with everything else that
+  prints at session start, and a name alone did not say there was a queue behind it.
+- **It says "skill" everywhere it used to say "lesson".** The thing being produced is a
+  skill; a second word for it was only ever something else to learn.
+
 ## [0.3.0] - 2026-08-12
 
 **A rule counts in any language, and the first run tells the truth.** Everything here

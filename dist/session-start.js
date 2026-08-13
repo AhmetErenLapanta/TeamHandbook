@@ -613,7 +613,9 @@ function buildSessionStartSummary(inputs) {
     const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
     const more = harvested.more > 0 ? ` (+${harvested.more} more)` : "";
     const repeats = (harvested.taughtBefore ?? 0) + 1;
-    const lead = repeats > 1 ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions` : "TeamHandbook learned from your last session";
+    const waited = harvested.oldestDays ?? 0;
+    const waiting = waited >= 2 ? `, the oldest waiting ${waited} days` : "";
+    const lead = repeats > 1 ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions` : harvested.more > 0 ? `TeamHandbook has ${harvested.more + 1} skills waiting for your call${waiting}, newest first` : "TeamHandbook learned from your last session";
     lines.push(
       `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this project, or share it with the team: run /handbook:review.`
     );
@@ -678,6 +680,11 @@ function lastHarvestFoundNothing(home) {
   }
   return false;
 }
+function oldestPendingDays(candidates, now = Date.now()) {
+  const times = candidates.map((c) => Date.parse(c.createdAt)).filter((t) => Number.isFinite(t));
+  if (times.length === 0) return 0;
+  return Math.floor((now - Math.min(...times)) / 864e5);
+}
 function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   const config = loadNotifyConfig(home);
   if (!config.sessionStart) return null;
@@ -689,9 +696,10 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   )[0];
   const harvested = top ? {
     name: top.slug,
-    kind: top.kind ?? "lesson",
+    kind: top.kind ?? "skill",
     total: top.gate?.total ?? null,
     more: harvestedPending.length - 1,
+    oldestDays: oldestPendingDays(harvestedPending),
     ...top.taughtBefore ? { taughtBefore: top.taughtBefore } : {}
   } : null;
   const pendingRepeats = Math.max(0, ...rest.map((c) => c.taughtBefore ? c.taughtBefore + 1 : 0));

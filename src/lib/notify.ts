@@ -6,6 +6,7 @@ import { configIsBroken, readConfigFile } from "./config.js";
 import { readCounters } from "./counters.js";
 import { loadTeamConfig, teamSkillsDir } from "./init.js";
 import { listCandidates } from "./queue.js";
+import type { CandidateMeta } from "./queue.js";
 import { readSkillUsage, handbookSkills, summarizeUsage } from "./usage.js";
 import { listExistingSkills } from "./skill-index.js";
 
@@ -224,6 +225,8 @@ export interface SummaryInputs {
   pendingRepeats?: number;
   // freshly harvested lessons awaiting the keep/share/skip decision — the headline
   harvested?: {
+    // days since the oldest pending harvested candidate was written
+    oldestDays?: number;
     name: string;
     kind: string;
     total: number | null;
@@ -286,10 +289,20 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     // the second time, lead with that — it is the moment the product justifies
     // itself, and it is the developer's own evidence, not a score they must trust.
     const repeats = (harvested.taughtBefore ?? 0) + 1;
+    // A queue that has been growing for days is a different message from a single
+    // fresh lesson, and the notice has to compete for attention with whatever else
+    // prints at session start. Lead with the count once there is more than one, and
+    // say how long the oldest has waited once that stops being "just now": both are
+    // facts the developer can act on, and neither nags when there is nothing to nag
+    // about.
+    const waited = harvested.oldestDays ?? 0;
+    const waiting = waited >= 2 ? `, the oldest waiting ${waited} days` : "";
     const lead =
       repeats > 1
         ? `TeamHandbook learned something you have now told Claude in ${repeats} sessions`
-        : "TeamHandbook learned from your last session";
+        : harvested.more > 0
+          ? `TeamHandbook has ${harvested.more + 1} skills waiting for your call${waiting}, newest first`
+          : "TeamHandbook learned from your last session";
     lines.push(
       `${lead}: "${harvested.name}" (${harvested.kind}${score})${more} - keep it for yourself, add it to this project, or share it with the team: run /handbook:review.`,
     );
@@ -369,6 +382,15 @@ function lastHarvestFoundNothing(home: string): boolean {
   return false;
 }
 
+/** How long the oldest of these has been waiting, in whole days. */
+function oldestPendingDays(candidates: CandidateMeta[], now: number = Date.now()): number {
+  const times = candidates
+    .map((c) => Date.parse(c.createdAt))
+    .filter((t) => Number.isFinite(t));
+  if (times.length === 0) return 0;
+  return Math.floor((now - Math.min(...times)) / 86_400_000);
+}
+
 export function sessionStartNotice(
   cwd: string,
   home: string = handbookHome(),
@@ -391,9 +413,10 @@ export function sessionStartNotice(
   const harvested = top
     ? {
         name: top.slug,
-        kind: top.kind ?? "lesson",
+        kind: top.kind ?? "skill",
         total: top.gate?.total ?? null,
         more: harvestedPending.length - 1,
+        oldestDays: oldestPendingDays(harvestedPending),
         ...(top.taughtBefore ? { taughtBefore: top.taughtBefore } : {}),
       }
     : null;

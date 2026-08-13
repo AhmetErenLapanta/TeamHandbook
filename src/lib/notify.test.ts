@@ -307,14 +307,36 @@ describe("harvest headline (v2 session-start ask)", () => {
 
   it("headlines the best harvested lesson with the keep/share/skip ask", () => {
     harvestCandidate("prefer-config-flags", 8);
-    harvestCandidate("minor-discovery", 5);
     sessionStartNotice(cwd, home); // consume first-run welcome
     const notice = sessionStartNotice(cwd, home)!;
     expect(notice).toContain('TeamHandbook learned from your last session: "prefer-config-flags" (correction, 8/10)');
-    expect(notice).toContain("(+1 more)");
     expect(notice).toContain("keep it for yourself, add it to this project, or share it with the team");
     // harvested items are not double-counted in the plain pending line
     expect(notice).not.toContain("candidate skills are awaiting");
+  });
+
+  it("given more than one lesson waiting, when the notice is built, then it leads with how many", () => {
+    harvestCandidate("prefer-config-flags", 8);
+    harvestCandidate("minor-discovery", 5);
+    sessionStartNotice(cwd, home); // consume first-run welcome
+
+    const notice = sessionStartNotice(cwd, home)!;
+
+    // one line competing with whatever else prints at session start: the count is the
+    // part the developer can act on, so it goes first
+    expect(notice).toContain("TeamHandbook has 2 skills waiting for your call");
+    expect(notice).toContain("the oldest waiting");
+    expect(notice).toContain('"prefer-config-flags" (correction, 8/10)');
+  });
+
+  it("given a single fresh lesson, when the notice is built, then it does not nag about a queue", () => {
+    harvestCandidate("prefer-config-flags", 8);
+    sessionStartNotice(cwd, home); // consume first-run welcome
+
+    const notice = sessionStartNotice(cwd, home)!;
+
+    expect(notice).not.toContain("skills waiting");
+    expect(notice).not.toContain("the oldest waiting");
   });
 
   it("keeps the plain review line for non-harvest candidates", () => {
