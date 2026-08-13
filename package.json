@@ -1,6 +1,6 @@
 {
   "name": "teamhandbook",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The team handbook that writes itself \u2014 the corrections you give Claude, captured once and shared with your team as reviewed skills.",
   "type": "module",
   "private": true,

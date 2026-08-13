@@ -89,7 +89,7 @@ function showCandidate(home: string, slug: string): void {
         console.log(`edits:     ${grounded.edits.join(", ")}`);
       }
     } else if (!grounded.quote) {
-      console.log("(no command/error recorded — this lesson came from the conversation)");
+      console.log("(no command/error recorded — this skill came from the conversation)");
     }
     if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
   } catch {
