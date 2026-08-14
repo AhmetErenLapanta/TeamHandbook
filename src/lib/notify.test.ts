@@ -106,8 +106,16 @@ describe("notify", () => {
       );
     });
 
-    it("returns null when there is nothing to announce", () => {
-      expect(buildSessionStartSummary({ pending: 0, newSkills: [] })).toBeNull();
+    it("says it is on when there is nothing else to announce, because silence reads as absent", () => {
+      expect(buildSessionStartSummary({ pending: 0, newSkills: [] })).toBe(
+        "handbook: on, nothing waiting for you yet.",
+      );
+    });
+
+    it("carries a number in the quiet line once there is one to carry", () => {
+      const text = buildSessionStartSummary({ pending: 0, newSkills: [], keptSkills: 4 });
+      expect(text).toContain("nothing waiting for you");
+      expect(text).toContain("4 skills kept so far");
     });
 
     it("welcomes on the first run", () => {
@@ -129,8 +137,9 @@ describe("notify", () => {
       expect(active).toContain("3 failures watched");
       expect(active).toContain("1 error→fix pair captured");
 
+      // no activity to report is still a line, it just has nothing to put in it
       const idle = buildSessionStartSummary({ pending: 0, newSkills: [], heartbeat: { failures: 0, pairs: 0, gateErrors: 0 } });
-      expect(idle).toBeNull();
+      expect(idle).toBe("handbook: on, nothing waiting for you yet.");
 
       const withPending = buildSessionStartSummary({
         pending: 1,
@@ -173,9 +182,15 @@ describe("notify", () => {
       expect(sessionStartNotice(cwd, home)).toBeNull();
     });
 
-    it("welcomes on the very first session, then stays silent when idle", () => {
+    it("welcomes on the very first session, then keeps saying it is on", () => {
       const first = sessionStartNotice(cwd, home);
       expect(first).toContain("TeamHandbook is active");
+      expect(sessionStartNotice(cwd, home)).toContain("handbook: on, nothing waiting");
+    });
+
+    it("stays silent when the developer turned the notice off", () => {
+      writeFileSync(join(home, "config.json"), JSON.stringify({ notify: { sessionStart: false } }));
+
       expect(sessionStartNotice(cwd, home)).toBeNull();
     });
 
@@ -193,7 +208,10 @@ describe("notify", () => {
       bumpCounter("bashFailuresCaptured", home);
       const notice = sessionStartNotice(cwd, home);
       expect(notice).toContain("1 failure watched");
-      expect(sessionStartNotice(cwd, home)).toBeNull();
+      // counted once: the next session still speaks, but the failure is not re-reported
+      const next = sessionStartNotice(cwd, home)!;
+      expect(next).toContain("handbook: on, nothing waiting");
+      expect(next).not.toContain("failure watched");
     });
   });
 });

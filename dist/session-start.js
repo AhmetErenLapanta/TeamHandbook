@@ -594,6 +594,7 @@ function buildSessionStartSummary(inputs) {
     newSkills,
     firstRun = false,
     heartbeat = null,
+    keptSkills = 0,
     teamNudge = null,
     digest = null,
     scoring = 0
@@ -650,15 +651,18 @@ function buildSessionStartSummary(inputs) {
       `handbook: ${heartbeat.gateErrors} gate run${heartbeat.gateErrors === 1 ? "" : "s"} failed since your last session (claude may be logged out, missing, or rate-limited) \u2014 run /handbook:doctor.`
     );
   }
-  if (!firstRun && lines.length === 0 && heartbeat && (heartbeat.failures > 0 || heartbeat.pairs > 0)) {
+  if (!firstRun && lines.length === 0) {
     const parts = [];
-    if (heartbeat.failures > 0) {
+    if (heartbeat && heartbeat.failures > 0) {
       parts.push(`${heartbeat.failures} failure${heartbeat.failures === 1 ? "" : "s"} watched`);
     }
-    if (heartbeat.pairs > 0) {
+    if (heartbeat && heartbeat.pairs > 0) {
       parts.push(`${heartbeat.pairs} error\u2192fix pair${heartbeat.pairs === 1 ? "" : "s"} captured`);
     }
-    lines.push(`handbook: since your last session \u2014 ${parts.join(", ")}.`);
+    if (keptSkills > 0) parts.push(`${keptSkills} skill${keptSkills === 1 ? "" : "s"} kept so far`);
+    lines.push(
+      parts.length > 0 ? `handbook: on, nothing waiting for you \u2014 ${parts.join(", ")}.` : "handbook: on, nothing waiting for you yet."
+    );
   }
   return lines.length > 0 ? lines.join("\n") : null;
 }
@@ -720,7 +724,8 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     harvestedNothing: lastHarvestFoundNothing(home),
     digest: weeklyDigest(home),
     configBroken: configIsBroken(home),
-    scoring: pendingHarvestCount(home)
+    scoring: pendingHarvestCount(home),
+    keptSkills: listCandidates(home, "approved").length
   });
 }
 

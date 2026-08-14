@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.2] - 2026-08-13
+
+- **The session-start line always says something.** Every line it could print was
+  conditional, and a developer who empties their queue and starts a session meets all of
+  those conditions being false at once. Silence reads as "not installed". It now says it
+  is on, what it watched since last time, and how many skills you have kept, whenever
+  there is nothing more specific to report. `{"notify": {"sessionStart": false}}` still
+  turns it off completely.
+
 ## [0.3.1] - 2026-08-13
 
 - **Review asks with buttons, not with prose.** Every verdict is a multiple-choice
