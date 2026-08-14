@@ -240,6 +240,8 @@ export interface SummaryInputs {
   firstRun?: boolean;
   newSkills: string[];
   heartbeat?: HeartbeatDelta | null;
+  // skills the developer has approved so far, so the quiet line still carries a number
+  keptSkills?: number;
   teamNudge?: string | null;
   digest?: string | null;
   // config.json exists but is unparseable — the kill switches failed closed
@@ -256,6 +258,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     newSkills,
     firstRun = false,
     heartbeat = null,
+    keptSkills = 0,
     teamNudge = null,
     digest = null,
     scoring = 0,
@@ -345,17 +348,25 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
       `handbook: ${heartbeat.gateErrors} gate run${heartbeat.gateErrors === 1 ? "" : "s"} failed since your last session (claude may be logged out, missing, or rate-limited) — run /handbook:doctor.`,
     );
   }
-  // The heartbeat fills the silence between candidates, but never competes with a
-  // stronger line: shown only when there was real activity and nothing else to say.
-  if (!firstRun && lines.length === 0 && heartbeat && (heartbeat.failures > 0 || heartbeat.pairs > 0)) {
+  // Every other line here is conditional, and a developer who approves their queue
+  // then starts a session meets all of them at once being false. Silence reads as
+  // "not installed", and a tool believed to be absent is one nobody runs. So when
+  // there is nothing else to say, say the smallest true thing: it is on, what it
+  // watched, and that nothing is waiting on them.
+  if (!firstRun && lines.length === 0) {
     const parts: string[] = [];
-    if (heartbeat.failures > 0) {
+    if (heartbeat && heartbeat.failures > 0) {
       parts.push(`${heartbeat.failures} failure${heartbeat.failures === 1 ? "" : "s"} watched`);
     }
-    if (heartbeat.pairs > 0) {
+    if (heartbeat && heartbeat.pairs > 0) {
       parts.push(`${heartbeat.pairs} error→fix pair${heartbeat.pairs === 1 ? "" : "s"} captured`);
     }
-    lines.push(`handbook: since your last session — ${parts.join(", ")}.`);
+    if (keptSkills > 0) parts.push(`${keptSkills} skill${keptSkills === 1 ? "" : "s"} kept so far`);
+    lines.push(
+      parts.length > 0
+        ? `handbook: on, nothing waiting for you — ${parts.join(", ")}.`
+        : "handbook: on, nothing waiting for you yet.",
+    );
   }
   return lines.length > 0 ? lines.join("\n") : null;
 }
@@ -445,5 +456,6 @@ export function sessionStartNotice(
     digest: weeklyDigest(home),
     configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home),
+    keptSkills: listCandidates(home, "approved").length,
   });
 }
