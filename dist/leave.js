@@ -2,7 +2,7 @@
 import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 // src/lib/fs-atomic.ts

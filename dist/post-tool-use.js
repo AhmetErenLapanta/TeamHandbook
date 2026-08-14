@@ -179,13 +179,13 @@ function signalSecret(fields) {
 }
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -316,7 +316,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync2(home, { recursive: true });
+  mkdirSync3(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -328,7 +328,7 @@ function maybeDumpPayload(raw, home = handbookHome()) {
   if (!process.env.TEAMHANDBOOK_DEBUG) return;
   try {
     const dir = join2(home, "debug");
-    mkdirSync2(dir, { recursive: true });
+    mkdirSync3(dir, { recursive: true });
     const n = readdirSync2(dir).length;
     if (n >= DEBUG_DUMP_CAP) return;
     writeFileSync2(join2(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });

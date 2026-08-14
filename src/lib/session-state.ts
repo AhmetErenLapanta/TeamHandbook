@@ -1,6 +1,6 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { writeFileAtomic } from "./fs-atomic.js";
 import type { CorrectionNote } from "./corrections.js";
 
@@ -53,6 +53,25 @@ export function emptySessionState(sessionId: string): SessionState {
 
 export function handbookHome(): string {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
+}
+
+/**
+ * A scratch directory for the git clones the team flow needs (join, init, publish,
+ * doctor). Deliberately NOT the system temp dir: Claude Code can run tools inside a
+ * sandbox that denies it, and the first person to try /handbook:join from one got
+ * "operation not permitted" before git was ever reached. The state directory is
+ * somewhere TeamHandbook already writes on every session, so if that is denied the
+ * plugin has bigger problems and doctor already says so. The system temp dir stays as
+ * the fallback for anyone whose home is the unusual one.
+ */
+export function handbookWorkdir(prefix: string, home: string = handbookHome()): string {
+  try {
+    const root = join(home, "tmp");
+    mkdirSync(root, { recursive: true });
+    return mkdtempSync(join(root, prefix));
+  } catch {
+    return mkdtempSync(join(tmpdir(), prefix));
+  }
 }
 
 function sessionFile(sessionId: string, home: string): string {

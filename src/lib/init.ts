@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
-import { handbookHome } from "./session-state.js";
+import { handbookWorkdir,handbookHome } from "./session-state.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 
@@ -150,6 +150,15 @@ function readmeFor(name: string, url: string): string {
 Your team's skill base: approved skills distilled by TeamHandbook from real coding
 sessions (error→fix moments and task procedures). This repository is a Claude Code
 plugin marketplace; every merge reaches all subscribed teammates automatically.
+
+## Access
+
+If this repository is private, each teammate needs two separate things: access to the
+repository (ask whoever set it up), and git credentials on their own machine. The second
+is a one-time interactive sign-in they run themselves, for example
+\`brew install gh && gh auth login\` for GitHub over HTTPS, or an SSH key registered with
+the forge. Without it the commands below fail with a bare git error, because a plugin
+can never stop to ask for a password.
 
 ## Consume skills (no TeamHandbook needed)
 
@@ -372,7 +381,7 @@ export function initTeamRepo(
       error: `a team repository is already configured; run /handbook:leave (or edit ${join(home, "config.json")}) to re-init`,
     };
   }
-  const workdir = mkdtempSync(join(tmpdir(), "handbook-init-"));
+  const workdir = handbookWorkdir("handbook-init-");
   writeSkeleton(workdir, skeletonFiles(marketplaceName, url, hostFromUrl(url)));
   try {
     git(["init", "-b", "main"], workdir);
@@ -418,13 +427,33 @@ export function formatInitSuccess(result: InitResult): string {
     `  config:      team repo saved to ${join(result.home ?? "", "config.json")}`,
     ...ciNote,
     "",
-    "Tell your teammates who will PRODUCE skills to run:",
+    // A handbook is normally private, and a private repo needs two separate things
+    // from each teammate: access to the repo, and credentials on their machine. The
+    // first person to try this had neither, had never used GitHub, and met a raw git
+    // error. Nothing here had told the champion there was anything to arrange.
+    "BEFORE you share this, give each teammate access to the repository. If it is",
+    "private they also need git credentials on their own machine, which is a one-time",
+    "interactive login they have to run themselves. Send them this:",
     "",
-    `  /handbook:join ${result.url}`,
+    "  ---------------------------------------------------------------",
+    `  Our team handbook lives at ${result.url} and I have given you access.`,
     "",
-    "Teammates who only want to CONSUME skills need two built-in commands instead:",
+    "  If you have never pushed to this host from this machine, sign in once,",
+    "  in your own terminal (it opens a browser):",
     "",
-    `  /plugin marketplace add ${result.url}`,
-    `  /plugin install ${result.name}@${result.name}`,
+    "    brew install gh && gh auth login        # GitHub over HTTPS",
+    "",
+    "  Then, in Claude Code:",
+    "",
+    "  To USE the team's skills:",
+    `    /plugin marketplace add ${result.url}`,
+    `    /plugin install ${result.name}@${result.name}`,
+    "",
+    "  To also CONTRIBUTE your own:",
+    `    /handbook:join ${result.url}`,
+    "  ---------------------------------------------------------------",
+    "",
+    "A public handbook needs none of the sign-in step: anyone can clone it. Private is",
+    "the right default for team knowledge, so the login is the price of that choice.",
   ].join("\n");
 }

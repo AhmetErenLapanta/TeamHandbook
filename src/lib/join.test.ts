@@ -30,6 +30,78 @@ function seedTeamRepo(): void {
   }
 }
 
+import { cloneFailureReason } from "./join.js";
+
+describe("cloneFailureReason", () => {
+  const url = "https://github.com/acme/handbook";
+
+  it("given git could not ask for a password, when reported, then it names credentials, not the URL", () => {
+    // verbatim from a teammate's first /handbook:join
+    const err = new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+
+    const reason = cloneFailureReason(url, err, { ghInstalled: false, ghAuthenticated: false });
+
+    expect(reason).toContain("no git credentials");
+    expect(reason).toContain("normally a private repo");
+    expect(reason).not.toContain("is the URL correct");
+  });
+
+  it("given the machine has no gh at all, when reported, then it says install it and sign in", () => {
+    const err = new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+
+    const reason = cloneFailureReason(url, err, { ghInstalled: false, ghAuthenticated: false });
+
+    expect(reason).toContain("brew install gh");
+    expect(reason).toContain("your own terminal");
+  });
+
+  it("given gh is installed but signed out, when reported, then it does not tell them to install it again", () => {
+    const err = new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+
+    const reason = cloneFailureReason(url, err, { ghInstalled: true, ghAuthenticated: false });
+
+    expect(reason).toContain("installed but not signed in");
+    expect(reason).not.toContain("brew install");
+  });
+
+  it("given gh is signed in already, when reported, then it points at the account rather than the tooling", () => {
+    const err = new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+
+    const reason = cloneFailureReason(url, err, { ghInstalled: true, ghAuthenticated: true });
+
+    expect(reason).toContain("probably not the one");
+    expect(reason).toContain("gh auth status");
+  });
+
+  it("given an ssh url with no credentials, when reported, then it talks about keys, not gh", () => {
+    const err = new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+
+    const reason = cloneFailureReason("git@github.com:acme/handbook.git", err, { ghInstalled: false, ghAuthenticated: false });
+
+    expect(reason).toContain("ssh-keygen");
+    expect(reason).not.toContain("brew install gh");
+  });
+
+  it("given ssh refused the key, when reported, then it says which key to register", () => {
+    const reason = cloneFailureReason("git@github.com:acme/handbook.git", new Error("git@github.com: Permission denied (publickey)."));
+
+    expect(reason).toContain("not registered on that host");
+  });
+
+  it("given the repo answers not-found, when reported, then it says a private repo looks identical to a typo", () => {
+    const reason = cloneFailureReason(url, new Error("remote: Repository not found."));
+
+    expect(reason).toContain("same way as a typo");
+  });
+
+  it("given an unrecognized failure, when reported, then git's own first line survives", () => {
+    const reason = cloneFailureReason(url, new Error("fatal: something entirely new\nsecond line"));
+
+    expect(reason).toContain("something entirely new");
+    expect(reason).not.toContain("second line");
+  });
+});
+
 describe("joinTeamRepo", () => {
   it("clones the team repo, reads the marketplace name, and records the team config", () => {
     seedTeamRepo();
@@ -66,10 +138,11 @@ describe("joinTeamRepo", () => {
     expect(loadTeamConfig(home)?.repoUrl).toBe("git@x.com:other/team.git");
   });
 
-  it("fails without touching config when the clone fails", () => {
+  it("fails without touching config when the clone fails, and says which failure it was", () => {
     const result = joinTeamRepo(join(remote, "does-not-exist"), home);
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("git clone failed");
+    // a path that is not there gets the not-found wording, not a generic clone error
+    expect(result.error).toContain("is not there, or your account cannot see it");
     expect(loadTeamConfig(home)).toBeNull();
   });
 

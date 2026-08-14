@@ -13,7 +13,7 @@ import {
 import { basename as basename2, join as join10 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir3, tmpdir } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/distill.ts
@@ -22,7 +22,7 @@ import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as wr
 import { dirname as dirname2, isAbsolute, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 // src/lib/fs-atomic.ts

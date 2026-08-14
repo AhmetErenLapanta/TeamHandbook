@@ -4,7 +4,7 @@ import { dirname as dirname2, join as join11 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
@@ -57,7 +57,7 @@ import { readFileSync as readFileSync5 } from "node:fs";
 import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir2, tmpdir } from "node:os";
+import { homedir as homedir2 } from "node:os";
 import { dirname, join as join6 } from "node:path";
 
 // src/lib/config.ts

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handbookHome } from "./session-state.js";
+import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig } from "./init.js";
 import { loadScoreConfig } from "./score.js";
@@ -182,7 +182,7 @@ function checkHooks(home: string): DoctorCheck {
 // version is still the scaffold's 0.1.0 means the bump CI never ran. Best-effort: any
 // error falls back to plain reachability (which was already confirmed).
 function remoteDistributionState(url: string, run: CommandRunner): { version: string; skillCount: number } | null {
-  const dir = mkdtempSync(join(tmpdir(), "handbook-doctor-"));
+  const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", url, dir], 25_000);
     const version = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
