@@ -1,12 +1,12 @@
 // src/lib/init.ts
 import { execFileSync } from "node:child_process";
-import { mkdirSync as mkdirSync2, mkdtempSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir2, tmpdir } from "node:os";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -29,18 +29,27 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+function handbookWorkdir(prefix, home = handbookHome()) {
+  try {
+    const root = join(home, "tmp");
+    mkdirSync2(root, { recursive: true });
+    return mkdtempSync(join(root, prefix));
+  } catch {
+    return mkdtempSync(join(tmpdir(), prefix));
+  }
+}
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 function configFile(home = handbookHome()) {
   return join2(home, "config.json");
 }
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync(configFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -50,7 +59,7 @@ function configIsBroken(home = handbookHome()) {
   const file = configFile(home);
   if (!existsSync(file)) return false;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    const parsed = JSON.parse(readFileSync2(file, "utf8"));
     return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
   } catch {
     return true;
@@ -187,6 +196,15 @@ Your team's skill base: approved skills distilled by TeamHandbook from real codi
 sessions (error\u2192fix moments and task procedures). This repository is a Claude Code
 plugin marketplace; every merge reaches all subscribed teammates automatically.
 
+## Access
+
+If this repository is private, each teammate needs two separate things: access to the
+repository (ask whoever set it up), and git credentials on their own machine. The second
+is a one-time interactive sign-in they run themselves, for example
+\`brew install gh && gh auth login\` for GitHub over HTTPS, or an SSH key registered with
+the forge. Without it the commands below fail with a bare git error, because a plugin
+can never stop to ask for a password.
+
 ## Consume skills (no TeamHandbook needed)
 
 \`\`\`
@@ -295,7 +313,7 @@ function skeletonFiles(name, url, host) {
 function writeSkeleton(dir, files) {
   for (const [path, content] of Object.entries(files)) {
     const target = join3(dir, path);
-    mkdirSync2(dirname2(target), { recursive: true });
+    mkdirSync3(dirname2(target), { recursive: true });
     writeFileSync2(target, content);
   }
 }
@@ -347,7 +365,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
       error: `a team repository is already configured; run /handbook:leave (or edit ${join3(home, "config.json")}) to re-init`
     };
   }
-  const workdir = mkdtempSync(join3(tmpdir(), "handbook-init-"));
+  const workdir = handbookWorkdir("handbook-init-");
   writeSkeleton(workdir, skeletonFiles(marketplaceName, url, hostFromUrl(url)));
   try {
     git(["init", "-b", "main"], workdir);
@@ -390,14 +408,34 @@ function formatInitSuccess(result) {
     `  config:      team repo saved to ${join3(result.home ?? "", "config.json")}`,
     ...ciNote,
     "",
-    "Tell your teammates who will PRODUCE skills to run:",
+    // A handbook is normally private, and a private repo needs two separate things
+    // from each teammate: access to the repo, and credentials on their machine. The
+    // first person to try this had neither, had never used GitHub, and met a raw git
+    // error. Nothing here had told the champion there was anything to arrange.
+    "BEFORE you share this, give each teammate access to the repository. If it is",
+    "private they also need git credentials on their own machine, which is a one-time",
+    "interactive login they have to run themselves. Send them this:",
     "",
-    `  /handbook:join ${result.url}`,
+    "  ---------------------------------------------------------------",
+    `  Our team handbook lives at ${result.url} and I have given you access.`,
     "",
-    "Teammates who only want to CONSUME skills need two built-in commands instead:",
+    "  If you have never pushed to this host from this machine, sign in once,",
+    "  in your own terminal (it opens a browser):",
     "",
-    `  /plugin marketplace add ${result.url}`,
-    `  /plugin install ${result.name}@${result.name}`
+    "    brew install gh && gh auth login        # GitHub over HTTPS",
+    "",
+    "  Then, in Claude Code:",
+    "",
+    "  To USE the team's skills:",
+    `    /plugin marketplace add ${result.url}`,
+    `    /plugin install ${result.name}@${result.name}`,
+    "",
+    "  To also CONTRIBUTE your own:",
+    `    /handbook:join ${result.url}`,
+    "  ---------------------------------------------------------------",
+    "",
+    "A public handbook needs none of the sign-in step: anyone can clone it. Private is",
+    "the right default for team knowledge, so the login is the price of that choice."
   ].join("\n");
 }
 

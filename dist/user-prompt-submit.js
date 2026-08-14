@@ -81,9 +81,9 @@ function noteCorrection(notes, prompt, at = (/* @__PURE__ */ new Date()).toISOSt
 }
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";

@@ -1,21 +1,30 @@
 // src/lib/doctor.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync4, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
+}
+function handbookWorkdir(prefix, home = handbookHome()) {
+  try {
+    const root = join(home, "tmp");
+    mkdirSync(root, { recursive: true });
+    return mkdtempSync(join(root, prefix));
+  } catch {
+    return mkdtempSync(join(tmpdir(), prefix));
+  }
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/counters.ts
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync } from "node:fs";
 import { join as join2 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -38,7 +47,7 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0
   };
   try {
-    const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
   } catch {
   }
@@ -46,14 +55,14 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/config.ts
-import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync as readFileSync3 } from "node:fs";
 import { join as join3 } from "node:path";
 function configFile(home = handbookHome()) {
   return join3(home, "config.json");
 }
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync3(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -63,7 +72,7 @@ function configIsBroken(home = handbookHome()) {
   const file = configFile(home);
   if (!existsSync(file)) return false;
   try {
-    const parsed = JSON.parse(readFileSync2(file, "utf8"));
+    const parsed = JSON.parse(readFileSync3(file, "utf8"));
     return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
   } catch {
     return true;
@@ -179,7 +188,7 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
 import { dirname, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -200,7 +209,7 @@ function pluginVersion() {
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(
-        readFileSync3(join5(here, up, ".claude-plugin", "plugin.json"), "utf8")
+        readFileSync4(join5(here, up, ".claude-plugin", "plugin.json"), "utf8")
       );
       if (typeof parsed?.version === "string") return parsed.version;
     } catch {
@@ -211,7 +220,7 @@ function pluginVersion() {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync3(pipelineLogFile(home), "utf8");
+    raw = readFileSync4(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -306,9 +315,9 @@ function checkGitIdentity(home, run) {
 function checkHomeWritable(home) {
   const probe = join6(home, `.doctor-probe-${process.pid}`);
   try {
-    mkdirSync2(home, { recursive: true });
+    mkdirSync3(home, { recursive: true });
     writeFileSync2(probe, "ok");
-    rmSync(probe, { force: true });
+    rmSync2(probe, { force: true });
     return ok("state dir", `${home} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${home}: ${String(err instanceof Error ? err.message : err)}`);
@@ -318,7 +327,7 @@ function checkConfig(home) {
   const file = join6(home, "config.json");
   if (!existsSync2(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync4(file, "utf8"));
+    const parsed = JSON.parse(readFileSync5(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -347,20 +356,20 @@ function checkHooks(home) {
   );
 }
 function remoteDistributionState(url, run) {
-  const dir = mkdtempSync(join6(tmpdir(), "handbook-doctor-"));
+  const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", url, dir], 25e3);
-    const version = JSON.parse(readFileSync4(join6(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync5(join6(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync2(join6(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync3(join6(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     return typeof version === "string" ? { version, skillCount } : null;
   } catch {
     return null;
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
   }
 }
 function checkTeamRepo(home, run) {

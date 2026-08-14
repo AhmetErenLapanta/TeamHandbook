@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.3] - 2026-08-14
+
+Joining a private team handbook, which is what most teams will have, failed twice over
+for the first person who tried it.
+
+- **Clones no longer use the system temp directory.** Claude Code can run tools in a
+  sandbox that denies it, and join died there before git was ever reached. `join`,
+  `init`, `publish` and `doctor` now clone under `~/.teamhandbook/tmp`, which the plugin
+  already writes to every session.
+- **A failed clone says which failure it was, and what this machine needs next.** No
+  credentials, an unregistered SSH key, a repo that is not there, or the network: each
+  gets its own answer. For the credentials case it checks whether `gh` is installed and
+  signed in, so the advice is one command rather than a menu.
+- **`/handbook:init` hands the champion a message to send.** Access to the repository
+  and credentials on a teammate's machine are two separate things, both required by a
+  private repo, and nothing used to mention either before the teammate hit a raw git
+  error. The generated handbook README says the same thing permanently.
+
 ## [0.3.2] - 2026-08-13
 
 - **The session-start line always says something.** Every line it could print was

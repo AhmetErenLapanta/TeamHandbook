@@ -18,13 +18,13 @@ function parseHookInput(raw) {
 }
 
 // src/lib/signals.ts
-import { existsSync, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "node:fs";
+import { existsSync, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync3 } from "node:fs";
 import { join as join3 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -137,7 +137,7 @@ function signalSecret(fields) {
 }
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -169,7 +169,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync2(home, { recursive: true });
+  mkdirSync3(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -206,7 +206,7 @@ function appendSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return;
   const { clean, redacted } = sanitizeSignalsForPersistence(signals);
   if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync3(home, { recursive: true });
+  mkdirSync4(home, { recursive: true });
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }

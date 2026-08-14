@@ -24,7 +24,7 @@ function parseHookInput(raw) {
 import { spawn } from "node:child_process";
 import {
   appendFileSync as appendFileSync2,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   readdirSync as readdirSync3,
   readFileSync as readFileSync5,
   renameSync as renameSync2,
@@ -36,9 +36,9 @@ import {
 import { basename, join as join5 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -206,11 +206,11 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
 );
 
 // src/lib/signals.ts
-import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
 import { join as join4 } from "node:path";
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -242,7 +242,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync2(home, { recursive: true });
+  mkdirSync3(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -299,7 +299,7 @@ function appendSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return;
   const { clean, redacted } = sanitizeSignalsForPersistence(signals);
   if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync3(home, { recursive: true });
+  mkdirSync4(home, { recursive: true });
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
@@ -412,7 +412,7 @@ function pendingDir(home = handbookHome()) {
   return join5(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
-  mkdirSync4(pendingDir(home), { recursive: true });
+  mkdirSync5(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
   let file = join5(pendingDir(home), `${base}.json`);

@@ -43,9 +43,9 @@ function writeFileAtomic(file, data) {
 import { join as join8 } from "node:path";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function emptySessionState(sessionId) {
   return { sessionId, openErrors: [], resolvedPairs: [] };
@@ -159,7 +159,7 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -191,7 +191,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync2(home, { recursive: true });
+  mkdirSync3(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -200,7 +200,7 @@ function incrementRedactionBlocked(home = handbookHome(), by = 1) {
 }
 
 // src/lib/init.ts
-import { homedir as homedir2, tmpdir } from "node:os";
+import { homedir as homedir2 } from "node:os";
 import { dirname as dirname2, join as join5 } from "node:path";
 
 // src/lib/score.ts
@@ -730,7 +730,7 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
 }
 
 // src/lib/signals.ts
-import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync8 } from "node:fs";
 import { join as join9 } from "node:path";
 function sanitizeSignalsForPersistence(signals) {
   let redacted = 0;
@@ -780,7 +780,7 @@ function appendSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return;
   const { clean, redacted } = sanitizeSignalsForPersistence(signals);
   if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync3(home, { recursive: true });
+  mkdirSync4(home, { recursive: true });
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
@@ -844,7 +844,7 @@ function ledgerPairsForSession(sessionId, home = handbookHome()) {
 import { spawn } from "node:child_process";
 import {
   appendFileSync as appendFileSync2,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   readdirSync as readdirSync6,
   readFileSync as readFileSync9,
   renameSync as renameSync2,
@@ -893,7 +893,7 @@ function pendingDir(home = handbookHome()) {
   return join10(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
-  mkdirSync4(pendingDir(home), { recursive: true });
+  mkdirSync5(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
   let file = join10(pendingDir(home), `${base}.json`);

@@ -1,9 +1,9 @@
 // src/cli/review.ts
-import { readFileSync as readFileSync7 } from "node:fs";
+import { readFileSync as readFileSync8 } from "node:fs";
 import { join as join9 } from "node:path";
 
 // src/lib/deliver.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename as basename2, join as join6 } from "node:path";
 
@@ -11,8 +11,9 @@ import { basename as basename2, join as join6 } from "node:path";
 import { execFileSync } from "node:child_process";
 
 // src/lib/session-state.ts
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -35,18 +36,27 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+function handbookWorkdir(prefix, home = handbookHome()) {
+  try {
+    const root = join(home, "tmp");
+    mkdirSync2(root, { recursive: true });
+    return mkdtempSync(join(root, prefix));
+  } catch {
+    return mkdtempSync(join(tmpdir(), prefix));
+  }
+}
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 function configFile(home = handbookHome()) {
   return join2(home, "config.json");
 }
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync(configFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -56,7 +66,7 @@ function configIsBroken(home = handbookHome()) {
   const file = configFile(home);
   if (!existsSync(file)) return false;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    const parsed = JSON.parse(readFileSync2(file, "utf8"));
     return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
   } catch {
     return true;
@@ -197,8 +207,7 @@ function runGit(args, cwd) {
 
 // src/lib/publish.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, mkdtempSync, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join4 } from "node:path";
 var FORGE_TIMEOUT_MS = 6e4;
 function runForge(tool, args, cwd) {
@@ -267,7 +276,7 @@ function manualPrUrl(repoUrl, branch) {
 }
 function readGroundedCase(candidateDir) {
   try {
-    const parsed = JSON.parse(readFileSync2(join4(candidateDir, "grounded-case.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync3(join4(candidateDir, "grounded-case.json"), "utf8"));
     if (typeof parsed?.command === "string" && typeof parsed?.error === "string" && typeof parsed?.expect === "string" && Array.isArray(parsed?.edits)) {
       return parsed;
     }
@@ -307,7 +316,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   }
   let candidateSkillMd;
   try {
-    candidateSkillMd = readFileSync2(join4(candidateDir, "SKILL.md"), "utf8");
+    candidateSkillMd = readFileSync3(join4(candidateDir, "SKILL.md"), "utf8");
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
@@ -328,7 +337,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     };
   }
   const identityArgs = typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== "" ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`] : [];
-  const workdir = mkdtempSync(join4(tmpdir(), "handbook-publish-"));
+  const workdir = handbookWorkdir("handbook-publish-");
   const repoDir = join4(workdir, "repo");
   try {
     try {
@@ -353,7 +362,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
-      mkdirSync2(join4(repoDir, skillDir), { recursive: true });
+      mkdirSync3(join4(repoDir, skillDir), { recursive: true });
       writeFileSync2(
         join4(repoDir, skillDir, "SKILL.md"),
         slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
@@ -381,12 +390,12 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       ...pr.error ? { prError: pr.error } : {}
     };
   } finally {
-    rmSync2(workdir, { recursive: true, force: true });
+    rmSync3(workdir, { recursive: true, force: true });
   }
 }
 
 // src/lib/queue.ts
-import { readdirSync, readFileSync as readFileSync3 } from "node:fs";
+import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
 import { basename, join as join5 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
@@ -401,7 +410,7 @@ function writeCandidateMeta(dir, meta) {
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync3(join5(dir, "SKILL.md"), "utf8");
+    md = readFileSync4(join5(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -409,7 +418,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync3(join5(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync4(join5(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -426,7 +435,7 @@ function synthesizeMeta(dir) {
 }
 function readCandidateMeta(dir) {
   try {
-    const parsed = JSON.parse(readFileSync3(candidateMetaFile(dir), "utf8"));
+    const parsed = JSON.parse(readFileSync4(candidateMetaFile(dir), "utf8"));
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return {
         ...parsed,
@@ -442,7 +451,7 @@ function listCandidates(home = handbookHome(), status) {
   const base = candidatesDir(home);
   let entries;
   try {
-    entries = readdirSync(base, { withFileTypes: true });
+    entries = readdirSync2(base, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -487,7 +496,7 @@ function mutedFile(home = handbookHome()) {
 }
 function loadMutedFingerprints(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync3(mutedFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync4(mutedFile(home), "utf8"));
     if (Array.isArray(parsed)) return new Set(parsed.filter((f) => typeof f === "string"));
   } catch {
   }
@@ -549,8 +558,8 @@ function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir()) 
   const slug = uniqueSlug(meta.slug, (s) => existsSync3(join6(skillsDir, s)));
   const target = join6(skillsDir, slug);
   try {
-    const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
-    mkdirSync3(target, { recursive: true });
+    const skillMd = readFileSync5(join6(dir, "SKILL.md"), "utf8");
+    mkdirSync4(target, { recursive: true });
     writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync3(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
@@ -595,8 +604,8 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   const slug = uniqueSlug(meta.slug, (s) => existsSync3(join6(skillsDir, s)));
   const target = join6(skillsDir, slug);
   try {
-    const skillMd = readFileSync4(join6(dir, "SKILL.md"), "utf8");
-    mkdirSync3(target, { recursive: true });
+    const skillMd = readFileSync5(join6(dir, "SKILL.md"), "utf8");
+    mkdirSync4(target, { recursive: true });
     writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
     if (existsSync3(join6(dir, "grounded-case.json"))) {
       copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
@@ -656,13 +665,13 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5, readdirSync as readdirSync2 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6, readdirSync as readdirSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync2(join7(home, "pending"));
+    entries = readdirSync3(join7(home, "pending"));
   } catch {
     return 0;
   }
@@ -670,7 +679,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync5(join7(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync6(join7(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -679,7 +688,7 @@ function pendingHarvestCount(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync6 } from "node:fs";
+import { readFileSync as readFileSync7 } from "node:fs";
 
 // src/lib/pipeline.ts
 import { basename as basename3, join as join8 } from "node:path";
@@ -693,7 +702,7 @@ var LOG_ROTATE_BYTES = 512 * 1024;
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync6(pipelineLogFile(home), "utf8");
+    raw = readFileSync7(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -719,7 +728,7 @@ function showCandidate(home, slug) {
   const dir = join9(candidatesDir(home), slug);
   let skillMd;
   try {
-    skillMd = readFileSync7(join9(dir, "SKILL.md"), "utf8");
+    skillMd = readFileSync8(join9(dir, "SKILL.md"), "utf8");
   } catch {
     console.error(`error: no candidate named "${slug}"`);
     process.exit(1);
@@ -750,7 +759,7 @@ function showCandidate(home, slug) {
   console.log("");
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
-    const grounded = JSON.parse(readFileSync7(join9(dir, "grounded-case.json"), "utf8"));
+    const grounded = JSON.parse(readFileSync8(join9(dir, "grounded-case.json"), "utf8"));
     if (grounded.quote) {
       console.log(`you said:  "${grounded.quote}"`);
     }

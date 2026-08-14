@@ -1,3 +1,4 @@
+import { handbookWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -198,7 +199,7 @@ export function publishCandidate(
     typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== ""
       ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`]
       : [];
-  const workdir = mkdtempSync(join(tmpdir(), "handbook-publish-"));
+  const workdir = handbookWorkdir("handbook-publish-");
   const repoDir = join(workdir, "repo");
   try {
     try {
