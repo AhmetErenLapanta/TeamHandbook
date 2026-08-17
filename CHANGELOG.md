@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.4] - 2026-08-17
+
+Setting up a real team handbook, on a real company GitLab, found four things in a row.
+None of them were visible from the test suite.
+
+- **`/handbook:init` adopts a repository that already exists**, on the branch that repo
+  actually uses. It used to build a history locally and push it, which requires an empty
+  remote and assumed the branch was called `main` — while teams get their repo from
+  organisation tooling, which leaves a README in it, and plenty of them still default to
+  `master`. A file that already has content is never overwritten, and is named in the
+  output so the join instructions are not silently lost.
+- **The scaffold arrives as a merge request**, not as a push to the default branch.
+  Writing to a protected branch takes a role most members do not have; opening a branch
+  is something almost anyone can do, and it is how every skill arrives anyway. An empty
+  repository is the one exception, because there is nothing to open a request against.
+- **Branch and commit names are configurable, and it asks instead of demanding.** A real
+  GitLab group rejected `handbook/scaffold` because branches there must match
+  `HEM-42-something`, and then rejected the commit message for the same kind of reason.
+  Every skill shared with the team would have been rejected identically. `init` now runs
+  plainly, and only when the forge refuses does it read the pattern out of the refusal,
+  propose a prefix, and ask. Both prefixes are remembered.
+- **A refused push says which rule refused it** — branch name with the pattern quoted,
+  commit message, commit author, protected branch — and when the rule is one nobody
+  anticipated, the forge's own words survive instead of being replaced by a guess. The
+  first version of this said "that branch is protected, ask for Maintainer" to someone
+  whose access was fine.
+- **`init` commits as the developer**, not as `TeamHandbook@localhost`, which is an
+  author a forge that checks authors will refuse. publish always did this.
+- **The version bump travels inside each skill's merge request**, so distribution needs
+  no CI, no access token, and no right to push to a protected branch. That job used to
+  be the only thing that made teammates' copies refresh, and it needed all three to be
+  right with nothing to warn you when they were not. `--with-ci` still scaffolds it for
+  repositories where skills also arrive by hand.
+- **Sharing a skill says what is now true**: the request to merge, and the version it
+  raises the handbook to, which is the part that makes teammates fetch it.
+
 ## [0.3.3] - 2026-08-14
 
 Joining a private team handbook, which is what most teams will have, failed twice over

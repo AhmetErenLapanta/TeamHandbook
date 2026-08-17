@@ -30,7 +30,7 @@ function seedTeamRepo(): void {
   }
 }
 
-import { cloneFailureReason } from "./join.js";
+import { cloneFailureReason } from "./git-errors.js";
 
 describe("cloneFailureReason", () => {
   const url = "https://github.com/acme/handbook";

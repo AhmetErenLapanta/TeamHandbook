@@ -104,12 +104,17 @@ function approveOne(home: string, slug: string, to?: DeliveryTarget): void {
     return;
   }
   if (result.mode === "team") {
+    // What the reader needs is not "it worked" but what is now true and what is left for
+    // them: a request exists, it carries the version teammates update to, and nothing
+    // reaches anyone until a human merges it.
+    const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
     if (result.prUrl) {
-      console.log(`Approved "${slug}" and opened a PR to the team skill base: ${result.prUrl}`);
+      console.log(`Shared "${slug}" with the team: ${result.prUrl}`);
+      console.log(`Merge that request and every teammate gets it at their next session.${bump}`);
     } else {
-      console.log(`Approved "${slug}" and pushed branch ${result.branch} to the team skill base.`);
-      if (result.prError) console.log(`Auto-PR skipped (${result.prError}) — install/authenticate gh or glab to open PRs automatically.`);
-      if (result.manualUrl) console.log(`Open the PR here: ${result.manualUrl}`);
+      console.log(`Shared "${slug}" with the team on branch ${result.branch}.${bump}`);
+      if (result.prError) console.log(`It could not open the request for you (${result.prError}) — install and sign in to gh or glab and it will next time.`);
+      if (result.manualUrl) console.log(`Open it here, then merge: ${result.manualUrl}`);
     }
   } else if (result.mode === "personal") {
     console.log(

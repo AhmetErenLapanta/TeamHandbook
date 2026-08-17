@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
-import { handbookWorkdir,handbookHome } from "./session-state.js";
+export { hostFromUrl } from "./forge.js";
+import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import type { ForgeRunner } from "./forge.js";
+import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 
@@ -26,6 +30,25 @@ export interface TeamConfig {
   marketplaceName: string;
   initializedAt?: string;
   joinedAt?: string;
+  // What every branch this tool pushes is named with. Default "handbook/", which reads
+  // well and groups them — but organisations enforce branch naming rules, and one real
+  // GitLab group rejected `handbook/scaffold` outright because branches there must look
+  // like `HEM-42-something`. Every skill shared with the team would have been rejected
+  // the same way, so this is not decoration.
+  branchPrefix?: string;
+  // Prepended to every commit message this tool writes, for the same reason as
+  // branchPrefix: a group that polices branch names usually polices commit messages too.
+  commitPrefix?: string;
+}
+
+export const DEFAULT_BRANCH_PREFIX = "handbook/";
+
+export function teamCommitPrefix(config: TeamConfig | null): string {
+  return config?.commitPrefix?.trim() ? `${config.commitPrefix.trim()} ` : "";
+}
+
+export function teamBranchPrefix(config: TeamConfig | null): string {
+  return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
 }
 
 export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null {
@@ -70,12 +93,6 @@ export function clearTeamConfig(home: string = handbookHome()): string | null {
   return previous;
 }
 
-export function hostFromUrl(url: string): string | null {
-  const normalized = normalizeRemoteUrl(url);
-  if (!normalized) return null;
-  return normalized.slice(0, normalized.indexOf("/"));
-}
-
 export function repoNameFromUrl(url: string): string | null {
   const normalized = normalizeRemoteUrl(url);
   if (!normalized) return null;
@@ -94,7 +111,7 @@ writeFileSync(file, JSON.stringify(plugin, null, 2) + "\\n");
 console.log(\`bumped plugin version to \${plugin.version}\`);
 `;
 
-const GITHUB_WORKFLOW = `name: version-bump
+const githubWorkflow = (bump: string) => `name: version-bump
 
 # Bumps the plugin version on every merge to main. The version string is Claude Code's
 # update signal: without a bump, teammates keep serving the cached marketplace copy.
@@ -104,7 +121,7 @@ on:
 
 jobs:
   bump:
-    if: "!startsWith(github.event.head_commit.message, 'ci: bump plugin version')"
+    if: "!startsWith(github.event.head_commit.message, '${bump}')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -117,11 +134,11 @@ jobs:
       - run: |
           git config user.name "handbook-ci"
           git config user.email "handbook-ci@users.noreply.github.com"
-          git commit -am "ci: bump plugin version"
+          git commit -am "${bump}"
           git push
 `;
 
-const GITLAB_CI = `# Bumps the plugin version on every merge to the default branch. The version string is
+const gitlabCi = (bump: string) => `# Bumps the plugin version on every merge to the default branch. The version string is
 # Claude Code's update signal: without a bump, teammates keep serving the cached copy.
 # Requires a project access token with write_repository scope stored in the
 # TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
@@ -129,22 +146,16 @@ version-bump:
   image: node:20
   rules:
     # only run when the CI token exists — otherwise skip (don't fail the pipeline)
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^ci: bump plugin version/ && $TEAMHANDBOOK_CI_TOKEN'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
     - git config user.name "handbook-ci"
     - git config user.email "handbook-ci@noreply.invalid"
-    - git commit -am "ci: bump plugin version"
+    - git commit -am "${bump}"
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
 
 function readmeFor(name: string, url: string): string {
-  const ciSetup = (hostFromUrl(url) ?? "").includes("github")
-    ? "the repository's Actions must have **Read and write permissions** (Settings → Actions → " +
-      "General), and if the default branch is protected, Actions must be allowed to push to it."
-    : "a project access token with `write_repository` scope must be stored in the " +
-      "**TEAMHANDBOOK_CI_TOKEN** CI/CD variable (Settings → CI/CD → Variables); until it is set the " +
-      "bump job is skipped and no teammate's copy refreshes.";
   return `# ${name}
 
 Your team's skill base: approved skills distilled by TeamHandbook from real coding
@@ -175,13 +186,16 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-Every merge to the default branch bumps the plugin version via CI
-(\`scripts/bump-version.mjs\`), which triggers Claude Code's background marketplace
-update on each teammate's machine. Skills live under \`skills/\`, one directory per
-skill (\`SKILL.md\` plus the \`grounded-case.json\` evidence it was distilled from).
+Every skill arrives as a merge request that also raises the version in
+\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
+moved: merge the request and each teammate's marketplace copy refreshes on its own.
+Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
+\`grounded-case.json\` evidence it was distilled from).
 
-> **CI setup (required for the above to work):** ${ciSetup} With it unset, merges do
-> not bump the version and teammates silently stop receiving updates.
+Nothing here needs CI, an access token, or the right to push to a protected branch. If
+skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
+job that bumps the version on merge instead; \`scripts/bump-version.mjs\` is what it
+runs, and it is left in place either way.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills" notice; it records the skill names it has already shown you under
@@ -231,7 +245,7 @@ try {
 process.exit(0);
 `;
 
-export function skeletonFiles(name: string, url: string, host: string | null): Record<string, string> {
+export function skeletonFiles(name: string, url: string, host: string | null, commitPrefix = "", withCi = false): Record<string, string> {
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -266,10 +280,19 @@ export function skeletonFiles(name: string, url: string, host: string | null): R
     "skills/README.md":
       "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
   };
-  if (host && host.includes("github")) {
-    files[".github/workflows/version-bump.yml"] = GITHUB_WORKFLOW;
-  } else {
-    files[".gitlab-ci.yml"] = GITLAB_CI;
+  // Opt-in only. The version bump now travels inside the merge request that carries the
+  // skill, so the ordinary path needs no CI, no access token, and no permission to push
+  // to a protected default branch — three things that had to be right before anyone
+  // received anything, with nothing to warn you when they were not. The job stays
+  // available for repositories where skills also arrive by hand, and it faces the same
+  // commit-message rules the developer does.
+  if (withCi) {
+    const bump = `${commitPrefix}ci: bump plugin version`;
+    if (host && host.includes("github")) {
+      files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
+    } else {
+      files[".gitlab-ci.yml"] = gitlabCi(bump);
+    }
   }
   return files;
 }
@@ -280,6 +303,38 @@ export function writeSkeleton(dir: string, files: Record<string, string>): void 
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
   }
+}
+
+/**
+ * Lay the skeleton into a repository that may already have things in it, and report
+ * what was left alone. A file that already carries content is never overwritten: a
+ * team's README is theirs, and a handbook is not worth losing it over. An empty file
+ * is not content — forges create a placeholder README on project creation, and
+ * refusing to fill that in would be pedantry.
+ */
+export function writeSkeletonPreserving(
+  dir: string,
+  files: Record<string, string>,
+): { written: string[]; skipped: string[] } {
+  const written: string[] = [];
+  const skipped: string[] = [];
+  for (const [path, content] of Object.entries(files)) {
+    const target = join(dir, path);
+    let existing = "";
+    try {
+      existing = readFileSync(target, "utf8");
+    } catch {
+      // absent, which is the common case
+    }
+    if (existing.trim()) {
+      skipped.push(path);
+      continue;
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+    written.push(path);
+  }
+  return { written, skipped };
 }
 
 export type GitRunner = (args: string[], cwd: string) => string | void;
@@ -347,12 +402,98 @@ export function teamSkillsDir(
   return team ? join(root, team.marketplaceName, "skills") : null;
 }
 
+/** A push that is refused says why, and on a forge the reason is nearly always a rule
+ * somebody set rather than a broken command. */
+/** The developer's own git identity as `-c` args, or null when they have none set.
+ * Every commit this tool makes is theirs, because a forge that checks authors will
+ * refuse anything else, and because the history should say who actually did it. */
+export function gitIdentityArgs(git: GitRunner): string[] | null {
+  const read = (key: string): string => {
+    try {
+      return String(git(["config", key], process.cwd()) ?? "").trim();
+    } catch {
+      return "";
+    }
+  };
+  const name = read("user.name");
+  const email = read("user.email");
+  if (!name || !email) return null;
+  return ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
+}
+
+export function pushFailureReason(url: string, branch: string, err: unknown): string {
+  const raw = String(err instanceof Error ? err.message : err);
+  const text = raw.toLowerCase();
+  const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
+  // The forge usually explains itself on a `remote:` line; the classifier's job is to
+  // not lose it. Reporting "protected branch, ask for Maintainer" against a GitLab group
+  // that had simply banned the branch NAME sent one real user to ask for permissions
+  // they already had.
+  const remoteSaid = raw
+    .split("\n")
+    .filter((l) => l.trim().startsWith("remote:"))
+    .map((l) => l.replace(/^\s*remote:\s*/, "").trim())
+    .filter(Boolean);
+  const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
+  // both branch-name and commit-message rules phrase themselves the same way, so the
+  // subject has to decide which knob to point at
+  if (pattern && !/commit message/i.test(raw)) {
+    return (
+      `${url} rejected the branch NAME "${branch}": this project requires branch names ` +
+      `matching ${pattern}. Nothing is wrong with your access. Re-run with a prefix that fits, ` +
+      'for example --branch-prefix "HEM-1-", and it is remembered for every skill shared later.'
+    );
+  }
+  if (text.includes("protected") || text.includes("not allowed to push")) {
+    return (
+      `${url} refused the push to ${branch}: ${remoteSaid[0] ?? "that branch is protected"}. ` +
+      "Ask for the role that lets you write there, or have someone who has it push once."
+    );
+  }
+  if (/commit message/i.test(raw) && /pattern|does not|must/i.test(raw)) {
+    return (
+      `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ` +
+      'Re-run with a prefix that satisfies it, for example --commit-prefix "HEM-1", and it is ' +
+      "remembered for every skill shared later."
+    );
+  }
+  if (/author|committer/i.test(raw) && /email|not a .* user|restricted/i.test(raw)) {
+    return (
+      `${url} rejected the commit AUTHOR: ${remoteSaid[0] ?? detail} The commit is made with ` +
+      "your own `git config user.name/user.email`, so set those to the address your forge knows you by."
+    );
+  }
+  if (text.includes("pre-receive hook declined")) {
+    return (
+      `${url} refused the push to ${branch} through a server-side rule: ` +
+      `${remoteSaid.join(" ") || detail}`
+    );
+  }
+  if (text.includes("non-fast-forward") || text.includes("fetch first") || text.includes("rejected")) {
+    return `${url} moved while this ran; nothing was changed. Re-run /handbook:init and it will pick the new state up.`;
+  }
+  return `pushing the scaffold to ${branch} on ${url} failed: ${detail}`;
+}
+
 export interface InitResult {
   ok: boolean;
   name?: string;
   url?: string;
   home?: string;
   error?: string;
+  // the branch the scaffold was pushed to: a scaffold branch, or the default branch
+  // itself when the repository was empty and there was nothing to open a request against
+  branch?: string;
+  // the repository's own default branch, which the request targets
+  defaultBranch?: string;
+  // true when the scaffold is already on the default branch (empty repo), false when it
+  // is waiting in a merge request
+  merged?: boolean;
+  prUrl?: string;
+  manualUrl?: string;
+  prError?: string;
+  // files the repository already had, left untouched
+  skipped?: string[];
 }
 
 export function initTeamRepo(
@@ -361,6 +502,10 @@ export function initTeamRepo(
   home: string = handbookHome(),
   git: GitRunner = runGit,
   now: string = new Date().toISOString(),
+  forge: ForgeRunner = runForge,
+  branchPrefix: string = DEFAULT_BRANCH_PREFIX,
+  commitPrefix = "",
+  withCi = false,
 ): InitResult {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   try {
@@ -381,51 +526,144 @@ export function initTeamRepo(
       error: `a team repository is already configured; run /handbook:leave (or edit ${join(home, "config.json")}) to re-init`,
     };
   }
-  const workdir = handbookWorkdir("handbook-init-");
-  writeSkeleton(workdir, skeletonFiles(marketplaceName, url, hostFromUrl(url)));
-  try {
-    git(["init", "-b", "main"], workdir);
-    git(["add", "-A"], workdir);
-    git(
-      ["-c", "user.name=TeamHandbook", "-c", "user.email=TeamHandbook@localhost", "commit", "-m", "chore: scaffold team skill base"],
-      workdir,
-    );
-    git(["remote", "add", "origin", "--", url], workdir);
-    git(["push", "-u", "origin", "main"], workdir);
-  } catch (err) {
-    return { ok: false, error: `git failed (is the target repo empty and reachable?): ${String(err)}` };
+  const identity = gitIdentityArgs(git);
+  if (!identity) {
+    return {
+      ok: false,
+      error:
+        "git user.name/user.email is not set — the scaffold commit would have an author " +
+        "your forge is likely to reject. Run `git config --global user.name \"Your Name\"` " +
+        "and `git config --global user.email you@example.com`, then re-run.",
+    };
   }
-  saveTeamConfig({ repoUrl: url, marketplaceName, initializedAt: now }, home);
-  return { ok: true, name: marketplaceName, url, home };
+  const workdir = handbookWorkdir("handbook-init-");
+  const repoDir = join(workdir, "repo");
+  // Clone first, always. Building a fresh history locally and pushing it assumed the
+  // remote was empty, and most teams create the repository through their organisation's
+  // tooling, which leaves a README in it. It also assumed the branch was called main,
+  // while plenty of organisations still default to master — and a scaffold pushed to
+  // the wrong branch is a handbook whose version-bump CI never runs.
+  try {
+    git(["clone", "--", url, repoDir], workdir);
+  } catch (err) {
+    return { ok: false, error: cloneFailureReason(url, err) };
+  }
+  let branch: string;
+  try {
+    branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
+  } catch {
+    branch = "";
+  }
+  if (!branch) {
+    return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
+  }
+  // No commits yet means no branch to open a request against; that is the only case
+  // where the scaffold has to land on the default branch directly.
+  let isEmptyRepo: boolean;
+  try {
+    isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
+  } catch {
+    isEmptyRepo = true;
+  }
+  if (existsSync(join(repoDir, ".claude-plugin", "marketplace.json"))) {
+    return {
+      ok: false,
+      error: `${url} is already a handbook — run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
+    };
+  }
+  const { skipped } = writeSkeletonPreserving(
+    repoDir,
+    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi),
+  );
+  // An empty repository has no default branch to open a merge request against, so the
+  // first commit has to go straight to it. Everywhere else the scaffold arrives the way
+  // every skill will: a branch and a merge request. Pushing to the default branch needs
+  // write access to a protected branch, which on most teams means Maintainer, while
+  // pushing a new branch is something almost any member can do — and the person setting
+  // the handbook up is not necessarily the person who administers the project.
+  const scaffoldBranch = `${branchPrefix}scaffold`;
+  const direct = isEmptyRepo;
+  try {
+    if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
+    git(["add", "-A"], repoDir);
+    // Commit as the developer, not as a stand-in address. publish has always done this
+    // because a forge that checks commit authors rejects anything else, and init pushes
+    // to the same repository under the same rules. "TeamHandbook@localhost" was an
+    // author waiting to be refused.
+    git([...identity, "commit", "-m", `${commitPrefix}chore: scaffold team skill base`], repoDir);
+    git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
+  } catch (err) {
+    return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
+  }
+  let prUrl: string | null = null;
+  let prError: string | undefined;
+  if (!direct) {
+    const opened = openPr(
+      url,
+      scaffoldBranch,
+      "chore: set up the team handbook",
+      "Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest, the version-bump CI, and a `skills/` directory.\n\nOpened by TeamHandbook.",
+      repoDir,
+      forge,
+    );
+    prUrl = opened.url;
+    prError = opened.error;
+  }
+  saveTeamConfig(
+    {
+      repoUrl: url,
+      marketplaceName,
+      initializedAt: now,
+      ...(branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {}),
+      ...(commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}),
+    },
+    home,
+  );
+  return {
+    ok: true,
+    name: marketplaceName,
+    url,
+    home,
+    branch: direct ? branch : scaffoldBranch,
+    defaultBranch: branch,
+    merged: direct,
+    skipped,
+    ...(prUrl ? { prUrl } : {}),
+    ...(prError ? { prError } : {}),
+    ...(!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
+  };
 }
 
 export function formatInitSuccess(result: InitResult): string {
   const isGitHub = !!result.url && (hostFromUrl(result.url) ?? "").includes("github");
-  const ciNote = isGitHub
-    ? [
-        "",
-        "  ⚠ CI: the version-bump workflow needs write access. In the repo settings enable",
-        "    'Read and write permissions' for Actions (Settings → Actions → General).",
-        "    If the default branch is protected, also allow Actions to bypass the push",
-        "    restriction (branch-protection rule) or push with a PAT secret — otherwise the",
-        "    bump push is rejected on every merge and teammates stop updating.",
-      ]
-    : [
-        "",
-        "  ⚠ CI (required for auto-distribution): the version-bump job needs a project access",
-        "    token with the `write_repository` scope, a Maintainer role, and permission to push",
-        "    to the protected default branch. Add it as a CI/CD variable named TEAMHANDBOOK_CI_TOKEN",
-        "    (Settings → CI/CD → Variables). Until it's set the job is SKIPPED and teammates'",
-        "    marketplace copies won't refresh — nothing else will warn you.",
-      ];
+  // No CI note any more: the version bump travels inside each skill's own merge
+  // request, so nothing here depends on a token or on write access to a protected
+  // branch. `--with-ci` is for repositories where skills also arrive by hand.
   return [
     "Team skill base initialized.",
     "",
     `  repository:  ${result.url}`,
     `  marketplace: ${result.name}`,
-    "  pushed:      marketplace skeleton + version-bump CI (branch main)",
+    ...(result.merged
+      ? [`  pushed:      marketplace skeleton + version-bump CI, straight to ${result.branch} (the repo was empty)`]
+      : [
+          `  pushed:      marketplace skeleton + version-bump CI to branch ${result.branch}`,
+          result.prUrl
+            ? `  request:     ${result.prUrl}`
+            : `  request:     open it here — ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
+          ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
+          `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`,
+        ]),
+    // Silence is the wrong signal here: a team whose README already said something
+    // keeps it, and then the join instructions live nowhere unless they are told.
+    ...(result.skipped?.length
+      ? [
+          `  left alone: ${result.skipped.join(", ")} (already had content)`,
+          "               the handbook README explains how teammates join — if yours was kept,",
+          "               copy that section across from skills/README.md or this output.",
+        ]
+      : []),
     `  config:      team repo saved to ${join(result.home ?? "", "config.json")}`,
-    ...ciNote,
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The
@@ -441,7 +679,10 @@ export function formatInitSuccess(result: InitResult): string {
     "  If you have never pushed to this host from this machine, sign in once,",
     "  in your own terminal (it opens a browser):",
     "",
-    "    brew install gh && gh auth login        # GitHub over HTTPS",
+    isGitHub
+      ? "    brew install gh && gh auth login        # GitHub over HTTPS"
+      : "    brew install glab && glab auth login    # GitLab over HTTPS,",
+    ...(isGitHub ? [] : ["                                            # or add an SSH key to your account"]),
     "",
     "  Then, in Claude Code:",
     "",

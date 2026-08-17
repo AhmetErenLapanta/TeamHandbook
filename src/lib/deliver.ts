@@ -39,6 +39,7 @@ export interface DeliverResult {
   deliveredTo?: string;
   branch?: string;
   prUrl?: string;
+  version?: string;
   manualUrl?: string;
   error?: string;
   // set when solo delivery could not use the origin project and fell back to cwd
@@ -136,6 +137,7 @@ function deliverToTeam(
     deliveredTo,
     branch: published.branch,
     prUrl: published.prUrl,
+    ...(published.version ? { version: published.version } : {}),
     manualUrl: published.manualUrl,
     ...(published.prError ? { prError: published.prError } : {}),
   };

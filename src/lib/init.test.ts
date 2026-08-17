@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   assertSafeGitUrl,
   clearTeamConfig,
@@ -16,6 +16,7 @@ import {
   saveTeamConfig,
   skeletonFiles,
   writeSkeleton,
+  pushFailureReason,
 } from "./init.js";
 
 describe("nonInteractiveEnv", () => {
@@ -100,7 +101,7 @@ describe("hostFromUrl / repoNameFromUrl", () => {
 
 describe("skeletonFiles", () => {
   it("emits marketplace, plugin, readme, bump script, and skills placeholder", () => {
-    const files = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", "gitlab.acme.com");
+    const files = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", "gitlab.acme.com", "", true);
     const marketplace = JSON.parse(files[".claude-plugin/marketplace.json"]!);
     expect(marketplace.name).toBe("acme-skills");
     expect(marketplace.plugins[0]).toMatchObject({ name: "acme-skills", source: "./" });
@@ -115,40 +116,39 @@ describe("skeletonFiles", () => {
   });
 
   it("guards the GitLab CI job on the token so it skips instead of failing", () => {
-    const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com");
+    const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", true);
     expect(gitlab[".gitlab-ci.yml"]).toContain("$TEAMHANDBOOK_CI_TOKEN");
   });
 
-  it("documents the CI setup its distribution depends on in the generated README, per host", () => {
-    expect(skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]).toContain(
-      "TEAMHANDBOOK_CI_TOKEN",
-    );
-    expect(skeletonFiles("s", "git@github.com:a/s.git", "github.com")["README.md"]).toContain(
-      "Read and write permissions",
-    );
+  it("tells the reader how updates reach them, without depending on CI to make it true", () => {
+    const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;
+
+    expect(readme).toContain("raises the version in");
+    expect(readme).toContain("Nothing here needs CI, an access token");
+    expect(readme).toContain("--with-ci");
   });
 
   it("discloses the consumer hook's local state write in the generated README", () => {
-    expect(skeletonFiles("s", "git@github.com:a/s.git", "github.com")["README.md"]).toContain(
+    expect(skeletonFiles("s", "git@github.com:a/s.git", "github.com", "", true)["README.md"]).toContain(
       "~/.teamhandbook-consumer",
     );
   });
 
   it("picks GitHub Actions for github hosts and GitLab CI otherwise", () => {
-    const github = skeletonFiles("s", "git@github.com:a/s.git", "github.com");
+    const github = skeletonFiles("s", "git@github.com:a/s.git", "github.com", "", true);
     expect(github[".github/workflows/version-bump.yml"]).toBeDefined();
     expect(github[".gitlab-ci.yml"]).toBeUndefined();
-    const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com");
+    const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", true);
     expect(gitlab[".gitlab-ci.yml"]).toBeDefined();
     expect(gitlab[".github/workflows/version-bump.yml"]).toBeUndefined();
-    const unknown = skeletonFiles("s", "git@code.acme.com:a/s.git", "code.acme.com");
+    const unknown = skeletonFiles("s", "git@code.acme.com:a/s.git", "code.acme.com", "", true);
     expect(unknown[".gitlab-ci.yml"]).toBeDefined();
   });
 
   it("produces a bump script that actually increments the patch version", () => {
     const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
     try {
-      writeSkeleton(dir, skeletonFiles("s", "git@github.com:a/s.git", "github.com"));
+      writeSkeleton(dir, skeletonFiles("s", "git@github.com:a/s.git", "github.com", "", true));
       execFileSync("node", ["scripts/bump-version.mjs"], { cwd: dir });
       const plugin = JSON.parse(readFileSync(join(dir, ".claude-plugin/plugin.json"), "utf8"));
       expect(plugin.version).toBe("0.1.1");
@@ -181,6 +181,127 @@ describe("team config", () => {
   });
 });
 
+describe("pushFailureReason", () => {
+  const url = "git@gitlab.com:acme/handbook.git";
+
+  it("given a protected branch, when reported, then it names the role, not the command", () => {
+    const reason = pushFailureReason(url, "master", new Error("remote: You are not allowed to push code to protected branches on this project.\n! [remote rejected] master -> master (pre-receive hook declined)"));
+
+    // the forge's own sentence survives rather than being replaced by our guess
+    expect(reason).toContain("not allowed to push code to protected branches");
+    expect(reason).toContain("Ask for the role");
+  });
+
+  it("given the remote moved underneath, when reported, then it says nothing was changed", () => {
+    const reason = pushFailureReason(url, "main", new Error("! [rejected] main -> main (non-fast-forward)"));
+
+    expect(reason).toContain("nothing was changed");
+  });
+});
+
+describe("pushFailureReason — a branch name the forge forbids", () => {
+  // verbatim from a real GitLab group: the branch NAME was the problem, and the
+  // previous message blamed protection and told the user to ask for Maintainer
+  const gitlab = new Error(
+    "remote: GitLab: Branch name 'handbook/scaffold' does not follow the pattern '((^(HSP|HEM|HEA|HEG)-\\d+(-[a-z0-9]+)*)|dev|master|prod|hotfix(.*))$'\n ! [remote rejected] HEAD -> handbook/scaffold (pre-receive hook declined)",
+  );
+
+  it("quotes the pattern and says access is not the problem", () => {
+    const reason = pushFailureReason("git@gitlab.com:acme/handbook.git", "handbook/scaffold", gitlab);
+
+    expect(reason).toContain("rejected the branch NAME");
+    expect(reason).toContain("HSP|HEM|HEA|HEG");
+    expect(reason).toContain("Nothing is wrong with your access");
+    expect(reason).toContain("--branch-prefix");
+    expect(reason).not.toContain("Maintainer");
+  });
+
+  it("keeps the remote's own words when a hook declines for some other reason", () => {
+    const reason = pushFailureReason(
+      "git@gitlab.com:acme/handbook.git",
+      "handbook/scaffold",
+      new Error("remote: GitLab: Commit message does not follow the pattern\n ! [remote rejected] HEAD -> x (pre-receive hook declined)"),
+    );
+
+    expect(reason).toContain("Commit message does not follow the pattern");
+  });
+});
+
+describe("pushFailureReason — the other rules a forge enforces", () => {
+  const url = "git@gitlab.com:acme/handbook.git";
+
+  it("given the commit message is refused, when reported, then it points at the commit prefix", () => {
+    const reason = pushFailureReason(url, "handbook/scaffold", new Error(
+      "remote: GitLab: Commit message does not follow the pattern '^(HEM)-\\d+'\n ! [remote rejected] HEAD -> x (pre-receive hook declined)",
+    ));
+
+    expect(reason).toContain("rejected the commit MESSAGE");
+    expect(reason).toContain("--commit-prefix");
+  });
+
+  it("given the commit author is refused, when reported, then it points at the developer's git config", () => {
+    const reason = pushFailureReason(url, "handbook/scaffold", new Error(
+      "remote: GitLab: Author 'TeamHandbook@localhost' is not a GitLab user\n ! [remote rejected] HEAD -> x (pre-receive hook declined)",
+    ));
+
+    expect(reason).toContain("rejected the commit AUTHOR");
+    expect(reason).toContain("git config user.name/user.email");
+  });
+
+  it("given a rule nobody anticipated, when reported, then the forge's own words are kept", () => {
+    const reason = pushFailureReason(url, "handbook/scaffold", new Error(
+      "remote: GitLab: Your push was rejected by a rule we have never seen\n ! [remote rejected] HEAD -> x (pre-receive hook declined)",
+    ));
+
+    expect(reason).toContain("Your push was rejected by a rule we have never seen");
+  });
+});
+
+describe("skeletonFiles — CI is no longer part of the default scaffold", () => {
+  it("given a plain init, when scaffolded, then no CI file is produced", () => {
+    const gitlab = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com");
+    const github = skeletonFiles("acme", "https://github.com/acme/handbook", "github.com");
+
+    // the bump rides in the skill's own request now, so nothing here needs a token or
+    // the right to push to a protected branch
+    expect(gitlab[".gitlab-ci.yml"]).toBeUndefined();
+    expect(github[".github/workflows/version-bump.yml"]).toBeUndefined();
+  });
+
+  it("given the CI is asked for, when scaffolded, then the right one for the host appears", () => {
+    const gitlab = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "", true);
+    const github = skeletonFiles("acme", "https://github.com/acme/handbook", "github.com", "", true);
+
+    expect(gitlab[".gitlab-ci.yml"]).toBeDefined();
+    expect(gitlab[".github/workflows/version-bump.yml"]).toBeUndefined();
+    expect(github[".github/workflows/version-bump.yml"]).toBeDefined();
+  });
+});
+
+describe("skeletonFiles — the CI has to survive the same rules the developer does", () => {
+  it("given a commit prefix, when scaffolded, then the version-bump job uses it too", () => {
+    const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "HEM-1 ", true);
+
+    const ci = files[".gitlab-ci.yml"]!;
+    // the bump commit is made on the server and faces the same message rule
+    expect(ci).toContain('git commit -am "HEM-1 ci: bump plugin version"');
+    // and the guard that stops it looping has to match the prefixed message
+    expect(ci).toContain("$CI_COMMIT_MESSAGE !~ /^HEM-1 ci: bump plugin version/");
+  });
+
+  it("given no prefix, when scaffolded, then nothing changes for teams without such rules", () => {
+    const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "", true);
+
+    expect(files[".gitlab-ci.yml"]).toContain('git commit -am "ci: bump plugin version"');
+  });
+
+  it("given a GitHub repo, when scaffolded, then its workflow carries the prefix as well", () => {
+    const files = skeletonFiles("acme", "https://github.com/acme/handbook", "github.com", "HEM-1 ", true);
+
+    expect(files[".github/workflows/version-bump.yml"]).toContain('git commit -am "HEM-1 ci: bump plugin version"');
+  });
+});
+
 describe("initTeamRepo", () => {
   function bareRepo(): string {
     const dir = mkdtempSync(join(tmpdir(), "handbook-team-"));
@@ -210,29 +331,113 @@ describe("initTeamRepo", () => {
   });
 
   it("derives the marketplace name from the repo URL when none is given", () => {
-    const result = initTeamRepo("git@gitlab.acme.com:team/Payments-Skills.git", undefined, home, () => {});
+    // the injected runner stands in for git, so it has to answer the one question the
+    // flow asks it: which branch does this remote call default
+    const result = initTeamRepo("git@gitlab.acme.com:team/Payments-Skills.git", undefined, home, (args) => {
+      // the stub stands in for git, so it answers the two things the flow asks it:
+      // whose commit this is, and what the remote calls its default branch
+      if (args[0] === "config") return args[1] === "user.name" ? "Dev" : "dev@acme.com";
+      if (args[0] === "symbolic-ref") return "main";
+      return "";
+    });
     expect(result).toMatchObject({ ok: true, name: "payments-skills" });
   });
 
-  it("fails without touching config when the push is rejected", () => {
-    const remote = bareRepo();
+  /** A repository as an organisation's tooling actually hands it over: one commit, a
+   * README with something in it, and a default branch that is not called main. */
+  function seededRepo(branch: string, files: Record<string, string> = { "README.md": "# our repo\n" }): string {
+    const remote = mkdtempSync(join(tmpdir(), "handbook-team-"));
+    execFileSync("git", ["init", "--bare", "-b", branch, remote]);
+    const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
     try {
-      const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
-      try {
-        execFileSync("git", ["-C", seed, "init", "-b", "main"]);
-        writeFileSync(join(seed, "existing.txt"), "occupied");
-        execFileSync("git", ["-C", seed, "add", "-A"]);
-        execFileSync(
-          "git",
-          ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"],
-        );
-        execFileSync("git", ["-C", seed, "push", remote, "main"]);
-      } finally {
-        rmSync(seed, { recursive: true, force: true });
+      execFileSync("git", ["-C", seed, "init", "-b", branch]);
+      for (const [path, body] of Object.entries(files)) {
+        mkdirSync(dirname(join(seed, path)), { recursive: true });
+        writeFileSync(join(seed, path), body);
       }
+      execFileSync("git", ["-C", seed, "add", "-A"]);
+      execFileSync("git", ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
+      execFileSync("git", ["-C", seed, "push", remote, branch]);
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+    }
+    return remote;
+  }
+
+  // no gh/glab on a test machine: the branch is pushed and the link is manual
+  const noForge = () => {
+    const err = new Error("spawn gh ENOENT") as Error & { code: string };
+    err.code = "ENOENT";
+    throw err;
+  };
+
+  it("given a repo with a README on master, when initialized, then the scaffold waits in a request and master is untouched", () => {
+    const remote = seededRepo("master");
+    try {
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, noForge);
+
+      expect(result).toMatchObject({ ok: true, branch: "handbook/scaffold", defaultBranch: "master", merged: false });
+      expect(result.skipped).toContain("README.md");
+      // pushing to a protected default branch is what most members cannot do; the
+      // scaffold branch is what they can
+      const onDefault = execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "master"], { encoding: "utf8" });
+      expect(onDefault).not.toContain(".claude-plugin/marketplace.json");
+      const onBranch = execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "handbook/scaffold"], { encoding: "utf8" });
+      expect(onBranch).toContain(".claude-plugin/marketplace.json");
+      expect(onBranch).toContain("scripts/bump-version.mjs");
+      const readme = execFileSync("git", ["-C", remote, "show", "master:README.md"], { encoding: "utf8" });
+      expect(readme).toBe("# our repo\n");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given no forge CLI, when initialized, then it hands back a link to open the request by hand", () => {
+    const remote = seededRepo("master");
+    try {
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, noForge);
+
+      expect(result.prUrl).toBeUndefined();
+      expect(result.prError).toContain("not installed");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given an empty repository, when initialized, then the scaffold goes straight to the default branch", () => {
+    const remote = mkdtempSync(join(tmpdir(), "handbook-team-"));
+    execFileSync("git", ["init", "--bare", "-b", "master", remote]);
+    try {
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, noForge);
+
+      // nothing to open a request against yet, so this is the one case that must push direct
+      expect(result).toMatchObject({ ok: true, branch: "master", merged: true });
+      const files = execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "master"], { encoding: "utf8" });
+      expect(files).toContain(".claude-plugin/marketplace.json");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a placeholder README with nothing in it, when initialized, then the handbook README fills it", () => {
+    const remote = seededRepo("master", { "README.md": "\n" });
+    try {
+      initTeamRepo(remote, "acme-skills", home, undefined, undefined, noForge);
+
+      const readme = execFileSync("git", ["-C", remote, "show", "handbook/scaffold:README.md"], { encoding: "utf8" });
+      expect(readme).toContain("Your team's skill base");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a repo that is already a handbook, when initialized, then it says to join instead", () => {
+    const remote = seededRepo("main", { ".claude-plugin/marketplace.json": '{"name":"acme"}\n' });
+    try {
       const result = initTeamRepo(remote, "acme-skills", home);
+
       expect(result.ok).toBe(false);
-      expect(result.error).toContain("git failed");
+      expect(result.error).toContain("/handbook:join");
       expect(loadTeamConfig(home)).toBeNull();
     } finally {
       rmSync(remote, { recursive: true, force: true });
