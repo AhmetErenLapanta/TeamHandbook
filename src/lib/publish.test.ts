@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrBody, buildPrTitle, manualPrUrl, publishCandidate } from "./publish.js";
+import { bumpPluginVersion, buildPrBody, buildPrTitle, manualPrUrl, publishCandidate } from "./publish.js";
 import { runGit } from "./init.js";
 import type { GitRunner } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
@@ -75,6 +75,32 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(candidateDir, { recursive: true, force: true });
   if (remote) rmSync(remote, { recursive: true, force: true });
+});
+
+describe("bumpPluginVersion", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "handbook-bump-"));
+    mkdirSync(join(dir, ".claude-plugin"), { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("given a skill is being published, when the version is bumped, then teammates have something to fetch", () => {
+    writeFileSync(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "acme", version: "0.1.0" }));
+
+    expect(bumpPluginVersion(dir)).toBe("0.1.1");
+    expect(JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")).version).toBe("0.1.1");
+  });
+
+  it("given the scaffold has not been merged yet, when bumping, then publishing still goes ahead", () => {
+    expect(bumpPluginVersion(dir)).toBeNull();
+  });
+
+  it("given a version that is not three numbers, when bumping, then it is left alone rather than mangled", () => {
+    writeFileSync(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "acme", version: "next" }));
+
+    expect(bumpPluginVersion(dir)).toBeNull();
+  });
 });
 
 describe("buildPrTitle / buildPrBody", () => {

@@ -129,6 +129,13 @@ function normalizeRemoteUrl(raw) {
   return s.slice(0, slash).toLowerCase() + s.slice(slash);
 }
 
+// src/lib/forge.ts
+function hostFromUrl(url) {
+  const normalized = normalizeRemoteUrl(url);
+  if (!normalized) return null;
+  return normalized.slice(0, normalized.indexOf("/"));
+}
+
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -136,11 +143,6 @@ function loadTeamConfig(home = handbookHome()) {
     return team;
   }
   return null;
-}
-function hostFromUrl(url) {
-  const normalized = normalizeRemoteUrl(url);
-  if (!normalized) return null;
-  return normalized.slice(0, normalized.indexOf("/"));
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {

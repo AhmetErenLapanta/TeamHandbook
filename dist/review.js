@@ -8,7 +8,7 @@ import { homedir as homedir2 } from "node:os";
 import { basename as basename2, join as join6 } from "node:path";
 
 // src/lib/init.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -145,6 +145,57 @@ function uniqueSlug(baseSlug, taken) {
   return slug;
 }
 
+// src/lib/forge.ts
+import { execFileSync } from "node:child_process";
+function hostFromUrl(url) {
+  const normalized = normalizeRemoteUrl(url);
+  if (!normalized) return null;
+  return normalized.slice(0, normalized.indexOf("/"));
+}
+var FORGE_TIMEOUT_MS = 6e4;
+function runForge(tool, args, cwd) {
+  return execFileSync(tool, args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    env: nonInteractiveEnv(),
+    timeout: FORGE_TIMEOUT_MS
+  });
+}
+function manualPrUrl(repoUrl, branch) {
+  const normalized = normalizeRemoteUrl(repoUrl);
+  if (!normalized) return null;
+  const host = hostFromUrl(repoUrl);
+  if (host && host.includes("github")) {
+    return `https://${normalized}/pull/new/${branch}`;
+  }
+  return `https://${normalized}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${encodeURIComponent(branch)}`;
+}
+function extractUrl(output) {
+  return output.match(/https?:\/\/\S+/)?.[0] ?? null;
+}
+function openPr(repoUrl, branch, title, body, repoDir, forge) {
+  const host = hostFromUrl(repoUrl);
+  try {
+    const out = host && host.includes("github") ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+      "glab",
+      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+      repoDir
+    );
+    return { url: extractUrl(out) };
+  } catch (err) {
+    const e = err;
+    const tool = host && host.includes("github") ? "gh" : "glab";
+    let reason;
+    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
+    else {
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      reason = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+    }
+    return { url: null, error: reason };
+  }
+}
+
 // src/lib/init.ts
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
@@ -153,17 +204,19 @@ function assertSafeGitUrl(url) {
     throw new Error(`unsafe or unsupported git URL: ${url}`);
   }
 }
+var DEFAULT_BRANCH_PREFIX = "handbook/";
+function teamCommitPrefix(config) {
+  return config?.commitPrefix?.trim() ? `${config.commitPrefix.trim()} ` : "";
+}
+function teamBranchPrefix(config) {
+  return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
   if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
     return team;
   }
   return null;
-}
-function hostFromUrl(url) {
-  const normalized = normalizeRemoteUrl(url);
-  if (!normalized) return null;
-  return normalized.slice(0, normalized.indexOf("/"));
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -188,7 +241,7 @@ function nonInteractiveEnv(base = process.env) {
 var GIT_TIMEOUT_MS = 12e4;
 function runGit(args, cwd) {
   try {
-    return execFileSync("git", args, {
+    return execFileSync2("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
@@ -206,19 +259,8 @@ function runGit(args, cwd) {
 }
 
 // src/lib/publish.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
 import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join4 } from "node:path";
-var FORGE_TIMEOUT_MS = 6e4;
-function runForge(tool, args, cwd) {
-  return execFileSync2(tool, args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    env: nonInteractiveEnv(),
-    timeout: FORGE_TIMEOUT_MS
-  });
-}
 function buildPrTitle(slug) {
   return `feat(skill): add ${slug}`;
 }
@@ -265,15 +307,6 @@ function buildPrBody(meta, grounded) {
   lines.push("", "---", "Opened by TeamHandbook after human approval of the candidate.");
   return lines.join("\n");
 }
-function manualPrUrl(repoUrl, branch) {
-  const normalized = normalizeRemoteUrl(repoUrl);
-  if (!normalized) return null;
-  const host = hostFromUrl(repoUrl);
-  if (host && host.includes("github")) {
-    return `https://${normalized}/pull/new/${branch}`;
-  }
-  return `https://${normalized}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${encodeURIComponent(branch)}`;
-}
 function readGroundedCase(candidateDir) {
   try {
     const parsed = JSON.parse(readFileSync3(join4(candidateDir, "grounded-case.json"), "utf8"));
@@ -284,31 +317,23 @@ function readGroundedCase(candidateDir) {
   }
   return null;
 }
-function extractUrl(output) {
-  return output.match(/https?:\/\/\S+/)?.[0] ?? null;
-}
-function openPr(repoUrl, branch, title, body, repoDir, forge) {
-  const host = hostFromUrl(repoUrl);
+function bumpPluginVersion(repoDir) {
+  const file = join4(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const out = host && host.includes("github") ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
-      "glab",
-      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
-      repoDir
-    );
-    return { url: extractUrl(out) };
-  } catch (err) {
-    const e = err;
-    const tool = host && host.includes("github") ? "gh" : "glab";
-    let reason;
-    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
-    else {
-      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      reason = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
-    }
-    return { url: null, error: reason };
+    const plugin = JSON.parse(readFileSync3(file, "utf8"));
+    const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    parts[2] = (parts[2] ?? 0) + 1;
+    plugin.version = parts.join(".");
+    writeFileSync2(file, JSON.stringify(plugin, null, 2) + "\n");
+    return plugin.version;
+  } catch {
+    return null;
   }
 }
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
+  const prefix = teamBranchPrefix(team);
+  const commitPrefix = teamCommitPrefix(team);
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -355,9 +380,10 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     }
     const slug = uniqueSlug(
       meta.slug,
-      (s) => existsSync2(join4(repoDir, "skills", s)) || remoteBranches.has(`handbook/${s}`)
+      (s) => existsSync2(join4(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
     );
-    const branch = `handbook/${slug}`;
+    const branch = `${prefix}${slug}`;
+    let version = null;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
     try {
@@ -373,20 +399,22 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
           join4(repoDir, skillDir, "grounded-case.json")
         );
       }
+      version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identityArgs, "commit", "-m", title], repoDir);
+      git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
       git(["push", "-u", "origin", branch], repoDir);
     } catch (err) {
       return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir));
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url };
+    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url, ...version ? { version } : {} };
     return {
       ok: true,
       branch,
       skillDir,
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0,
+      ...version ? { version } : {},
       ...pr.error ? { prError: pr.error } : {}
     };
   } finally {
@@ -590,6 +618,7 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
     deliveredTo,
     branch: published.branch,
     prUrl: published.prUrl,
+    ...published.version ? { version: published.version } : {},
     manualUrl: published.manualUrl,
     ...published.prError ? { prError: published.prError } : {}
   };
@@ -789,12 +818,14 @@ function approveOne(home, slug, to) {
     return;
   }
   if (result.mode === "team") {
+    const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
     if (result.prUrl) {
-      console.log(`Approved "${slug}" and opened a PR to the team skill base: ${result.prUrl}`);
+      console.log(`Shared "${slug}" with the team: ${result.prUrl}`);
+      console.log(`Merge that request and every teammate gets it at their next session.${bump}`);
     } else {
-      console.log(`Approved "${slug}" and pushed branch ${result.branch} to the team skill base.`);
-      if (result.prError) console.log(`Auto-PR skipped (${result.prError}) \u2014 install/authenticate gh or glab to open PRs automatically.`);
-      if (result.manualUrl) console.log(`Open the PR here: ${result.manualUrl}`);
+      console.log(`Shared "${slug}" with the team on branch ${result.branch}.${bump}`);
+      if (result.prError) console.log(`It could not open the request for you (${result.prError}) \u2014 install and sign in to gh or glab and it will next time.`);
+      if (result.manualUrl) console.log(`Open it here, then merge: ${result.manualUrl}`);
     }
   } else if (result.mode === "personal") {
     console.log(

@@ -5,23 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
 import type { GroundedCase } from "./distill.js";
-import { assertSafeGitUrl, hostFromUrl, nonInteractiveEnv, runGit } from "./init.js";
+import { assertSafeGitUrl, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
+import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import type { ForgeRunner } from "./forge.js";
+export { manualPrUrl, runForge } from "./forge.js";
+export type { ForgeRunner } from "./forge.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
-
-export type ForgeRunner = (tool: "gh" | "glab", args: string[], cwd: string) => string;
-
-export const FORGE_TIMEOUT_MS = 60_000;
-
-export function runForge(tool: "gh" | "glab", args: string[], cwd: string): string {
-  return execFileSync(tool, args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    env: nonInteractiveEnv(),
-    timeout: FORGE_TIMEOUT_MS,
-  });
-}
 
 export function buildPrTitle(slug: string): string {
   return `feat(skill): add ${slug}`;
@@ -73,16 +63,6 @@ export function buildPrBody(meta: CandidateMeta, grounded: GroundedCase | null):
   return lines.join("\n");
 }
 
-export function manualPrUrl(repoUrl: string, branch: string): string | null {
-  const normalized = normalizeRemoteUrl(repoUrl);
-  if (!normalized) return null;
-  const host = hostFromUrl(repoUrl);
-  if (host && host.includes("github")) {
-    return `https://${normalized}/pull/new/${branch}`;
-  }
-  return `https://${normalized}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${encodeURIComponent(branch)}`;
-}
-
 function readGroundedCase(candidateDir: string): GroundedCase | null {
   try {
     const parsed = JSON.parse(readFileSync(join(candidateDir, "grounded-case.json"), "utf8"));
@@ -100,54 +80,46 @@ function readGroundedCase(candidateDir: string): GroundedCase | null {
   return null;
 }
 
-function extractUrl(output: string): string | null {
-  return output.match(/https?:\/\/\S+/)?.[0] ?? null;
-}
-
-function openPr(
-  repoUrl: string,
-  branch: string,
-  title: string,
-  body: string,
-  repoDir: string,
-  forge: ForgeRunner,
-): { url: string | null; error?: string } {
-  const host = hostFromUrl(repoUrl);
-  try {
-    const out =
-      host && host.includes("github")
-        ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir)
-        : forge(
-            "glab",
-            ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
-            repoDir,
-          );
-    return { url: extractUrl(out) };
-  } catch (err) {
-    // The branch is already pushed, so this is a soft failure (fall back to a manual
-    // link) — but surface WHY, so the user isn't left guessing that gh/glab just
-    // needs installing or `gh auth login`.
-    const e = err as { code?: string; stderr?: string; message?: string };
-    const tool = host && host.includes("github") ? "gh" : "glab";
-    let reason: string;
-    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
-    else {
-      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      reason = (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
-    }
-    return { url: null, error: reason };
-  }
-}
-
 export interface PublishOutcome {
   ok: boolean;
   branch?: string;
   skillDir?: string;
+  // the version this request raises the plugin to, which is what makes teammates fetch
+  version?: string;
   prUrl?: string;
   manualUrl?: string;
   error?: string;
   // why the forge CLI couldn't auto-open the PR (branch is pushed; link is manual)
   prError?: string;
+}
+
+/**
+ * Raise the plugin version in the same request as the skill.
+ *
+ * The version string is Claude Code's only signal that a plugin moved: without a new
+ * one, a merged skill sits in the repository and no teammate's copy ever fetches it.
+ * That used to be CI's job, which meant a token with write access, permission to push
+ * to a protected default branch, and a commit made on the server under whatever rules
+ * the organisation enforces — three things to get right before anyone receives
+ * anything, and nothing to warn you when they were not. Bumping it here costs nothing,
+ * arrives atomically with the skill it belongs to, and gets reviewed alongside it.
+ *
+ * Best-effort by design: a repository whose scaffold has not been merged yet has no
+ * plugin.json, and a skill is still worth publishing.
+ */
+export function bumpPluginVersion(repoDir: string): string | null {
+  const file = join(repoDir, ".claude-plugin", "plugin.json");
+  try {
+    const plugin = JSON.parse(readFileSync(file, "utf8"));
+    const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    parts[2] = (parts[2] ?? 0) + 1;
+    plugin.version = parts.join(".");
+    writeFileSync(file, JSON.stringify(plugin, null, 2) + "\n");
+    return plugin.version;
+  } catch {
+    return null;
+  }
 }
 
 export function publishCandidate(
@@ -157,6 +129,8 @@ export function publishCandidate(
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
 ): PublishOutcome {
+  const prefix = teamBranchPrefix(team);
+  const commitPrefix = teamCommitPrefix(team);
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -226,9 +200,10 @@ export function publishCandidate(
     }
     const slug = uniqueSlug(
       meta.slug,
-      (s) => existsSync(join(repoDir, "skills", s)) || remoteBranches.has(`handbook/${s}`),
+      (s) => existsSync(join(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`),
     );
-    const branch = `handbook/${slug}`;
+    const branch = `${prefix}${slug}`;
+    let version: string | null = null;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
     try {
@@ -246,20 +221,22 @@ export function publishCandidate(
           join(repoDir, skillDir, "grounded-case.json"),
         );
       }
+      version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identityArgs, "commit", "-m", title], repoDir);
+      git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
       git(["push", "-u", "origin", branch], repoDir);
     } catch (err) {
       return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir));
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url };
+    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url, ...(version ? { version } : {}) };
     return {
       ok: true,
       branch,
       skillDir,
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined,
+      ...(version ? { version } : {}),
       ...(pr.error ? { prError: pr.error } : {}),
     };
   } finally {
