@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.5] - 2026-08-18
+
+- **The scaffold stopped shipping a script nothing runs.** `scripts/bump-version.mjs` is
+  what the version-bump CI job executes, and 0.3.4 moved the bump into each skill's own
+  merge request so that job is no longer needed. The script stayed behind anyway, putting
+  a file in every team's repository that nothing would ever run. It ships with
+  `--with-ci` now, next to the job that calls it. The default scaffold is six files: the
+  two manifests that make the repository a marketplace, the dependency-free notice that
+  tells teammates new skills arrived, and a README at each level.
+
 ## [0.3.4] - 2026-08-17
 
 Setting up a real team handbook, on a real company GitLab, found four things in a row.
