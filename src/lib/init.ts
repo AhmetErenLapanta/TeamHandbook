@@ -194,8 +194,7 @@ Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 
 Nothing here needs CI, an access token, or the right to push to a protected branch. If
 skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
-job that bumps the version on merge instead; \`scripts/bump-version.mjs\` is what it
-runs, and it is left in place either way.
+job that bumps the version on merge instead, together with the script it runs.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills" notice; it records the skill names it has already shown you under
@@ -276,7 +275,6 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
         2,
       ) + "\n",
     "README.md": readmeFor(name, url),
-    "scripts/bump-version.mjs": BUMP_SCRIPT,
     "skills/README.md":
       "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
   };
@@ -287,6 +285,9 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
   // available for repositories where skills also arrive by hand, and it faces the same
   // commit-message rules the developer does.
   if (withCi) {
+    // The script only exists to be run by that job. Shipping it without the job put a
+    // file in every team's repository that nothing on earth would ever execute.
+    files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
     const bump = `${commitPrefix}ci: bump plugin version`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);

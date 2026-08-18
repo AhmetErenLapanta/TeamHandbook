@@ -258,6 +258,19 @@ describe("pushFailureReason — the other rules a forge enforces", () => {
 });
 
 describe("skeletonFiles — CI is no longer part of the default scaffold", () => {
+  it("given a plain init, when scaffolded, then the bump script is not shipped either", () => {
+    const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com");
+
+    // nothing in the default scaffold would ever run it
+    expect(files["scripts/bump-version.mjs"]).toBeUndefined();
+  });
+
+  it("given the CI is asked for, when scaffolded, then the script it runs comes with it", () => {
+    const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "", true);
+
+    expect(files["scripts/bump-version.mjs"]).toBeDefined();
+  });
+
   it("given a plain init, when scaffolded, then no CI file is produced", () => {
     const gitlab = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com");
     const github = skeletonFiles("acme", "https://github.com/acme/handbook", "github.com");
@@ -319,7 +332,6 @@ describe("initTeamRepo", () => {
       });
       expect(files).toContain(".claude-plugin/marketplace.json");
       expect(files).toContain(".claude-plugin/plugin.json");
-      expect(files).toContain("scripts/bump-version.mjs");
       expect(loadTeamConfig(home)).toEqual({
         repoUrl: remote,
         marketplaceName: "acme-skills",
@@ -384,7 +396,6 @@ describe("initTeamRepo", () => {
       expect(onDefault).not.toContain(".claude-plugin/marketplace.json");
       const onBranch = execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "handbook/scaffold"], { encoding: "utf8" });
       expect(onBranch).toContain(".claude-plugin/marketplace.json");
-      expect(onBranch).toContain("scripts/bump-version.mjs");
       const readme = execFileSync("git", ["-C", remote, "show", "master:README.md"], { encoding: "utf8" });
       expect(readme).toBe("# our repo\n");
     } finally {
