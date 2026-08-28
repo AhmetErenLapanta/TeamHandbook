@@ -171,6 +171,12 @@ function nonInteractiveEnv(base = process.env) {
   };
 }
 var GIT_TIMEOUT_MS = 12e4;
+function summarizeGitStderr(stderr, tailLines = 3) {
+  const lines = stderr.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim());
+  const explanations = lines.filter((line) => line.trim().startsWith("remote:"));
+  const tail = lines.slice(-tailLines).filter((line) => !explanations.includes(line));
+  return [...explanations, ...tail].join("\n");
+}
 function runGit(args, cwd) {
   try {
     return execFileSync2("git", args, {
@@ -183,8 +189,7 @@ function runGit(args, cwd) {
   } catch (err) {
     const stderr = err?.stderr;
     if (typeof stderr === "string" && stderr.trim()) {
-      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-      throw new Error(`git ${args[0]} failed: ${tail}`);
+      throw new Error(`git ${args[0]} failed: ${summarizeGitStderr(stderr)}`);
     }
     throw err;
   }

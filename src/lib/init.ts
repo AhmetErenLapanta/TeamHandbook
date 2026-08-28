@@ -363,6 +363,24 @@ export function nonInteractiveEnv(
 
 export const GIT_TIMEOUT_MS = 120_000;
 
+/**
+ * The part of git's stderr worth keeping. The tail carries the verdict ("[remote
+ * rejected] … pre-receive hook declined"), but a forge explains itself on `remote:`
+ * lines ABOVE it, and a real rejection is four lines, so a plain tail cut away the
+ * only sentence that said WHY. pushFailureReason reads those lines to name the rule
+ * that fired; it was classifying a message they had already been removed from, and
+ * every test for it passed a two-line error a tail can never truncate.
+ */
+export function summarizeGitStderr(stderr: string, tailLines = 3): string {
+  const lines = stderr
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim());
+  const explanations = lines.filter((line) => line.trim().startsWith("remote:"));
+  const tail = lines.slice(-tailLines).filter((line) => !explanations.includes(line));
+  return [...explanations, ...tail].join("\n");
+}
+
 export function runGit(args: string[], cwd: string): string {
   try {
     return execFileSync("git", args, {
@@ -378,8 +396,7 @@ export function runGit(args: string[], cwd: string): string {
     // and a half-hour diagnosis for the user.
     const stderr = (err as { stderr?: unknown })?.stderr;
     if (typeof stderr === "string" && stderr.trim()) {
-      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-      throw new Error(`git ${args[0]} failed: ${tail}`);
+      throw new Error(`git ${args[0]} failed: ${summarizeGitStderr(stderr)}`);
     }
     throw err;
   }
@@ -422,7 +439,15 @@ export function gitIdentityArgs(git: GitRunner): string[] | null {
   return ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
 }
 
-export function pushFailureReason(url: string, branch: string, err: unknown): string {
+const INIT_BRANCH_PREFIX_FIX =
+  'Re-run with a prefix that fits, for example --branch-prefix "HEM-1-", and it is remembered for every skill shared later.';
+
+export function pushFailureReason(
+  url: string,
+  branch: string,
+  err: unknown,
+  branchPrefixFix: string = INIT_BRANCH_PREFIX_FIX,
+): string {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
@@ -441,8 +466,7 @@ export function pushFailureReason(url: string, branch: string, err: unknown): st
   if (pattern && !/commit message/i.test(raw)) {
     return (
       `${url} rejected the branch NAME "${branch}": this project requires branch names ` +
-      `matching ${pattern}. Nothing is wrong with your access. Re-run with a prefix that fits, ` +
-      'for example --branch-prefix "HEM-1-", and it is remembered for every skill shared later.'
+      `matching ${pattern}. Nothing is wrong with your access. ${branchPrefixFix}`
     );
   }
   if (text.includes("protected") || text.includes("not allowed to push")) {

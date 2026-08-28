@@ -3,7 +3,14 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bumpPluginVersion, buildPrBody, buildPrTitle, manualPrUrl, publishCandidate } from "./publish.js";
+import {
+  bumpPluginVersion,
+  buildPrBody,
+  buildPrTitle,
+  manualPrUrl,
+  publishCandidate,
+  retryBranchAfterNameRejection,
+} from "./publish.js";
 import { runGit } from "./init.js";
 import type { GitRunner } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
@@ -296,7 +303,7 @@ describe("publishCandidate", () => {
     expect(result.branch).toBe("handbook/fix-npm-test-2");
   });
 
-  it("fails with git's actual reason when the push is rejected", () => {
+  it("fails with the rule that refused the push, not just the fact that it failed", () => {
     remote = teamRepo();
     const failingGit: GitRunner = (args, cwd) => {
       if (args[0] === "push") throw new Error("git push failed: remote: protected branch");
@@ -310,6 +317,117 @@ describe("publishCandidate", () => {
       () => "",
     );
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("git push failed");
+    expect(result.error).toContain("protected");
+    expect(result.error).toContain("refused the push");
+  });
+});
+
+describe("retryBranchAfterNameRejection", () => {
+  const pattern = "((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$";
+  const rejection = new Error(
+    `git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the pattern '${pattern}'`,
+  );
+  const team = { repoUrl: "git@gitlab.com:acme/qa.git", marketplaceName: "qa", commitPrefix: "HQA-000" };
+
+  it("given the team's own commit prefix, when the branch name is refused, then it is reused for the branch", () => {
+    const retry = retryBranchAfterNameRejection(rejection, team, "fix-npm-test");
+
+    expect(retry).toEqual({ branch: "HQA-000-fix-npm-test", prefix: "HQA-000-" });
+  });
+
+  it("given a slug already suffixed past a collision, when derived, then the name still satisfies the rule", () => {
+    const retry = retryBranchAfterNameRejection(rejection, team, "fix-npm-test-2");
+
+    expect(retry).toEqual({ branch: "HQA-000-fix-npm-test-2", prefix: "HQA-000-" });
+  });
+
+  it("given no commit prefix to derive from, when the branch name is refused, then nothing is invented", () => {
+    const retry = retryBranchAfterNameRejection(rejection, { ...team, commitPrefix: undefined }, "fix-npm-test");
+
+    expect(retry).toBeNull();
+  });
+
+  it("given a derived name the pattern still rejects, when checked, then it is not pushed", () => {
+    const refusesEverything = new Error(
+      "git push failed: remote: GitLab: Branch name 'handbook/x' does not follow the pattern '^release/.+$'",
+    );
+
+    expect(retryBranchAfterNameRejection(refusesEverything, team, "fix-npm-test")).toBeNull();
+  });
+
+  it("given the commit MESSAGE was refused, when classified, then the branch name is left alone", () => {
+    const commitRule = new Error(
+      "git push failed: remote: GitLab: Commit message does not follow the pattern '^HQA-\\d+'",
+    );
+
+    expect(retryBranchAfterNameRejection(commitRule, team, "fix-npm-test")).toBeNull();
+  });
+
+  it("given an unparseable pattern, when evaluated, then the rule is reported instead of guessed at", () => {
+    const broken = new Error(
+      "git push failed: remote: GitLab: Branch name 'handbook/x' does not follow the pattern '([unclosed'",
+    );
+
+    expect(retryBranchAfterNameRejection(broken, team, "fix-npm-test")).toBeNull();
+  });
+});
+
+describe("publishCandidate — a forge that polices branch names", () => {
+  it("given the default branch name is refused, when publishing, then it retries under the team's prefix and reports it", () => {
+    remote = teamRepo();
+    let pushes = 0;
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") {
+        pushes += 1;
+        if (pushes === 1) {
+          throw new Error(
+            "git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the " +
+              "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'\n" +
+              "To gitlab.com:acme/qa-handbook.git\n" +
+              " ! [remote rejected] handbook/fix-npm-test -> handbook/fix-npm-test (pre-receive hook declined)\n" +
+              "error: failed to push some refs to 'gitlab.com:acme/qa-handbook.git'",
+          );
+        }
+      }
+      return runGit(args, cwd);
+    };
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t", commitPrefix: "HQA-000" },
+      policedGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.branch).toBe("HQA-000-fix-npm-test");
+    expect(result.learnedBranchPrefix).toBe("HQA-000-");
+    expect(pushes).toBe(2);
+  });
+
+  it("given nothing to derive a prefix from, when the branch name is refused, then the rule and the fix are reported", () => {
+    remote = teamRepo();
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") {
+        throw new Error(
+          "git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the " +
+            "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
+        );
+      }
+      return runGit(args, cwd);
+    };
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      policedGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("rejected the branch NAME");
+    expect(result.error).toContain("branchPrefix");
   });
 });

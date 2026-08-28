@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
 import type { GroundedCase } from "./distill.js";
-import { assertSafeGitUrl, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
+import { assertSafeGitUrl, pushFailureReason, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
 import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, runForge } from "./forge.js";
@@ -88,6 +88,9 @@ export interface PublishOutcome {
   version?: string;
   prUrl?: string;
   manualUrl?: string;
+  // the branch prefix this push had to discover because the forge refused the default
+  // one; the caller persists it so no later skill pays the same round trip
+  learnedBranchPrefix?: string;
   error?: string;
   // why the forge CLI couldn't auto-open the PR (branch is pushed; link is manual)
   prError?: string;
@@ -120,6 +123,45 @@ export function bumpPluginVersion(repoDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+// A forge that polices branch names quotes its rule when it refuses one. Patterns are
+// short; anything longer is not a naming rule we can reason about, and building a
+// RegExp out of it is not worth the risk.
+const MAX_BRANCH_PATTERN_CHARS = 200;
+
+/**
+ * The branch to retry with after a forge rejected the branch NAME, or null when there
+ * is nothing to derive one from.
+ *
+ * This is not a guess. A group that polices branch names almost always polices commit
+ * messages too, so the team already answered this question during /handbook:init and
+ * had the answer accepted by the same server — it is sitting in the config as
+ * commitPrefix. And the rejection quotes the pattern, so the derived name is checked
+ * against it before anything is pushed: if it does not match, we do not push it and the
+ * developer gets the rule instead. The alternative was sending them to hand-edit
+ * ~/.teamhandbook/config.json, which is a file a sandboxed session may not be allowed
+ * to touch at all.
+ */
+export function retryBranchAfterNameRejection(
+  err: unknown,
+  team: TeamConfig,
+  slug: string,
+): { branch: string; prefix: string } | null {
+  const raw = String(err instanceof Error ? err.message : err);
+  if (/commit message/i.test(raw)) return null; // a different rule, a different knob
+  const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
+  if (!pattern || pattern.length > MAX_BRANCH_PATTERN_CHARS) return null;
+  const commitPrefix = team.commitPrefix?.trim().replace(/-+$/, "");
+  if (!commitPrefix) return null;
+  const prefix = `${commitPrefix}-`;
+  const branch = `${prefix}${slug}`;
+  try {
+    if (!new RegExp(pattern).test(branch)) return null;
+  } catch {
+    return null; // not a regex we can evaluate; report the rule instead of guessing
+  }
+  return { branch, prefix };
 }
 
 export function publishCandidate(
@@ -202,7 +244,8 @@ export function publishCandidate(
       meta.slug,
       (s) => existsSync(join(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`),
     );
-    const branch = `${prefix}${slug}`;
+    let branch = `${prefix}${slug}`;
+    let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
@@ -224,13 +267,42 @@ export function publishCandidate(
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      git(["push", "-u", "origin", branch], repoDir);
+      try {
+        git(["push", "-u", "origin", branch], repoDir);
+      } catch (err) {
+        // The default branch name is the one thing here the team never chose. If the
+        // forge refuses it, recover from what they did choose rather than failing and
+        // asking them to configure something first.
+        const retry = retryBranchAfterNameRejection(err, team, slug);
+        // uniqueSlug picked this slug against the DEFAULT prefix, so it cannot have
+        // ruled out a collision under the derived one. Refusing to push is the safe
+        // half; the other half is that the message the developer then gets — set
+        // branchPrefix and approve again — is also the fix, because the next run picks
+        // the slug against the right names and suffixes past it.
+        if (!retry || remoteBranches.has(retry.branch)) throw err;
+        git(["branch", "-m", retry.branch], repoDir);
+        git(["push", "-u", "origin", retry.branch], repoDir);
+        branch = retry.branch;
+        learnedBranchPrefix = retry.prefix;
+      }
     } catch (err) {
-      return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
+      return {
+        ok: false,
+        error: pushFailureReason(
+          team.repoUrl,
+          branch,
+          err,
+          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits ' +
+            '(for example "HEM-1-"), then approve again; it is remembered for every skill after that.',
+        ),
+      };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir));
+    const learned = learnedBranchPrefix ? { learnedBranchPrefix } : {};
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url, ...(version ? { version } : {}) };
+    if (pr.url) {
+      return { ok: true, branch, skillDir, prUrl: pr.url, ...(version ? { version } : {}), ...learned };
+    }
     return {
       ok: true,
       branch,
@@ -238,6 +310,7 @@ export function publishCandidate(
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined,
       ...(version ? { version } : {}),
       ...(pr.error ? { prError: pr.error } : {}),
+      ...learned,
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });

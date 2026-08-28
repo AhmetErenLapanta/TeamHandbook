@@ -116,6 +116,14 @@ function approveOne(home: string, slug: string, to?: DeliveryTarget): void {
       if (result.prError) console.log(`It could not open the request for you (${result.prError}) — install and sign in to gh or glab and it will next time.`);
       if (result.manualUrl) console.log(`Open it here, then merge: ${result.manualUrl}`);
     }
+    // The branch is not named what it would normally be named. Say so once, rather than
+    // letting the reader find a different name than the one they expected in the forge.
+    if (result.learnedBranchPrefix) {
+      console.log(
+        `Your project refuses the default branch name, so this went out as ${result.branch}. ` +
+          "That prefix is remembered — later skills use it straight away.",
+      );
+    }
   } else if (result.mode === "personal") {
     console.log(
       `Kept "${slug}" for you at ${result.deliveredTo}. ` +

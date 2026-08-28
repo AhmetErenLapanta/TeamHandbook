@@ -17,6 +17,7 @@ import {
   skeletonFiles,
   writeSkeleton,
   pushFailureReason,
+  summarizeGitStderr,
 } from "./init.js";
 
 describe("nonInteractiveEnv", () => {
@@ -196,6 +197,49 @@ describe("pushFailureReason", () => {
     const reason = pushFailureReason(url, "main", new Error("! [rejected] main -> main (non-fast-forward)"));
 
     expect(reason).toContain("nothing was changed");
+  });
+});
+
+describe("summarizeGitStderr", () => {
+  // verbatim shape of a real GitLab push rejection: the reason arrives on a `remote:`
+  // line and git adds THREE lines of verdict after it, so the reason is exactly what a
+  // tail-of-three cut away. A customer hit this and had to re-clone the repo by hand to
+  // find out which rule had fired.
+  const rejection = [
+    "remote: GitLab: Branch name 'handbook/gateway-camelcase' does not follow the pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
+    "To gitlab.com:acme/qa-handbook.git",
+    " ! [remote rejected] handbook/gateway-camelcase -> handbook/gateway-camelcase (pre-receive hook declined)",
+    "error: failed to push some refs to 'gitlab.com:acme/qa-handbook.git'",
+  ].join("\n");
+
+  it("given a rejection whose reason sits above the tail, when summarized, then the reason survives", () => {
+    const summary = summarizeGitStderr(rejection);
+
+    expect(summary).toContain("does not follow the pattern");
+    expect(summary).toContain("pre-receive hook declined");
+  });
+
+  it("given a summarized rejection, when classified, then the rule is named rather than guessed at", () => {
+    const reason = pushFailureReason(
+      "git@gitlab.com:acme/qa-handbook.git",
+      "handbook/gateway-camelcase",
+      new Error(`git push failed: ${summarizeGitStderr(rejection)}`),
+    );
+
+    expect(reason).toContain("rejected the branch NAME");
+    expect(reason).toContain("HQA");
+  });
+
+  it("given stderr with no remote explanation, when summarized, then the tail is still reported", () => {
+    const summary = summarizeGitStderr("fatal: could not read Username for 'https://gitlab.com'");
+
+    expect(summary).toContain("could not read Username");
+  });
+
+  it("given a reason that also appears in the tail, when summarized, then it is not repeated", () => {
+    const summary = summarizeGitStderr("remote: GitLab: nope\nTo gitlab.com:acme/x.git");
+
+    expect(summary.match(/remote: GitLab: nope/g)).toHaveLength(1);
   });
 });
 

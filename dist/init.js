@@ -438,6 +438,12 @@ function nonInteractiveEnv(base = process.env) {
   };
 }
 var GIT_TIMEOUT_MS = 12e4;
+function summarizeGitStderr(stderr, tailLines = 3) {
+  const lines = stderr.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim());
+  const explanations = lines.filter((line) => line.trim().startsWith("remote:"));
+  const tail = lines.slice(-tailLines).filter((line) => !explanations.includes(line));
+  return [...explanations, ...tail].join("\n");
+}
 function runGit(args, cwd) {
   try {
     return execFileSync3("git", args, {
@@ -450,8 +456,7 @@ function runGit(args, cwd) {
   } catch (err) {
     const stderr = err?.stderr;
     if (typeof stderr === "string" && stderr.trim()) {
-      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-      throw new Error(`git ${args[0]} failed: ${tail}`);
+      throw new Error(`git ${args[0]} failed: ${summarizeGitStderr(stderr)}`);
     }
     throw err;
   }
@@ -469,14 +474,15 @@ function gitIdentityArgs(git) {
   if (!name || !email) return null;
   return ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
 }
-function pushFailureReason(url, branch, err) {
+var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "HEM-1-", and it is remembered for every skill shared later.';
+function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX) {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
   const remoteSaid = raw.split("\n").filter((l) => l.trim().startsWith("remote:")).map((l) => l.replace(/^\s*remote:\s*/, "").trim()).filter(Boolean);
   const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
   if (pattern && !/commit message/i.test(raw)) {
-    return `${url} rejected the branch NAME "${branch}": this project requires branch names matching ${pattern}. Nothing is wrong with your access. Re-run with a prefix that fits, for example --branch-prefix "HEM-1-", and it is remembered for every skill shared later.`;
+    return `${url} rejected the branch NAME "${branch}": this project requires branch names matching ${pattern}. Nothing is wrong with your access. ${branchPrefixFix}`;
   }
   if (text.includes("protected") || text.includes("not allowed to push")) {
     return `${url} refused the push to ${branch}: ${remoteSaid[0] ?? "that branch is protected"}. Ask for the role that lets you write there, or have someone who has it push once.`;
