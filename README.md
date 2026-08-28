@@ -11,8 +11,9 @@ type it, the command that failed, the fix that followed. It reads the session on
 ends, and your next one opens with what it found:
 
 ```
-handbook learned from your last session: "no-db-mocks-in-integration-tests"
-(correction, 8/10) - run /handbook:review
+TeamHandbook learned from your last session: "no-db-mocks-in-integration-tests"
+(correction, 8/10) - keep it for yourself, add it to this project, or share it with
+the team: run /handbook:review.
 ```
 
 Nothing is kept until you say so, and you decide who gets it:
@@ -52,28 +53,31 @@ That's the whole install. It works **solo immediately** - no team setup required
 words, the failing command, the fix:
 
 ```
-candidate: no-db-mocks-in-integration-tests  [correction]  [scope: team]  [pending]
+candidate: no-db-mocks-in-integration-tests  [correction]  [scope: team]  [status: pending]
 score:     8/10  (recurrence 1, unfindability 2, generality 2, durability 2, costOfError 1)
+repeated:  you have told Claude this in 3 sessions
 
 ── grounded case ──
 you said:  "we never mock the DB in integration tests here - use the testcontainer fixture"
 expect:    Integration tests start a testcontainer instead of a mock.
 ```
 
-Then you choose where it lives:
+Then it asks where each skill goes and you pick an answer:
 
-```
-/handbook:review approve <slug> --to personal   # ~/.claude/skills - every project, just you
-/handbook:review approve <slug> --to project    # this project's .claude/skills - commit it and it travels
-/handbook:review approve <slug> --to team       # a pull request to your team's handbook
-```
+- **Keep for yourself** - `~/.claude/skills`: every project you open, nobody else
+- **Add to this project** - this directory's `.claude/skills`: commit it and it travels
+  with the code
+- **Share with the team** - a pull request to your team's handbook
+- **Reject** - not worth keeping, and it can be silenced for good
+
+You can also ask for an edit before deciding, or leave one pending and come back.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/handbook:review` | Keep, scope, share, edit, or reject each skill. **The only way anything ships.** |
-| `/handbook:demo` | Walk the whole loop in two minutes on a scratch project. |
+| `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |
 | `/handbook:learn` | Capture something on demand instead of waiting for the session to end. |
 | `/handbook:status` | Queue, ledger, how often your skills actually fired, config. |
 | `/handbook:doctor` | Diagnose node, the `claude` CLI, hooks, config, team repo. |
@@ -117,20 +121,25 @@ approving it.
 
 ## Sharing it with your team
 
-The team handbook is just a git repo. One person creates it:
+The team handbook is just a git repo, and it can already have files in it. One person
+sets it up:
 
 ```
 /handbook:init
 ```
 
-That prints the one command everyone else runs:
+The scaffold arrives as an ordinary request against the default branch - nothing is live
+for anyone until a human merges it. Once merged, that person passes on the one command
+everyone else runs:
 
 ```
 /handbook:join <repo-url>
 ```
 
 From then on, an approved skill arrives as an ordinary pull request - reviewed like
-code, merged like code, and delivered by Claude Code's own marketplace.
+code, merged like code, and delivered by Claude Code's own marketplace. That same request
+also raises the handbook's version, which is what makes each teammate's copy fetch it:
+no CI, no access token, and no right to push to a protected branch.
 
 Teammates who only want to *read* the handbook don't need this plugin at all:
 

@@ -71,7 +71,8 @@ half of the demo worth watching.
 > Start Claude Code in `/tmp/handbook-demo` once more. It should open with:
 >
 > ```
-> TeamHandbook learned from your last session: "..." (correction, 8/10) - run /handbook:review
+> TeamHandbook learned from your last session: "..." (correction, 8/10) - keep it for
+> yourself, add it to this project, or share it with the team: run /handbook:review.
 > ```
 >
 > Run `/handbook:review` and read the candidate:
