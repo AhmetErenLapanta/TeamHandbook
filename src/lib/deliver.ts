@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { loadTeamConfig, runGit } from "./init.js";
+import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd, uniqueSlug } from "./distill.js";
 import { publishCandidate, runForge } from "./publish.js";
@@ -49,6 +49,9 @@ export interface DeliverResult {
   originProject?: string;
   // why a team PR could not be auto-opened (the branch is pushed; link is manual)
   prError?: string;
+  // the branch prefix the forge forced this push to adopt, once, so it can be said out
+  // loud instead of the branch quietly having a different name than the one reported
+  learnedBranchPrefix?: string;
 }
 
 export function approveAndDeliver(
@@ -80,7 +83,13 @@ export function approveAndDeliver(
         error: "no team configured — run /handbook:init or /handbook:join first, or approve with --to personal",
       };
     }
-    return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge);
+    // The forge taught us its branch rule the only way it can: by refusing one. Remember
+    // it here, where the home directory is known, so the next skill goes out first time.
+    if (delivered.learnedBranchPrefix) {
+      saveTeamConfig({ ...team, branchPrefix: delivered.learnedBranchPrefix }, home);
+    }
+    return delivered;
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir);
   return deliverSolo(dir, meta, fallbackCwd, decidedAt);
@@ -140,6 +149,7 @@ function deliverToTeam(
     ...(published.version ? { version: published.version } : {}),
     manualUrl: published.manualUrl,
     ...(published.prError ? { prError: published.prError } : {}),
+    ...(published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {}),
   };
 }
 

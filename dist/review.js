@@ -1,14 +1,15 @@
 // src/cli/review.ts
 import { readFileSync as readFileSync8 } from "node:fs";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // src/lib/deliver.ts
 import { copyFileSync as copyFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename as basename2, join as join6 } from "node:path";
+import { basename as basename2, join as join7 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
+import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -218,6 +219,20 @@ function loadTeamConfig(home = handbookHome()) {
   }
   return null;
 }
+var BrokenConfigError = class extends Error {
+  constructor(home) {
+    super(
+      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+    );
+    this.name = "BrokenConfigError";
+  }
+};
+function saveTeamConfig(team, home = handbookHome()) {
+  if (configIsBroken(home)) throw new BrokenConfigError(home);
+  const config = readConfigFile(home);
+  config.team = team;
+  writeFileAtomic(join4(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+}
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
     hooks: {
@@ -239,6 +254,12 @@ function nonInteractiveEnv(base = process.env) {
   };
 }
 var GIT_TIMEOUT_MS = 12e4;
+function summarizeGitStderr(stderr, tailLines = 3) {
+  const lines = stderr.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim());
+  const explanations = lines.filter((line) => line.trim().startsWith("remote:"));
+  const tail = lines.slice(-tailLines).filter((line) => !explanations.includes(line));
+  return [...explanations, ...tail].join("\n");
+}
 function runGit(args, cwd) {
   try {
     return execFileSync2("git", args, {
@@ -251,16 +272,42 @@ function runGit(args, cwd) {
   } catch (err) {
     const stderr = err?.stderr;
     if (typeof stderr === "string" && stderr.trim()) {
-      const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-      throw new Error(`git ${args[0]} failed: ${tail}`);
+      throw new Error(`git ${args[0]} failed: ${summarizeGitStderr(stderr)}`);
     }
     throw err;
   }
 }
+var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
+function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX) {
+  const raw = String(err instanceof Error ? err.message : err);
+  const text = raw.toLowerCase();
+  const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
+  const remoteSaid = raw.split("\n").filter((l) => l.trim().startsWith("remote:")).map((l) => l.replace(/^\s*remote:\s*/, "").trim()).filter(Boolean);
+  const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
+  if (pattern && !/commit message/i.test(raw)) {
+    return `${url} rejected the branch NAME "${branch}": this project requires branch names matching ${pattern}. Nothing is wrong with your access. ${branchPrefixFix}`;
+  }
+  if (text.includes("protected") || text.includes("not allowed to push")) {
+    return `${url} refused the push to ${branch}: ${remoteSaid[0] ?? "that branch is protected"}. Ask for the role that lets you write there, or have someone who has it push once.`;
+  }
+  if (/commit message/i.test(raw) && /pattern|does not|must/i.test(raw)) {
+    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.`;
+  }
+  if (/author|committer/i.test(raw) && /email|not a .* user|restricted/i.test(raw)) {
+    return `${url} rejected the commit AUTHOR: ${remoteSaid[0] ?? detail} The commit is made with your own \`git config user.name/user.email\`, so set those to the address your forge knows you by.`;
+  }
+  if (text.includes("pre-receive hook declined")) {
+    return `${url} refused the push to ${branch} through a server-side rule: ${remoteSaid.join(" ") || detail}`;
+  }
+  if (text.includes("non-fast-forward") || text.includes("fetch first") || text.includes("rejected")) {
+    return `${url} moved while this ran; nothing was changed. Re-run /handbook:init and it will pick the new state up.`;
+  }
+  return `pushing the scaffold to ${branch} on ${url} failed: ${detail}`;
+}
 
 // src/lib/publish.ts
 import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 function buildPrTitle(slug) {
   return `feat(skill): add ${slug}`;
 }
@@ -309,7 +356,7 @@ function buildPrBody(meta, grounded) {
 }
 function readGroundedCase(candidateDir) {
   try {
-    const parsed = JSON.parse(readFileSync3(join4(candidateDir, "grounded-case.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync3(join5(candidateDir, "grounded-case.json"), "utf8"));
     if (typeof parsed?.command === "string" && typeof parsed?.error === "string" && typeof parsed?.expect === "string" && Array.isArray(parsed?.edits)) {
       return parsed;
     }
@@ -318,7 +365,7 @@ function readGroundedCase(candidateDir) {
   return null;
 }
 function bumpPluginVersion(repoDir) {
-  const file = join4(repoDir, ".claude-plugin", "plugin.json");
+  const file = join5(repoDir, ".claude-plugin", "plugin.json");
   try {
     const plugin = JSON.parse(readFileSync3(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
@@ -331,6 +378,23 @@ function bumpPluginVersion(repoDir) {
     return null;
   }
 }
+var MAX_BRANCH_PATTERN_CHARS = 200;
+function retryBranchAfterNameRejection(err, team, slug) {
+  const raw = String(err instanceof Error ? err.message : err);
+  if (/commit message/i.test(raw)) return null;
+  const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
+  if (!pattern || pattern.length > MAX_BRANCH_PATTERN_CHARS) return null;
+  const commitPrefix = team.commitPrefix?.trim().replace(/-+$/, "");
+  if (!commitPrefix) return null;
+  const prefix = `${commitPrefix}-`;
+  const branch = `${prefix}${slug}`;
+  try {
+    if (!new RegExp(pattern).test(branch)) return null;
+  } catch {
+    return null;
+  }
+  return { branch, prefix };
+}
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
@@ -341,7 +405,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   }
   let candidateSkillMd;
   try {
-    candidateSkillMd = readFileSync3(join4(candidateDir, "SKILL.md"), "utf8");
+    candidateSkillMd = readFileSync3(join5(candidateDir, "SKILL.md"), "utf8");
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
@@ -363,7 +427,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   }
   const identityArgs = typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== "" ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`] : [];
   const workdir = handbookWorkdir("handbook-publish-");
-  const repoDir = join4(workdir, "repo");
+  const repoDir = join5(workdir, "repo");
   try {
     try {
       git(["clone", "--depth", "1", "--", team.repoUrl, repoDir], workdir);
@@ -380,42 +444,64 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     }
     const slug = uniqueSlug(
       meta.slug,
-      (s) => existsSync2(join4(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
+      (s) => existsSync2(join5(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
     );
-    const branch = `${prefix}${slug}`;
+    let branch = `${prefix}${slug}`;
+    let learnedBranchPrefix;
     let version = null;
     const skillDir = `skills/${slug}`;
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
-      mkdirSync3(join4(repoDir, skillDir), { recursive: true });
+      mkdirSync3(join5(repoDir, skillDir), { recursive: true });
       writeFileSync2(
-        join4(repoDir, skillDir, "SKILL.md"),
+        join5(repoDir, skillDir, "SKILL.md"),
         slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
       );
-      if (existsSync2(join4(candidateDir, "grounded-case.json"))) {
+      if (existsSync2(join5(candidateDir, "grounded-case.json"))) {
         copyFileSync(
-          join4(candidateDir, "grounded-case.json"),
-          join4(repoDir, skillDir, "grounded-case.json")
+          join5(candidateDir, "grounded-case.json"),
+          join5(repoDir, skillDir, "grounded-case.json")
         );
       }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      git(["push", "-u", "origin", branch], repoDir);
+      try {
+        git(["push", "-u", "origin", branch], repoDir);
+      } catch (err) {
+        const retry = retryBranchAfterNameRejection(err, team, slug);
+        if (!retry || remoteBranches.has(retry.branch)) throw err;
+        git(["branch", "-m", retry.branch], repoDir);
+        git(["push", "-u", "origin", retry.branch], repoDir);
+        branch = retry.branch;
+        learnedBranchPrefix = retry.prefix;
+      }
     } catch (err) {
-      return { ok: false, error: `git push failed (branch ${branch}): ${String(err)}` };
+      return {
+        ok: false,
+        error: pushFailureReason(
+          team.repoUrl,
+          branch,
+          err,
+          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits (for example "TEAM-1-"), then approve again; it is remembered for every skill after that.'
+        )
+      };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir));
+    const learned = learnedBranchPrefix ? { learnedBranchPrefix } : {};
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (pr.url) return { ok: true, branch, skillDir, prUrl: pr.url, ...version ? { version } : {} };
+    if (pr.url) {
+      return { ok: true, branch, skillDir, prUrl: pr.url, ...version ? { version } : {}, ...learned };
+    }
     return {
       ok: true,
       branch,
       skillDir,
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0,
       ...version ? { version } : {},
-      ...pr.error ? { prError: pr.error } : {}
+      ...pr.error ? { prError: pr.error } : {},
+      ...learned
     };
   } finally {
     rmSync3(workdir, { recursive: true, force: true });
@@ -424,13 +510,13 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
 
 // src/lib/queue.ts
 import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
-import { basename, join as join5 } from "node:path";
+import { basename, join as join6 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
 }
 function candidateMetaFile(dir) {
-  return join5(dir, "candidate.json");
+  return join6(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
   writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
@@ -438,7 +524,7 @@ function writeCandidateMeta(dir, meta) {
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync4(join5(dir, "SKILL.md"), "utf8");
+    md = readFileSync4(join6(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -446,7 +532,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync4(join5(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync4(join6(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -483,7 +569,7 @@ function listCandidates(home = handbookHome(), status) {
   } catch {
     return [];
   }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join5(base, e.name))).filter((m) => m !== null);
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join6(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
@@ -504,7 +590,7 @@ function originProject(meta) {
 }
 function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
-  const dir = join5(candidatesDir(home), slug);
+  const dir = join6(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
   if (meta.status !== "pending") {
@@ -520,7 +606,7 @@ function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Da
   return { ok: true, meta: updated, muted };
 }
 function mutedFile(home = handbookHome()) {
-  return join5(home, "muted.json");
+  return join6(home, "muted.json");
 }
 function loadMutedFingerprints(home = handbookHome()) {
   try {
@@ -551,10 +637,10 @@ function formatCandidateList(metas, now = Date.now()) {
 
 // src/lib/deliver.ts
 function soloSkillsDir(projectCwd) {
-  return join6(projectCwd, ".claude", "skills");
+  return join7(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join6(homedir2(), ".claude", "skills");
+  return join7(homedir2(), ".claude", "skills");
 }
 function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync3) {
   const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
@@ -562,7 +648,7 @@ function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync3) {
 }
 function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir()) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
-  const dir = join6(candidatesDir(home), slug);
+  const dir = join7(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
   if (meta.status !== "pending") {
@@ -577,20 +663,24 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
         error: "no team configured \u2014 run /handbook:init or /handbook:join first, or approve with --to personal"
       };
     }
-    return deliverToTeam(dir, meta, team, decidedAt, git, forge);
+    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge);
+    if (delivered.learnedBranchPrefix) {
+      saveTeamConfig({ ...team, branchPrefix: delivered.learnedBranchPrefix }, home);
+    }
+    return delivered;
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir);
   return deliverSolo(dir, meta, fallbackCwd, decidedAt);
 }
 function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir()) {
-  const slug = uniqueSlug(meta.slug, (s) => existsSync3(join6(skillsDir, s)));
-  const target = join6(skillsDir, slug);
+  const slug = uniqueSlug(meta.slug, (s) => existsSync3(join7(skillsDir, s)));
+  const target = join7(skillsDir, slug);
   try {
-    const skillMd = readFileSync5(join6(dir, "SKILL.md"), "utf8");
+    const skillMd = readFileSync5(join7(dir, "SKILL.md"), "utf8");
     mkdirSync4(target, { recursive: true });
-    writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync3(join6(dir, "grounded-case.json"))) {
-      copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
+    writeFileSync4(join7(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
+    if (existsSync3(join7(dir, "grounded-case.json"))) {
+      copyFileSync2(join7(dir, "grounded-case.json"), join7(target, "grounded-case.json"));
     }
   } catch (err) {
     return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
@@ -620,7 +710,8 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
     prUrl: published.prUrl,
     ...published.version ? { version: published.version } : {},
     manualUrl: published.manualUrl,
-    ...published.prError ? { prError: published.prError } : {}
+    ...published.prError ? { prError: published.prError } : {},
+    ...published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {}
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
@@ -630,14 +721,14 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})` : void 0;
   const installedProject = meta.cwd && existsSync3(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
-  const slug = uniqueSlug(meta.slug, (s) => existsSync3(join6(skillsDir, s)));
-  const target = join6(skillsDir, slug);
+  const slug = uniqueSlug(meta.slug, (s) => existsSync3(join7(skillsDir, s)));
+  const target = join7(skillsDir, slug);
   try {
-    const skillMd = readFileSync5(join6(dir, "SKILL.md"), "utf8");
+    const skillMd = readFileSync5(join7(dir, "SKILL.md"), "utf8");
     mkdirSync4(target, { recursive: true });
-    writeFileSync4(join6(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync3(join6(dir, "grounded-case.json"))) {
-      copyFileSync2(join6(dir, "grounded-case.json"), join6(target, "grounded-case.json"));
+    writeFileSync4(join7(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
+    if (existsSync3(join7(dir, "grounded-case.json"))) {
+      copyFileSync2(join7(dir, "grounded-case.json"), join7(target, "grounded-case.json"));
     }
   } catch (err) {
     return { ok: false, mode: "solo", meta, error: `delivery failed: ${String(err)}` };
@@ -695,12 +786,12 @@ function loadHarvestConfig(home = handbookHome()) {
 
 // src/lib/notify.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6, readdirSync as readdirSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync3(join7(home, "pending"));
+    entries = readdirSync3(join8(home, "pending"));
   } catch {
     return 0;
   }
@@ -708,7 +799,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync6(join7(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync6(join8(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -720,10 +811,10 @@ function pendingHarvestCount(home = handbookHome()) {
 import { readFileSync as readFileSync7 } from "node:fs";
 
 // src/lib/pipeline.ts
-import { basename as basename3, join as join8 } from "node:path";
+import { basename as basename3, join as join9 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join8(home, "pipeline.log");
+  return join9(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 
@@ -754,10 +845,10 @@ function usage() {
   process.exit(2);
 }
 function showCandidate(home, slug) {
-  const dir = join9(candidatesDir(home), slug);
+  const dir = join10(candidatesDir(home), slug);
   let skillMd;
   try {
-    skillMd = readFileSync8(join9(dir, "SKILL.md"), "utf8");
+    skillMd = readFileSync8(join10(dir, "SKILL.md"), "utf8");
   } catch {
     console.error(`error: no candidate named "${slug}"`);
     process.exit(1);
@@ -788,7 +879,7 @@ function showCandidate(home, slug) {
   console.log("");
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
-    const grounded = JSON.parse(readFileSync8(join9(dir, "grounded-case.json"), "utf8"));
+    const grounded = JSON.parse(readFileSync8(join10(dir, "grounded-case.json"), "utf8"));
     if (grounded.quote) {
       console.log(`you said:  "${grounded.quote}"`);
     }
@@ -826,6 +917,11 @@ function approveOne(home, slug, to) {
       console.log(`Shared "${slug}" with the team on branch ${result.branch}.${bump}`);
       if (result.prError) console.log(`It could not open the request for you (${result.prError}) \u2014 install and sign in to gh or glab and it will next time.`);
       if (result.manualUrl) console.log(`Open it here, then merge: ${result.manualUrl}`);
+    }
+    if (result.learnedBranchPrefix) {
+      console.log(
+        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered \u2014 later skills use it straight away.`
+      );
     }
   } else if (result.mode === "personal") {
     console.log(

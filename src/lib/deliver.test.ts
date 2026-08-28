@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { approveAndDeliver, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
-import { saveTeamConfig } from "./init.js";
+import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import type { GitRunner } from "./init.js";
 import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
@@ -200,6 +201,34 @@ describe("approveAndDeliver (team mode)", () => {
       status: "approved",
       decidedAt: "2026-08-08T01:00:00Z",
     });
+  });
+
+  it("given a forge that refuses the default branch name, when sharing, then the prefix it accepts is remembered", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t", commitPrefix: "HQA-000" }, home);
+    seedCandidate(meta());
+    let pushes = 0;
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push" && ++pushes === 1) {
+        throw new Error(
+          "git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the " +
+            "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
+        );
+      }
+      return runGit(args, cwd);
+    };
+
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      policedGit,
+      () => "",
+    );
+
+    expect(result).toMatchObject({ ok: true, mode: "team", branch: "HQA-000-fix-npm-test" });
+    expect(loadTeamConfig(home)?.branchPrefix).toBe("HQA-000-");
   });
 
   it("records the branch as deliveredTo when no PR URL could be obtained", () => {
