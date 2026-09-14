@@ -151,10 +151,37 @@ describe("parseHarvestResponse", () => {
     expect(parseHarvestResponse(raw, grounding)).toEqual([]);
   });
 
-  it("given a quote the model trimmed and re-punctuated, when parsed, then it still counts", () => {
-    const raw = JSON.stringify([rawItem({ quote: "We keep feature flags in config -- never env vars!" })]);
+  it("given a quote that differs only in case and spacing, when parsed, then it still counts", () => {
+    const raw = JSON.stringify([rawItem({ quote: "We Keep   Feature Flags In Config, Never Env Vars" })]);
 
     expect(parseHarvestResponse(raw, grounding)).toHaveLength(1);
+  });
+
+  it("given a quote the model re-punctuated, when parsed, then it is refused on purpose", () => {
+    // Deliberately strict. Of 32 quotes real sessions produced, 31 matched exactly
+    // and 1 through its elisions; none needed a looser rule, so a quote that is not
+    // what was typed is treated as the model not quoting.
+    const raw = JSON.stringify([rawItem({ quote: "We keep feature flags in config -- never env vars!" })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
+  it("given a long quote whose middle the model elided, when parsed, then every piece is checked and it survives", () => {
+    // measured on a real session: a 717-character teaching came back as its opening
+    // and closing sentences joined by "...", and an exact-match check refused it
+    const elided = rawItem({
+      quote: "we keep feature flags in config ... never env vars",
+    });
+
+    expect(parseHarvestResponse(JSON.stringify([elided]), grounding)).toHaveLength(1);
+  });
+
+  it("given an elided quote with a piece nobody typed, when parsed, then it is still refused", () => {
+    const halfInvented = rawItem({
+      quote: "we keep feature flags in config ... and we deploy straight to production",
+    });
+
+    expect(parseHarvestResponse(JSON.stringify([halfInvented]), grounding)).toEqual([]);
   });
 
   it("given a quote too short to mean anything, when parsed, then it is refused", () => {
@@ -676,14 +703,14 @@ describe("harvestSession (end to end with a fake runner)", () => {
       evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
     });
     const deps = (name: string) => ({
-      runner: async () => JSON.stringify([rawItem({ name, quote: "never mock the database, use testcontainers" })]),
+      runner: async () => JSON.stringify([rawItem({ name, quote: "we never mock the database, use testcontainers" })]),
       remoteUrl: () => null,
       listSkills: () => [],
       skillDirs: () => [],
     });
 
-    await harvestSession(teach("we never use mocks for the database here, use testcontainers"), home, deps("first-pass"));
-    await harvestSession(teach("don't mock the database — use testcontainers"), home, deps("second-pass"));
+    await harvestSession(teach("in this repo we never mock the database, use testcontainers"), home, deps("first-pass"));
+    await harvestSession(teach("again, we never mock the database, use testcontainers"), home, deps("second-pass"));
 
     expect(readCandidateMeta(join(candidatesDir(home), "first-pass"))?.taughtBefore).toBeUndefined();
     expect(readCandidateMeta(join(candidatesDir(home), "second-pass"))?.taughtBefore).toBe(1);

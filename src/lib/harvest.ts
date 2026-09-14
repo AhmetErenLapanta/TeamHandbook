@@ -355,19 +355,24 @@ function foldForMatch(text: string): string {
 }
 
 /**
- * A quote is evidence only if the developer actually said it. Two ways to be sure,
- * strictest first: the words appear in the text the model was shown, or they are the
- * same teaching as a prompt capture recorded on its own. The second one exists
- * because a model re-punctuates and trims what it quotes, and dropping an honest
- * teaching over a stripped comma would cost this product its best kind of item.
+ * A quote is evidence only if the developer actually said it: the words have to be
+ * in the text the model was shown. Nothing looser. A fuzzy "same teaching" fallback
+ * was tried and measured off: across 34 replayed sessions it admitted not one real
+ * quote the exact check missed (31 exact, 1 elided, 0 fuzzy), while it did admit a
+ * quote that was half a real teaching and half invention. An unused lenient path is
+ * only attack surface.
  */
 function quoteIsGrounded(quote: string, grounding: HarvestGrounding): boolean {
   const needle = foldForMatch(quote);
   if (needle.length < MIN_QUOTE_CHARS) return false;
-  if (foldForMatch(grounding.slice).includes(needle)) return true;
-  if (grounding.corrections.some((text) => foldForMatch(text).includes(needle))) return true;
-  const words = matchTokens(quote);
-  return grounding.corrections.some((text) => sameTeaching(words, matchTokens(text)));
+  const haystacks = [foldForMatch(grounding.slice), ...grounding.corrections.map(foldForMatch)];
+  if (haystacks.some((hay) => hay.includes(needle))) return true;
+  // Quoting a long passage, a model keeps the ends and elides the middle with "...".
+  // Measured: a real 717-character teaching was refused this way, every piece of it
+  // present in the slice. Each piece still has to be real text, so this checks them
+  // one by one instead of trusting the whole string or giving up on it.
+  const pieces = needle.split(/\s*(?:\.\.\.|\u2026)\s*/).map((piece) => piece.trim()).filter(Boolean);
+  return pieces.length > 1 && pieces.every((piece) => haystacks.some((hay) => hay.includes(piece)));
 }
 
 /**
