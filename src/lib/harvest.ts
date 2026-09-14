@@ -241,8 +241,10 @@ export function buildHarvestPrompt(input: {
     "   look, but a rule stated once, anywhere in the conversation, counts too.",
     '2. "procedure" — a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
-    '3. "discovery" — a non-obvious convention, environment quirk, or trap uncovered',
-    "   during the work.",
+    '3. "discovery" - a repeatable way of working this session uncovered: a convention',
+    "   to follow, a check to run before the obvious move, an order of operations that",
+    "   has to hold. It has to change how the NEXT piece of work is done. A trap counts",
+    "   only when avoiding it next time is a habit someone could adopt.",
     '4. "error-fix" — a lesson from a resolved error→fix pair below; set source to its',
     "   [pair:...] id.",
     "",
@@ -278,8 +280,13 @@ export function buildHarvestPrompt(input: {
     "- Produce NOTHING that overlaps an existing skill listed below.",
     "- Do not invent: every item must be grounded in the session data. When unsure,",
     "  leave it out — an empty list is a valid answer.",
-    "- One-off trivia, personal preferences without team value, and anything derivable",
-    "  from the repo's own README/tests score low.",
+    "- Leave these out rather than scoring them low: one-off trivia, a personal",
+    "  preference with no team value, anything derivable from the repo's own README and",
+    "  tests, and anything a stronger model would already get right on its own. A skill",
+    "  is a way of working, not a fact a capable reader could work out for themselves.",
+    "- Leave out any item that only states a fact about ONE system: a number someone",
+    "  measured, a field a table happens to have, how a single file behaves today. That",
+    "  is a note, not a skill.",
     `- Score each item 0-2 on: ${CRITERIA.join(", ")}.`,
     "- recurrence is evidence, not a hunch: score it 2 only when a pair is marked as",
     "  recurred or a teaching is marked as taught in earlier sessions.",
@@ -318,10 +325,75 @@ export function buildHarvestPrompt(input: {
 
 // ── parsing (fail closed) ───────────────────────────────────────────────────
 
-function parseItem(raw: unknown): HarvestItem | null {
+/**
+ * The session text a claimed anchor has to be found in. Required, not optional: a
+ * caller that forgets it would silently turn the two checks below back off, which is
+ * the fail-open default this exists to prevent.
+ */
+export interface HarvestGrounding {
+  /** the redacted slice EXACTLY as it went into the prompt - the model can only have
+   * copied a quote out of the text it was shown, so matching anything else (the raw
+   * transcript, say) would reject quotes that are honest */
+  slice: string;
+  /** the prompts capture recorded deterministically, as the developer typed them */
+  corrections: string[];
+  /** fingerprints of the error->fix pairs that were actually handed over */
+  pairFingerprints: Set<string>;
+}
+
+// Short enough to land in any 40k slice by accident ("we do", "run it"), which would
+// make the quote check a formality instead of an anchor.
+const MIN_QUOTE_CHARS = 12;
+
+function foldForMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/['’`"“”]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * A quote is evidence only if the developer actually said it. Two ways to be sure,
+ * strictest first: the words appear in the text the model was shown, or they are the
+ * same teaching as a prompt capture recorded on its own. The second one exists
+ * because a model re-punctuates and trims what it quotes, and dropping an honest
+ * teaching over a stripped comma would cost this product its best kind of item.
+ */
+function quoteIsGrounded(quote: string, grounding: HarvestGrounding): boolean {
+  const needle = foldForMatch(quote);
+  if (needle.length < MIN_QUOTE_CHARS) return false;
+  if (foldForMatch(grounding.slice).includes(needle)) return true;
+  if (grounding.corrections.some((text) => foldForMatch(text).includes(needle))) return true;
+  const words = matchTokens(quote);
+  return grounding.corrections.some((text) => sameTeaching(words, matchTokens(text)));
+}
+
+/**
+ * Anchors, verified here because a kind squeezed by a quota has a cheap way out:
+ * relabel the same one-system fact as a correction, or as an error-fix pointing at a
+ * pair id nobody will look up. correction and error-fix are the two kinds whose
+ * evidence CAN be checked against what the session actually produced, so it is.
+ * Unverifiable anchor, no item: a fabricated quote is worse than a missing lesson,
+ * because it reaches a team repo reading like something a colleague said.
+ */
+function anchorIsSound(o: Record<string, unknown>, grounding: HarvestGrounding): boolean {
+  if (o.kind === "correction") {
+    return typeof o.quote === "string" && quoteIsGrounded(o.quote, grounding);
+  }
+  if (o.kind === "error-fix") {
+    const source = typeof o.source === "string" ? o.source : "";
+    const fingerprint = source.match(/^pair:([0-9a-f]{16})$/)?.[1];
+    return !!fingerprint && grounding.pairFingerprints.has(fingerprint);
+  }
+  return true;
+}
+
+function parseItem(raw: unknown, grounding: HarvestGrounding): HarvestItem | null {
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw as Record<string, unknown>;
   if (!HARVEST_KINDS.includes(o.kind as HarvestKind)) return null;
+  if (!anchorIsSound(o, grounding)) return null;
   for (const key of ["name", "description", "body", "expect"]) {
     if (typeof o[key] !== "string" || !(o[key] as string).trim()) return null;
   }
@@ -398,7 +470,10 @@ function balancedArrayAt(raw: string, from: number): string | null {
  * session as unparseable. Take the balanced close instead, and when a bracket in the
  * prose came first, try the next one. Still fail-closed: no valid array, no items.
  */
-export function parseHarvestResponse(raw: string): HarvestItem[] | null {
+export function parseHarvestResponse(
+  raw: string,
+  grounding: HarvestGrounding,
+): HarvestItem[] | null {
   for (
     let attempt = 0, from = raw.indexOf("[");
     attempt < 5 && from !== -1;
@@ -409,7 +484,9 @@ export function parseHarvestResponse(raw: string): HarvestItem[] | null {
     try {
       const parsed: unknown = JSON.parse(candidate);
       if (Array.isArray(parsed)) {
-        return parsed.map(parseItem).filter((i): i is HarvestItem => i !== null);
+        return parsed
+          .map((element) => parseItem(element, grounding))
+          .filter((i): i is HarvestItem => i !== null);
       }
     } catch {
       // that bracket opened inside prose; try the next one
@@ -422,9 +499,19 @@ export function parseHarvestResponse(raw: string): HarvestItem[] | null {
 
 const MAX_BODY_CHARS = 8_000;
 
+/**
+ * At most one discovery per session. Measured, not guessed: discovery was 72% of a
+ * 147-item queue (106 items), and it is the one kind with no anchor to check - a
+ * correction has its quote, a procedure its task, an error-fix its pair. The prompt
+ * now asks for a way of working rather than a fact, but asking is not enforcing, and
+ * the score hint that was supposed to do the enforcing never dropped anything:
+ * 96 of 96 logged runs wrote every item they received (sievedOut: 0).
+ */
+const MAX_PER_KIND: Partial<Record<HarvestKind, number>> = { discovery: 1 };
+
 export interface SievedItem {
   item: HarvestItem;
-  reason: "secret" | "oversized" | "duplicate" | "muted" | "below-floor" | "over-cap";
+  reason: "secret" | "oversized" | "duplicate" | "muted" | "below-floor" | "over-cap" | "kind-quota";
 }
 
 export function sieveHarvestItems(
@@ -470,9 +557,27 @@ export function sieveHarvestItems(
     }
     return true;
   });
-  survivors.sort((a, b) => b.total - a.total);
-  const kept = survivors.slice(0, context.maxPerSession);
-  for (const item of survivors.slice(context.maxPerSession)) {
+  // The quota runs BEFORE the sort, on the order the model emitted: the prompt asks
+  // for items in priority order, so the first discovery is the model's own pick.
+  // Score cannot make this call - on the runs measured above it ranked one-system
+  // facts above the ways of working they buried, so picking the highest-scoring
+  // discovery would reliably keep the wrong one. It also runs AFTER the vetoes, so a
+  // discovery that was going to be dropped anyway does not burn the single slot.
+  const seenPerKind = new Map<HarvestKind, number>();
+  const withinQuota = survivors.filter((item) => {
+    const quota = MAX_PER_KIND[item.kind];
+    if (quota === undefined) return true;
+    const seen = seenPerKind.get(item.kind) ?? 0;
+    if (seen >= quota) {
+      dropped.push({ item, reason: "kind-quota" });
+      return false;
+    }
+    seenPerKind.set(item.kind, seen + 1);
+    return true;
+  });
+  withinQuota.sort((a, b) => b.total - a.total);
+  const kept = withinQuota.slice(0, context.maxPerSession);
+  for (const item of withinQuota.slice(context.maxPerSession)) {
     dropped.push({ item, reason: "over-cap" });
   }
   return { kept, dropped };
@@ -582,7 +687,11 @@ export async function harvestSession(
   } catch (err) {
     return { outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}`, written: [] };
   }
-  const items = parseHarvestResponse(response);
+  const items = parseHarvestResponse(response, {
+    slice,
+    corrections: (evidence.corrections ?? []).map((c) => c.text),
+    pairFingerprints: new Set(evidence.pairs.map((p) => p.fingerprint)),
+  });
   if (items === null) {
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
