@@ -83,6 +83,7 @@ You can also ask for an edit before deciding, or leave one pending and come back
 | `/handbook:doctor` | Diagnose node, the `claude` CLI, hooks, config, team repo. |
 | `/handbook:init` | Scaffold the team handbook repo and print the join command. |
 | `/handbook:join <url>` | Point at an existing team handbook. |
+| `/handbook:mcp [name]` | List your MCP servers; share one with the team so nobody sets it up by hand. |
 | `/handbook:leave` | Back to solo. Deletes no skills. |
 
 ## How it works

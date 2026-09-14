@@ -395,6 +395,56 @@ function retryBranchAfterNameRejection(err, team, slug) {
   }
   return { branch, prefix };
 }
+function resolveGitIdentity(git) {
+  const read = (key) => {
+    try {
+      return git(["config", key], process.cwd());
+    } catch {
+      return "";
+    }
+  };
+  const email = read("user.email");
+  const name = read("user.name");
+  const unset = (v) => typeof v === "string" && v.trim() === "";
+  if (unset(email) || unset(name)) {
+    return {
+      error: 'git user.name/user.email is not set - the PR would have a junk author. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then approve again.'
+    };
+  }
+  return {
+    args: typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== "" ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`] : []
+  };
+}
+function cloneTeamRepo(git, repoUrl, repoDir, workdir) {
+  try {
+    git(["clone", "--depth", "1", "--", repoUrl, repoDir], workdir);
+    return null;
+  } catch (err) {
+    return `git clone failed (is the team repo reachable?): ${String(err)}`;
+  }
+}
+function listRemoteBranches(git, repoDir) {
+  try {
+    const out = git(["ls-remote", "--heads", "origin"], repoDir);
+    return new Set(
+      String(out ?? "").split("\n").map((line) => line.split("	")[1] ?? "").filter(Boolean).map((ref) => ref.replace("refs/heads/", ""))
+    );
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
+  try {
+    git(["push", "-u", "origin", branch], repoDir);
+    return { branch };
+  } catch (err) {
+    const retry = retryBranchAfterNameRejection(err, team, slug);
+    if (!retry || remoteBranches.has(retry.branch)) throw err;
+    git(["branch", "-m", retry.branch], repoDir);
+    git(["push", "-u", "origin", retry.branch], repoDir);
+    return { branch: retry.branch, learnedBranchPrefix: retry.prefix };
+  }
+}
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
@@ -409,39 +459,15 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
-  const readIdentity = (key) => {
-    try {
-      return git(["config", key], process.cwd());
-    } catch {
-      return "";
-    }
-  };
-  const email = readIdentity("user.email");
-  const name = readIdentity("user.name");
-  const unset = (v) => typeof v === "string" && v.trim() === "";
-  if (unset(email) || unset(name)) {
-    return {
-      ok: false,
-      error: 'git user.name/user.email is not set \u2014 the PR would have a junk author. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then approve again.'
-    };
-  }
-  const identityArgs = typeof name === "string" && name.trim() !== "" && typeof email === "string" && email.trim() !== "" ? ["-c", `user.name=${name.trim()}`, "-c", `user.email=${email.trim()}`] : [];
+  const identity = resolveGitIdentity(git);
+  if ("error" in identity) return { ok: false, error: identity.error };
+  const identityArgs = identity.args;
   const workdir = handbookWorkdir("handbook-publish-");
   const repoDir = join5(workdir, "repo");
   try {
-    try {
-      git(["clone", "--depth", "1", "--", team.repoUrl, repoDir], workdir);
-    } catch (err) {
-      return { ok: false, error: `git clone failed (is the team repo reachable?): ${String(err)}` };
-    }
-    let remoteBranches = /* @__PURE__ */ new Set();
-    try {
-      const out = git(["ls-remote", "--heads", "origin"], repoDir);
-      remoteBranches = new Set(
-        String(out ?? "").split("\n").map((line) => line.split("	")[1] ?? "").filter(Boolean).map((ref) => ref.replace("refs/heads/", ""))
-      );
-    } catch {
-    }
+    const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
+    if (cloneError) return { ok: false, error: cloneError };
+    const remoteBranches = listRemoteBranches(git, repoDir);
     const slug = uniqueSlug(
       meta.slug,
       (s) => existsSync2(join5(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
@@ -467,16 +493,9 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      try {
-        git(["push", "-u", "origin", branch], repoDir);
-      } catch (err) {
-        const retry = retryBranchAfterNameRejection(err, team, slug);
-        if (!retry || remoteBranches.has(retry.branch)) throw err;
-        git(["branch", "-m", retry.branch], repoDir);
-        git(["push", "-u", "origin", retry.branch], repoDir);
-        branch = retry.branch;
-        learnedBranchPrefix = retry.prefix;
-      }
+      const pushed = pushBranch(git, repoDir, branch, team, slug, remoteBranches);
+      branch = pushed.branch;
+      learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
       return {
         ok: false,

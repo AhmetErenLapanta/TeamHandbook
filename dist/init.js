@@ -341,7 +341,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 var CONSUMER_NOTICE_SCRIPT = `#!/usr/bin/env node
-// Prints "<plugin>: N new skills since your last session" \u2014 no dependencies, no
+// Prints "<plugin>: N new skill(s) since your last session" - no dependencies, no
 // TeamHandbook engine required. Best-effort: any error exits 0 silently.
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -353,15 +353,38 @@ try {
   try { name = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8")).name || name; } catch {}
   const current = readdirSync(join(root, "skills"), { withFileTypes: true })
     .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  // A merged MCP server raises the plugin version and refreshes every copy exactly as a
+  // skill does. Counting only skills would make that arrive in silence: the teammate
+  // would have a new server connected to their machine and no notice that it happened,
+  // which is half of what this plugin promises. Both shapes seen in the field are read
+  // here - a {"mcpServers": {...}} wrapper and a bare server map - and this deliberately
+  // duplicates the reader in TeamHandbook's own mcp.ts, because this script ships inside
+  // the team's plugin and is not allowed to import anything.
+  let servers = [];
+  try {
+    const parsed = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
+    const map = parsed && typeof parsed.mcpServers === "object" && parsed.mcpServers ? parsed.mcpServers : parsed;
+    if (map && typeof map === "object") servers = Object.keys(map).sort();
+  } catch {}
   const seenDir = join(homedir(), ".teamhandbook-consumer");
   const seenFile = join(seenDir, name + ".json");
   let prior = null;
   try { prior = JSON.parse(readFileSync(seenFile, "utf8")); } catch {}
   mkdirSync(seenDir, { recursive: true });
-  writeFileSync(seenFile, JSON.stringify(current));
-  if (Array.isArray(prior)) {
-    const fresh = current.filter((s) => !prior.includes(s));
-    if (fresh.length) console.log(name + ": " + fresh.length + " new skill(s) since your last session: " + fresh.join(", ") + ".");
+  writeFileSync(seenFile, JSON.stringify({ skills: current, servers }));
+  // An earlier copy of this script stored a bare array of skill names. Reading that as
+  // "no servers seen yet" would announce every server the team already had as new, so
+  // the one session after an upgrade reports skills only.
+  const priorSkills = Array.isArray(prior) ? prior : prior && Array.isArray(prior.skills) ? prior.skills : null;
+  const priorServers = Array.isArray(prior) ? servers : prior && Array.isArray(prior.servers) ? prior.servers : null;
+  const freshSkills = priorSkills ? current.filter((s) => !priorSkills.includes(s)) : [];
+  const freshServers = priorServers ? servers.filter((s) => !priorServers.includes(s)) : [];
+  const parts = [];
+  if (freshSkills.length) parts.push(freshSkills.length + " new skill(s)");
+  if (freshServers.length) parts.push(freshServers.length + " new MCP server(s)");
+  if (parts.length) {
+    const named = freshSkills.concat(freshServers.map((s) => s + " (MCP)")).join(", ");
+    console.log(name + ": " + parts.join(" and ") + " since your last session: " + named + ".");
   }
 } catch {}
 process.exit(0);
