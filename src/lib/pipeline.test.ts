@@ -75,7 +75,7 @@ function job(home: string, overrides: Partial<HarvestJob> = {}): HarvestJob {
   const transcript = join(home, "t.jsonl");
   writeFileSync(
     transcript,
-    JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "we keep flags in config" } }) + "\n",
+    JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "we keep feature flags in config, not in env vars" } }) + "\n",
   );
   return {
     sessionId: "s1",
