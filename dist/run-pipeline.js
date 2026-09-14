@@ -957,10 +957,10 @@ function foldForMatch(text) {
 function quoteIsGrounded(quote, grounding) {
   const needle = foldForMatch(quote);
   if (needle.length < MIN_QUOTE_CHARS) return false;
-  if (foldForMatch(grounding.slice).includes(needle)) return true;
-  if (grounding.corrections.some((text) => foldForMatch(text).includes(needle))) return true;
-  const words = matchTokens(quote);
-  return grounding.corrections.some((text) => sameTeaching(words, matchTokens(text)));
+  const haystacks = [foldForMatch(grounding.slice), ...grounding.corrections.map(foldForMatch)];
+  if (haystacks.some((hay) => hay.includes(needle))) return true;
+  const pieces = needle.split(/\s*(?:\.\.\.|\u2026)\s*/).map((piece) => piece.trim()).filter(Boolean);
+  return pieces.length > 1 && pieces.every((piece) => haystacks.some((hay) => hay.includes(piece)));
 }
 function anchorIsSound(o, grounding) {
   if (o.kind === "correction") {
