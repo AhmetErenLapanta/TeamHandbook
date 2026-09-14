@@ -409,6 +409,12 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).toContain("a repeatable way of working this session uncovered");
     expect(prompt).toContain("change how the NEXT piece of work is done");
     expect(prompt).not.toContain("a non-obvious convention, environment quirk, or trap uncovered");
+    // measured: without this line the model relabelled procedures as discoveries
+    // (procedure 7 -> 2, discovery 22 -> 24 across 17 replayed sessions)
+    expect(prompt).toContain("is a procedure, not a discovery");
+    // the quota is enforced in the sieve either way, but saying so makes the model's
+    // own ordering - which is what the quota keeps - worth something
+    expect(prompt).toContain("At most ONE");
   });
 
   it("given the prompt is built, then the two exclusions are stated as exclusions, not as a score hint", () => {
