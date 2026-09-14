@@ -2,15 +2,20 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   bumpPluginVersion,
+  buildMcpPrBody,
   buildPrBody,
   buildPrTitle,
+  formatMcpShareResult,
   manualPrUrl,
   publishCandidate,
+  publishMcpServer,
   retryBranchAfterNameRejection,
 } from "./publish.js";
+import { auditServer } from "./mcp.js";
+import type { McpServerEntry } from "./mcp.js";
 import { runGit } from "./init.js";
 import type { GitRunner } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
@@ -50,7 +55,7 @@ function gitIn(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 }
 
-function teamRepo(seedSkillDirs: string[] = []): string {
+function teamRepo(seedSkillDirs: string[] = [], seedFiles: Record<string, string> = {}): string {
   const bare = mkdtempSync(join(tmpdir(), "handbook-team-"));
   execFileSync("git", ["init", "--bare", "-b", "main", bare]);
   const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
@@ -62,6 +67,10 @@ function teamRepo(seedSkillDirs: string[] = []): string {
     for (const dir of seedSkillDirs) {
       mkdirSync(join(repo, "skills", dir), { recursive: true });
       writeFileSync(join(repo, "skills", dir, "SKILL.md"), "occupied\n");
+    }
+    for (const [path, content] of Object.entries(seedFiles)) {
+      mkdirSync(join(repo, dirname(path)), { recursive: true });
+      writeFileSync(join(repo, path), content);
     }
     gitIn(repo, ["add", "-A"]);
     gitIn(repo, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
@@ -429,5 +438,125 @@ describe("publishCandidate — a forge that polices branch names", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("rejected the branch NAME");
     expect(result.error).toContain("branchPrefix");
+  });
+});
+
+describe("publishMcpServer", () => {
+  const gitlab: McpServerEntry = {
+    name: "gitlab",
+    scope: "user",
+    config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+  };
+  const pluginJson = JSON.stringify({ name: "acme", version: "0.1.0" }, null, 2) + "\n";
+
+  it("given the team repo already declares a server, when another is shared, then theirs survives and the version rises in the same commit", () => {
+    remote = teamRepo([], {
+      ".claude-plugin/plugin.json": pluginJson,
+      ".mcp.json": JSON.stringify({ mcpServers: { linear: { type: "sse", url: "https://mcp.linear.app/sse" } } }, null, 2) + "\n",
+    });
+
+    const result = publishMcpServer(gitlab, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/3");
+
+    expect(result).toMatchObject({ ok: true, branch: "handbook/mcp-gitlab", version: "0.1.1" });
+    const declared = JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.mcp.json"]));
+    expect(declared.mcpServers.linear).toEqual({ type: "sse", url: "https://mcp.linear.app/sse" });
+    expect(declared.mcpServers.gitlab).toEqual(gitlab.config);
+    // the server and the version signal travel as one commit, in either order: a merged
+    // server whose version did not move reaches nobody
+    const touched = gitIn(remote, ["show", "--name-only", "--format=", "handbook/mcp-gitlab"]);
+    expect(touched).toContain(".mcp.json");
+    expect(touched).toContain(".claude-plugin/plugin.json");
+    expect(JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.claude-plugin/plugin.json"])).version).toBe("0.1.1");
+  });
+
+  it("given a team repo with no .mcp.json at all, when a server is shared, then the file is created in the shape Claude Code loads", () => {
+    remote = teamRepo([], { ".claude-plugin/plugin.json": pluginJson });
+
+    const result = publishMcpServer(gitlab, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/4");
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.mcp.json"]))).toEqual({
+      mcpServers: { gitlab: gitlab.config },
+    });
+  });
+
+  it("given a forge that polices names, when a server is shared, then the branch and the commit both carry the team's prefix", () => {
+    remote = teamRepo([], { ".claude-plugin/plugin.json": pluginJson });
+
+    const result = publishMcpServer(
+      gitlab,
+      { repoUrl: remote, marketplaceName: "acme", branchPrefix: "TEAM-1-", commitPrefix: "TEAM-1" },
+      undefined,
+      () => "https://example.com/mr/5",
+    );
+
+    expect(result).toMatchObject({ ok: true, branch: "TEAM-1-mcp-gitlab" });
+    expect(gitIn(remote, ["log", "-1", "--format=%s", "TEAM-1-mcp-gitlab"]).startsWith("TEAM-1 ")).toBe(true);
+  });
+
+  it("given a server carrying a credential, when it is shared, then git is never run at all", () => {
+    const calls: string[][] = [];
+    const recordingGit: GitRunner = (args) => {
+      calls.push(args);
+      return "";
+    };
+
+    const result = publishMcpServer(
+      {
+        name: "acme-api",
+        scope: "user",
+        config: { type: "http", url: "https://api.acme.com/mcp", headers: { Authorization: "Bearer 8f2c41d9ab7e05631cd4a29f" } },
+      },
+      { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "acme" },
+      recordingGit,
+      () => "https://example.com/mr/6",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("headers.Authorization");
+    // the credential never reached a clone, an index, or a working tree: the refusal
+    // happens before the first git call, not after the commit
+    expect(calls).toEqual([]);
+  });
+
+  it("given the team already declares that name, when it is shared, then nothing is pushed over theirs", () => {
+    remote = teamRepo([], {
+      ".claude-plugin/plugin.json": pluginJson,
+      ".mcp.json": JSON.stringify({ mcpServers: { gitlab: { type: "http", url: "https://gitlab.acme.com/api/v4/mcp" } } }) + "\n",
+    });
+
+    const result = publishMcpServer(gitlab, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/7");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("already declares");
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("mcp-gitlab");
+  });
+});
+
+describe("buildMcpPrBody / formatMcpShareResult", () => {
+  const stdio: McpServerEntry = {
+    name: "playwright",
+    scope: "project",
+    config: { command: "npx", args: ["@playwright/mcp@latest"], env: { PW_TOKEN: "${PW_TOKEN}" } },
+  };
+
+  it("given a server that starts a process, when the request is written, then the reviewer sees the exact command", () => {
+    const body = buildMcpPrBody(stdio, auditServer(stdio.config));
+
+    expect(body).toContain("- command: `npx @playwright/mcp@latest`");
+    expect(body).toContain("starts a process");
+    expect(body).toContain("`PW_TOKEN`");
+    expect(body).toContain("No credential travels");
+  });
+
+  it("given the request is open, when the result is reported, then the local server is named as still present", () => {
+    const text = formatMcpShareResult(
+      { ok: true, serverName: "gitlab", branch: "handbook/mcp-gitlab", prUrl: "https://example.com/mr/3", version: "0.1.1" },
+      "acme",
+    );
+
+    expect(text).toContain("plugin:acme:gitlab");
+    expect(text).toContain("never writes to ~/.claude.json");
+    expect(text).toContain("0.1.1");
   });
 });

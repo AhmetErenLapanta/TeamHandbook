@@ -146,6 +146,60 @@ describe("skeletonFiles", () => {
     expect(unknown[".gitlab-ci.yml"]).toBeDefined();
   });
 
+  it("produces a notice that announces a merged MCP server, not just skills", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
+    const run = (): string =>
+      execFileSync("node", ["hooks/notice.mjs"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+      });
+    try {
+      writeSkeleton(dir, skeletonFiles("acme", "git@github.com:a/s.git", "github.com"));
+      mkdirSync(join(dir, "skills", "fix-npm-test"), { recursive: true });
+      // first run only records what is already there
+      expect(run()).toBe("");
+
+      writeFileSync(
+        join(dir, ".mcp.json"),
+        JSON.stringify({ mcpServers: { gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } } }),
+      );
+      mkdirSync(join(dir, "skills", "fix-eslint"), { recursive: true });
+      const notice = run();
+
+      expect(notice).toContain("1 new skill(s) and 1 new MCP server(s) since your last session");
+      expect(notice).toContain("fix-eslint");
+      expect(notice).toContain("gitlab (MCP)");
+      // and it does not repeat itself the next time
+      expect(run()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(consumerHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a bare server map too, which is the other shape plugins declare in the field", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
+    const run = (): string =>
+      execFileSync("node", ["hooks/notice.mjs"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+      });
+    try {
+      writeSkeleton(dir, skeletonFiles("acme", "git@github.com:a/s.git", "github.com"));
+      expect(run()).toBe("");
+      writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ terraform: { command: "terraform-mcp" } }));
+
+      expect(run()).toContain("1 new MCP server(s) since your last session: terraform (MCP)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(consumerHome, { recursive: true, force: true });
+    }
+  });
+
   it("produces a bump script that actually increments the patch version", () => {
     const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
     try {

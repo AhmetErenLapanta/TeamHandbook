@@ -29,6 +29,12 @@ This document states exactly what it reads, what it writes, and where data goes.
   read and harvested after the fact. Each session is salvaged at most once.
 - Your local git config and credentials — only when *you* approve a candidate and it
   opens a pull request, using your own identity.
+- **`~/.claude.json`, read-only, and only when you run `/handbook:mcp`:** the MCP servers
+  Claude Code has configured for your user and for the current project, so one of them can
+  be offered to your team. TeamHandbook never writes to this file: it belongs to the running
+  client, and sharing a server does not remove your own. A server definition holding a
+  literal value in `headers` or `env` is refused rather than carried, because only a plain
+  `${VAR}` reference proves the credential itself stays on this machine.
 
 ## What it writes, and where
 
@@ -115,7 +121,9 @@ Two things, and only these:
      never harvested and costs no model call at all.
 2. **On your approval:** `/handbook:review` → approve installs the skill locally or
    opens a PR to the team repo you configured (your git credentials, your chosen
-   repo). Nothing is shared with your team before this.
+   repo). `/handbook:mcp <name>` does the same for one MCP server you name, adding its
+   definition to the team plugin in a PR you can read before merging. Nothing is shared
+   with your team before this.
 
 ## Removing your data
 
