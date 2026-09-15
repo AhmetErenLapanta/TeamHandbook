@@ -431,3 +431,92 @@ describe("publishCandidate — a forge that polices branch names", () => {
     expect(result.error).toContain("branchPrefix");
   });
 });
+
+describe("publishCandidate carries the whole skill", () => {
+  it("given a candidate with scripts and references, when it is shared, then they reach the team repo", () => {
+    // 7 of 21 skills measured on a real machine carry working parts next to SKILL.md;
+    // a two-file copy would put a skill in the team repo that cannot run
+    mkdirSync(join(candidateDir, "scripts"), { recursive: true });
+    mkdirSync(join(candidateDir, "references"), { recursive: true });
+    writeFileSync(join(candidateDir, "preflight.sh"), "#!/bin/sh\necho ready\n");
+    writeFileSync(join(candidateDir, "scripts", "server.cjs"), "module.exports = {};\n");
+    writeFileSync(join(candidateDir, "references", "queries.sql"), "select 1;\n");
+    remote = teamRepo();
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(true);
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", result.branch!]).split("\n");
+    expect(files).toContain("skills/fix-npm-test/SKILL.md");
+    expect(files).toContain("skills/fix-npm-test/grounded-case.json");
+    expect(files).toContain("skills/fix-npm-test/preflight.sh");
+    expect(files).toContain("skills/fix-npm-test/scripts/server.cjs");
+    expect(files).toContain("skills/fix-npm-test/references/queries.sql");
+  });
+
+  it("given an ordinary harvest candidate, when it is shared, then only its two files go out", () => {
+    // the pre-existing behaviour, pinned: a general copy must not start shipping more
+    remote = teamRepo();
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(true);
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", result.branch!])
+      .split("\n")
+      .filter((f) => f.startsWith("skills/fix-npm-test/"));
+    expect(files.sort()).toEqual([
+      "skills/fix-npm-test/SKILL.md",
+      "skills/fix-npm-test/grounded-case.json",
+    ]);
+  });
+
+  it("given a candidate.json in the candidate dir, when it is shared, then it stays out of the team repo", () => {
+    // candidate.json carries the session id and the absolute cwd of the machine the
+    // lesson was captured on; writeFileAtomic can also leave a .tmp- sibling behind
+    writeFileSync(join(candidateDir, "candidate.json"), JSON.stringify(meta()) + "\n");
+    writeFileSync(join(candidateDir, "candidate.json.tmp-123-0-abc"), "torn write\n");
+    remote = teamRepo();
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(true);
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", result.branch!]);
+    expect(files).not.toContain("candidate.json");
+  });
+
+  it("given a suffixed slug, when it is shared, then the extra files follow it under the new name", () => {
+    writeFileSync(join(candidateDir, "preflight.sh"), "#!/bin/sh\necho ready\n");
+    remote = teamRepo(["fix-npm-test"]);
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.skillDir).toBe("skills/fix-npm-test-2");
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", result.branch!]).split("\n");
+    expect(files).toContain("skills/fix-npm-test-2/preflight.sh");
+  });
+});

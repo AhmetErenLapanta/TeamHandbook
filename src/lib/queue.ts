@@ -1,8 +1,10 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
+import { detectSecret } from "./secrets.js";
+import { copySkillPayload, listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict } from "./score.js";
 
@@ -123,6 +125,103 @@ export function readCandidateMeta(dir: string): CandidateMeta | null {
     // fall through to synthesis from the artifact files
   }
   return synthesizeMeta(dir);
+}
+
+export interface IntakeResult {
+  ok: boolean;
+  slug?: string;
+  dir?: string;
+  /** how many files were taken in, so the caller can say the extras came along */
+  fileCount?: number;
+  error?: string;
+  /** set when the secret sieve is what refused the skill: the pattern, and where */
+  secret?: { pattern: string; file: string };
+}
+
+/**
+ * Take a skill somebody wrote by hand into the review queue.
+ *
+ * Until this existed, a hand-written skill had no route to a team at all: the queue was
+ * reachable only by re-living the lesson and hoping the harvest caught it. From here the
+ * existing chain takes over unchanged - /handbook:review, approveAndDeliver, and for the
+ * team answer publishCandidate. No candidate.json is written on purpose, so the meta is
+ * synthesized from the frontmatter by readCandidateMeta, and the review flow sees an
+ * ordinary pending candidate.
+ *
+ * The secret sieve has to be re-established here, and this is the load-bearing part of
+ * the function. The harvest reaches the queue through pipeline.ts, which runs
+ * signalSecret over every captured field before a candidate is ever written. A directory
+ * copied straight into candidatesDir() never passes that point, so this is the second
+ * door into the pending queue and it needs its own lock: no captured secret reaches the
+ * queue, a candidate, or a PR.
+ *
+ * It refuses rather than redacts. Redaction is the right answer for a transcript slice,
+ * where the lesson survives losing a token. It is the wrong answer for a skill: a blanked
+ * out reference file or a pruned script still installs, still reads as complete to the
+ * teammate who receives it, and fails only when they run it. A skill that never arrives
+ * is better than a skill that arrives hollow, so the whole intake stops and names the
+ * file, which is the one thing that lets the author fix it.
+ *
+ * Every file that would be copied is screened first, and the screened list is the list
+ * that gets copied. Screening file by file as they are copied would leave the files that
+ * sort earlier sitting in the queue when a later one trips the sieve.
+ */
+export function intakeSkill(sourceDir: string, home: string = handbookHome()): IntakeResult {
+  const slug = basename(sourceDir);
+  if (!isSafeSlug(slug)) {
+    return { ok: false, error: `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
+  let skillMd: string;
+  try {
+    skillMd = readFileSync(join(sourceDir, "SKILL.md"), "utf8");
+  } catch {
+    return { ok: false, error: `no readable SKILL.md in ${sourceDir}` };
+  }
+  if (!parseSkillFrontmatter(skillMd)) {
+    return { ok: false, error: `the SKILL.md in ${sourceDir} has no name and description frontmatter` };
+  }
+  const dir = join(candidatesDir(home), slug);
+  if (existsSync(dir)) {
+    // Overwriting would silently discard a decision already made about that slug (an
+    // approved candidate keeps its meta here). Refusing is also the honest answer to
+    // the manager who meant to update a skill: see uniqueSlug, which suffixes instead.
+    return { ok: false, error: `"${slug}" is already in the review queue` };
+  }
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    // A symlink cannot be screened for what it will resolve to at copy time, and
+    // dropping it quietly is the pruning this card exists to stop. Neither is allowed,
+    // so the skill is refused with the entry named.
+    return {
+      ok: false,
+      error: `${slug} contains "${skipped[0]}", which is not a regular file; nothing was queued`,
+    };
+  }
+  if (files.length === 0) {
+    return { ok: false, error: `${slug} has no files to queue` };
+  }
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(join(sourceDir, file), "utf8");
+    } catch {
+      // unreadable means unscreened, and unscreened must not ship
+      return { ok: false, error: `cannot read "${file}" in ${sourceDir}; nothing was queued` };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return {
+        ok: false,
+        secret: { pattern, file },
+        error:
+          `"${file}" looks like it contains a secret (${pattern}), so ${slug} was not queued. ` +
+          `Skills are reviewed and shared as they are, and a redacted one would install and then ` +
+          `fail; take the credential out of the skill and try again.`,
+      };
+    }
+  }
+  copySkillPayload(sourceDir, dir, skillMd, files);
+  return { ok: true, slug, dir, fileCount: files.length };
 }
 
 /**

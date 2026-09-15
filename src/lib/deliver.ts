@@ -1,9 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd, uniqueSlug } from "./distill.js";
+import { copySkillPayload } from "./skill-files.js";
 import { publishCandidate, runForge } from "./publish.js";
 import type { ForgeRunner } from "./publish.js";
 import { handbookHome } from "./session-state.js";
@@ -107,11 +108,7 @@ export function deliverPersonal(
   const target = join(skillsDir, slug);
   try {
     const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
-    mkdirSync(target, { recursive: true });
-    writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync(join(dir, "grounded-case.json"))) {
-      copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));
-    }
+    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
     return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
   }
@@ -179,12 +176,8 @@ function deliverSolo(
     // read before creating the target: an unreadable candidate must not leave an
     // empty skill dir behind (which would shift every future slug to -2)
     const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
-    mkdirSync(target, { recursive: true });
     // rewrite the frontmatter name when suffixed so it doesn't shadow the skill it collided with
-    writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync(join(dir, "grounded-case.json"))) {
-      copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));
-    }
+    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
     return { ok: false, mode: "solo", meta, error: `delivery failed: ${String(err)}` };
   }
