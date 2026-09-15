@@ -34,7 +34,12 @@ This document states exactly what it reads, what it writes, and where data goes.
   be offered to your team. TeamHandbook never writes to this file: it belongs to the running
   client, and sharing a server does not remove your own. A server definition holding a
   literal value in `headers` or `env` is refused rather than carried, because only a plain
-  `${VAR}` reference proves the credential itself stays on this machine.
+  `${VAR}` reference proves the credential itself stays on this machine. That rule is
+  structural and absolute for those two fields. It is not a promise about the whole
+  definition: a URL is additionally scanned for an embedded token, but that scan is a
+  heuristic that can miss a short or word-shaped one, and a credential passed through a
+  stdio server's `args` is not checked at all. The merge request prints the endpoint and the
+  full command so a person reads them before the server reaches anyone.
 
 ## What it writes, and where
 

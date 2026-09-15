@@ -66,6 +66,45 @@ describe("auditServer", () => {
     expect(audit).toMatchObject({ migratable: false, reason: "secret-pattern", detail: "url-credentials" });
   });
 
+  it("given a provider that puts the token in the endpoint, when audited, then the server is refused", () => {
+    const zapier = { type: "http", url: "https://mcp.zapier.com/api/mcp/s/NjM4YTk5ZTQtYjk2Mi00/mcp" };
+    const composio = { type: "http", url: "https://mcp.composio.dev/composio/server/3f9a2b1c-7d4e-4f8a-9b2c-1e5d6a7b8c9d/mcp" };
+    const smithery = { type: "http", url: "https://server.smithery.ai/@org/srv/mcp?profile=abc123def456" };
+
+    expect(auditServer(zapier)).toMatchObject({ migratable: false, reason: "url-token" });
+    expect(auditServer(composio)).toMatchObject({ migratable: false, reason: "url-token" });
+    expect(auditServer(smithery)).toMatchObject({ migratable: false, reason: "url-token" });
+    // the shape both other nets were measured to miss: no keyword, no pattern, and the
+    // endpoint would have been printed in the merge request under a promise of safety
+    expect(detectSecret(JSON.stringify(zapier))).toBeNull();
+    expect(detectSecret(JSON.stringify(smithery))).toBeNull();
+  });
+
+  it("given ordinary endpoints, when audited, then the token scan does not refuse them", () => {
+    // the other half of a heuristic: a net tested only on what it must catch quietly
+    // refuses everything, and a manager with nothing shareable never runs the command twice
+    const legitimate = [
+      "https://mcp.notion.com/mcp",
+      "https://gitlab.com/api/v4/mcp",
+      "https://mcp.atlassian.com/v1/mcp",
+      "https://mcp.example.com/v2beta1/mcp",
+      "https://mcp.example.com/streamable-http-v1/mcp",
+      "https://mcp.example.com/mcp?transport=streamable-http",
+      "https://api.githubcopilot.com/mcp/",
+    ];
+
+    for (const url of legitimate) {
+      expect({ url, ...auditServer({ type: "http", url }) }).toMatchObject({ url, migratable: true });
+    }
+  });
+
+  it("given a token in the endpoint, when it is reported, then the message says where it is", () => {
+    const message = refusalMessage("zapier", auditServer({ type: "http", url: "https://mcp.zapier.com/api/mcp/s/NjM4YTk5ZTQtYjk2Mi00/mcp" }));
+
+    expect(message).toContain("NjM4YTk5ZTQtYjk2Mi00");
+    expect(message).toContain("every teammate");
+  });
+
   it("given something that is neither a process nor an endpoint, when audited, then it is refused rather than guessed at", () => {
     expect(auditServer({ type: "http" })).toMatchObject({ migratable: false, reason: "unsupported-shape" });
     expect(auditServer("gitlab")).toMatchObject({ migratable: false, reason: "unsupported-shape" });
