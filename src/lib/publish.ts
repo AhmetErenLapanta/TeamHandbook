@@ -1,9 +1,10 @@
 import { handbookWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
+import { copySkillPayload } from "./skill-files.js";
 import type { GroundedCase } from "./distill.js";
 import { assertSafeGitUrl, pushFailureReason, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
 import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
@@ -251,19 +252,15 @@ export function publishCandidate(
     const title = buildPrTitle(slug);
     try {
       git(["checkout", "-b", branch], repoDir);
-      mkdirSync(join(repoDir, skillDir), { recursive: true });
       // Keep the SKILL.md name in sync with a suffixed slug so it doesn't shadow
-      // the skill it collided with.
-      writeFileSync(
-        join(repoDir, skillDir, "SKILL.md"),
+      // the skill it collided with. Everything else the candidate carries goes with
+      // it: a skill whose scripts and references were left behind is a skill the
+      // reviewer approves and the teammate cannot run.
+      copySkillPayload(
+        candidateDir,
+        join(repoDir, skillDir),
         slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug),
       );
-      if (existsSync(join(candidateDir, "grounded-case.json"))) {
-        copyFileSync(
-          join(candidateDir, "grounded-case.json"),
-          join(repoDir, skillDir, "grounded-case.json"),
-        );
-      }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);

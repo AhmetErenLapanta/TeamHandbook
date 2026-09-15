@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { approveAndDeliver, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
@@ -305,5 +305,79 @@ describe("three-way delivery (v2)", () => {
     saveTeamConfig({ repoUrl: "git@unreachable:x/y.git", marketplaceName: "t" }, home);
     const result = approveAndDeliver(home, "fix-npm-test", "/fallback");
     expect(result.mode).toBe("solo");
+  });
+});
+
+describe("delivery carries the whole skill", () => {
+  function seedWithExtras(m: CandidateMeta): string {
+    const dir = seedCandidate(m);
+    mkdirSync(join(dir, "scripts"), { recursive: true });
+    writeFileSync(join(dir, "preflight.sh"), "#!/bin/sh\necho ready\n");
+    writeFileSync(join(dir, "scripts", "server.cjs"), "module.exports = {};\n");
+    return dir;
+  }
+
+  it("given a skill with extra files, when it is kept for yourself, then they are installed too", () => {
+    const personal = mkdtempSync(join(tmpdir(), "handbook-personal-"));
+    try {
+      seedWithExtras(meta());
+
+      const result = approveAndDeliver(
+        home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+        null, undefined, undefined, "personal", personal,
+      );
+
+      expect(result.ok).toBe(true);
+      const target = join(personal, "fix-npm-test");
+      expect(readFileSync(join(target, "preflight.sh"), "utf8")).toContain("echo ready");
+      expect(readFileSync(join(target, "scripts", "server.cjs"), "utf8")).toContain("module.exports");
+      // the queue's own bookkeeping is not part of the skill
+      expect(existsSync(join(target, "candidate.json"))).toBe(false);
+    } finally {
+      rmSync(personal, { recursive: true, force: true });
+    }
+  });
+
+  it("given a skill with extra files, when it is added to the project, then they are installed too", () => {
+    seedWithExtras(meta());
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    expect(result.ok).toBe(true);
+    const target = join(soloSkillsDir(project), "fix-npm-test");
+    expect(readFileSync(join(target, "preflight.sh"), "utf8")).toContain("echo ready");
+    expect(readFileSync(join(target, "scripts", "server.cjs"), "utf8")).toContain("module.exports");
+    expect(existsSync(join(target, "candidate.json"))).toBe(false);
+  });
+
+  it("given an ordinary harvest candidate, when it is delivered, then it installs exactly the two files it always did", () => {
+    // the pre-existing behaviour, pinned against the general copy
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    expect(result.ok).toBe(true);
+    const target = join(soloSkillsDir(project), "fix-npm-test");
+    expect(readdirSync(target).sort()).toEqual(["SKILL.md", "grounded-case.json"]);
+  });
+
+  it("given an unreadable candidate, when it is delivered, then no skill directory is left behind", () => {
+    const dir = join(candidatesDir(home), "fix-npm-test");
+    mkdirSync(dir, { recursive: true });
+    writeCandidateMeta(dir, meta());
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(soloSkillsDir(project), "fix-npm-test"))).toBe(false);
   });
 });

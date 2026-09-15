@@ -429,7 +429,7 @@ function maybeDumpPayload(raw, home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function candidateMetaFile(dir) {
@@ -679,7 +679,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
 }
 
 // src/lib/harvest.ts
-import { existsSync as existsSync3 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 
 // src/lib/transcript.ts
 import { readFileSync as readFileSync7 } from "node:fs";
@@ -1139,7 +1139,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync3(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync4(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,
