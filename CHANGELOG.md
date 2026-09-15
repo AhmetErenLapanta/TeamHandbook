@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.8] - 2026-09-15
+
+- **Discovery took most of the queue and nothing ever dropped one.** Discovery was 72% of
+  the pending queue, the prompt ranked it last in priority and no line of code read that
+  ranking, and the only quality filter was a scoring hint that had never sieved anything
+  out: 96 runs, 96 times zero. Its definition invited whatever the session happened to
+  turn up, so a fact about one system arrived as a skill. The definition now asks for a
+  way of working that recurs, says outright that something a stronger model would get
+  right on its own is not a skill, and the sieve enforces one discovery per session
+  against the order the model itself proposed, not against the score. Tightened parsing
+  closes the cheap way around it: a correction without a quote the developer actually
+  wrote, or an error-fix naming a failure that never happened, is dropped rather than
+  relabelled.
+
+  **Yield drops on purpose.** Replayed over 17 real sessions, the same evidence through
+  the old and new prompts: 45 proposals became 36 (-20%), and the discovery share of the
+  queue fell from 48.9% to 36.1%. Every one of those nine losses was a discovery;
+  corrections and procedures kept all of theirs. Fewer suggestions is the point, and the
+  ones that survive are the ones worth reading.
+
 ## [0.3.7] - 2026-09-15
 
 - **Leaving the team promised an install that never happened.** `/handbook:leave` said
