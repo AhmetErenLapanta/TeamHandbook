@@ -120,8 +120,52 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
 }
 
 // src/lib/queue.ts
+var STATUSES = ["pending", "approved", "rejected"];
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
+}
+function candidateMetaFile(dir) {
+  return join4(dir, "candidate.json");
+}
+function synthesizeMeta(dir) {
+  let md;
+  try {
+    md = readFileSync(join4(dir, "SKILL.md"), "utf8");
+  } catch {
+    return null;
+  }
+  const summary = parseSkillFrontmatter(md);
+  if (!summary) return null;
+  let grounded = {};
+  try {
+    grounded = JSON.parse(readFileSync(join4(dir, "grounded-case.json"), "utf8"));
+  } catch {
+  }
+  const gate = grounded.gate;
+  return {
+    slug: basename(dir),
+    status: "pending",
+    createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
+    scope: summary.scope ?? "team",
+    description: summary.description,
+    fingerprint: typeof grounded.fingerprint === "string" ? grounded.fingerprint : "",
+    sessionId: "",
+    gate: gate && typeof gate.total === "number" ? gate : null
+  };
+}
+function readCandidateMeta(dir) {
+  try {
+    const parsed = JSON.parse(readFileSync(candidateMetaFile(dir), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
+      return {
+        ...parsed,
+        slug: basename(dir),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
+      };
+    }
+  } catch {
+  }
+  return synthesizeMeta(dir);
 }
 function intakeSkill(sourceDir, home = handbookHome()) {
   const slug = basename(sourceDir);
@@ -139,7 +183,12 @@ function intakeSkill(sourceDir, home = handbookHome()) {
   }
   const dir = join4(candidatesDir(home), slug);
   if (existsSync(dir)) {
-    return { ok: false, error: `"${slug}" is already in the review queue` };
+    const existing = readCandidateMeta(dir);
+    const decided = existing && existing.status !== "pending" ? existing.status : null;
+    return {
+      ok: false,
+      error: decided ? `"${slug}" was already ${decided} here; nothing was changed` : `"${slug}" is already waiting in the review queue`
+    };
   }
   const { files, skipped } = listSkillFiles(sourceDir);
   if (skipped.length > 0) {

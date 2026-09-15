@@ -13,18 +13,20 @@ One skill per run. If the user names several, do them one at a time and report e
    If they did not, list what is there and ask which one - do not guess, and do not take the
    whole directory in.
 2. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/share-skill.js" <path to the skill directory>`
-3. On success, relay the message and tell them the next step is /handbook:review, where they
-   choose between keeping it, adding it to this project, and opening a pull request to the
-   team handbook. Nothing has left the machine yet.
+3. On success, relay the message and tell them two things: the queue got a COPY, so the skill
+   they already use is untouched and keeps working; and the next step is /handbook:review,
+   where they choose between keeping it, adding it to this project, and opening a pull request
+   to the team handbook. Nothing has left the machine yet.
 4. On a refusal, relay the reason as-is; each one names what to fix:
    - a secret in one of the skill's files. The skill is NOT queued, and this is deliberate:
      it would otherwise be reviewed and pushed to a shared repository as it stands. Tell them
      which file, and that taking the credential out (an environment variable, a local config
      file the skill reads) and running the command again is the fix. Do not offer to redact
      it for them - a skill with a blanked-out script installs and then fails.
-   - already in the review queue. The queued copy is left untouched; /handbook:review is
-     where it gets decided.
+   - already waiting in the review queue, or already approved or rejected there. Either way
+     the queued copy is left exactly as it is. A waiting one is decided in /handbook:review;
+     a decided one has already been through it.
    - no SKILL.md, or a SKILL.md with no name and description frontmatter. It is not a skill
      Claude Code would load either; offer to write the frontmatter.
 
-The skill directory itself is never modified, moved, or deleted. The queue gets a copy.
+The skill directory itself is never modified, moved, or deleted.
