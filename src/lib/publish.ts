@@ -430,17 +430,32 @@ export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
       "dependency you are adding, not the way you would review a document.",
     );
   }
+  // State the check, never the conclusion. An earlier version of this section promised
+  // outright that no credential travelled, which was a guarantee wider than anything
+  // actually verified: a provider that embeds the token in the endpoint (Zapier, Composio,
+  // Smithery) sailed through, and the reviewer read a written assurance over the top of the
+  // credential itself. Human review was the one compensating control here, and a sentence
+  // that tells the reviewer not to look is worse than no sentence at all.
   lines.push(
     "",
-    "## Credentials",
+    "## What was checked",
     "",
-    audit.requiresEnv.length
-      ? "No credential travels in this definition. Each teammate supplies these themselves, " +
-        `from their own environment: ${audit.requiresEnv.map((v) => `\`${v}\``).join(", ")}. ` +
-        "Until they do, the server simply will not start for them."
-      : "No credential travels in this definition, and this server needs none: nothing in it " +
-        "was a literal header or environment value, which is the only shape TeamHandbook " +
-        "will carry.",
+    "Every value in `headers` and `env` is a plain ${VAR} reference rather than a literal, so",
+    "no credential travels in those fields. The endpoint was also scanned for an embedded",
+    "token and none was found.",
+  );
+  if (audit.requiresEnv.length) {
+    lines.push(
+      "",
+      `Each teammate supplies these from their own environment: ${audit.requiresEnv.map((v) => `\`${v}\``).join(", ")}.` +
+        " Until they do, the server will not start for them.",
+    );
+  }
+  lines.push(
+    "",
+    "That is the whole of the check, and it is a narrower claim than \"this definition holds",
+    "no secret\": the endpoint scan is a heuristic, and a credential passed in `args` is not",
+    "checked at all. Read the endpoint and the command above before merging.",
     "",
     "---",
     "Opened by TeamHandbook at the explicit request of whoever ran the command.",

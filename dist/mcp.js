@@ -341,6 +341,38 @@ function transportOf(config) {
   if (typeof config.type === "string" && config.type.trim()) return config.type.trim();
   return typeof config.command === "string" ? "stdio" : "unknown";
 }
+var UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var MIN_TOKEN_CHARS = 12;
+var HEX_TOKEN_CHARS = 16;
+function tokenLike(value) {
+  if (UUID_SHAPE.test(value)) return true;
+  if (value.length >= HEX_TOKEN_CHARS && /^[0-9a-f]+$/i.test(value)) return true;
+  if (value.length < MIN_TOKEN_CHARS) return false;
+  if (!/[A-Za-z]/.test(value) || !/[0-9]/.test(value)) return false;
+  const mixedCase = /[a-z]/.test(value) && /[A-Z]/.test(value);
+  return mixedCase || !/[-_.]/.test(value);
+}
+function urlToken(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  for (const segment of parsed.pathname.split("/")) {
+    if (!segment) continue;
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+    }
+    if (tokenLike(decoded)) return `path segment "${decoded}"`;
+  }
+  for (const [key, value] of parsed.searchParams) {
+    if (tokenLike(value)) return `query parameter "${key}"`;
+  }
+  return null;
+}
 function auditServer(config) {
   const base = { migratable: false, requiresEnv: [], startsProcess: false, transport: "unknown" };
   if (!isPlainObject(config)) return { ...base, reason: "unsupported-shape", detail: "not an object" };
@@ -375,11 +407,18 @@ function auditServer(config) {
   if (pattern) {
     return { ...base, transport, startsProcess, reason: "secret-pattern", detail: pattern };
   }
+  const embedded = typeof config.url === "string" ? urlToken(config.url) : null;
+  if (embedded) {
+    return { ...base, transport, startsProcess, reason: "url-token", detail: embedded };
+  }
   return { migratable: true, requiresEnv, startsProcess, transport };
 }
 function refusalMessage(name, audit) {
   if (audit.reason === "credential-field") {
     return `"${name}" is not shareable as written: ${audit.detail} holds a literal value. Anything in headers or env that is not a plain \${VAR} reference is treated as a credential and stays on this machine. Rewrite it as \${VAR} (the name travels, the value does not), then run this again.`;
+  }
+  if (audit.reason === "url-token") {
+    return `"${name}" is not shareable as written: its URL carries what looks like a credential (${audit.detail}). Providers that put the secret in the endpoint hand every teammate the manager's own access, so this stays here. Ask the provider for a URL without the token, or pass the credential in a header as a \${VAR} reference.`;
   }
   if (audit.reason === "secret-pattern") {
     return `"${name}" is not shareable: its definition contains what looks like a ${audit.detail}. Move the credential into an environment variable and reference it as \${VAR}.`;
@@ -415,6 +454,11 @@ function mergeServerIntoMcpJson(existing, name, config) {
   }
   return JSON.stringify(document, null, 2) + "\n";
 }
+function refusalSummary(audit) {
+  if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
+  if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
+  return String(audit.detail);
+}
 function formatServerList(entries) {
   if (!entries.length) {
     return "No MCP servers are configured for this machine or this project, so there is nothing to share yet. Add one the way you normally would (claude mcp add), then run this again.";
@@ -422,7 +466,7 @@ function formatServerList(entries) {
   const lines = ["Your MCP servers, as Claude Code has them here:", ""];
   for (const entry of entries) {
     const audit = auditServer(entry.config);
-    const state = audit.migratable ? audit.startsProcess ? "shareable (starts a process on every teammate's machine)" : "shareable" : `not shareable: ${audit.reason === "credential-field" ? `${audit.detail} holds a literal value` : audit.detail}`;
+    const state = audit.migratable ? audit.startsProcess ? "shareable (starts a process on every teammate's machine)" : "shareable" : `not shareable: ${refusalSummary(audit)}`;
     const needs = audit.requiresEnv.length ? `, needs ${audit.requiresEnv.join(", ")}` : "";
     lines.push(`  ${entry.name}  [${entry.scope}, ${audit.transport}]  ${state}${needs}`);
   }
@@ -546,9 +590,23 @@ function buildMcpPrBody(entry, audit) {
   }
   lines.push(
     "",
-    "## Credentials",
+    "## What was checked",
     "",
-    audit.requiresEnv.length ? `No credential travels in this definition. Each teammate supplies these themselves, from their own environment: ${audit.requiresEnv.map((v) => `\`${v}\``).join(", ")}. Until they do, the server simply will not start for them.` : "No credential travels in this definition, and this server needs none: nothing in it was a literal header or environment value, which is the only shape TeamHandbook will carry.",
+    "Every value in `headers` and `env` is a plain ${VAR} reference rather than a literal, so",
+    "no credential travels in those fields. The endpoint was also scanned for an embedded",
+    "token and none was found."
+  );
+  if (audit.requiresEnv.length) {
+    lines.push(
+      "",
+      `Each teammate supplies these from their own environment: ${audit.requiresEnv.map((v) => `\`${v}\``).join(", ")}. Until they do, the server will not start for them.`
+    );
+  }
+  lines.push(
+    "",
+    'That is the whole of the check, and it is a narrower claim than "this definition holds',
+    'no secret": the endpoint scan is a heuristic, and a credential passed in `args` is not',
+    "checked at all. Read the endpoint and the command above before merging.",
     "",
     "---",
     "Opened by TeamHandbook at the explicit request of whoever ran the command."

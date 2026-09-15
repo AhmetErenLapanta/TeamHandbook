@@ -546,7 +546,18 @@ describe("buildMcpPrBody / formatMcpShareResult", () => {
     expect(body).toContain("- command: `npx @playwright/mcp@latest`");
     expect(body).toContain("starts a process");
     expect(body).toContain("`PW_TOKEN`");
-    expect(body).toContain("No credential travels");
+  });
+
+  it("given a body that reports the check, when it is read, then it claims only what was verified", () => {
+    const body = buildMcpPrBody(stdio, auditServer(stdio.config));
+
+    expect(body).toContain("## What was checked");
+    // the claim stays inside the check: an unconditional "no credential travels" told the
+    // one human control in this flow to stop looking
+    expect(body).not.toContain("No credential travels");
+    expect(body).toContain("narrower claim");
+    expect(body).toContain("heuristic");
+    expect(body).toContain("`args` is not");
   });
 
   it("given the request is open, when the result is reported, then the local server is named as still present", () => {

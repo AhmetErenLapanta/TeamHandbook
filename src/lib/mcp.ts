@@ -18,7 +18,7 @@ export interface McpServerEntry {
   config: Record<string, unknown>;
 }
 
-export type McpRefusal = "credential-field" | "secret-pattern" | "unsupported-shape";
+export type McpRefusal = "credential-field" | "secret-pattern" | "url-token" | "unsupported-shape";
 
 export interface McpAudit {
   migratable: boolean;
@@ -116,6 +116,69 @@ function transportOf(config: Record<string, unknown>): string {
   return typeof config.command === "string" ? "stdio" : "unknown";
 }
 
+
+// A token embedded in the URL is the one credential shape BOTH nets above were measured to
+// miss, and it is not exotic: Zapier, Composio, Smithery and Pipedream all hand out a
+// server URL with the secret in a path segment or a query value, and `claude mcp add`
+// writes it exactly as given. Such a server passed as "migratable", and the merge request
+// then printed the endpoint under a promise that no credential travelled.
+//
+// Be honest about what this is. Unlike the headers/env rule, this is NOT a structural
+// guarantee - it is a heuristic, a pattern race of the kind this file otherwise refuses to
+// enter, and it is here only because the alternative was a written guarantee that is
+// false. It catches an opaque high-entropy segment; it will miss a credential that is
+// short, or lowercase-with-hyphens, or that reads like a word. Everything downstream of it
+// states its claim in terms of what was actually checked, never "this holds no secret".
+//
+// The thresholds are measured, not guessed, against two sets: five real-provider URLs that
+// must be caught and ten that must pass (seven public endpoint shapes plus every live
+// {type,url} server on the machine this was written on).
+//   - 12 characters is the LARGEST minimum that still catches all five: Smithery's
+//     `?profile=abc123def456` is exactly 12, so 13 lets it through. A smaller minimum only
+//     adds false positives, and nothing measured needed one.
+//   - letters AND digits together, because a word-shaped segment (`mcp`, `composio`,
+//     `streamable-http`) is a route, not a secret.
+//   - separators are the tie-breaker: `streamable-http-v1` is 18 characters with a digit
+//     and must pass, while `NjM4YTk5ZTQtYjk2Mi00` is hyphenated too. Mixed case separates
+//     them - base64 carries it, a route name does not - so a hyphenated all-lowercase
+//     segment passes and an unseparated one (`abc123def456`) does not.
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MIN_TOKEN_CHARS = 12;
+const HEX_TOKEN_CHARS = 16;
+
+function tokenLike(value: string): boolean {
+  if (UUID_SHAPE.test(value)) return true;
+  if (value.length >= HEX_TOKEN_CHARS && /^[0-9a-f]+$/i.test(value)) return true;
+  if (value.length < MIN_TOKEN_CHARS) return false;
+  if (!/[A-Za-z]/.test(value) || !/[0-9]/.test(value)) return false;
+  const mixedCase = /[a-z]/.test(value) && /[A-Z]/.test(value);
+  return mixedCase || !/[-_.]/.test(value);
+}
+
+/** Where a token appears to be embedded in this URL, or null. */
+export function urlToken(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null; // not a URL we can take apart; detectSecret still saw the raw string
+  }
+  for (const segment of parsed.pathname.split("/")) {
+    if (!segment) continue;
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      // a malformed escape is not a reason to stop looking at the rest
+    }
+    if (tokenLike(decoded)) return `path segment "${decoded}"`;
+  }
+  for (const [key, value] of parsed.searchParams) {
+    if (tokenLike(value)) return `query parameter "${key}"`;
+  }
+  return null;
+}
+
 /**
  * May this server be written into the team repository, and what does a reviewer have to
  * be told about it?
@@ -156,13 +219,17 @@ export function auditServer(config: unknown): McpAudit {
       if (!requiresEnv.includes(reference[1]!)) requiresEnv.push(reference[1]!);
     }
   }
-  // Second net, not a replacement for the first. The structural rule cannot see a
-  // credential that lives outside headers and env - `url` carrying `user:pass@` is the
-  // measured example - and detectSecret cannot see one whose key it does not recognise.
-  // Each covers what the other misses; neither is allowed to stand in for the other.
+  // Second net. It reaches where the structural rule cannot - `url` carrying `user:pass@`
+  // is the measured example - and the structural rule reaches where its keyword list does
+  // not. Neither stands in for the other, and the two together are still not exhaustive:
+  // the URL shape below is one both of them missed.
   const pattern = detectSecret(JSON.stringify(config));
   if (pattern) {
     return { ...base, transport, startsProcess, reason: "secret-pattern", detail: pattern };
+  }
+  const embedded = typeof config.url === "string" ? urlToken(config.url) : null;
+  if (embedded) {
+    return { ...base, transport, startsProcess, reason: "url-token", detail: embedded };
   }
   return { migratable: true, requiresEnv, startsProcess, transport };
 }
@@ -174,6 +241,14 @@ export function refusalMessage(name: string, audit: McpAudit): string {
       "Anything in headers or env that is not a plain ${VAR} reference is treated as a " +
       "credential and stays on this machine. Rewrite it as ${VAR} (the name travels, the " +
       "value does not), then run this again."
+    );
+  }
+  if (audit.reason === "url-token") {
+    return (
+      `"${name}" is not shareable as written: its URL carries what looks like a credential ` +
+      `(${audit.detail}). Providers that put the secret in the endpoint hand every teammate ` +
+      "the manager's own access, so this stays here. Ask the provider for a URL without the " +
+      "token, or pass the credential in a header as a ${VAR} reference."
     );
   }
   if (audit.reason === "secret-pattern") {
@@ -235,6 +310,12 @@ export function mergeServerIntoMcpJson(
   return JSON.stringify(document, null, 2) + "\n";
 }
 
+function refusalSummary(audit: McpAudit): string {
+  if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
+  if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
+  return String(audit.detail);
+}
+
 /**
  * The read-only first screen: every server this machine could share, and for the ones it
  * cannot, why not.
@@ -258,7 +339,7 @@ export function formatServerList(entries: McpServerEntry[]): string {
       ? audit.startsProcess
         ? "shareable (starts a process on every teammate's machine)"
         : "shareable"
-      : `not shareable: ${audit.reason === "credential-field" ? `${audit.detail} holds a literal value` : audit.detail}`;
+      : `not shareable: ${refusalSummary(audit)}`;
     const needs = audit.requiresEnv.length ? `, needs ${audit.requiresEnv.join(", ")}` : "";
     lines.push(`  ${entry.name}  [${entry.scope}, ${audit.transport}]  ${state}${needs}`);
   }
