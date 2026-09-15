@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.7] - 2026-09-15
+
+- **Leaving the team promised an install that never happened.** `/handbook:leave` said
+  approved skills now install into the current project. Neither half was true. A
+  candidate the harvest marked for the team still resolves to the team after the binding
+  is cleared, finds no configuration, and returns an error instead of installing
+  anything, so every team-scoped candidate in the queue needs an explicit `--to` once you
+  have left. And a project skill installs into the project it was captured in, not
+  whichever one you happen to be reviewing from. The message says both now, and it lives
+  in a function with tests instead of inline in the command.
+
+## [0.3.6] - 2026-08-28
+
+- **Sharing a skill died on a branch name nobody chose.** A group that polices branch
+  names refused `handbook/<slug>`, and the push failed with no way forward: the advice
+  was to hand-edit `~/.teamhandbook/config.json`, a file a sandboxed session may not be
+  allowed to touch. The retry now derives a name from the `commitPrefix` the team already
+  agreed with that same server during `/handbook:init`, checks it against the pattern the
+  rejection quoted before pushing anything, and remembers what worked so no later skill
+  pays the same round trip. When the branch goes out under a different name than the
+  default, the approval says so rather than leaving the reader to find it in the forge.
+  Push failures also keep the forge's own `remote:` explanation, which a plain tail of
+  git's stderr had been cutting away, leaving the verdict without the reason.
+
 ## [0.3.5] - 2026-08-18
 
 - **The scaffold stopped shipping a script nothing runs.** `scripts/bump-version.mjs` is
