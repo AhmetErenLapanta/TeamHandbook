@@ -1240,6 +1240,7 @@ function releaseHarvestJob(claimedFile) {
 }
 function drainHarvestJobs(home = handbookHome()) {
   reclaimStaleClaims(pendingDir(home));
+  cleanupStaleHarvestMarkers(home);
   let entries;
   try {
     entries = readdirSync4(pendingDir(home));
@@ -1301,8 +1302,66 @@ function abandonJob(job, home) {
   }
   bumpCounter("gateAbandoned", home);
 }
+function harvestedDir(home = handbookHome()) {
+  return join10(home, "harvested");
+}
+function harvestMarkerFile(job, home) {
+  if (!job.transcriptPath) return null;
+  let size;
+  try {
+    size = statSync(job.transcriptPath).size;
+  } catch {
+    return null;
+  }
+  const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  return join10(harvestedDir(home), `${session}-${size}`);
+}
+function claimHarvest(marker, home) {
+  try {
+    mkdirSync4(harvestedDir(home), { recursive: true });
+    writeFileSync5(marker, "", { flag: "wx" });
+    return true;
+  } catch (err) {
+    return err?.code !== "EEXIST";
+  }
+}
+var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+function cleanupStaleHarvestMarkers(home, now = Date.now()) {
+  const dir = harvestedDir(home);
+  let entries;
+  try {
+    entries = readdirSync4(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    try {
+      const file = join10(dir, entry);
+      if (now - statSync(file).mtimeMs > MARKER_MAX_AGE_MS) rmSync2(file, { force: true });
+    } catch {
+    }
+  }
+}
 var MAX_HARVEST_ATTEMPTS = 3;
 async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+  const marker = harvestMarkerFile(job, home);
+  if (marker && !claimHarvest(marker, home)) {
+    const reason = "already harvested at this transcript length";
+    appendPipelineLog(
+      {
+        received: 0,
+        sievedOut: 0,
+        scored: 0,
+        rejected: 0,
+        errored: 0,
+        written: [],
+        harvest: { sessionId: job.sessionId, skipped: reason }
+      },
+      home,
+      now()
+    );
+    return { outcome: "skipped", reason, written: [] };
+  }
   const summary = await harvestSession(job, home, deps);
   const log = {
     received: summary.produced ?? 0,
@@ -1328,6 +1387,7 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
     ]
   };
   if (summary.outcome === "error") {
+    if (marker) rmSync2(marker, { force: true });
     bumpCounter("gateErrors", home);
     const attempts = (job.attempts ?? 0) + 1;
     if (attempts < MAX_HARVEST_ATTEMPTS) {
