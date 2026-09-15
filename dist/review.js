@@ -642,9 +642,16 @@ function soloSkillsDir(projectCwd) {
 function personalSkillsDir() {
   return join7(homedir2(), ".claude", "skills");
 }
+function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync3) {
+  return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
+}
 function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync3) {
-  const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
-  return soloSkillsDir(origin);
+  return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
+}
+function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync3) {
+  const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
+  if (origin === fallbackCwd) return "this project's .claude/skills";
+  return `${basename2(origin)}'s .claude/skills (where it was captured, not this project)`;
 }
 function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir()) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
@@ -867,8 +874,11 @@ function showCandidate(home, slug) {
   } else {
     console.log("score:     n/a");
   }
+  if (meta && meta.suggestedTarget !== "project") {
+    console.log(`project:   ${projectTargetLabel(meta, process.cwd())}`);
+  }
   if (meta?.suggestedTarget) {
-    const where = meta.suggestedTarget === "personal" ? "keep for yourself (~/.claude/skills)" : meta.suggestedTarget === "project" ? "this project's .claude/skills" : "share with the team (PR)";
+    const where = meta.suggestedTarget === "personal" ? "keep for yourself (~/.claude/skills)" : meta.suggestedTarget === "project" ? projectTargetLabel(meta, process.cwd()) : "share with the team (PR)";
     console.log(`suggested: ${where}`);
   }
   if (meta?.taughtBefore) {
@@ -930,9 +940,8 @@ function approveOne(home, slug, to) {
   } else {
     if (result.warning) console.log(`Note: ${result.warning}`);
     const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
-    console.log(
-      `Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. Commit this directory so the skill travels with the repo.`
-    );
+    const commit = result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
+    console.log(`Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
   }
 }
 function rejectOne(home, slug, never) {

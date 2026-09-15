@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { approveAndDeliver, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
+import { approveAndDeliver, projectTargetLabel, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner } from "./init.js";
 import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
@@ -75,6 +75,33 @@ describe("resolveDeliveryDir", () => {
   it("falls back to the given cwd when the origin is gone or unrecorded", () => {
     expect(resolveDeliveryDir(meta(), "/fallback", () => false)).toBe(soloSkillsDir("/fallback"));
     expect(resolveDeliveryDir(meta({ cwd: undefined }), "/fallback")).toBe(soloSkillsDir("/fallback"));
+  });
+});
+
+describe("projectTargetLabel", () => {
+  it("names the origin project when the review runs from a different one", () => {
+    // given a candidate captured in `project`, reviewed from somewhere else
+    // when the option text is built
+    const label = projectTargetLabel(meta(), "/somewhere/else", () => true);
+    // then it names the project the copy will actually land in, before the choice
+    expect(label).toBe(`${basename(project)}'s .claude/skills (where it was captured, not this project)`);
+  });
+
+  it("keeps the short wording when the origin is the project being reviewed from", () => {
+    // given a candidate captured in the very project the review runs from
+    // when the option text is built
+    const label = projectTargetLabel(meta(), project, () => true);
+    // then there is no difference to report and the plain wording stands
+    expect(label).toBe("this project's .claude/skills");
+  });
+
+  it("says this project once the origin is gone, which is where delivery then lands", () => {
+    // given an origin directory that no longer exists
+    // when the option text is built
+    const label = projectTargetLabel(meta(), "/fallback", () => false);
+    // then it follows resolveDeliveryDir's fallback instead of naming a dead project
+    expect(label).toBe("this project's .claude/skills");
+    expect(resolveDeliveryDir(meta(), "/fallback", () => false)).toBe(soloSkillsDir("/fallback"));
   });
 });
 
