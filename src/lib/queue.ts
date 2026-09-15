@@ -182,10 +182,19 @@ export function intakeSkill(sourceDir: string, home: string = handbookHome()): I
   }
   const dir = join(candidatesDir(home), slug);
   if (existsSync(dir)) {
-    // Overwriting would silently discard a decision already made about that slug (an
-    // approved candidate keeps its meta here). Refusing is also the honest answer to
-    // the manager who meant to update a skill: see uniqueSlug, which suffixes instead.
-    return { ok: false, error: `"${slug}" is already in the review queue` };
+    // Overwriting would silently discard a decision already made about that slug: an
+    // approved candidate keeps its meta here, and rewriting it would offer a delivered
+    // skill for review a second time. A decided one is named as decided, because
+    // "waiting in the review queue" would send the user to look for something
+    // /handbook:review will not show them.
+    const existing = readCandidateMeta(dir);
+    const decided = existing && existing.status !== "pending" ? existing.status : null;
+    return {
+      ok: false,
+      error: decided
+        ? `"${slug}" was already ${decided} here; nothing was changed`
+        : `"${slug}" is already waiting in the review queue`,
+    };
   }
   const { files, skipped } = listSkillFiles(sourceDir);
   if (skipped.length > 0) {

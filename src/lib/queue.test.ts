@@ -471,9 +471,25 @@ describe("intakeSkill", () => {
     const result = intakeSkill(source, home);
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("already in the review queue");
+    expect(result.error).toContain("already waiting in the review queue");
     const queued = join(candidatesDir(home), "rebuild-nightly-report", "SKILL.md");
     expect(readFileSync(queued, "utf8")).toContain("Body.");
+  });
+
+  it("given a slug already decided, when it is taken in again, then the decision is named and kept", () => {
+    const source = handWrittenSkill("rebuild-nightly-report");
+    expect(intakeSkill(source, home).ok).toBe(true);
+    const dir = join(candidatesDir(home), "rebuild-nightly-report");
+    const approved = readCandidateMeta(dir)!;
+    writeCandidateMeta(dir, { ...approved, status: "approved", deliveredMode: "personal" });
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(false);
+    // "waiting in the review queue" would send the user to a queue that will not show it
+    expect(result.error).toContain("already approved");
+    expect(readCandidateMeta(dir)?.status).toBe("approved");
+    expect(readCandidateMeta(dir)?.deliveredMode).toBe("personal");
   });
 
   it("given a directory with no SKILL.md, when it is taken in, then it is refused", () => {
