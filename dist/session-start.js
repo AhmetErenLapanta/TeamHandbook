@@ -909,6 +909,7 @@ function enqueueHarvestJob(job, home = handbookHome()) {
 }
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 var LOG_ROTATE_BYTES = 512 * 1024;
+var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
   const child = spawnFn(process.execPath, [runnerScript], {
     detached: true,

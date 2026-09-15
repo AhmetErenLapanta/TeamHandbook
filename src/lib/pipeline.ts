@@ -91,6 +91,7 @@ export function releaseHarvestJob(claimedFile: string): void {
 
 export function drainHarvestJobs(home: string = handbookHome()): ClaimedJob[] {
   reclaimStaleClaims(pendingDir(home));
+  cleanupStaleHarvestMarkers(home);
   let entries: string[];
   try {
     entries = readdirSync(pendingDir(home));
@@ -212,6 +213,79 @@ function abandonJob(job: HarvestJob, home: string): void {
   bumpCounter("gateAbandoned", home);
 }
 
+// ── harvest once per transcript state ───────────────────────────────────────
+// Measured on one machine's pipeline.log: 13 sessions were harvested more than
+// once. Eight of them were RESUMED sessions whose transcript had grown between the
+// runs, so each run read a tail the previous one could not see and produced its own
+// real lessons (one session was resumed across a month and yielded 13 candidates
+// over five later runs). Keying this guard on sessionId alone would have thrown all
+// of those away. The waste is the four sessions whose transcript had NOT changed:
+// 5 model calls and 6 duplicate candidates, two of them the same three lessons
+// reworded. So the identity of a harvest is the session AND the transcript state it
+// read, not the session.
+//
+// The marker is created with "wx" - the exclusive-create idiom enqueueHarvestJob
+// already uses above - because O_EXCL is atomic across processes and a look-then-run
+// check on pipeline.log is not. That difference is the fix: the duplicate pairs
+// finished 1.702s and 0.007s apart against a harvest measured at ~25s, so both runs
+// were already in flight before either could log anything to look at.
+export function harvestedDir(home: string = handbookHome()): string {
+  return join(home, "harvested");
+}
+
+function harvestMarkerFile(job: HarvestJob, home: string): string | null {
+  // No transcript, or a transcript we cannot stat, means no identity to key on, so
+  // the guard steps aside and the job runs. A session whose transcript appears later
+  // must never be locked out by a run that skipped for "no transcript".
+  if (!job.transcriptPath) return null;
+  let size: number;
+  try {
+    size = statSync(job.transcriptPath).size;
+  } catch {
+    return null;
+  }
+  const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  return join(harvestedDir(home), `${session}-${size}`);
+}
+
+function claimHarvest(marker: string, home: string): boolean {
+  try {
+    mkdirSync(harvestedDir(home), { recursive: true });
+    writeFileSync(marker, "", { flag: "wx" });
+    return true;
+  } catch (err) {
+    // EEXIST is the whole point: this session was already harvested at this exact
+    // transcript length. Any OTHER failure (unwritable home, full disk) lets the
+    // harvest proceed - this guard exists to save duplicate work, not to become a
+    // new way to lose a session's lessons.
+    return (err as NodeJS.ErrnoException)?.code !== "EEXIST";
+  }
+}
+
+// A marker outlives the session file it guards (SESSION_MAX_AGE_MS, 7d) and then
+// stops meaning anything: a resumed session gets a different length and so a
+// different marker. Swept at drain time, where reclaimStaleClaims already does the
+// queue's housekeeping, so the directory cannot grow without bound.
+const MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function cleanupStaleHarvestMarkers(home: string, now: number = Date.now()): void {
+  const dir = harvestedDir(home);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    try {
+      const file = join(dir, entry);
+      if (now - statSync(file).mtimeMs > MARKER_MAX_AGE_MS) rmSync(file, { force: true });
+    } catch {
+      // raced with a live runner; leave it
+    }
+  }
+}
+
 // Re-try a harvest whose claude call failed (logged-out CLI, timeout) this many
 // times across runs before giving up, instead of losing the session's lessons.
 const MAX_HARVEST_ATTEMPTS = 3;
@@ -223,6 +297,24 @@ export async function runHarvestJob(
   deps: PipelineDeps = {},
   now: () => string = () => new Date().toISOString(),
 ): Promise<HarvestSummary> {
+  const marker = harvestMarkerFile(job, home);
+  if (marker && !claimHarvest(marker, home)) {
+    const reason = "already harvested at this transcript length";
+    appendPipelineLog(
+      {
+        received: 0,
+        sievedOut: 0,
+        scored: 0,
+        rejected: 0,
+        errored: 0,
+        written: [],
+        harvest: { sessionId: job.sessionId, skipped: reason },
+      },
+      home,
+      now(),
+    );
+    return { outcome: "skipped", reason, written: [] };
+  }
   const summary = await harvestSession(job, home, deps);
   const log: PipelineSummary = {
     received: summary.produced ?? 0,
@@ -250,6 +342,12 @@ export async function runHarvestJob(
     ],
   };
   if (summary.outcome === "error") {
+    // An errored run harvested nothing, so it must not block its own retry: a
+    // measured session whose model call failed produced two real candidates on the
+    // retry, from the very same transcript bytes. Releasing the marker here is what
+    // keeps "already harvested" meaning a run that COMPLETED, rather than a run that
+    // merely happened.
+    if (marker) rmSync(marker, { force: true });
     bumpCounter("gateErrors", home);
     const attempts = (job.attempts ?? 0) + 1;
     if (attempts < MAX_HARVEST_ATTEMPTS) {
