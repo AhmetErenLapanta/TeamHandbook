@@ -21,7 +21,7 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -352,7 +352,7 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "node:fs";
 import { basename, join as join6 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
@@ -461,7 +461,7 @@ function welcomeMarkerFile(home) {
 }
 function isFirstRun(home = handbookHome()) {
   const marker = welcomeMarkerFile(home);
-  if (existsSync2(marker)) return false;
+  if (existsSync3(marker)) return false;
   writeFileAtomic(marker, (/* @__PURE__ */ new Date()).toISOString() + "\n");
   return true;
 }
@@ -540,7 +540,7 @@ function weeklyDigest(home = handbookHome(), now = Date.now()) {
 }
 function pendingTeamNudge(home = handbookHome()) {
   if (loadTeamConfig(home)) return null;
-  if (existsSync2(teamNudgeMarkerFile(home))) return null;
+  if (existsSync3(teamNudgeMarkerFile(home))) return null;
   const approved = listCandidates(home, "approved").length;
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), (/* @__PURE__ */ new Date()).toISOString() + "\n");
@@ -730,7 +730,7 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
 }
 
 // src/lib/signals.ts
-import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync4, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync8 } from "node:fs";
 import { join as join9 } from "node:path";
 function sanitizeSignalsForPersistence(signals) {
   let redacted = 0;
@@ -784,7 +784,7 @@ function appendSignals(signals, home = handbookHome()) {
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
-function signalFromPair(pair, sessionId, ts, fileExists = existsSync3) {
+function signalFromPair(pair, sessionId, ts, fileExists = existsSync4) {
   const persistedEdits = pair.edits.filter(fileExists);
   return {
     ts,
@@ -801,7 +801,7 @@ function signalFromPair(pair, sessionId, ts, fileExists = existsSync3) {
     resolvedAt: pair.resolvedAt
   };
 }
-function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync3) {
+function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync4) {
   const state = loadSessionState(sessionId, home);
   if (state.resolvedPairs.length === 0) return [];
   const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
@@ -909,6 +909,7 @@ function enqueueHarvestJob(job, home = handbookHome()) {
 }
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 var LOG_ROTATE_BYTES = 512 * 1024;
+var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
   const child = spawnFn(process.execPath, [runnerScript], {
     detached: true,

@@ -188,7 +188,7 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
@@ -283,7 +283,7 @@ function summarizeUsage(usage, known) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
 import { join as join9 } from "node:path";
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
@@ -352,6 +352,7 @@ function pipelineLogFile(home = handbookHome()) {
   return join10(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
+var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
 // src/lib/status.ts
 function pluginVersion() {

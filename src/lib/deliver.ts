@@ -1,9 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd, uniqueSlug } from "./distill.js";
+import { copySkillPayload } from "./skill-files.js";
 import { publishCandidate, runForge } from "./publish.js";
 import type { ForgeRunner } from "./publish.js";
 import { handbookHome } from "./session-state.js";
@@ -23,13 +24,41 @@ export function personalSkillsDir(): string {
 
 export type DeliveryTarget = "personal" | "project" | "team";
 
+/** The project a skill installs into: the one it was captured in, with the reviewer's
+ * own project standing in only when that origin is gone. One definition, because the
+ * label below has to answer from the same rule the copy obeys - a second copy of this
+ * condition is exactly how the text came to promise a directory the copy never used. */
+function deliveryOrigin(
+  meta: CandidateMeta,
+  fallbackCwd: string,
+  dirExists: (path: string) => boolean = existsSync,
+): string {
+  return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
+}
+
 export function resolveDeliveryDir(
   meta: CandidateMeta,
   fallbackCwd: string,
   dirExists: (path: string) => boolean = existsSync,
 ): string {
-  const origin = meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
-  return soloSkillsDir(origin);
+  return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
+}
+
+/** How the "add it to a project" option must read BEFORE it is picked. The reviewer
+ * decides from the option text, and a candidate harvested in another project installs
+ * there, not where they are standing - so when the two differ the text names the origin
+ * instead of saying "this". approveAndDeliver reports that project too (originProject),
+ * but only after the copy, which is one decision too late to change the answer. */
+export function projectTargetLabel(
+  meta: CandidateMeta,
+  fallbackCwd: string,
+  dirExists: (path: string) => boolean = existsSync,
+): string {
+  const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
+  if (origin === fallbackCwd) return "this project's .claude/skills";
+  // The bare name, not the absolute path: it is what the reviewer recognizes, and the
+  // full path is already on the line the CLI prints once the skill has landed.
+  return `${basename(origin)}'s .claude/skills (where it was captured, not this project)`;
 }
 
 export interface DeliverResult {
@@ -107,11 +136,7 @@ export function deliverPersonal(
   const target = join(skillsDir, slug);
   try {
     const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
-    mkdirSync(target, { recursive: true });
-    writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync(join(dir, "grounded-case.json"))) {
-      copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));
-    }
+    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
     return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
   }
@@ -179,12 +204,8 @@ function deliverSolo(
     // read before creating the target: an unreadable candidate must not leave an
     // empty skill dir behind (which would shift every future slug to -2)
     const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
-    mkdirSync(target, { recursive: true });
     // rewrite the frontmatter name when suffixed so it doesn't shadow the skill it collided with
-    writeFileSync(join(target, "SKILL.md"), slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-    if (existsSync(join(dir, "grounded-case.json"))) {
-      copyFileSync(join(dir, "grounded-case.json"), join(target, "grounded-case.json"));
-    }
+    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
     return { ok: false, mode: "solo", meta, error: `delivery failed: ${String(err)}` };
   }
