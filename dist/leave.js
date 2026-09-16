@@ -95,6 +95,21 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+function formatLeaveSuccess(team) {
+  return [
+    `Left the team skill base at ${team.repoUrl}. TeamHandbook is in solo mode again.`,
+    "",
+    "Pending candidates the harvest marked for the team have nowhere to publish now:",
+    "approve each with `--to personal` or `--to project`, or the approval fails on the",
+    "missing team. `--to project` installs the skill into the project it was captured in,",
+    "not whichever project you are reviewing from.",
+    "",
+    "Run /handbook:join <url> to join a different team.",
+    "Claude Code's marketplace subscription is separate: run",
+    `\`/plugin marketplace remove ${team.marketplaceName}\` yourself if you also want to stop`,
+    "receiving that team's skills."
+  ].join("\n");
+}
 
 // src/cli/leave.ts
 function main() {
@@ -111,9 +126,6 @@ function main() {
     return;
   }
   clearTeamConfig();
-  console.log(
-    `Left the team skill base at ${team.repoUrl}. TeamHandbook is back in solo mode; approved skills now install into the current project. Run /handbook:join <url> to join a different team.
-Claude Code's marketplace subscription is separate \u2014 run \`/plugin marketplace remove ${team.marketplaceName}\` yourself if you also want to stop receiving that team's skills.`
-  );
+  console.log(formatLeaveSuccess(team));
 }
 main();

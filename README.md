@@ -65,8 +65,9 @@ expect:    Integration tests start a testcontainer instead of a mock.
 Then it asks where each skill goes and you pick an answer:
 
 - **Keep for yourself** - `~/.claude/skills`: every project you open, nobody else
-- **Add to this project** - this directory's `.claude/skills`: commit it and it travels
-  with the code
+- **Add to the project it came from** - that project's `.claude/skills`, named in the
+  question: commit it and it travels with the code. A skill installs where it was
+  captured, not whichever project you are reviewing from
 - **Share with the team** - a pull request to your team's handbook
 - **Reject** - not worth keeping, and it can be silenced for good
 
