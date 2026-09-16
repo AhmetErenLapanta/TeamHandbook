@@ -613,7 +613,7 @@ describe("runManualSignal", () => {
       expect(loadSessionState("s1", home).explicitLearnPending).toBe(false);
     });
 
-    // Criterion 2 is "not a single case lost" — including a clarification that
+    // Criterion 2 is "not a single case lost" - including a clarification that
     // takes more than one round trip (which mode? which case? more detail?).
     it("still queues the candidate after a multi-turn clarification", async () => {
       captureLearnInvocation(promptInput("/handbook:learn"), home);

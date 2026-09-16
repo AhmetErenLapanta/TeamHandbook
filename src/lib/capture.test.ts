@@ -323,7 +323,7 @@ describe("captureLearnInvocation (telling the user's own /handbook:learn from th
   // clarifying question when nothing in the session matches yet, and that
   // exchange can take more than one round trip. Every answer is a new
   // UserPromptSubmit, in prose, that must not be mistaken for the user having
-  // moved on to something unrelated — no matter how many of them intervene.
+  // moved on to something unrelated - no matter how many of them intervene.
   describe("a pending ask survives plain-language prompts", () => {
     it("survives one intervening prompt (a single clarifying answer)", () => {
       captureLearnInvocation(promptInput("/handbook:learn"), home);
@@ -350,7 +350,7 @@ describe("captureLearnInvocation (telling the user's own /handbook:learn from th
 
     it("survives a pasted absolute path, a regex, or a diff line (not command-shaped)", () => {
       captureLearnInvocation(promptInput("/handbook:learn"), home);
-      captureLearnInvocation(promptInput("/Users/me/repo/src/lib/capture.ts"), home);
+      captureLearnInvocation(promptInput("/tmp/repo/src/lib/capture.ts"), home);
       captureLearnInvocation(promptInput("/^\\/handbook:learn(\\s|$)/"), home);
       captureLearnInvocation(promptInput("/dev/null 2>&1"), home);
       expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);

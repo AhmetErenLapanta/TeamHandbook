@@ -72,8 +72,8 @@ describe("buildScorePrompt", () => {
   });
 
   // K-17 UYARI 1: a manual-model capture (the model invoked /handbook:learn on its
-  // own) has no ledger history either — it is scored on this same call, the same
-  // as a user-typed manual capture — so it must get the same no-ledger-history
+  // own) has no ledger history either - it is scored on this same call, the same
+  // as a user-typed manual capture - so it must get the same no-ledger-history
   // recurrence guidance, not be silently judged by the raw occurrence count.
   it("gives manual-model the same no-ledger-history recurrence guidance as manual", () => {
     const manualPrompt = buildScorePrompt(candidate({ trigger: "manual" }), 1);

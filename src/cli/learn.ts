@@ -30,7 +30,7 @@ async function main(): Promise<number> {
   const outcome = await runManualSignal(signal);
   // Consume the pending ask only once the run actually produced an outcome. An
   // "error" (claude unreachable, timed out) leaves the ask pending so the user's
-  // natural next move — retrying in plain language — is still judged "manual",
+  // natural next move, retrying in plain language, is still judged "manual",
   // not silently downgraded because the first attempt happened to fail.
   if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {

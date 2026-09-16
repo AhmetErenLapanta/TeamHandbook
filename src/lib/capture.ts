@@ -91,11 +91,11 @@ const LEARN_SLASH_COMMAND = /^\/handbook:learn(\s|$)/;
 // Any OTHER literal slash command. Seeing one while an ask is pending is positive
 // evidence the user moved on to a different explicit action, so it is the one
 // thing (short of the CLI actually consuming the ask) allowed to clear a pending
-// flag early. A plain-language prompt is not this — it is what learn.md step 2's
+// flag early. A plain-language prompt is not this - it is what learn.md step 2's
 // clarifying question gets answered with. Shaped like a command name (letters,
 // digits, ":", "_", "-", then whitespace or end), the same way LEARN_SLASH_COMMAND
 // is anchored and terminated, specifically so it does NOT match a pasted absolute
-// path ("/Users/x/..."), a regex literal, or a diff line — any of those would
+// path ("/tmp/repo/x/..."), a regex literal, or a diff line - any of those would
 // otherwise silently kill a still-live ask, which is exactly the lost-case class
 // this card exists to close.
 const ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
@@ -118,19 +118,19 @@ const ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
  *     nothing in the session matches yet, and that exchange can take more than
  *     one round trip (which mode, which case, more detail). Every answer is a new
  *     UserPromptSubmit, in prose, not the literal slash command. Clearing the flag
- *     on the first one of those — or even the second — would misjudge the capture
+ *     on the first one of those, or even the second, would misjudge the capture
  *     that follows as "the model invoked this on its own", when the user started
  *     it and is still mid-conversation answering the product's own questions.
  *
  * A plain-language prompt therefore never clears a pending ask by itself, no
- * matter how many of them intervene — an arbitrary turn budget would just move
+ * matter how many of them intervene - an arbitrary turn budget would just move
  * where LOST TRUE reappears, and criterion here is zero lost cases, not "usually
  * enough". Instead:
  *
  *   - The ask is CONSUMED (cleared) the moment cli/learn.ts actually decides a
  *     trigger on it and the pipeline reaches a non-error outcome (see learn.ts's
  *     peekExplicitLearnInvocation / finalizeExplicitLearnInvocation, and
- *     pipeline.ts's runManualSignal caller) — this is what stops a genuinely-used
+ *     pipeline.ts's runManualSignal caller) - this is what stops a genuinely-used
  *     true from leaking into a later, unrelated capture; it covers the ordinary
  *     "typed it, it ran" case exactly.
  *   - The ask is INVALIDATED early if the user types a DIFFERENT literal slash
@@ -142,7 +142,7 @@ const ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
  *     until one of the above happens. This is an accepted, asymmetric risk: it
  *     can cause a later unrelated model-initiated capture in the same session to
  *     wrongly get the "explicit" pass, which only means it is queued for the
- *     user to accept or reject at /handbook:review — never that a real request is
+ *     user to accept or reject at /handbook:review - never that a real request is
  *     silently destroyed. The opposite mistake (treating a live explicit ask as
  *     the model's own) throws the user's capture away with no recovery, which
  *     both learn.ts's own fail-open default and this card treat as strictly
@@ -162,7 +162,7 @@ export function captureLearnInvocation(input: HookInput, home: string = handbook
   } else if (ANY_SLASH_COMMAND.test(prompt)) {
     state.explicitLearnPending = false; // explicit context switch: the ask is over
   }
-  // else: a plain-language prompt while pending — left untouched on purpose.
+  // else: a plain-language prompt while pending - left untouched on purpose.
   if (input.transcript_path) state.transcriptPath = input.transcript_path;
   saveSessionState(state, home);
   return true;
