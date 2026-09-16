@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.5] - 2026-09-16
+
+- **Asking Claude in plain language for a capture got the same free pass as typing the
+  command.** `/handbook:learn` skips the quality gate on purpose: you asked for this
+  skill, so the score travels as advice rather than a veto. But nothing stopped Claude
+  from reaching for the command itself off an ordinary sentence, and in that moment the
+  reason for the exemption is simply not true. The exemption now belongs to the person:
+  when you type the command, everything works as it did and the candidate is queued
+  whatever the gate thinks; when Claude reaches for it on your behalf, the gate keeps its
+  veto. Answering the question the command itself asks you counts as you, which took some
+  care to get right: the flag that records your request survives the turns in between
+  without ever leaking into a later, unrelated capture.
+
 ## [0.5.4] - 2026-09-16
 
 - **The repository can now measure whether a plain sentence reaches the right command.**
