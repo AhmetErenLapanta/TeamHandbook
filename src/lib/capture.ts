@@ -84,6 +84,30 @@ export function captureCorrection(input: HookInput, home: string = handbookHome(
   return true;
 }
 
+// Namespaced exactly as commands/learn.md is invoked; matches with or without
+// $ARGUMENTS after it, never a prompt that merely mentions the command in prose.
+const LEARN_SLASH_COMMAND = /^\/handbook:learn(\s|$)/;
+
+/**
+ * Record whether the prompt just typed literally is the /handbook:learn slash
+ * command, unexpanded. Measured, not assumed: dumping real hook stdin for both a
+ * typed slash command and a plain-language request that made the model invoke the
+ * same command via the Skill tool showed UserPromptSubmit carries the raw text a
+ * human submitted in both cases (the slash command included), and that the model's
+ * own Skill-tool call produces no UserPromptSubmit event of its own. So the most
+ * recent value here is the only place the two paths are told apart. Overwritten on
+ * every prompt (not just learn-shaped ones) so a stale true from three turns ago
+ * never survives into an unrelated later capture.
+ */
+export function captureLearnInvocation(input: HookInput, home: string = handbookHome()): boolean {
+  if (!input.session_id || typeof input.prompt !== "string") return false;
+  const state = loadSessionState(input.session_id, home);
+  state.lastPromptWasSlashLearn = LEARN_SLASH_COMMAND.test(input.prompt.trim());
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
+  saveSessionState(state, home);
+  return true;
+}
+
 /** Record a failed Bash command (PostToolUseFailure, or a non-zero PostToolUse). */
 export function captureBashFailure(input: HookInput, home: string = handbookHome()): boolean {
   if (input.tool_name !== "Bash" || !input.session_id) return false;

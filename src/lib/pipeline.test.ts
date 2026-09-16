@@ -528,6 +528,38 @@ describe("runManualSignal", () => {
     expect(outcome).toMatchObject({ stage: "error" });
     expect(existsSync(candidatesDir(home))).toBe(false);
   });
+
+  // This is the gate distinction: the same low-scoring signal, told apart only
+  // by trigger, ends up queued for one and dropped for the other.
+  describe("the same rejected candidate, explicit vs. model-initiated", () => {
+    const lowScore = JSON.stringify({
+      scores: { recurrence: 0, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      rationale: "too situational to generalize",
+      duplicateOf: null,
+    });
+    const runner: ClaudeRunner = async (prompt) =>
+      prompt.includes("kebab-case-skill-name") ? distillResponse : lowScore;
+
+    it("still queues it when the user explicitly typed the command (trigger: manual)", async () => {
+      const outcome = await runManualSignal(manual(), home, { runner, remoteUrl: () => null });
+      expect(outcome).toMatchObject({ stage: "written", slug: "fix-npm-test" });
+      expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+    });
+
+    it("drops it when the model invoked the command on its own (trigger: manual-model)", async () => {
+      const outcome = await runManualSignal(manual({ trigger: "manual-model" }), home, {
+        runner,
+        remoteUrl: () => null,
+      });
+      expect(outcome).toMatchObject({
+        stage: "vetoed",
+        gateTotal: 4,
+        threshold: 7,
+        rationale: "too situational to generalize",
+      });
+      expect(existsSync(candidatesDir(home))).toBe(false);
+    });
+  });
 });
 
 describe("spawnPipelineRunner", () => {

@@ -1,5 +1,5 @@
 import { readStdin } from "../lib/hook-io.js";
-import { parseLearnPayload, signalFromLearnPayload } from "../lib/learn.js";
+import { currentSessionId, learnWasExplicit, parseLearnPayload, signalFromLearnPayload } from "../lib/learn.js";
 import { runManualSignal } from "../lib/pipeline.js";
 
 function describeSieve(reason: string, detail?: string): string {
@@ -18,11 +18,19 @@ async function main(): Promise<number> {
     console.error(`error: ${error}`);
     return 2;
   }
-  const signal = signalFromLearnPayload(payload, new Date().toISOString());
+  const trigger = learnWasExplicit(currentSessionId()) ? "manual" : "manual-model";
+  const signal = signalFromLearnPayload(payload, new Date().toISOString(), trigger);
   const outcome = await runManualSignal(signal);
   switch (outcome.stage) {
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));
+      return 0;
+    case "vetoed":
+      console.log(
+        `Not captured: the gate scored it ${outcome.gateTotal ?? "?"}/10, below the ${outcome.threshold}/10 threshold` +
+          (outcome.rationale ? ` (${outcome.rationale})` : "") +
+          `. This request came from the model rather than something you explicitly typed, so the gate's rejection stands and nothing was queued.`,
+      );
       return 0;
     case "error":
       console.error(

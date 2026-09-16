@@ -431,11 +431,15 @@ export async function runHarvestJob(
   return summary;
 }
 
-// ── manual path (/handbook:learn) — unchanged behavior ─────────────────────
+// ── manual path (/handbook:learn) ───────────────────────────────────────────
 
 export type ManualOutcome =
   | { stage: "sieved"; reason: DropReason; detail?: string }
   | { stage: "error"; message: string }
+  // the model invoked /handbook:learn on its own (signal.trigger === "manual-model")
+  // and the gate rejected it: enforced, not carried as advice, because there was no
+  // explicit ask to honor
+  | { stage: "vetoed"; gateTotal: number | null; threshold: number; rationale?: string }
   | {
       stage: "written";
       slug: string;
@@ -506,11 +510,23 @@ export async function runManualSignal(
     summary.errored = 1;
     return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
   }
-  // The user explicitly asked for this skill, so it is ALWAYS distilled and
-  // queued; the gate's dissent travels with it as advice. The share decision —
-  // publish to the team or not — is the user's, at /handbook:review.
+  // A capture the user explicitly typed is ALWAYS distilled and queued; the gate's
+  // dissent travels with it as advice, and the share decision (publish to the team
+  // or not) is the user's, at /handbook:review. One the model started on its own
+  // (signal.trigger === "manual-model") gets no such pass: a rejected verdict is
+  // enforced here, the same as the automatic end-of-session harvest, because there
+  // was no explicit ask to honor.
   const total = verdict.result?.total ?? null;
   const belowThreshold = total !== null && total < scoreConfig.threshold;
+  if (verdict.outcome !== "promote" && signal.trigger !== "manual") {
+    summary.rejected = 1;
+    return finish({
+      stage: "vetoed",
+      gateTotal: total,
+      threshold: scoreConfig.threshold,
+      ...(verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}),
+    });
+  }
   const duplicateOf = verdict.result?.duplicateOf;
   const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
   if (outcome.outcome !== "distilled" || !outcome.artifact) {

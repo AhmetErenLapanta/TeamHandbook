@@ -45,6 +45,14 @@ export interface SessionState {
   // set when salvage already harvested this (possibly still-alive) session, so an
   // orphan is never harvested twice
   harvestedAt?: string;
+  // whether the prompt just submitted was the literal, unexpanded /handbook:learn
+  // slash command; measured fresh on every UserPromptSubmit (see
+  // captureLearnInvocation), because that is the only point where the user's own
+  // keystrokes are visible before Claude Code expands or acts on them. This is what
+  // lets the learn gate tell the user's own explicit ask apart from the model
+  // invoking the same command on its own initiative via the Skill tool, which
+  // produces no UserPromptSubmit event at all.
+  lastPromptWasSlashLearn?: boolean;
 }
 
 export function emptySessionState(sessionId: string): SessionState {
@@ -104,6 +112,9 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
         : {}),
       ...(typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {}),
       ...(Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}),
+      ...(typeof parsed.lastPromptWasSlashLearn === "boolean"
+        ? { lastPromptWasSlashLearn: parsed.lastPromptWasSlashLearn }
+        : {}),
     };
   } catch {
     return emptySessionState(sessionId);

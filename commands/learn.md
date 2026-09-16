@@ -4,9 +4,14 @@ argument-hint: [optional hint about which moment or task to capture]
 ---
 
 The user wants to capture something from this session on demand, without waiting for the
-end-of-session harvest. Because the user explicitly asked, the candidate is ALWAYS
-distilled and queued — the gate scores it, but its verdict travels as advice for the
-review, not as a veto. Only the secret scan can still drop it entirely.
+end-of-session harvest. If the user typed `/handbook:learn` themselves, the candidate is
+ALWAYS distilled and queued - the gate scores it, but its verdict travels as advice for
+the review, not as a veto. This command has no `disable-model-invocation` guard, though,
+so it can also start from a plain-language request with no literal `/handbook:learn` in
+the transcript ("capture that as a skill"). In that case there was no explicit ask to
+honor, so the gate's rejection is enforced instead: a low-scoring candidate is dropped,
+not queued, and the CLI says so. Either way, only the secret scan can drop a candidate
+the gate would otherwise have queued.
 
 There are TWO capture modes. Pick the one that matches what happened:
 
@@ -52,8 +57,9 @@ Procedure:
    Never put secrets, tokens, or passwords in the payload — the secret scan will veto
    the whole candidate.
 4. Relay the CLI's verdict to the user verbatim: written (with slug and gate score —
-   including the gate's concern when the score is below the threshold), or dropped by a
-   rule sieve (secret / oversized).
+   including the gate's concern when the score is below the threshold), dropped by a
+   rule sieve (secret / oversized), or - only possible when you invoked this yourself,
+   not the user - not captured because the gate rejected it.
 
 This uses the user's own `claude` CLI and runs two calls back to back — it scores, then
 distills — so it may take a couple of minutes. That is normal; do not cancel it. If it
