@@ -1,5 +1,11 @@
 import { readStdin } from "../lib/hook-io.js";
-import { currentSessionId, learnWasExplicit, parseLearnPayload, signalFromLearnPayload } from "../lib/learn.js";
+import {
+  currentSessionId,
+  finalizeExplicitLearnInvocation,
+  parseLearnPayload,
+  peekExplicitLearnInvocation,
+  signalFromLearnPayload,
+} from "../lib/learn.js";
 import { runManualSignal } from "../lib/pipeline.js";
 
 function describeSieve(reason: string, detail?: string): string {
@@ -18,9 +24,15 @@ async function main(): Promise<number> {
     console.error(`error: ${error}`);
     return 2;
   }
-  const trigger = learnWasExplicit(currentSessionId()) ? "manual" : "manual-model";
+  const sessionId = currentSessionId();
+  const trigger = peekExplicitLearnInvocation(sessionId) ? "manual" : "manual-model";
   const signal = signalFromLearnPayload(payload, new Date().toISOString(), trigger);
   const outcome = await runManualSignal(signal);
+  // Consume the pending ask only once the run actually produced an outcome. An
+  // "error" (claude unreachable, timed out) leaves the ask pending so the user's
+  // natural next move — retrying in plain language — is still judged "manual",
+  // not silently downgraded because the first attempt happened to fail.
+  if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));

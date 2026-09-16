@@ -70,6 +70,27 @@ describe("buildScorePrompt", () => {
     expect(prompt).toContain("fix-npm-cache:\n  Use when npm install fails on a stale cache.");
     expect(prompt).toContain('"duplicateOf"');
   });
+
+  // A manual-model capture (the model invoked /handbook:learn on its
+  // own) has no ledger history either — it is scored on this same call, the same
+  // as a user-typed manual capture — so it must get the same no-ledger-history
+  // recurrence guidance, not be silently judged by the raw occurrence count.
+  it("gives manual-model the same no-ledger-history recurrence guidance as manual", () => {
+    const manualPrompt = buildScorePrompt(candidate({ trigger: "manual" }), 1);
+    const manualModelPrompt = buildScorePrompt(candidate({ trigger: "manual-model" }), 1);
+    expect(manualPrompt).toContain("no ledger history");
+    expect(manualModelPrompt).toContain("no ledger history");
+    // same trigger framing text for both, so scoring is not skewed by which one
+    // asked
+    const extractTriggerLine = (p: string) => p.split("\n").find((l) => l.startsWith("- trigger:"));
+    expect(extractTriggerLine(manualModelPrompt)).toBe(extractTriggerLine(manualPrompt));
+  });
+
+  it("omits the no-ledger-history guidance for an automatic harvest signal", () => {
+    const prompt = buildScorePrompt(candidate({ trigger: undefined }), 4);
+    expect(prompt).not.toContain("no ledger history");
+    expect(prompt).not.toMatch(/^- trigger:/m);
+  });
 });
 
 describe("parseScoreResponse", () => {

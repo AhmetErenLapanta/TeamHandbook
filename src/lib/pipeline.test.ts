@@ -22,6 +22,9 @@ import type { Signal } from "./signals.js";
 import type { HarvestJob } from "./harvest.js";
 import { candidatesDir } from "./skill-index.js";
 import { emptySessionState, loadSessionState, saveSessionState } from "./session-state.js";
+import { captureLearnInvocation } from "./capture.js";
+import { finalizeExplicitLearnInvocation, peekExplicitLearnInvocation } from "./learn.js";
+import type { HookInput } from "./hook-io.js";
 
 function candidate(overrides: Partial<Signal> = {}): Signal {
   return {
@@ -558,6 +561,105 @@ describe("runManualSignal", () => {
         rationale: "too situational to generalize",
       });
       expect(existsSync(candidatesDir(home))).toBe(false);
+    });
+  });
+
+  // End-to-end proof of the exact scenario an independent audit
+  // measured as broken. Before the fix, step 2 of the flow below (the user
+  // answering the gate's own clarifying question, itself a fresh UserPromptSubmit)
+  // overwrote the pending explicit-ask flag to false, so trigger came out
+  // "manual-model" and a low-scoring candidate the user explicitly asked for was
+  // vetoed and lost. After the fix it stays "manual": the candidate is queued
+  // regardless of the gate's score, exactly like a single-turn explicit capture.
+  describe("The user answers the gate's own clarifying question", () => {
+    function promptInput(prompt: string): HookInput {
+      return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt };
+    }
+
+    const lowScore = JSON.stringify({
+      scores: { recurrence: 0, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      rationale: "too situational to generalize",
+      duplicateOf: null,
+    });
+    const runner: ClaudeRunner = async (prompt) =>
+      prompt.includes("kebab-case-skill-name") ? distillResponse : lowScore;
+
+    it("still queues the candidate after a single clarifying answer", async () => {
+      // 1. user types '/handbook:learn'
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      // 2. learn.md step 2: nothing matched yet, so the product asks; the user
+      //    answers in plain language, which is itself a new UserPromptSubmit
+      captureLearnInvocation(
+        promptInput("it was the npm test flakiness we fixed with a retry wrapper"),
+        home,
+      );
+      // 3. the capture runs, exactly as cli/learn.ts decides its trigger
+      const trigger = peekExplicitLearnInvocation("s1", home) ? "manual" : "manual-model";
+      expect(trigger).toBe("manual");
+
+      const outcome = await runManualSignal(
+        manual({
+          trigger,
+          task: { goal: "fix npm test flakiness", steps: ["add retry wrapper", "rerun npm test"] },
+        }),
+        home,
+        { runner, remoteUrl: () => null },
+      );
+      finalizeExplicitLearnInvocation("s1", home);
+
+      expect(outcome).toMatchObject({ stage: "written", gateTotal: 4, belowThreshold: true });
+      expect(existsSync(candidatesDir(home))).toBe(true);
+      // and the ask is now consumed, not left to leak into a later capture
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(false);
+    });
+
+    // Criterion 2 is "not a single case lost" — including a clarification that
+    // takes more than one round trip (which mode? which case? more detail?).
+    it("still queues the candidate after a multi-turn clarification", async () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("the npm test flakiness"), home);
+      captureLearnInvocation(promptInput("mode A, the error->fix one"), home);
+      captureLearnInvocation(promptInput("the retry wrapper is what fixed it"), home);
+
+      const trigger = peekExplicitLearnInvocation("s1", home) ? "manual" : "manual-model";
+      expect(trigger).toBe("manual");
+
+      const outcome = await runManualSignal(manual({ trigger }), home, { runner, remoteUrl: () => null });
+
+      expect(outcome).toMatchObject({ stage: "written" });
+      expect(existsSync(candidatesDir(home))).toBe(true);
+    });
+
+    // The second risk, closed together with the first: a failed run (claude
+    // unreachable) must not spend the user's explicit ask, or their natural
+    // retry gets misjudged as the model acting on its own.
+    it("keeps the ask pending across a failed run, so a retry is still judged manual", async () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("the npm test flakiness fix"), home);
+
+      const failingOutcome = await runManualSignal(manual({ trigger: "manual" }), home, {
+        runner: async () => {
+          throw new Error("claude unavailable");
+        },
+        remoteUrl: () => null,
+      });
+      expect(failingOutcome).toMatchObject({ stage: "error" });
+      // cli/learn.ts only finalizes on a non-error outcome
+      expect(peekExplicitLearnInvocation("s1", home)).toBe(true);
+
+      // the user retries in plain language; the ask is still pending
+      captureLearnInvocation(promptInput("let's try that capture again"), home);
+      const retryTrigger = peekExplicitLearnInvocation("s1", home) ? "manual" : "manual-model";
+      expect(retryTrigger).toBe("manual");
+
+      const outcome = await runManualSignal(manual({ trigger: retryTrigger }), home, {
+        runner,
+        remoteUrl: () => null,
+      });
+      finalizeExplicitLearnInvocation("s1", home);
+
+      expect(outcome).toMatchObject({ stage: "written" });
+      expect(existsSync(candidatesDir(home))).toBe(true);
     });
   });
 });

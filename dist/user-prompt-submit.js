@@ -130,7 +130,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
-      ...typeof parsed.lastPromptWasSlashLearn === "boolean" ? { lastPromptWasSlashLearn: parsed.lastPromptWasSlashLearn } : {}
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -154,10 +154,18 @@ function captureCorrection(input, home = handbookHome()) {
   return true;
 }
 var LEARN_SLASH_COMMAND = /^\/handbook:learn(\s|$)/;
+var ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
 function captureLearnInvocation(input, home = handbookHome()) {
   if (!input.session_id || typeof input.prompt !== "string") return false;
   const state = loadSessionState(input.session_id, home);
-  state.lastPromptWasSlashLearn = LEARN_SLASH_COMMAND.test(input.prompt.trim());
+  const prompt = input.prompt.trim();
+  if (LEARN_SLASH_COMMAND.test(prompt)) {
+    state.explicitLearnPending = true;
+  } else if (state.explicitLearnPending !== true) {
+    state.explicitLearnPending = false;
+  } else if (ANY_SLASH_COMMAND.test(prompt)) {
+    state.explicitLearnPending = false;
+  }
   if (input.transcript_path) state.transcriptPath = input.transcript_path;
   saveSessionState(state, home);
   return true;
