@@ -7,6 +7,7 @@ import {
   assertSafeGitUrl,
   clearTeamConfig,
   formatInitSuccess,
+  formatLeaveSuccess,
   teamSkillsDir,
   hostFromUrl,
   initTeamRepo,
@@ -144,6 +145,60 @@ describe("skeletonFiles", () => {
     expect(gitlab[".github/workflows/version-bump.yml"]).toBeUndefined();
     const unknown = skeletonFiles("s", "git@code.acme.com:a/s.git", "code.acme.com", "", true);
     expect(unknown[".gitlab-ci.yml"]).toBeDefined();
+  });
+
+  it("produces a notice that announces a merged MCP server, not just skills", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
+    const run = (): string =>
+      execFileSync("node", ["hooks/notice.mjs"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+      });
+    try {
+      writeSkeleton(dir, skeletonFiles("acme", "git@github.com:a/s.git", "github.com"));
+      mkdirSync(join(dir, "skills", "fix-npm-test"), { recursive: true });
+      // first run only records what is already there
+      expect(run()).toBe("");
+
+      writeFileSync(
+        join(dir, ".mcp.json"),
+        JSON.stringify({ mcpServers: { gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } } }),
+      );
+      mkdirSync(join(dir, "skills", "fix-eslint"), { recursive: true });
+      const notice = run();
+
+      expect(notice).toContain("1 new skill(s) and 1 new MCP server(s) since your last session");
+      expect(notice).toContain("fix-eslint");
+      expect(notice).toContain("gitlab (MCP)");
+      // and it does not repeat itself the next time
+      expect(run()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(consumerHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a bare server map too, which is the other shape plugins declare in the field", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
+    const run = (): string =>
+      execFileSync("node", ["hooks/notice.mjs"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+      });
+    try {
+      writeSkeleton(dir, skeletonFiles("acme", "git@github.com:a/s.git", "github.com"));
+      expect(run()).toBe("");
+      writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ terraform: { command: "terraform-mcp" } }));
+
+      expect(run()).toContain("1 new MCP server(s) since your last session: terraform (MCP)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(consumerHome, { recursive: true, force: true });
+    }
   });
 
   it("produces a bump script that actually increments the patch version", () => {
@@ -520,6 +575,33 @@ describe("formatInitSuccess", () => {
     expect(text).toContain("/handbook:join git@x.com:a/b.git");
     expect(text).toContain("/plugin marketplace add git@x.com:a/b.git");
     expect(text).toContain("/plugin install acme-skills");
+  });
+});
+
+describe("formatLeaveSuccess", () => {
+  const team = { repoUrl: "git@x.com:a/b.git", marketplaceName: "acme-skills" };
+
+  it("given team-scoped candidates left in the queue, when the team binding is cleared, then the message sends the user to an explicit --to", () => {
+    const text = formatLeaveSuccess(team);
+
+    expect(text).toContain("--to personal");
+    expect(text).toContain("--to project");
+    expect(text).toMatch(/marked for the team/i);
+  });
+
+  it("given an approval that is still ahead, when the message describes where a project skill lands, then it names the capturing project rather than the current one", () => {
+    const text = formatLeaveSuccess(team);
+
+    expect(text).toMatch(/captured in/i);
+    expect(text).not.toMatch(/install into the current project/i);
+  });
+
+  it("given the parts of the old message that were true, when it is reformatted, then the join command and the separate marketplace subscription survive", () => {
+    const text = formatLeaveSuccess(team);
+
+    expect(text).toContain("git@x.com:a/b.git");
+    expect(text).toContain("/handbook:join");
+    expect(text).toContain("/plugin marketplace remove acme-skills");
   });
 });
 

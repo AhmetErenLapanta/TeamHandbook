@@ -188,7 +188,7 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync2, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function candidateMetaFile(dir) {
@@ -283,7 +283,7 @@ function summarizeUsage(usage, known) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
 import { join as join9 } from "node:path";
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
