@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approveAndDeliver } from "../lib/deliver.js";
+import { approveAndDeliver, projectTargetLabel } from "../lib/deliver.js";
 import type { DeliveryTarget } from "../lib/deliver.js";
 import {
   decideCandidate,
@@ -51,12 +51,21 @@ function showCandidate(home: string, slug: string): void {
   } else {
     console.log("score:     n/a");
   }
+  // "Add it to a project" is offered for every candidate, whatever we suggest, and it
+  // installs where the candidate was captured - which is not always the project the
+  // reviewer is in. The dialog is built from this output, so the destination is printed
+  // for all of them; only the suggestion below, when it already names it, makes this
+  // line a repeat. It reads the cwd approveAndDeliver itself falls back to, so the
+  // destination shown here is the one the copy will use.
+  if (meta && meta.suggestedTarget !== "project") {
+    console.log(`project:   ${projectTargetLabel(meta, process.cwd())}`);
+  }
   if (meta?.suggestedTarget) {
     const where =
       meta.suggestedTarget === "personal"
         ? "keep for yourself (~/.claude/skills)"
         : meta.suggestedTarget === "project"
-          ? "this project's .claude/skills"
+          ? projectTargetLabel(meta, process.cwd())
           : "share with the team (PR)";
     console.log(`suggested: ${where}`);
   }
@@ -134,10 +143,12 @@ function approveOne(home: string, slug: string, to?: DeliveryTarget): void {
     const loads = result.originProject
       ? `Claude will load it in ${result.originProject} (where it was captured) next session`
       : "Claude will load it next session";
-    console.log(
-      `Approved "${slug}" and installed it at ${result.deliveredTo}. ` +
-        `${loads}. Commit this directory so the skill travels with the repo.`,
-    );
+    // "this directory" is only the right repo to commit when the skill landed here; when
+    // it landed in the project it was captured in, that is the repo the skill travels with.
+    const commit = result.originProject
+      ? "Commit it there so the skill travels with that repo."
+      : "Commit this directory so the skill travels with the repo.";
+    console.log(`Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
   }
 }
 
