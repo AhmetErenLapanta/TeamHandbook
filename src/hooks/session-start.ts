@@ -63,8 +63,12 @@ function salvageOrphans(currentSessionId?: string): void {
   // real home: two jobs sat at attempts 1 for 23 hours across many sessions, while the
   // start notice kept telling the user they were "harvesting in the background". A
   // transient failure became a permanent loss. Draining an empty queue costs one
-  // readdir and no model call; a retry spends the attempt the failed job already
-  // budgeted, and MAX_HARVEST_ATTEMPTS still ends it at three.
+  // readdir and no model call, and the retry cannot run away: drainHarvestJobs spends
+  // an attempt at the CLAIM and writes it to the job before the model call, so a job
+  // whose runners keep being killed is abandoned after MAX_HARVEST_ATTEMPTS claims
+  // rather than costing one model call per session start forever. Counting attempts
+  // where the failure is reported would have capped nothing here, because a killed
+  // runner never gets to report anything.
   if (enqueued > 0 || hasPendingHarvestJobs()) {
     spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
   }

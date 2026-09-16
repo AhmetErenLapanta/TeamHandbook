@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   abandonedFile,
   drainHarvestJobs,
@@ -183,7 +183,9 @@ describe("runHarvestJob", () => {
     for (const c of requeued) releaseHarvestJob(c.claimedFile);
     expect(readCounters(home).gateErrors).toBe(1);
 
-    await runHarvestJob({ ...job(home), attempts: 2 }, home, { ...deps, runner: down });
+    // attempts counts CLAIMS, so a job carrying 3 has spent the budget: this failure
+    // is the third, and it ends the job rather than queueing a fourth
+    await runHarvestJob({ ...job(home), attempts: 3 }, home, { ...deps, runner: down });
     expect(drainHarvestJobs(home)).toEqual([]); // gone from the queue
     expect(readCounters(home).gateAbandoned).toBe(1); // but counted
     expect(JSON.parse(readFileSync(abandonedFile(home), "utf8").trim()).sessionId).toBe("s1");
@@ -523,6 +525,122 @@ describe("a failed harvest is picked up again", () => {
     expect(hasPendingHarvestJobs(home)).toBe(false);
     releaseHarvestJob(claimed[0]!.claimedFile);
     expect(hasPendingHarvestJobs(home)).toBe(false);
+  });
+});
+
+describe("a job whose runner is killed instead of failing", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const deps = { listSkills: () => [], skillDirs: () => [], remoteUrl: () => null };
+
+  /** the machine dies mid-harvest: nothing is logged, nothing is released, and the
+   * claim sits there until it ages past the horizon and the queue hands it back */
+  function killRunner(claimedFile: string): void {
+    const dead = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimedFile, dead, dead);
+  }
+
+  it("given a runner killed before it could report anything, when the queue hands the job back, then the attempt it spent is already on the job", () => {
+    enqueueHarvestJob(job(home), home);
+    const first = drainHarvestJobs(home);
+    expect(first[0]!.job.attempts).toBe(1);
+    killRunner(first[0]!.claimedFile);
+
+    const second = drainHarvestJobs(home);
+    expect(second[0]!.job.attempts).toBe(2);
+    // on disk too, or the next kill would start counting from zero all over again
+    expect(JSON.parse(readFileSync(second[0]!.claimedFile, "utf8")).attempts).toBe(2);
+    for (const c of second) releaseHarvestJob(c.claimedFile);
+  });
+
+  it("given every runner killed mid-harvest, when session after session hands the job back, then it is abandoned at the cap and leaves the queue", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed: number[] = [];
+    for (let session = 0; session < 5; session++) {
+      for (const c of drainHarvestJobs(home)) {
+        claimed.push(c.job.attempts!);
+        killRunner(c.claimedFile);
+      }
+    }
+    expect(claimed).toEqual([1, 2, 3]); // the fourth session finds nothing left to claim
+    expect(readdirSync(pendingDir(home))).toEqual([]);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+    expect(readCounters(home).gateAbandoned).toBe(1);
+    expect(JSON.parse(readFileSync(abandonedFile(home), "utf8").trim()).sessionId).toBe("s1");
+  });
+
+  it("given one killed runner, when the next session's runner claims the job, then the harvest runs and the session's lessons land", async () => {
+    enqueueHarvestJob(job(home), home);
+    const killed = drainHarvestJobs(home);
+    killRunner(killed[0]!.claimedFile);
+
+    const next = drainHarvestJobs(home);
+    const summary = await runHarvestJob(next[0]!.job, home, { ...deps, runner: async () => harvestReply });
+    releaseHarvestJob(next[0]!.claimedFile);
+
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+    expect(readCounters(home).gateAbandoned).toBe(0);
+  });
+
+  it("given a model call that keeps failing, when the retries are drained, then the job still costs exactly three model calls", async () => {
+    let calls = 0;
+    const down: ClaudeRunner = async () => {
+      calls += 1;
+      throw new Error("logged out");
+    };
+    enqueueHarvestJob(job(home), home);
+    for (let session = 0; session < 5; session++) {
+      for (const c of drainHarvestJobs(home)) {
+        await runHarvestJob(c.job, home, { ...deps, runner: down });
+        releaseHarvestJob(c.claimedFile);
+      }
+    }
+    // charging the claim must not shorten the retry budget a transient failure gets
+    expect(calls).toBe(3);
+    expect(readCounters(home).gateAbandoned).toBe(1);
+    expect(readdirSync(pendingDir(home))).toEqual([]);
+  });
+
+  it("given a job handed back round after round, when it is reclaimed, then its file name does not grow", () => {
+    enqueueHarvestJob(job(home), home);
+    const names: string[] = [];
+    for (let session = 0; session < 3; session++) {
+      for (const c of drainHarvestJobs(home)) {
+        names.push(basename(c.claimedFile));
+        killRunner(c.claimedFile);
+      }
+    }
+    // one stamp, replaced each round: a chain of them grew 24 bytes a reclaim and
+    // would have ended the loop with ENAMETOOLONG instead of with a decision
+    expect(names[2]!.length).toBe(names[1]!.length);
+    expect(names[2]!.match(/reclaimed-/g)).toHaveLength(1);
+  });
+
+  it("given a temp left behind by a runner killed mid-write, when the queue is drained past the claim horizon, then it is swept", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed = drainHarvestJobs(home)[0]!.claimedFile;
+    // built the way fs-atomic builds it (pid, seq, base36 hrtime), so this stays a
+    // test of the sweep's pattern rather than of a name typed out here
+    const leaked = `${claimed}.tmp-${process.pid}-0-${process.hrtime.bigint().toString(36)}`;
+    writeFileSync(leaked, JSON.stringify({ sessionId: "s1" }));
+    const dead = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(leaked, dead, dead);
+    utimesSync(claimed, dead, dead);
+
+    drainHarvestJobs(home);
+    // notify counts every pending name containing ".json" as a session being
+    // harvested, so a leaked temp would report one forever
+    expect(existsSync(leaked)).toBe(false);
   });
 });
 
