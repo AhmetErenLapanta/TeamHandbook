@@ -907,6 +907,13 @@ function enqueueHarvestJob(job, home = handbookHome()) {
   }
   return null;
 }
+function hasPendingHarvestJobs(home = handbookHome()) {
+  try {
+    return readdirSync6(pendingDir(home)).some((entry) => entry.endsWith(".json"));
+  } catch {
+    return false;
+  }
+}
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -948,7 +955,7 @@ function salvageOrphans(currentSessionId) {
     saveSessionState(fresh);
     enqueued += 1;
   }
-  if (enqueued > 0) {
+  if (enqueued > 0 || hasPendingHarvestJobs()) {
     spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
   }
 }

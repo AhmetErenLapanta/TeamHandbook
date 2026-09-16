@@ -8,6 +8,7 @@ import {
   harvestedDir,
   releaseHarvestJob,
   enqueueHarvestJob,
+  hasPendingHarvestJobs,
   pendingDir,
   pipelineLogFile,
   runHarvestJob,
@@ -443,6 +444,70 @@ describe("harvest once per transcript state", () => {
     const again = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
     expect(calls.n).toBe(1);
     expect(again.outcome).toBe("skipped");
+  });
+});
+
+describe("a failed harvest is picked up again", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const deps = { listSkills: () => [], skillDirs: () => [], remoteUrl: () => null };
+  const down: ClaudeRunner = async () => {
+    throw new Error("logged out");
+  };
+
+  it("given a job whose model call failed, when the queue is drained again, then it is claimed again and its attempts go up", async () => {
+    await runHarvestJob(job(home), home, { ...deps, runner: down });
+
+    const second = drainHarvestJobs(home);
+    expect(second).toHaveLength(1);
+    expect(second[0]!.job.attempts).toBe(1);
+    await runHarvestJob(second[0]!.job, home, { ...deps, runner: down });
+    releaseHarvestJob(second[0]!.claimedFile);
+
+    const third = drainHarvestJobs(home);
+    expect(third).toHaveLength(1);
+    expect(third[0]!.job.attempts).toBe(2);
+    // the retry carries the ORIGINAL evidence, not a re-derived one: a transient
+    // failure must cost nothing but the attempt
+    expect(third[0]!.job.sessionId).toBe("s1");
+    expect(readCounters(home).gateErrors).toBe(2);
+    expect(readCounters(home).gateAbandoned).toBe(0);
+    for (const c of third) releaseHarvestJob(c.claimedFile);
+  });
+
+  it("given a retry whose model call works, when it runs, then the session's lessons land after all", async () => {
+    await runHarvestJob(job(home), home, { ...deps, runner: down });
+    const retry = drainHarvestJobs(home);
+    const summary = await runHarvestJob(retry[0]!.job, home, { ...deps, runner: async () => harvestReply });
+    releaseHarvestJob(retry[0]!.claimedFile);
+
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+    expect(hasPendingHarvestJobs(home)).toBe(false); // nothing left owed
+  });
+
+  it("given a queue holding a retry, when a session starts, then the runner has something to find", () => {
+    expect(hasPendingHarvestJobs(home)).toBe(false); // no pending dir at all yet
+    enqueueHarvestJob(job(home), home);
+    expect(hasPendingHarvestJobs(home)).toBe(true);
+  });
+
+  it("given a job another runner is already harvesting, when a session starts, then no second runner is spawned for it", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed = drainHarvestJobs(home);
+    expect(claimed).toHaveLength(1);
+    // in flight as `<job>.json.claimed-<pid>`: the queue owes nothing to a new runner
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+    releaseHarvestJob(claimed[0]!.claimedFile);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
   });
 });
 
