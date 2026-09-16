@@ -61,9 +61,17 @@ const evidence: HarvestEvidence = {
   recurrence: { abcdefabcdefabcd: 3 },
 };
 
+// What the model was actually shown. parseHarvestResponse now needs it: an item
+// whose anchor cannot be found in this text is refused.
+const grounding = {
+  slice: "User: we keep feature flags in config, never env vars",
+  corrections: ["we keep feature flags in config, never env vars"],
+  pairFingerprints: new Set(["abcdefabcdefabcd"]),
+};
+
 describe("parseHarvestResponse", () => {
   it("parses a valid array and computes totals", () => {
-    const parsed = parseHarvestResponse(JSON.stringify([rawItem()]));
+    const parsed = parseHarvestResponse(JSON.stringify([rawItem()]), grounding);
     expect(parsed).toHaveLength(1);
     expect(parsed![0]!.total).toBe(7);
   });
@@ -76,23 +84,23 @@ describe("parseHarvestResponse", () => {
       rawItem({ scores: { recurrence: 5 } }),
       rawItem({ name: "" }),
     ])}\nDone.`;
-    expect(parseHarvestResponse(raw)).toHaveLength(1);
+    expect(parseHarvestResponse(raw, grounding)).toHaveLength(1);
   });
 
   it("fails closed on non-JSON and non-array replies", () => {
-    expect(parseHarvestResponse("I could not find any lessons.")).toBeNull();
-    expect(parseHarvestResponse('{"kind":"correction"}')).toBeNull();
-    expect(parseHarvestResponse("[not json")).toBeNull();
+    expect(parseHarvestResponse("I could not find any lessons.", grounding)).toBeNull();
+    expect(parseHarvestResponse('{"kind":"correction"}', grounding)).toBeNull();
+    expect(parseHarvestResponse("[not json", grounding)).toBeNull();
   });
 
   it("accepts an empty array as a valid answer", () => {
-    expect(parseHarvestResponse("[]")).toEqual([]);
+    expect(parseHarvestResponse("[]", grounding)).toEqual([]);
   });
   it("given prose after the array containing a bracket, when parsed, then the array is still read", () => {
     const raw =
       '```json\n[]\n```\n\nNothing new here — see [the earlier note] for why.';
 
-    expect(parseHarvestResponse(raw)).toEqual([]);
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
   });
 
   it("given a bracket in the prose BEFORE the array, when parsed, then the real array is found", () => {
@@ -102,13 +110,14 @@ describe("parseHarvestResponse", () => {
       description: "Use when ...",
       body: "b",
       expect: "e",
+      quote: "we keep feature flags in config, never env vars",
       scope: "team",
       scores: { recurrence: 1, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
       total: 5,
     };
     const raw = `Looking at [the session] I found this:\n\n[${JSON.stringify(item)}]`;
 
-    expect(parseHarvestResponse(raw)).toHaveLength(1);
+    expect(parseHarvestResponse(raw, grounding)).toHaveLength(1);
   });
 
   it("given a body containing brackets and escaped quotes, when parsed, then the array is not cut short", () => {
@@ -123,13 +132,97 @@ describe("parseHarvestResponse", () => {
       total: 5,
     };
 
-    expect(parseHarvestResponse(JSON.stringify([item]))).toHaveLength(1);
+    expect(parseHarvestResponse(JSON.stringify([item]), grounding)).toHaveLength(1);
   });
 
   it("given a reply with no array at all, when parsed, then it fails closed", () => {
-    expect(parseHarvestResponse("I could not find anything worth keeping.")).toBeNull();
+    expect(parseHarvestResponse("I could not find anything worth keeping.", grounding)).toBeNull();
   });
 
+  it("given a correction with no quote, when parsed, then it is refused", () => {
+    const raw = JSON.stringify([rawItem({ quote: undefined })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
+  it("given a correction quoting words nobody typed, when parsed, then it is refused", () => {
+    const raw = JSON.stringify([rawItem({ quote: "we always deploy straight to production" })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
+  it("given a quote that differs only in case and spacing, when parsed, then it still counts", () => {
+    const raw = JSON.stringify([rawItem({ quote: "We Keep   Feature Flags In Config, Never Env Vars" })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toHaveLength(1);
+  });
+
+  it("given a quote the model re-punctuated, when parsed, then it is refused on purpose", () => {
+    // Deliberately strict. Of 32 quotes real sessions produced, 31 matched exactly
+    // and 1 through its elisions; none needed a looser rule, so a quote that is not
+    // what was typed is treated as the model not quoting.
+    const raw = JSON.stringify([rawItem({ quote: "We keep feature flags in config -- never env vars!" })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
+  it("given a long quote whose middle the model elided, when parsed, then every piece is checked and it survives", () => {
+    // measured on a real session: a 717-character teaching came back as its opening
+    // and closing sentences joined by "...", and an exact-match check refused it
+    const elided = rawItem({
+      quote: "we keep feature flags in config ... never env vars",
+    });
+
+    expect(parseHarvestResponse(JSON.stringify([elided]), grounding)).toHaveLength(1);
+  });
+
+  it("given an elided quote with a piece nobody typed, when parsed, then it is still refused", () => {
+    const halfInvented = rawItem({
+      quote: "we keep feature flags in config ... and we deploy straight to production",
+    });
+
+    expect(parseHarvestResponse(JSON.stringify([halfInvented]), grounding)).toEqual([]);
+  });
+
+  it("given a quote too short to mean anything, when parsed, then it is refused", () => {
+    const raw = JSON.stringify([rawItem({ quote: "we keep" })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
+  it("given an error-fix naming a pair the session never produced, when parsed, then it is refused", () => {
+    const invented = rawItem({
+      kind: "error-fix",
+      name: "invented-fix",
+      quote: undefined,
+      source: "pair:0123456789abcdef",
+    });
+
+    expect(parseHarvestResponse(JSON.stringify([invented]), grounding)).toEqual([]);
+  });
+
+  it("given an error-fix with no source at all, when parsed, then it is refused", () => {
+    const raw = JSON.stringify([rawItem({ kind: "error-fix", name: "sourceless", quote: undefined })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
+  it("given an error-fix naming a real pair, when parsed, then it survives", () => {
+    const grounded = rawItem({
+      kind: "error-fix",
+      name: "real-fix",
+      quote: undefined,
+      source: "pair:abcdefabcdefabcd",
+    });
+
+    expect(parseHarvestResponse(JSON.stringify([grounded]), grounding)).toHaveLength(1);
+  });
+
+  it("given a discovery, when parsed, then no anchor is demanded of it", () => {
+    const raw = JSON.stringify([rawItem({ kind: "discovery", name: "d", quote: undefined })]);
+
+    expect(parseHarvestResponse(raw, grounding)).toHaveLength(1);
+  });
 });
 
 describe("sieveHarvestItems", () => {
@@ -166,6 +259,74 @@ describe("sieveHarvestItems", () => {
     const { kept, dropped } = sieveHarvestItems(items, { ...context, maxPerSession: 2 });
     expect(kept.map((i) => i.total)).toEqual([9, 8]);
     expect(dropped.filter((d) => d.reason === "over-cap")).toHaveLength(2);
+  });
+
+  it("given three discoveries, when sieved, then only one survives the kind quota", () => {
+    const items = [
+      item({ kind: "discovery", name: "first-discovery" }),
+      item({ kind: "discovery", name: "second-discovery" }),
+      item({ kind: "discovery", name: "third-discovery" }),
+    ];
+
+    const { kept, dropped } = sieveHarvestItems(items, context);
+
+    expect(kept.map((i) => i.name)).toEqual(["first-discovery"]);
+    expect(dropped.map((d) => [d.item.name, d.reason])).toEqual([
+      ["second-discovery", "kind-quota"],
+      ["third-discovery", "kind-quota"],
+    ]);
+  });
+
+  it("given a lower-scoring discovery emitted first, when sieved, then IT is the one kept", () => {
+    // The whole point of the quota running before the sort. The model is asked for
+    // items in priority order; the score is not a better judge of which discovery to
+    // keep, so the first one wins even though a later one scores higher.
+    const weakFirst = item({
+      kind: "discovery",
+      name: "emitted-first",
+      scores: { recurrence: 0, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      total: 4,
+    });
+    const strongLater = item({
+      kind: "discovery",
+      name: "emitted-later",
+      scores: { recurrence: 2, unfindability: 2, generality: 2, durability: 2, costOfError: 2 },
+      total: 10,
+    });
+
+    const { kept, dropped } = sieveHarvestItems([weakFirst, strongLater], context);
+
+    expect(kept.map((i) => i.name)).toEqual(["emitted-first"]);
+    expect(dropped).toEqual([{ item: strongLater, reason: "kind-quota" }]);
+  });
+
+  it("given a first discovery that fails a veto, when sieved, then it does not burn the quota slot", () => {
+    // The quota runs after the vetoes on purpose: an item that was never going to be
+    // written must not cost the one slot a real discovery could have used.
+    const doomed = item({ kind: "discovery", name: "leaky", body: "token=sk-proj-abcdef1234567890ABCDEFGH" });
+    const real = item({ kind: "discovery", name: "real-one" });
+
+    const { kept, dropped } = sieveHarvestItems([doomed, real], context);
+
+    expect(kept.map((i) => i.name)).toEqual(["real-one"]);
+    expect(dropped.map((d) => d.reason)).toEqual(["secret"]);
+  });
+
+  it("given the quota and the per-session cap both bite, when sieved, then each drop keeps its own reason", () => {
+    const items = [
+      item({ kind: "discovery", name: "kept-discovery", scores: { recurrence: 0, unfindability: 1, generality: 1, durability: 1, costOfError: 1 }, total: 4 }),
+      item({ kind: "discovery", name: "second-discovery", total: 10 }),
+      item({ kind: "correction", name: "strong-correction", total: 9 }),
+      item({ kind: "correction", name: "weaker-correction", total: 8 }),
+    ];
+
+    const { kept, dropped } = sieveHarvestItems(items, { ...context, maxPerSession: 2 });
+
+    expect(kept.map((i) => i.name)).toEqual(["strong-correction", "weaker-correction"]);
+    expect(dropped.map((d) => [d.item.name, d.reason]).sort()).toEqual([
+      ["kept-discovery", "over-cap"],
+      ["second-discovery", "kind-quota"],
+    ]);
   });
 
   it("drops muted fingerprints (reject --never keeps working)", () => {
@@ -263,6 +424,64 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).not.toContain("typed in earlier sessions too");
   });
 
+  it("given the prompt is built, then discovery is defined as a way of working, not a fact", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence,
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).toContain("a repeatable way of working this session uncovered");
+    expect(prompt).toContain("change how the NEXT piece of work is done");
+    expect(prompt).not.toContain("a non-obvious convention, environment quirk, or trap uncovered");
+    // measured: without this line the model relabelled procedures as discoveries
+    // (procedure 7 -> 2, discovery 22 -> 24 across 17 replayed sessions)
+    expect(prompt).toContain("is a procedure, not a discovery");
+    // the quota is enforced in the sieve either way, but saying so makes the model's
+    // own ordering - which is what the quota keeps - worth something
+    expect(prompt).toContain("At most ONE");
+  });
+
+  it("given the prompt is built, then the two exclusions are stated as exclusions, not as a score hint", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "",
+      evidence,
+      existingSkills: [],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).toContain("anything a stronger model would already get right on its own");
+    expect(prompt).toContain("only states a fact about ONE system");
+    // the old wording invited the model to keep them with a low score
+    expect(prompt).not.toContain("README/tests score low");
+  });
+
+  it("given the new criterion, when the prompt is built, then it sits in the instructions and not inside the fence", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "User: never use Lombok here",
+      evidence,
+      existingSkills: [{ name: "old-skill", description: "d" }],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    // a rule the model must OBEY cannot live in the block it is told to treat as
+    // untrusted data, or the session text could rewrite it
+    const fence = prompt.indexOf(UNTRUSTED_OPEN);
+    expect(fence).toBeGreaterThan(-1);
+    for (const sentence of [
+      "a repeatable way of working this session uncovered",
+      "anything a stronger model would already get right on its own",
+      "only states a fact about ONE system",
+    ]) {
+      expect(prompt.indexOf(sentence)).toBeGreaterThan(-1);
+      expect(prompt.indexOf(sentence)).toBeLessThan(fence);
+    }
+  });
+
   it("given no teaching was flagged, when the prompt is built, then that instruction is absent", () => {
     const prompt = buildHarvestPrompt({
       slice: "",
@@ -281,7 +500,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
     const transcript = join(home, "t.jsonl");
     writeFileSync(
       transcript,
-      JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "always run make fmt before committing" } }) + "\n",
+      JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "we keep feature flags in config, never env vars. always run make fmt before committing" } }) + "\n",
     );
     return { sessionId: "s1", cwd: home, transcriptPath: transcript, evidence, ...overrides };
   }
@@ -484,14 +703,14 @@ describe("harvestSession (end to end with a fake runner)", () => {
       evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
     });
     const deps = (name: string) => ({
-      runner: async () => JSON.stringify([rawItem({ name, quote: "never mock the database, use testcontainers" })]),
+      runner: async () => JSON.stringify([rawItem({ name, quote: "we never mock the database, use testcontainers" })]),
       remoteUrl: () => null,
       listSkills: () => [],
       skillDirs: () => [],
     });
 
-    await harvestSession(teach("we never use mocks for the database here, use testcontainers"), home, deps("first-pass"));
-    await harvestSession(teach("don't mock the database — use testcontainers"), home, deps("second-pass"));
+    await harvestSession(teach("in this repo we never mock the database, use testcontainers"), home, deps("first-pass"));
+    await harvestSession(teach("again, we never mock the database, use testcontainers"), home, deps("second-pass"));
 
     expect(readCandidateMeta(join(candidatesDir(home), "first-pass"))?.taughtBefore).toBeUndefined();
     expect(readCandidateMeta(join(candidatesDir(home), "second-pass"))?.taughtBefore).toBe(1);
@@ -527,7 +746,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
     const item = rawItem({
       name: "no-db-mocks",
       description: "Use when writing database tests — use testcontainers instead of mocks.",
-      quote: undefined,
+      quote: "we never mock the database, use testcontainers",
     });
 
     await harvestSession(
@@ -556,6 +775,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
       evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
     });
     const unrelated = rawItem({
+      kind: "procedure",
       name: "run-migrations-first",
       description: "Use when deploying the api to staging.",
       quote: undefined,
@@ -582,7 +802,7 @@ describe("suggestedTarget routing (regression: a project lesson must never defau
     const transcript = join(home, "t2.jsonl");
     writeFileSync(
       transcript,
-      JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "tests live under test/" } }) + "\n",
+      JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "tests live under test/, and we keep feature flags in config, never env vars" } }) + "\n",
     );
     // a team IS configured, and the model says this lesson is repo-specific
     writeFileSync(

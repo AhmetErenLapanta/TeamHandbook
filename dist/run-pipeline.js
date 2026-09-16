@@ -429,7 +429,7 @@ function maybeDumpPayload(raw, home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected"];
 function candidateMetaFile(dir) {
@@ -679,7 +679,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
 }
 
 // src/lib/harvest.ts
-import { existsSync as existsSync3 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 
 // src/lib/transcript.ts
 import { readFileSync as readFileSync7 } from "node:fs";
@@ -876,8 +876,11 @@ function buildHarvestPrompt(input) {
     "   look, but a rule stated once, anywhere in the conversation, counts too.",
     '2. "procedure" \u2014 a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
-    '3. "discovery" \u2014 a non-obvious convention, environment quirk, or trap uncovered',
-    "   during the work.",
+    '3. "discovery" - a repeatable way of working this session uncovered: a convention',
+    "   to follow, a check to run before the obvious move, a trap worth avoiding next",
+    "   time. It has to change how the NEXT piece of work is done. Writing down the",
+    "   steps of a task that got completed is a procedure, not a discovery. At most ONE",
+    "   discovery is kept per session, so propose the single most reusable one.",
     '4. "error-fix" \u2014 a lesson from a resolved error\u2192fix pair below; set source to its',
     "   [pair:...] id.",
     "",
@@ -909,8 +912,13 @@ function buildHarvestPrompt(input) {
     "- Produce NOTHING that overlaps an existing skill listed below.",
     "- Do not invent: every item must be grounded in the session data. When unsure,",
     "  leave it out \u2014 an empty list is a valid answer.",
-    "- One-off trivia, personal preferences without team value, and anything derivable",
-    "  from the repo's own README/tests score low.",
+    "- Leave these out rather than scoring them low: one-off trivia, a personal",
+    "  preference with no team value, anything derivable from the repo's own README and",
+    "  tests, and anything a stronger model would already get right on its own. A skill",
+    "  is a way of working, not a fact a capable reader could work out for themselves.",
+    "- Leave out any item that only states a fact about ONE system: a number someone",
+    "  measured, a field a table happens to have, how a single file behaves today. That",
+    "  is a note, not a skill.",
     `- Score each item 0-2 on: ${CRITERIA.join(", ")}.`,
     "- recurrence is evidence, not a hunch: score it 2 only when a pair is marked as",
     "  recurred or a teaching is marked as taught in earlier sessions.",
@@ -942,10 +950,34 @@ function buildHarvestPrompt(input) {
     "An empty array [] is a valid, respectable answer."
   ].join("\n");
 }
-function parseItem(raw) {
+var MIN_QUOTE_CHARS = 12;
+function foldForMatch(text) {
+  return text.toLowerCase().replace(/['’`"“”]/g, "").replace(/\s+/g, " ").trim();
+}
+function quoteIsGrounded(quote, grounding) {
+  const needle = foldForMatch(quote);
+  if (needle.length < MIN_QUOTE_CHARS) return false;
+  const haystacks = [foldForMatch(grounding.slice), ...grounding.corrections.map(foldForMatch)];
+  if (haystacks.some((hay) => hay.includes(needle))) return true;
+  const pieces = needle.split(/\s*(?:\.\.\.|\u2026)\s*/).map((piece) => piece.trim()).filter(Boolean);
+  return pieces.length > 1 && pieces.every((piece) => haystacks.some((hay) => hay.includes(piece)));
+}
+function anchorIsSound(o, grounding) {
+  if (o.kind === "correction") {
+    return typeof o.quote === "string" && quoteIsGrounded(o.quote, grounding);
+  }
+  if (o.kind === "error-fix") {
+    const source = typeof o.source === "string" ? o.source : "";
+    const fingerprint = source.match(/^pair:([0-9a-f]{16})$/)?.[1];
+    return !!fingerprint && grounding.pairFingerprints.has(fingerprint);
+  }
+  return true;
+}
+function parseItem(raw, grounding) {
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw;
   if (!HARVEST_KINDS.includes(o.kind)) return null;
+  if (!anchorIsSound(o, grounding)) return null;
   for (const key of ["name", "description", "body", "expect"]) {
     if (typeof o[key] !== "string" || !o[key].trim()) return null;
   }
@@ -1006,14 +1038,14 @@ function balancedArrayAt(raw, from) {
   }
   return null;
 }
-function parseHarvestResponse(raw) {
+function parseHarvestResponse(raw, grounding) {
   for (let attempt = 0, from = raw.indexOf("["); attempt < 5 && from !== -1; attempt += 1, from = raw.indexOf("[", from + 1)) {
     const candidate = balancedArrayAt(raw, from);
     if (!candidate) continue;
     try {
       const parsed = JSON.parse(candidate);
       if (Array.isArray(parsed)) {
-        return parsed.map(parseItem).filter((i) => i !== null);
+        return parsed.map((element) => parseItem(element, grounding)).filter((i) => i !== null);
       }
     } catch {
     }
@@ -1021,6 +1053,7 @@ function parseHarvestResponse(raw) {
   return null;
 }
 var MAX_BODY_CHARS = 8e3;
+var MAX_PER_KIND = { discovery: 1 };
 function sieveHarvestItems(items, context) {
   const dropped = [];
   const survivors = items.filter((item) => {
@@ -1053,9 +1086,21 @@ function sieveHarvestItems(items, context) {
     }
     return true;
   });
-  survivors.sort((a, b) => b.total - a.total);
-  const kept = survivors.slice(0, context.maxPerSession);
-  for (const item of survivors.slice(context.maxPerSession)) {
+  const seenPerKind = /* @__PURE__ */ new Map();
+  const withinQuota = survivors.filter((item) => {
+    const quota = MAX_PER_KIND[item.kind];
+    if (quota === void 0) return true;
+    const seen = seenPerKind.get(item.kind) ?? 0;
+    if (seen >= quota) {
+      dropped.push({ item, reason: "kind-quota" });
+      return false;
+    }
+    seenPerKind.set(item.kind, seen + 1);
+    return true;
+  });
+  withinQuota.sort((a, b) => b.total - a.total);
+  const kept = withinQuota.slice(0, context.maxPerSession);
+  for (const item of withinQuota.slice(context.maxPerSession)) {
     dropped.push({ item, reason: "over-cap" });
   }
   return { kept, dropped };
@@ -1114,7 +1159,11 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   } catch (err) {
     return { outcome: "error", error: `claude invocation failed: ${claudeErrorReason(err)}`, written: [] };
   }
-  const items = parseHarvestResponse(response);
+  const items = parseHarvestResponse(response, {
+    slice,
+    corrections: (evidence.corrections ?? []).map((c) => c.text),
+    pairFingerprints: new Set(evidence.pairs.map((p) => p.fingerprint))
+  });
   if (items === null) {
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
@@ -1139,7 +1188,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync3(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync4(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,

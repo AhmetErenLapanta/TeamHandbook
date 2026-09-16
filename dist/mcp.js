@@ -479,7 +479,7 @@ function formatServerList(entries) {
 }
 
 // src/lib/publish.ts
-import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join5 } from "node:path";
 function bumpPluginVersion(repoDir) {
   const file = join5(repoDir, ".claude-plugin", "plugin.json");

@@ -4,6 +4,78 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-16
+
+- **A skill you wrote by hand had no way to reach your team.** The only route into the
+  queue was living the lesson again and hoping the harvest caught it: of the skills
+  sitting in a developer's own `~/.claude/skills`, all but one had been written by hand
+  and none of them could be shared. `/handbook:share-skill` takes one into the review
+  queue, where the ordinary approval path already knows how to deliver it. A skill is
+  more than its `SKILL.md` too: the scripts, references and helpers beside it now travel
+  with it, so what arrives is the skill that worked rather than a pruned copy of it.
+
+- **Nothing reaches the queue on trust.** The harvest sieves for secrets on its way in,
+  and a skill taken from disk skips that path entirely, so the check is done at the new
+  boundary instead: every file that would travel is scanned, and one that carries a
+  credential is refused before anything is copied. Refused, not redacted. A skill with
+  `[REDACTED]` where its token was is a skill that fails for whoever installs it, and a
+  broken thing shipped quietly is worse than nothing shipped at all.
+
+## [0.3.9] - 2026-09-16
+
+- **The review promised this project and installed the skill elsewhere.** Approving a
+  candidate with `--to project` puts it in the project the lesson was captured in, which
+  is right: that is where the rule applies. But the option you picked it from said "this
+  project", and the review runs wherever you happen to be. Reviewing from one checkout a
+  lesson caught in another installed it somewhere you did not choose, and the line naming
+  the real destination printed after the decision, not before it. The choice now names
+  the project it will install into, and the command, its documentation and the README all
+  point at the same place.
+
+## [0.3.8] - 2026-09-15
+
+- **Discovery took most of the queue and nothing ever dropped one.** Discovery was 72% of
+  the pending queue, the prompt ranked it last in priority and no line of code read that
+  ranking, and the only quality filter was a scoring hint that had never sieved anything
+  out: 96 runs, 96 times zero. Its definition invited whatever the session happened to
+  turn up, so a fact about one system arrived as a skill. The definition now asks for a
+  way of working that recurs, says outright that something a stronger model would get
+  right on its own is not a skill, and the sieve enforces one discovery per session
+  against the order the model itself proposed, not against the score. Tightened parsing
+  closes the cheap way around it: a correction without a quote the developer actually
+  wrote, or an error-fix naming a failure that never happened, is dropped rather than
+  relabelled.
+
+  **Yield drops on purpose.** Replayed over 17 real sessions, the same evidence through
+  the old and new prompts: 45 proposals became 36 (-20%), and the discovery share of the
+  queue fell from 48.9% to 36.1%. Every one of those nine losses was a discovery;
+  corrections and procedures kept all of theirs. Fewer suggestions is the point, and the
+  ones that survive are the ones worth reading.
+
+## [0.3.7] - 2026-09-15
+
+- **Leaving the team promised an install that never happened.** `/handbook:leave` said
+  approved skills now install into the current project. Neither half was true. A
+  candidate the harvest marked for the team still resolves to the team after the binding
+  is cleared, finds no configuration, and returns an error instead of installing
+  anything, so every team-scoped candidate in the queue needs an explicit `--to` once you
+  have left. And a project skill installs into the project it was captured in, not
+  whichever one you happen to be reviewing from. The message says both now, and it lives
+  in a function with tests instead of inline in the command.
+
+## [0.3.6] - 2026-08-28
+
+- **Sharing a skill died on a branch name nobody chose.** A group that polices branch
+  names refused `handbook/<slug>`, and the push failed with no way forward: the advice
+  was to hand-edit `~/.teamhandbook/config.json`, a file a sandboxed session may not be
+  allowed to touch. The retry now derives a name from the `commitPrefix` the team already
+  agreed with that same server during `/handbook:init`, checks it against the pattern the
+  rejection quoted before pushing anything, and remembers what worked so no later skill
+  pays the same round trip. When the branch goes out under a different name than the
+  default, the approval says so rather than leaving the reader to find it in the forge.
+  Push failures also keep the forge's own `remote:` explanation, which a plain tail of
+  git's stderr had been cutting away, leaving the verdict without the reason.
+
 ## [0.3.5] - 2026-08-18
 
 - **The scaffold stopped shipping a script nothing runs.** `scripts/bump-version.mjs` is

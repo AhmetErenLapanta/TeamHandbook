@@ -32,7 +32,13 @@ user clear them in one pass.
    c. In the dialog, one question per candidate, with these four options, the suggested
       destination first and marked as recommended:
       - **Keep for yourself** — loads in every project, only for you
-      - **Add to this project** — this directory's `.claude/skills`, for anyone who works here
+      - **Add to <project>** - the `.claude/skills` of the project `show` names on its
+        `project:` line (or `suggested:`, when that is what it recommends), for anyone who
+        works there. A skill installs into the project it was captured in, not whichever
+        project you are reviewing from, so put that project's name in the option itself:
+        the user answers from the option text, and the CLI names the project only after
+        it has already copied the skill. "Add to this project" is right only when `show`
+        says this one.
       - **Share with the team** — a pull request to the team handbook
       - **Reject** — not worth keeping
       The question header is a short tag, not a title: it fits about a dozen
@@ -49,8 +55,9 @@ user clear them in one pass.
 6. Map each answer to the CLI:
    - **Keep for yourself** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to personal`
      (installs into the user-level `~/.claude/skills` — loads in every project).
-   - **Add to this project** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to project`
-     (installs into this directory's `.claude/skills`; commit it and it travels with the code).
+   - **Add to <project>** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to project`
+     (installs into the `.claude/skills` of the project the skill was captured in, which is
+     the one `show` named; commit that repo and the skill travels with the code).
    - **Share with the team** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to team`
      (pushes a `handbook/<slug>` branch and opens a PR to the team handbook; needs
      /handbook:init or /handbook:join first — the CLI says so if not).

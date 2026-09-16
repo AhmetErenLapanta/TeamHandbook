@@ -7,6 +7,7 @@ import {
   assertSafeGitUrl,
   clearTeamConfig,
   formatInitSuccess,
+  formatLeaveSuccess,
   teamSkillsDir,
   hostFromUrl,
   initTeamRepo,
@@ -574,6 +575,33 @@ describe("formatInitSuccess", () => {
     expect(text).toContain("/handbook:join git@x.com:a/b.git");
     expect(text).toContain("/plugin marketplace add git@x.com:a/b.git");
     expect(text).toContain("/plugin install acme-skills");
+  });
+});
+
+describe("formatLeaveSuccess", () => {
+  const team = { repoUrl: "git@x.com:a/b.git", marketplaceName: "acme-skills" };
+
+  it("given team-scoped candidates left in the queue, when the team binding is cleared, then the message sends the user to an explicit --to", () => {
+    const text = formatLeaveSuccess(team);
+
+    expect(text).toContain("--to personal");
+    expect(text).toContain("--to project");
+    expect(text).toMatch(/marked for the team/i);
+  });
+
+  it("given an approval that is still ahead, when the message describes where a project skill lands, then it names the capturing project rather than the current one", () => {
+    const text = formatLeaveSuccess(team);
+
+    expect(text).toMatch(/captured in/i);
+    expect(text).not.toMatch(/install into the current project/i);
+  });
+
+  it("given the parts of the old message that were true, when it is reformatted, then the join command and the separate marketplace subscription survive", () => {
+    const text = formatLeaveSuccess(team);
+
+    expect(text).toContain("git@x.com:a/b.git");
+    expect(text).toContain("/handbook:join");
+    expect(text).toContain("/plugin marketplace remove acme-skills");
   });
 });
 
