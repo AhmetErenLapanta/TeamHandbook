@@ -8,7 +8,7 @@ import type { GateVerdict } from "./score.js";
 
 // "archived" is a queue state, not a verdict: the developer never looked at these.
 // It exists so a queue that grew past reading can be shrunk to the handful still
-// worth a decision, and it is reversible by design — see the archive manifest below.
+// worth a decision, and it is reversible by design - see the archive manifest below.
 export type CandidateStatus = "pending" | "approved" | "rejected" | "archived";
 
 export interface CandidateMeta {
@@ -39,7 +39,7 @@ export interface CandidateMeta {
 }
 
 // Every status readCandidateMeta will accept. Leaving one out does not hide the
-// candidates carrying it — the parse below rejects the file, synthesizeMeta rebuilds
+// candidates carrying it - the parse below rejects the file, synthesizeMeta rebuilds
 // it as "pending", and gate/taughtBefore/sessionId/suggestedTarget are lost with it.
 // So writing an unlisted status resurrects a candidate stripped of its evidence
 // instead of quieting it, which is the one failure archiving must not have.
@@ -229,7 +229,7 @@ export function decideCandidate(
  * A queue that grew past reading is not a review queue. Archiving moves a candidate
  * out of the pending list without deciding it: the directory stays where it is, the
  * artifact is untouched, and only the status line changes. It is deliberately NOT a
- * rejection — it records no verdict and never mutes the fingerprint, because nobody
+ * rejection - it records no verdict and never mutes the fingerprint, because nobody
  * looked at these and silencing a lesson the developer never saw is not reversible
  * in the way the archive is.
  */
@@ -284,7 +284,7 @@ export function archivesDir(home: string = handbookHome()): string {
 /**
  * Every archiving run writes one of these. It is not a log: it is the undo. Putting
  * 151 candidates back by hand is not an option a person would take, so without a
- * manifest "the archive is reversible" would be a claim nobody could act on — and
+ * manifest "the archive is reversible" would be a claim nobody could act on - and
  * that reversibility is the whole reason archiving needs no approval.
  */
 export function writeArchiveManifest(home: string, manifest: ArchiveManifest): string {
