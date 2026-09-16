@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.9] - 2026-09-16
+
+- **The review promised this project and installed the skill elsewhere.** Approving a
+  candidate with `--to project` puts it in the project the lesson was captured in, which
+  is right: that is where the rule applies. But the option you picked it from said "this
+  project", and the review runs wherever you happen to be. Reviewing from one checkout a
+  lesson caught in another installed it somewhere you did not choose, and the line naming
+  the real destination printed after the decision, not before it. The choice now names
+  the project it will install into, and the command, its documentation and the README all
+  point at the same place.
+
 ## [0.3.8] - 2026-09-15
 
 - **Discovery took most of the queue and nothing ever dropped one.** Discovery was 72% of
