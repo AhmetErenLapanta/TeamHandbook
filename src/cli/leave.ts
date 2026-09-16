@@ -1,4 +1,4 @@
-import { clearTeamConfig, loadTeamConfig } from "../lib/init.js";
+import { clearTeamConfig, formatLeaveSuccess, loadTeamConfig } from "../lib/init.js";
 import { configIsBroken } from "../lib/config.js";
 
 function main(): void {
@@ -19,12 +19,7 @@ function main(): void {
     return;
   }
   clearTeamConfig();
-  console.log(
-    `Left the team skill base at ${team.repoUrl}. TeamHandbook is back in solo mode; approved skills now ` +
-      `install into the current project. Run /handbook:join <url> to join a different team.\n` +
-      `Claude Code's marketplace subscription is separate — run ` +
-      `\`/plugin marketplace remove ${team.marketplaceName}\` yourself if you also want to stop receiving that team's skills.`,
-  );
+  console.log(formatLeaveSuccess(team));
 }
 
 main();
