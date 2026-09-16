@@ -70,6 +70,12 @@ each. Re-run the command above unchanged to compare against it.
 | after the change | 3 | 0.6667 | 24/36 |
 | after the change | 9 | 0.6204 | 67/108 |
 
+The 9-run row has no like-for-like baseline: nothing in this repository was ever run at 9
+runs per case with the old descriptions. Its 0.6204 is comparable only to a future 9-run
+measurement, never to the 3-run rows above it, whose composition differs case by case even
+when their totals match. To compare a later change against this table, either re-run both
+sides at 9, or compare at 3.
+
 `fp`: 3 cases, 3 runs each, 1.00, no handbook command fired in any run.
 
 A movement under 0.07 at 3 runs per case is noise: the auditor changed nothing and saw
