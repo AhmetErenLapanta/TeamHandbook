@@ -53,22 +53,6 @@ export function enqueueHarvestJob(job: HarvestJob, home: string = handbookHome()
   return null;
 }
 
-/**
- * Whether the queue holds a job no runner has taken yet. The predicate is deliberately
- * the one drainHarvestJobs claims on - `.json` exactly. A job in flight is renamed to
- * `<job>.json.claimed-<pid>` and fails that test, so a live harvest cannot talk a
- * second runner into starting beside it: the O_EXCL claim would reject it anyway, but
- * not spawning it at all is what keeps "one model call per transcript" cheap as well
- * as correct.
- */
-export function hasPendingHarvestJobs(home: string = handbookHome()): boolean {
-  try {
-    return readdirSync(pendingDir(home)).some((entry) => entry.endsWith(".json"));
-  } catch {
-    return false; // no pending dir yet: nothing to run
-  }
-}
-
 // A runner that crashed between claim and delete leaves a *.claimed-<pid> file no
 // drain would ever pick up again — that job would be silently lost. Reclaim claims
 // older than this back into the queue.
@@ -93,6 +77,39 @@ function reclaimStaleClaims(dir: string): void {
       // another process may have raced us; nothing to do
     }
   }
+}
+
+/**
+ * Whether the queue owes a runner any work. The predicate mirrors what the next drain
+ * will actually DO, which is more than "an unclaimed file": drainHarvestJobs reclaims
+ * stale claims first, so both shapes count.
+ *
+ * A FRESH claim is not work owed. Its runner is alive and sitting in its model call,
+ * and waking a second runner beside it is the duplicate harvest K-6 hardened against.
+ *
+ * A STALE claim is the only kind of work nothing else will ever notice. Its runner was
+ * killed mid-harvest, and reclaimStaleClaims - which runs INSIDE the drain - is what
+ * hands the job back. Leaving it out here would have rebuilt the very defect this
+ * function exists to close, reached from a different file state: no unclaimed `.json`
+ * means no runner spawned, no drain, and so nothing to reclaim it, forever.
+ */
+export function hasPendingHarvestJobs(home: string = handbookHome()): boolean {
+  const dir = pendingDir(home);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false; // no pending dir yet: nothing to run
+  }
+  return entries.some((entry) => {
+    if (entry.endsWith(".json")) return true;
+    if (!/^.+\.json\.claimed-\d+$/.test(entry)) return false;
+    try {
+      return Date.now() - statSync(join(dir, entry)).mtimeMs > STALE_CLAIM_MS;
+    } catch {
+      return false; // swept while we looked; the next start will see whatever is left
+    }
+  });
 }
 
 export interface ClaimedJob {

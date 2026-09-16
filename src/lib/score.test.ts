@@ -326,6 +326,17 @@ describe("runClaudeCli against a real claude process", () => {
     await expect(runClaudeCli("prompt", "haiku", 20_000)).resolves.toBe("STDIN_CLOSED");
   });
 
+  it("given a claude that writes past the output cap, when the runner calls it, then the reason names the cap and not a timeout", async () => {
+    // node kills the child on overflow, so this error can look like the timeout branch
+    // right below it; the whole point of this commit is that the reason names the knob
+    // the user actually has to turn
+    fakeClaude(`#!/usr/bin/env node\nprocess.stdout.write("x".repeat(2 * 1024 * 1024));\n`);
+    const err = await runClaudeCli("prompt", "haiku", 20_000).catch((e: unknown) => e);
+    const reason = claudeErrorReason(err);
+    expect(reason).toContain("1 MB output cap");
+    expect(reason).not.toContain("timed out");
+  });
+
   it("given no claude on PATH at all, when the runner calls it, then the reason says so instead of crashing the runner", async () => {
     process.env.PATH = bin; // empty dir: nothing to find
     const err = await runClaudeCli("prompt", "haiku", 20_000).catch((e: unknown) => e);

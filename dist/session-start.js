@@ -907,14 +907,25 @@ function enqueueHarvestJob(job, home = handbookHome()) {
   }
   return null;
 }
+var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function hasPendingHarvestJobs(home = handbookHome()) {
+  const dir = pendingDir(home);
+  let entries;
   try {
-    return readdirSync6(pendingDir(home)).some((entry) => entry.endsWith(".json"));
+    entries = readdirSync6(dir);
   } catch {
     return false;
   }
+  return entries.some((entry) => {
+    if (entry.endsWith(".json")) return true;
+    if (!/^.+\.json\.claimed-\d+$/.test(entry)) return false;
+    try {
+      return Date.now() - statSync2(join10(dir, entry)).mtimeMs > STALE_CLAIM_MS;
+    } catch {
+      return false;
+    }
+  });
 }
-var STALE_CLAIM_MS = 10 * 60 * 1e3;
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
