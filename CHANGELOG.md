@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.1] - 2026-09-16
+
+- **The same session was harvested more than once, and its lessons arrived twice.**
+  Thirteen sessions in one developer's history were harvested again after the first run
+  finished, each repeat costing another model call and putting the same lesson back in
+  the queue under a different name. Most of those repeats were legitimate: continuing a
+  session with `--continue` keeps its id and grows the transcript, and the new tail
+  deserves a harvest. So a run is now identified by the session and the transcript it
+  read, which lets a resumed session through and turns the duplicates away.
+
+- **A harvest killed halfway through no longer locks the session out.** The marker that
+  says "this one is done" was written when the work was claimed, so a runner stopped by a
+  reboot or an out-of-memory kill left one behind that nothing would clear for thirty
+  days, while the queue handed the job back after ten minutes. The job came back and was
+  refused, and that session's lessons were lost for as long as the marker stood. Claiming
+  and completing are recorded apart now: an unfinished marker does not turn the next run
+  away.
+
 ## [0.5.0] - 2026-09-16
 
 - **A team's MCP server arrived one teammate at a time, by hand.** The handbook could
