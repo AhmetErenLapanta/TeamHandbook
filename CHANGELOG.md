@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.0] - 2026-09-16
+
+- **A team's MCP server arrived one teammate at a time, by hand.** The handbook could
+  share skills and nothing else, so the tools the team actually works through, a GitLab
+  connection say, were set up again on every machine by whoever got round to it. Now
+  `/handbook:mcp` takes a server you already run locally and sends it to the team
+  repository as a merge request, beside the skills, carrying the version bump that makes
+  everyone's copy refresh. Merge it and the next session a teammate opens already has the
+  server connected.
+
+- **A server whose address is its password is refused, not published.** Credentials in an
+  MCP definition do not only live in headers and environment values: a whole class of
+  hosted servers puts an opaque token in the URL itself, and that is the shape
+  `claude mcp add` writes. Chasing those by pattern is a race, so the rule is structural
+  instead. Anything but a plain `${VAR}` reference in a header or environment value stops
+  the share, and so does a URL segment that looks like a secret rather than a path. The
+  request that goes out says what was actually checked rather than promising that no
+  credential travels, because the developer reviewing it deserves the real scope of the
+  guarantee.
+
 ## [0.4.0] - 2026-09-16
 
 - **A skill you wrote by hand had no way to reach your team.** The only route into the
