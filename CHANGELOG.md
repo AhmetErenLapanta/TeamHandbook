@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-16
+
+- **A skill you wrote by hand had no way to reach your team.** The only route into the
+  queue was living the lesson again and hoping the harvest caught it: of the skills
+  sitting in a developer's own `~/.claude/skills`, all but one had been written by hand
+  and none of them could be shared. `/handbook:share-skill` takes one into the review
+  queue, where the ordinary approval path already knows how to deliver it. A skill is
+  more than its `SKILL.md` too: the scripts, references and helpers beside it now travel
+  with it, so what arrives is the skill that worked rather than a pruned copy of it.
+
+- **Nothing reaches the queue on trust.** The harvest sieves for secrets on its way in,
+  and a skill taken from disk skips that path entirely, so the check is done at the new
+  boundary instead: every file that would travel is scanned, and one that carries a
+  credential is refused before anything is copied. Refused, not redacted. A skill with
+  `[REDACTED]` where its token was is a skill that fails for whoever installs it, and a
+  broken thing shipped quietly is worse than nothing shipped at all.
+
 ## [0.3.9] - 2026-09-16
 
 - **The review promised this project and installed the skill elsewhere.** Approving a
