@@ -164,31 +164,92 @@ export function parseScoreResponse(text: string, threshold: number): ScoreResult
   };
 }
 
+// The CLI colorizes its own warnings even when stdout is a pipe, so the escapes ride
+// into whatever reads them: one of the five recorded failures logged its reason as
+// "\u001b[33mWarning: ...\u001b[39m", unreadable and invisible to any match on the text.
+function stripAnsi(text: string): string {
+  return text.replace(/\u001B\[[0-9;]*m/g, "");
+}
+
+// The CLI warns when it finds stdin open and empty. That warning is benign - it says so
+// itself ("proceeding without it"), and a run that printed it still exited 0 when
+// measured against the real binary. It was also the only line the CLI ever put on
+// stderr, which is how it came to be named as the cause of every failure. runClaudeCli
+// now closes stdin so it should not appear at all; it stays filtered here because an
+// older CLI on someone's PATH would otherwise go straight back to hiding the real error.
+const BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
+
+/** The last thing the process said that is actually about a failure, or "". */
+function failureStderr(raw: string): string {
+  return stripAnsi(raw)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line))
+    .slice(-2)
+    .join(" ")
+    .slice(0, 200);
+}
+
 /**
  * A concise, user-facing reason from a failed `claude -p` call. execFile's raw error
  * echoes the entire (multi-KB) prompt on its `Command failed:` line; surfacing that
  * verbatim buries the real cause. Prefer the process's stderr, special-case a missing
  * binary, and otherwise strip the echoed command.
+ *
+ * Measured on a real pipeline.log: five harvests spread over a month all reported the
+ * benign stdin warning as their cause, because stderr held nothing else and nothing
+ * here ever read what the PROCESS did. Those exit codes are gone for good. When stderr
+ * carries no failure, say how the process ended instead - that is the difference
+ * between a log line a user can act on and one that hides the defect behind a warning.
  */
 export function claudeErrorReason(err: unknown): string {
-  const e = err as { code?: string; stderr?: string; message?: string };
+  const e = err as {
+    code?: string | number;
+    killed?: boolean;
+    signal?: string;
+    stderr?: string;
+    message?: string;
+  };
   if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) — run /handbook:doctor";
-  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
-  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
+  if (stderr) return stderr;
+  // Nothing usable on stderr: report what the PROCESS did, never the model's own
+  // output. That output is derived from session text and this string reaches pipeline.log.
+  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
+  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
+  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
   if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
   return firstLine.slice(0, 200);
 }
 
 export type ClaudeRunner = (prompt: string, model: string, timeoutMs: number) => Promise<string>;
 
+/**
+ * The prompt travels as an argv argument, so the CLI has nothing to read from stdin -
+ * but execFile hands the child an open pipe there and never closes it, and the CLI
+ * reads a non-tty stdin as a prompt still on its way. Measured against the real binary:
+ * every call sat 3s waiting for input that was never coming and then warned about it on
+ * stderr (39.0s wall for a prompt that takes 33.4s with stdin closed). Ending the pipe
+ * is the explicit redirect the warning itself asks for.
+ */
 export const runClaudeCli: ClaudeRunner = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
-  const { stdout } = await execFileAsync("claude", args, {
+  const call = execFileAsync("claude", args, {
     timeout: timeoutMs,
     maxBuffer: 1024 * 1024,
   });
+  const stdin = call.child.stdin;
+  if (stdin) {
+    // A child that never started (no claude on PATH) already has a destroyed pipe.
+    // Ending that one raises an unhandled stream error ON TOP OF the ENOENT the await
+    // below is about to report, which would take the detached runner down with it.
+    stdin.on("error", () => {});
+    stdin.end();
+  }
+  const { stdout } = await call;
   return stdout;
 };
 
