@@ -1316,13 +1316,43 @@ function harvestMarkerFile(job, home) {
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   return join10(harvestedDir(home), `${session}-${size}`);
 }
+var MARKER_CLAIMED = "claimed";
+var MARKER_DONE = "done";
+function markerIsFinished(marker) {
+  try {
+    return readFileSync8(marker, "utf8").trim() === MARKER_DONE;
+  } catch {
+    return false;
+  }
+}
 function claimHarvest(marker, home) {
   try {
     mkdirSync4(harvestedDir(home), { recursive: true });
-    writeFileSync5(marker, "", { flag: "wx" });
+    writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
     return true;
   } catch (err) {
-    return err?.code !== "EEXIST";
+    if (err?.code !== "EEXIST") return true;
+    if (markerIsFinished(marker)) return false;
+    let claimedAt;
+    try {
+      claimedAt = statSync(marker).mtimeMs;
+    } catch {
+      return true;
+    }
+    if (Date.now() - claimedAt <= STALE_CLAIM_MS) return false;
+    rmSync2(marker, { force: true });
+    try {
+      writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+function finishHarvest(marker) {
+  try {
+    writeFileSync5(marker, MARKER_DONE);
+  } catch {
   }
 }
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -1337,7 +1367,8 @@ function cleanupStaleHarvestMarkers(home, now = Date.now()) {
   for (const entry of entries) {
     try {
       const file = join10(dir, entry);
-      if (now - statSync(file).mtimeMs > MARKER_MAX_AGE_MS) rmSync2(file, { force: true });
+      const horizon = markerIsFinished(file) ? MARKER_MAX_AGE_MS : STALE_CLAIM_MS;
+      if (now - statSync(file).mtimeMs > horizon) rmSync2(file, { force: true });
     } catch {
     }
   }
@@ -1396,6 +1427,8 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
       log.outcomes.push({ fingerprint: job.sessionId, outcome: "error", abandoned: true });
       abandonJob(job, home);
     }
+  } else if (marker) {
+    finishHarvest(marker);
   }
   appendPipelineLog(log, home, now());
   return summary;
