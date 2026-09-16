@@ -288,6 +288,13 @@ export function buildHarvestPrompt(input: {
     "- Leave out any item that only states a fact about ONE system: a number someone",
     "  measured, a field a table happens to have, how a single file behaves today. That",
     "  is a note, not a skill.",
+    // Measured on three held-out candidates: two kept a rule after every proper name
+    // and local constraint was stripped out; the third had nothing left but generic
+    // advice ("stop on a rate limit") once its one local constraint was removed. That
+    // split is what this test is for, not the item's kind or its score.
+    "- Apply this test to every candidate: strip every proper name and local, machine-",
+    "  specific constraint out of it. Does a rule that still says what to do survive?",
+    "  If not, leave it out.",
     `- Score each item 0-2 on: ${CRITERIA.join(", ")}.`,
     "- recurrence is evidence, not a hunch: score it 2 only when a pair is marked as",
     "  recurred or a teaching is marked as taught in earlier sessions.",
