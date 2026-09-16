@@ -6,9 +6,13 @@ import {
   decideCandidate,
   formatCandidateList,
   isSafeSlug,
+  listArchiveManifests,
   listCandidates,
+  readArchiveManifest,
   readCandidateMeta,
+  restoreArchived,
 } from "../lib/queue.js";
+import { formatSweepReport, sweepQueue } from "../lib/sweep.js";
 import { loadScoreConfig } from "../lib/score.js";
 import { loadHarvestConfig } from "../lib/harvest.js";
 import { pendingHarvestCount } from "../lib/notify.js";
@@ -18,7 +22,8 @@ import { candidatesDir } from "../lib/skill-index.js";
 
 function usage(): never {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never] [--to personal|project|team]",
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
+      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team]",
   );
   process.exit(2);
 }
@@ -158,10 +163,44 @@ function rejectOne(home: string, slug: string, never: boolean): void {
   }
 }
 
-function main(): void {
+/**
+ * The archive, shown only when asked for. The default list stays the pending queue:
+ * an archived candidate is one the developer chose not to be shown, and putting it
+ * back on the review screen would undo the only thing archiving does.
+ */
+function listArchived(home: string): void {
+  console.log(formatCandidateList(listCandidates(home, "archived"), Date.now(), "Archived"));
+}
+
+async function sweep(home: string, dryRun: boolean): Promise<void> {
+  const report = await sweepQueue(home, { dryRun });
+  console.log(formatSweepReport(report, dryRun));
+}
+
+function restore(home: string, file?: string): void {
+  // no argument means the most recent run, which is what "undo that sweep" means to
+  // anyone who just ran one
+  const target = file ?? listArchiveManifests(home).at(-1);
+  if (!target) {
+    console.error("error: no archive manifest to restore from");
+    process.exit(1);
+  }
+  const manifest = readArchiveManifest(target);
+  if (!manifest) {
+    console.error(`error: "${target}" is not a readable archive manifest`);
+    process.exit(1);
+  }
+  const result = restoreArchived(home, manifest);
+  console.log(`Restored ${result.restored.length} candidate(s) from ${target}.`);
+  for (const s of result.skipped) console.log(`  skipped ${s.slug} - ${s.reason}`);
+}
+
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const never = args.includes("--never");
   const all = args.includes("--all");
+  const archived = args.includes("--archived");
+  const dryRun = args.includes("--dry-run");
   // Accept both `--to personal` and `--to=personal`. Silently ignoring the `=`
   // spelling would fall back to the candidate's suggested target — which is often
   // "team" — so "keep this to myself" could publish to the team instead.
@@ -174,7 +213,19 @@ function main(): void {
   const positional = args.filter((a, i) => !a.startsWith("--") && (toIndex === -1 || i !== toIndex + 1));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
+  if (cmd === "sweep") {
+    await sweep(home, dryRun);
+    return;
+  }
+  if (cmd === "restore") {
+    restore(home, slugArgs[0]);
+    return;
+  }
   if (cmd === "list") {
+    if (archived) {
+      listArchived(home);
+      return;
+    }
     const pending = listCandidates(home, "pending");
     console.log(formatCandidateList(pending));
     if (pending.length === 0) {
@@ -213,4 +264,9 @@ function main(): void {
   }
 }
 
-main();
+// no explicit exit: stdout to a pipe flushes asynchronously, and exiting on the
+// promise would truncate a long `list` or `show`
+main().catch((err) => {
+  console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+  process.exitCode = 1;
+});

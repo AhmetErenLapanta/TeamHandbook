@@ -123,7 +123,7 @@ export interface StatusReport {
   home: string;
   version: string;
   ledger: LedgerStats;
-  queue: { pending: number; approved: number; rejected: number };
+  queue: { pending: number; approved: number; rejected: number; archived: number };
   redactionBlocked: number;
   // cumulative value scoreboard — the user's ready-made "was it worth it" line
   sinceInstall: { approved: number; teamShared: number; pairsCaptured: number; secretsBlocked: number };
@@ -170,6 +170,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
       pending: count("pending"),
       approved: count("approved"),
       rejected: count("rejected"),
+      archived: count("archived"),
     },
     redactionBlocked: counters.redactionBlocked,
     sinceInstall: {
@@ -222,7 +223,10 @@ export function formatStatus(report: StatusReport): string {
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
-    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
+    // Archived candidates are counted here and nowhere else. "Quietly" means no nag,
+    // not no trace: a queue that shrank by 151 items with no number to show for it
+    // would have the product telling the developer something untrue about their data.
+    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error→fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun

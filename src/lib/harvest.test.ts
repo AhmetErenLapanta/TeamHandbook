@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,8 @@ import {
   suggestedTargetFor,
 } from "./harvest.js";
 import type { HarvestEvidence, HarvestItem, HarvestJob } from "./harvest.js";
-import { readCandidateMeta } from "./queue.js";
+import { archiveCandidate, readCandidateMeta, writeCandidateMeta } from "./queue.js";
+import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 import { UNTRUSTED_OPEN } from "./prompt-safety.js";
 
@@ -820,5 +821,53 @@ describe("suggestedTarget routing (regression: a project lesson must never defau
     // ROUTING must still follow the model's judgment, or a one-repo rule gets
     // published to the whole team by a bare `approve`.
     expect(meta.suggestedTarget).toBe("project");
+  });
+});
+
+describe("the archive must not swallow the recent-decisions window", () => {
+  it("given an archived backlog larger than the window, when a session is harvested, then the real decisions still reach the prompt", async () => {
+    const seed = (slug: string, status: CandidateMeta["status"], createdAt: string): void => {
+      const dir = join(candidatesDir(home), slug);
+      mkdirSync(dir, { recursive: true });
+      writeCandidateMeta(dir, {
+        slug,
+        status: status === "archived" ? "pending" : status,
+        createdAt,
+        scope: "team",
+        description: `${slug} description`,
+        fingerprint: `fp-${slug}`,
+        sessionId: "s0",
+        gate: null,
+      });
+      if (status === "archived") archiveCandidate(home, slug, "swept");
+    };
+    // 30 archived candidates, all NEWER than the one real decision: unfiltered, the
+    // twenty-wide window is entirely theirs and the prompt's "do not re-propose
+    // anything you have already decided" silently stops naming any decision
+    for (let i = 0; i < 30; i++) seed(`swept-${i}`, "archived", `2026-09-1${i % 10}T00:00:00Z`);
+    seed("really-rejected", "rejected", "2026-08-01T00:00:00Z");
+
+    const transcript = join(home, "t-window.jsonl");
+    writeFileSync(
+      transcript,
+      JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "always run make fmt before committing" } }) + "\n",
+    );
+    let seen = "";
+    await harvestSession(
+      { sessionId: "s-window", cwd: home, transcriptPath: transcript, evidence },
+      home,
+      {
+        runner: async (prompt) => {
+          seen = prompt;
+          return "[]";
+        },
+        remoteUrl: () => null,
+        listSkills: () => [],
+        skillDirs: () => [],
+      },
+    );
+
+    expect(seen).toContain("really-rejected [rejected]");
+    expect(seen).not.toContain("swept-0");
   });
 });
