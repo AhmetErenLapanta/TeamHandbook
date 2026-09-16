@@ -128,7 +128,7 @@ export function currentSessionId(env: NodeJS.ProcessEnv = process.env): string |
  * check at all. Only a session with a recorded, measurably-not-pending ask
  * returns false.
  *
- * A PURE read — it does not clear anything. cli/learn.ts calls this to decide the
+ * A PURE read - it does not clear anything. cli/learn.ts calls this to decide the
  * trigger, then calls finalizeExplicitLearnInvocation only once the pipeline's
  * outcome is known, so a pending ask survives a failed run (claude unreachable,
  * timed out) for the user's natural retry instead of being spent on an attempt
@@ -144,7 +144,7 @@ export function peekExplicitLearnInvocation(
 
 /**
  * Consume a pending explicit ask once cli/learn.ts's pipeline run has reached a
- * real outcome (written, vetoed, or sieved — anything but "error"). This is the
+ * real outcome (written, vetoed, or sieved - anything but "error"). This is the
  * other half of peekExplicitLearnInvocation: clearing it here, and only here, is
  * what stops a genuinely-used true from leaking into a later, unrelated capture
  * the model starts on its own within the same session (see capture.ts's

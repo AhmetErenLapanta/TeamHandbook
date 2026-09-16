@@ -110,7 +110,7 @@ export function buildScorePrompt(
     ...(signal.trigger === "manual" || signal.trigger === "manual-model"
       ? [
           "- trigger: this is a manual capture (via /handbook:learn), not the automatic",
-          "  end-of-session harvest, so it has no ledger history by definition — judge",
+          "  end-of-session harvest, so it has no ledger history by definition - judge",
           "  recurrence by how plausibly the team will face similar situations again, not",
           "  by the count above. Still reject trivia the team could trivially rediscover.",
         ]
