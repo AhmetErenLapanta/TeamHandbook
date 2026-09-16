@@ -7,6 +7,7 @@ import {
   captureBashSuccess,
   captureCorrection,
   captureFileEdit,
+  captureLearnInvocation,
   recordActivity,
 } from "./capture.js";
 import { loadSessionState } from "./session-state.js";
@@ -290,5 +291,37 @@ describe("captureCorrection (recording what the developer typed)", () => {
       captureCorrection(promptInput("always use Bearer sk-proj-abcdef1234567890ABCDEFGH"), home),
     ).toBe(false);
     expect(loadSessionState("s1", home).corrections).toBeUndefined();
+  });
+});
+
+describe("captureLearnInvocation (telling the user's own /handbook:learn from the model's)", () => {
+  function promptInput(prompt: string): HookInput {
+    return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt };
+  }
+
+  it("marks the session when the prompt literally is the slash command", () => {
+    expect(captureLearnInvocation(promptInput("/handbook:learn"), home)).toBe(true);
+    expect(loadSessionState("s1", home).lastPromptWasSlashLearn).toBe(true);
+  });
+
+  it("marks the session when the slash command carries $ARGUMENTS", () => {
+    captureLearnInvocation(promptInput("/handbook:learn the npm test fix from earlier"), home);
+    expect(loadSessionState("s1", home).lastPromptWasSlashLearn).toBe(true);
+  });
+
+  it("clears the flag for a plain-language request, even one that asks for a capture", () => {
+    captureLearnInvocation(promptInput("/handbook:learn"), home);
+    captureLearnInvocation(promptInput("capture that as a skill please"), home);
+    expect(loadSessionState("s1", home).lastPromptWasSlashLearn).toBe(false);
+  });
+
+  it("does not match a prompt that merely mentions the command in prose", () => {
+    captureLearnInvocation(promptInput("does /handbook:learn also catch this?"), home);
+    expect(loadSessionState("s1", home).lastPromptWasSlashLearn).toBe(false);
+  });
+
+  it("ignores a missing session id or prompt", () => {
+    expect(captureLearnInvocation({ session_id: "s1" }, home)).toBe(false);
+    expect(captureLearnInvocation({ prompt: "/handbook:learn" }, home)).toBe(false);
   });
 });

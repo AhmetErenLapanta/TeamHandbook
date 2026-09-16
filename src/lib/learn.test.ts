@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { parseLearnPayload, signalFromLearnPayload } from "./learn.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { currentSessionId, learnWasExplicit, parseLearnPayload, signalFromLearnPayload } from "./learn.js";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
+import { loadSessionState, saveSessionState } from "./session-state.js";
 
 describe("parseLearnPayload", () => {
   it("accepts a minimal payload and fills defaults", () => {
@@ -89,5 +93,61 @@ describe("signalFromLearnPayload", () => {
     );
     expect(signal.resolvedCommand).toBeUndefined();
     expect(signal.resolvedAt).toBeUndefined();
+  });
+
+  it("carries an explicit trigger through to the signal", () => {
+    const signal = signalFromLearnPayload(
+      { kind: "error-fix", command: "npm test", error: "boom", edits: [], cwd: "/repo", sessionId: "s1" },
+      "2026-08-08T00:00:00Z",
+      "manual-model",
+    );
+    expect(signal.trigger).toBe("manual-model");
+  });
+});
+
+describe("currentSessionId", () => {
+  it("reads CLAUDE_CODE_SESSION_ID from the given environment", () => {
+    expect(currentSessionId({ CLAUDE_CODE_SESSION_ID: " s1 " })).toBe("s1");
+  });
+
+  it("is undefined when unset or blank", () => {
+    expect(currentSessionId({})).toBeUndefined();
+    expect(currentSessionId({ CLAUDE_CODE_SESSION_ID: "  " })).toBeUndefined();
+  });
+});
+
+// This is the case the K-17 card exists to prove: the same CLI invocation, told
+// apart only by what the session's most recently recorded prompt was.
+describe("learnWasExplicit (telling the user's own /handbook:learn from the model's)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("is true when the session's last prompt was the literal slash command", () => {
+    const state = loadSessionState("s1", home);
+    state.lastPromptWasSlashLearn = true;
+    saveSessionState(state, home);
+    expect(learnWasExplicit("s1", home)).toBe(true);
+  });
+
+  it("is false when the session's last prompt was plain language", () => {
+    const state = loadSessionState("s1", home);
+    state.lastPromptWasSlashLearn = false;
+    saveSessionState(state, home);
+    expect(learnWasExplicit("s1", home)).toBe(false);
+  });
+
+  it("defaults to true (preserves today's behavior) with no session id", () => {
+    expect(learnWasExplicit(undefined, home)).toBe(true);
+  });
+
+  it("defaults to true (preserves today's behavior) when nothing was ever recorded", () => {
+    expect(learnWasExplicit("never-seen-session", home)).toBe(true);
   });
 });

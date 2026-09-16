@@ -129,7 +129,8 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
-      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}
+      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
+      ...typeof parsed.lastPromptWasSlashLearn === "boolean" ? { lastPromptWasSlashLearn: parsed.lastPromptWasSlashLearn } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -152,12 +153,22 @@ function captureCorrection(input, home = handbookHome()) {
   saveSessionState(state, home);
   return true;
 }
+var LEARN_SLASH_COMMAND = /^\/handbook:learn(\s|$)/;
+function captureLearnInvocation(input, home = handbookHome()) {
+  if (!input.session_id || typeof input.prompt !== "string") return false;
+  const state = loadSessionState(input.session_id, home);
+  state.lastPromptWasSlashLearn = LEARN_SLASH_COMMAND.test(input.prompt.trim());
+  if (input.transcript_path) state.transcriptPath = input.transcript_path;
+  saveSessionState(state, home);
+  return true;
+}
 
 // src/hooks/user-prompt-submit.ts
 async function main() {
   const input = parseHookInput(await readStdin());
   if (!input) return;
   captureCorrection(input);
+  captureLearnInvocation(input);
 }
 main().then(
   () => process.exit(0),

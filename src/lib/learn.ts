@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
 import type { Signal, TaskCase } from "./signals.js";
+import { handbookHome, loadSessionState } from "./session-state.js";
 
 export interface ErrorFixPayload {
   kind: "error-fix";
@@ -111,7 +112,32 @@ export function parseLearnPayload(raw: string, defaultCwd: string = process.cwd(
   };
 }
 
-export function signalFromLearnPayload(payload: LearnPayload, ts: string): Signal {
+/** The CLAUDE_CODE_SESSION_ID of the running Claude Code session, if any (unset
+ * outside Claude Code, e.g. under a test runner or a bare `claude` invocation). */
+export function currentSessionId(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const id = env.CLAUDE_CODE_SESSION_ID;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+/**
+ * Whether this /handbook:learn invocation should carry the user's explicit-ask free
+ * pass (commands/learn.md). Positive evidence only: a session with nothing recorded
+ * (no session id, no session-state file, the UserPromptSubmit hook never having run)
+ * defaults to true, because a wrong "false" here would silently start rejecting
+ * the user's own explicit request, which is worse than never having built this
+ * check at all. Only a session whose most recently recorded prompt was measurably
+ * NOT the literal /handbook:learn command returns false.
+ */
+export function learnWasExplicit(sessionId: string | undefined, home: string = handbookHome()): boolean {
+  if (!sessionId) return true;
+  return loadSessionState(sessionId, home).lastPromptWasSlashLearn !== false;
+}
+
+export function signalFromLearnPayload(
+  payload: LearnPayload,
+  ts: string,
+  trigger: Signal["trigger"] = "manual",
+): Signal {
   if (payload.kind === "procedure") {
     const normalizedGoal = normalizeErrorText(payload.task.goal.toLowerCase());
     return {
@@ -126,7 +152,7 @@ export function signalFromLearnPayload(payload: LearnPayload, ts: string): Signa
       count: 1,
       edits: payload.edits,
       task: payload.task,
-      trigger: "manual",
+      trigger,
     };
   }
   const error = normalizeErrorText(payload.error);
@@ -143,6 +169,6 @@ export function signalFromLearnPayload(payload: LearnPayload, ts: string): Signa
     count: 1,
     edits: payload.edits,
     ...(payload.resolvedCommand ? { resolvedCommand: payload.resolvedCommand, resolvedAt: ts } : {}),
-    trigger: "manual",
+    trigger,
   };
 }
