@@ -483,6 +483,23 @@ describe("buildHarvestPrompt", () => {
     }
   });
 
+  it("given the proper-name-strip test, when the prompt is built, then it sits in the instructions and not inside the fence", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "User: never use Lombok here",
+      evidence,
+      existingSkills: [{ name: "old-skill", description: "d" }],
+      recentDecisions: [],
+      maxItems: 3,
+    });
+
+    expect(prompt).toContain("Does a rule that still says what to do survive?");
+    const fence = prompt.indexOf(UNTRUSTED_OPEN);
+    const sentence = prompt.indexOf("strip every proper name and local, machine-");
+    expect(fence).toBeGreaterThan(-1);
+    expect(sentence).toBeGreaterThan(-1);
+    expect(sentence).toBeLessThan(fence);
+  });
+
   it("given no teaching was flagged, when the prompt is built, then that instruction is absent", () => {
     const prompt = buildHarvestPrompt({
       slice: "",

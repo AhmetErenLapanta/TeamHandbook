@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.4] - 2026-09-16
+
+- **The repository can now measure whether a plain sentence reaches the right command.**
+  Nothing an installed copy does changes with this release. What changes is that the
+  question "does asking in ordinary language actually work" stopped being a matter of
+  opinion: there is an eval suite under `evals/`, written in the phrasings a developer
+  would really use, English and Turkish both, and running it prints a hit rate. The first
+  run scored 0.5556, and of the misses, most were not the wrong command being chosen but
+  no command being chosen at all. That number is the baseline the next two changes to the
+  command descriptions have to beat, and without it neither of them could honestly claim
+  to have improved anything.
+
+## [0.5.3] - 2026-09-16
+
+- **A suggestion that said nothing once the names came out no longer gets through.**
+  The harvest already refused items that only state a fact about one system, but the line
+  between a fact and a way of working was left to the model to feel out, and plenty of
+  single-system notes read like rules. There is a test for it now, and it is the one a
+  reader would apply by hand: take the proper names and the machine-specific constraints
+  out of the candidate, and see whether a rule that still says what to do survives.
+  Measured on three real candidates, two kept their rule and the third collapsed into
+  generic advice once its one local constraint was removed. That split is what the test
+  catches, and it is not the same thing as the item's kind or its score.
+
 ## [0.5.2] - 2026-09-16
 
 - **The queue grew past reading and nothing could be set aside without deciding it.**
