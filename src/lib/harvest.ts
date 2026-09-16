@@ -669,7 +669,7 @@ export async function harvestSession(
   // the prompt tells the model not to re-propose anything in it; an archiving run can
   // put hundreds of candidates in the queue at once, and they would fill the window
   // and push out the decisions the developer actually made. The honest cost is that an
-  // archived lesson can be proposed again — which is right, since archiving is not a
+  // archived lesson can be proposed again - which is right, since archiving is not a
   // verdict and nobody read these. Muting them instead would silence a lesson the
   // developer never saw, and the discovery bar now drops the weak ones at the source.
   const recentDecisions = listCandidates(home)
