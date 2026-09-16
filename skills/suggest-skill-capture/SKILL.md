@@ -1,6 +1,6 @@
 ---
 name: suggest-skill-capture
-description: After completing a genuinely teachable piece of work in this session — a multi-step task that followed project/team conventions, touched several files in a deliberate order, or encoded knowledge not written down anywhere — offer the user, at most once per session, to capture it as a skill via /handbook:learn. Never for routine or trivial work.
+description: After completing a genuinely teachable piece of work in this session (a multi-step task that followed project/team conventions, touched several files in a deliberate order, or encoded knowledge not written down anywhere), offer the user, at most once per session, to capture it as a skill via /handbook:learn. Never for routine or trivial work.
 ---
 
 TeamHandbook turns real session learnings into reviewed skills the user keeps, scopes to

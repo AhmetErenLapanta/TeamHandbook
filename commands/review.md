@@ -1,5 +1,5 @@
 ---
-description: Review what TeamHandbook learned — keep each skill for yourself, add it to this project, share it with the team, or reject it
+description: Review what TeamHandbook has captured and give each pending skill a verdict: keep it for yourself, add it to this project, share it with the team, or reject it. This is the only route by which anything leaves this machine, and the place to go whenever captured work should reach other people. Triggers: "go through the pending ones", "what has it learned so far", "deal with the queue", "my team should get these", "approve or throw these out", "empty the review queue".
 ---
 
 You are running TeamHandbook's review flow. Pending skill candidates were harvested from real
@@ -19,7 +19,9 @@ user clear them in one pass.
    then stop.
 3. Show the whole queue first, one line each: name, kind, score, age, and the description's
    first line. The user decides what to spend attention on; drip-feeding them one candidate
-   at a time hides how much is waiting.
+   at a time hides how much is waiting. If that list is longer than the user can work
+   through in one sitting, offer the sweep at the end of this file before starting the
+   batches.
 4. Then take them in batches of up to four. Run `show` and write the summary for every
    candidate in the batch FIRST, and only then open a single dialog carrying one question
    per candidate. One dialog per candidate is the thing this replaces: it is the same
@@ -79,3 +81,23 @@ user clear them in one pass.
 
 Queue STATE (candidate.json) is only ever written by the review CLI; the only file you may
 edit directly is a candidate's SKILL.md, at the user's request, before their verdict.
+
+## When the queue is too long to review
+
+The backlog predates the bar the harvest holds discoveries to today, and a queue nobody can
+finish reading is a queue nobody decides. The sweep puts today's bar to what is already
+waiting. Offer it when `list` shows more than one sitting's worth.
+
+1. Show what it would do before it does it:
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" sweep --dry-run`
+   It judges the backlog and prints the same report, archiving nothing. Relay that report
+   and let the user decide from it.
+2. Then, on their word: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" sweep`
+3. Say what it does not cover, before they expect otherwise: only DISCOVERY candidates are
+   re-judged. Corrections, procedures and error-fix candidates stay pending, so a sweep
+   shortens the queue rather than emptying it. Both runs spend model calls, and the report
+   names how many it took.
+4. Archived is not rejected, and the user should hear that too:
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" list --archived` shows what was set aside,
+   and `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" restore` puts the most recent sweep
+   back. Pass a manifest path to restore an older one.

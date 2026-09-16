@@ -1,5 +1,5 @@
 ---
-description: Set up the team's shared skills repository, one person, once
+description: Set up the team's shared skills repository, one person, once: scaffolds that repo as a Claude Code plugin marketplace, opens a merge request with the scaffold, and prints the message the rest of the team needs. Run it only when no team repo exists yet; if one already does, join it instead. Triggers: "start a shared skill repo for us", "I am setting this up for my team", "create the team handbook repository", "we need one central place for our skills", "I will be the one who sets it up".
 argument-hint: [optional SSH URL of an empty git repo]
 ---
 

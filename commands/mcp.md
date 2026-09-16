@@ -1,5 +1,5 @@
 ---
-description: Share one of your MCP servers with the team, so nobody sets it up by hand
+description: Share one of the MCP servers already configured on this machine with the team, as a merge request to the team's plugin repository, so nobody has to install or configure it by hand. It only reads your local MCP config and never writes to it. Triggers: "share this MCP server with everyone", "the team should have this server too", "push my MCP config to the team", "set this server up for the whole team", "distribute an MCP server".
 argument-hint: [optional name of the server to share]
 ---
 
