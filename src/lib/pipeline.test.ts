@@ -500,6 +500,21 @@ describe("a failed harvest is picked up again", () => {
     expect(hasPendingHarvestJobs(home)).toBe(true);
   });
 
+  it("given a runner killed mid-harvest, when a session starts, then the queue still owes its job a runner", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed = drainHarvestJobs(home);
+    expect(claimed).toHaveLength(1);
+    // the runner dies here: the claim is never released, and only a drain reclaims it
+    const dead = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimed[0]!.claimedFile, dead, dead);
+
+    expect(hasPendingHarvestJobs(home)).toBe(true);
+    const reclaimed = drainHarvestJobs(home);
+    expect(reclaimed).toHaveLength(1);
+    expect(reclaimed[0]!.job.sessionId).toBe("s1");
+    for (const c of reclaimed) releaseHarvestJob(c.claimedFile);
+  });
+
   it("given a job another runner is already harvesting, when a session starts, then no second runner is spawned for it", () => {
     enqueueHarvestJob(job(home), home);
     const claimed = drainHarvestJobs(home);
