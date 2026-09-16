@@ -963,6 +963,7 @@ function appendPipelineLog(summary, home, ts) {
   } catch {
   }
 }
+var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 async function runManualSignal(signal, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   const runner = deps.runner ?? runClaudeCli;
   const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
