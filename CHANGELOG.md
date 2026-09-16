@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.4] - 2026-09-16
+
+- **The repository can now measure whether a plain sentence reaches the right command.**
+  Nothing an installed copy does changes with this release. What changes is that the
+  question "does asking in ordinary language actually work" stopped being a matter of
+  opinion: there is an eval suite under `evals/`, written in the phrasings a developer
+  would really use, English and Turkish both, and running it prints a hit rate. The first
+  run scored 0.5556, and of the misses, most were not the wrong command being chosen but
+  no command being chosen at all. That number is the baseline the next two changes to the
+  command descriptions have to beat, and without it neither of them could honestly claim
+  to have improved anything.
+
 ## [0.5.3] - 2026-09-16
 
 - **A suggestion that said nothing once the names came out no longer gets through.**
