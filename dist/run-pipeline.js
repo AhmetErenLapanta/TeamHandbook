@@ -1,7 +1,7 @@
 // src/lib/pipeline.ts
 import {
   appendFileSync,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   readdirSync as readdirSync4,
   readFileSync as readFileSync8,
   renameSync as renameSync2,
@@ -429,9 +429,9 @@ function maybeDumpPayload(raw, home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
+import { mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
 import { basename, join as join7 } from "node:path";
-var STATUSES = ["pending", "approved", "rejected"];
+var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
   return join7(dir, "candidate.json");
 }
@@ -1140,7 +1140,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   }
   const dirs = deps.skillDirs ? deps.skillDirs(home, job.cwd) : defaultHarvestSkillDirs(home, job.cwd);
   const existingSkills = deps.listSkills ? deps.listSkills(dirs) : listSkillsSafe(dirs);
-  const recentDecisions = listCandidates(home).slice(0, 20).map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
+  const recentDecisions = listCandidates(home).filter((c) => c.status !== "archived").slice(0, 20).map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
   const evidence = {
     ...job.evidence,
     echoes: recordAndMatchTeachings((job.evidence.corrections ?? []).map((c) => c.text), home)
@@ -1250,7 +1250,7 @@ function pendingDir(home = handbookHome()) {
   return join10(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
-  mkdirSync4(pendingDir(home), { recursive: true });
+  mkdirSync5(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
   let file = join10(pendingDir(home), `${base}.json`);
@@ -1328,7 +1328,7 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
-  mkdirSync4(home, { recursive: true });
+  mkdirSync5(home, { recursive: true });
   const file = pipelineLogFile(home);
   appendFileSync(file, JSON.stringify({ ts, ...summary }) + "\n");
   try {
@@ -1344,7 +1344,7 @@ function abandonedFile(home = handbookHome()) {
 }
 function abandonJob(job, home) {
   try {
-    mkdirSync4(home, { recursive: true });
+    mkdirSync5(home, { recursive: true });
     appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
   } catch {
   }

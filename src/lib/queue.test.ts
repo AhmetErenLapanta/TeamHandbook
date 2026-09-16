@@ -3,15 +3,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  archiveCandidate,
   candidateMetaFile,
   candidateMetaFromArtifact,
   decideCandidate,
   formatCandidateList,
   isSafeSlug,
+  listArchiveManifests,
   listCandidates,
   patchPendingCandidate,
   loadMutedFingerprints,
+  readArchiveManifest,
   readCandidateMeta,
+  restoreArchived,
+  writeArchiveManifest,
   writeCandidateMeta,
 } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
@@ -333,5 +338,115 @@ describe("formatCandidateList kind badge (v2)", () => {
       Date.parse("2026-08-08T01:00:00Z"),
     );
     expect(text).toContain("[correction]  [team]");
+  });
+});
+
+describe("archiving the queue", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-archive-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("given an archived candidate, when it is read back, then it stays archived with its evidence intact", () => {
+    const dir = writeCandidateDir(
+      home,
+      meta({
+        slug: "stale-discovery",
+        kind: "discovery",
+        origin: "harvest",
+        sessionId: "s-42",
+        suggestedTarget: "personal",
+        taughtBefore: 2,
+      }),
+    );
+
+    const result = archiveCandidate(home, "stale-discovery", "below the discovery bar", "2026-09-16T00:00:00Z");
+
+    expect(result.ok).toBe(true);
+    // the resurrection trap: a status readCandidateMeta does not know is not hidden,
+    // it is rebuilt as pending by synthesizeMeta and stripped of everything below
+    const read = readCandidateMeta(dir);
+    expect(read?.status).toBe("archived");
+    expect(read?.gate).toEqual(meta().gate);
+    expect(read?.taughtBefore).toBe(2);
+    expect(read?.sessionId).toBe("s-42");
+    expect(read?.suggestedTarget).toBe("personal");
+    expect(read?.archivedAt).toBe("2026-09-16T00:00:00Z");
+    expect(read?.archiveReason).toBe("below the discovery bar");
+  });
+
+  it("given an archived candidate, when the pending queue is listed, then it is gone but the unfiltered list still has it", () => {
+    writeCandidateDir(home, meta({ slug: "keeps-waiting" }));
+    writeCandidateDir(home, meta({ slug: "swept-away" }));
+
+    archiveCandidate(home, "swept-away", "below the discovery bar");
+
+    expect(listCandidates(home, "pending").map((m) => m.slug)).toEqual(["keeps-waiting"]);
+    expect(listCandidates(home, "archived").map((m) => m.slug)).toEqual(["swept-away"]);
+    expect(listCandidates(home).map((m) => m.slug).sort()).toEqual(["keeps-waiting", "swept-away"]);
+  });
+
+  it("given three archived candidates, when restored from the manifest, then each meta matches its pre-archive snapshot", () => {
+    const slugs = ["one-rule", "two-rule", "three-rule"];
+    const dirs = slugs.map((slug, i) =>
+      writeCandidateDir(home, meta({ slug, kind: "discovery", taughtBefore: i, sessionId: `s-${i}` })),
+    );
+    const before = dirs.map((dir) => readCandidateMeta(dir));
+
+    const entries = slugs.map((slug) => archiveCandidate(home, slug, "swept", "2026-09-16T00:00:00Z").entry!);
+    const file = writeArchiveManifest(home, {
+      sweptAt: "2026-09-16T00:00:00Z",
+      reason: "swept",
+      entries,
+    });
+    expect(listCandidates(home, "pending")).toEqual([]);
+
+    const restored = restoreArchived(home, readArchiveManifest(file)!);
+
+    expect(restored.restored.sort()).toEqual([...slugs].sort());
+    expect(restored.skipped).toEqual([]);
+    expect(dirs.map((dir) => readCandidateMeta(dir))).toEqual(before);
+    expect(listCandidates(home, "pending").map((m) => m.slug).sort()).toEqual([...slugs].sort());
+    expect(listArchiveManifests(home)).toEqual([file]);
+  });
+
+  it("given a candidate that is not pending, when archiving is tried, then it is refused", () => {
+    writeCandidateDir(home, meta({ slug: "already-kept", status: "approved" }));
+    writeCandidateDir(home, meta({ slug: "turned-down", status: "rejected" }));
+    writeCandidateDir(home, meta({ slug: "swept-once" }));
+    archiveCandidate(home, "swept-once", "swept");
+
+    expect(archiveCandidate(home, "already-kept", "swept").error).toContain("approved");
+    expect(archiveCandidate(home, "turned-down", "swept").error).toContain("rejected");
+    // archiving twice would record "archived" as the status to restore to
+    expect(archiveCandidate(home, "swept-once", "swept").error).toContain("archived");
+    expect(readCandidateMeta(join(candidatesDir(home), "already-kept"))?.status).toBe("approved");
+  });
+
+  it("given an archived candidate, when a decision is attempted, then the review CLI refuses it", () => {
+    writeCandidateDir(home, meta({ slug: "swept-away" }));
+    archiveCandidate(home, "swept-away", "swept");
+
+    const result = decideCandidate(home, "swept-away", "approved");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("already archived");
+  });
+
+  it("given a manifest naming a candidate that was decided since, when restoring, then it is skipped rather than reopened", () => {
+    writeCandidateDir(home, meta({ slug: "swept-away" }));
+    const entry = archiveCandidate(home, "swept-away", "swept").entry!;
+    const dir = join(candidatesDir(home), "swept-away");
+    writeCandidateMeta(dir, { ...readCandidateMeta(dir)!, status: "approved" });
+
+    const result = restoreArchived(home, { sweptAt: "2026-09-16T00:00:00Z", reason: "swept", entries: [entry] });
+
+    expect(result.restored).toEqual([]);
+    expect(result.skipped).toEqual([{ slug: "swept-away", reason: "already approved" }]);
   });
 });

@@ -188,9 +188,9 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
 import { basename, join as join7 } from "node:path";
-var STATUSES = ["pending", "approved", "rejected"];
+var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
   return join7(dir, "candidate.json");
 }
@@ -447,7 +447,8 @@ function gatherStatus(home = handbookHome()) {
     queue: {
       pending: count("pending"),
       approved: count("approved"),
-      rejected: count("rejected")
+      rejected: count("rejected"),
+      archived: count("archived")
     },
     redactionBlocked: counters.redactionBlocked,
     sinceInstall: {
@@ -495,7 +496,10 @@ function formatStatus(report) {
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
-    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected`,
+    // Archived candidates are counted here and nowhere else. "Quietly" means no nag,
+    // not no trace: a queue that shrank by 151 items with no number to show for it
+    // would have the product telling the developer something untrue about their data.
+    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error\u2192fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} \u2014 ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last harvest:    never",

@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats, pluginVersion } from "./status.js";
 import { incrementRedactionBlocked } from "./counters.js";
 import { pipelineLogFile } from "./pipeline.js";
-import { writeCandidateMeta } from "./queue.js";
+import { archiveCandidate, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { appendSignals } from "./signals.js";
 import type { Signal } from "./signals.js";
@@ -96,7 +96,7 @@ describe("gatherStatus / formatStatus", () => {
       home,
       version: pluginVersion(),
       ledger: { total: 2, candidates: 1, weak: 1, distinctFingerprints: 2 },
-      queue: { pending: 1, approved: 1, rejected: 1 },
+      queue: { pending: 1, approved: 1, rejected: 1, archived: 0 },
       redactionBlocked: 1,
       sinceInstall: { approved: 1, teamShared: 0, pairsCaptured: 0, secretsBlocked: 1 },
       detector: { postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 },
@@ -184,5 +184,24 @@ describe("gatherStatus / formatStatus", () => {
     const text = formatStatus(gatherStatus(home));
     expect(text).toContain("Abandoned:");
     expect(text).toContain("2 session harvest(s) given up");
+  });
+});
+
+describe("the archive is counted, not hidden", () => {
+  it("given a swept queue, when status is gathered, then every candidate directory is still accounted for", () => {
+    const slugs = ["kept-a", "kept-b", "swept-a", "swept-b", "swept-c"];
+    for (const slug of slugs) seedCandidate(slug, "pending");
+    seedCandidate("decided-a", "approved");
+    seedCandidate("decided-b", "rejected");
+    for (const slug of ["swept-a", "swept-b", "swept-c"]) archiveCandidate(home, slug, "swept");
+
+    const { queue } = gatherStatus(home);
+
+    expect(queue).toEqual({ pending: 2, approved: 1, rejected: 1, archived: 3 });
+    // the queue line has to add up to what is on disk, or the archive is a leak
+    expect(queue.pending + queue.approved + queue.rejected + queue.archived).toBe(
+      readdirSync(candidatesDir(home)).length,
+    );
+    expect(formatStatus(gatherStatus(home))).toContain("2 pending, 1 approved, 1 rejected, 3 archived");
   });
 });
