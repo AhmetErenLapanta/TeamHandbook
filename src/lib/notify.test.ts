@@ -16,7 +16,7 @@ import {
 } from "./notify.js";
 import { bumpCounter } from "./counters.js";
 import { saveTeamConfig } from "./init.js";
-import { writeCandidateMeta } from "./queue.js";
+import { archiveCandidate, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 
@@ -174,6 +174,23 @@ describe("notify", () => {
       const notice = sessionStartNotice(cwd, home);
       expect(notice).toContain("1 candidate skill is awaiting your review");
       expect(notice).toContain("brand-new-skill");
+    });
+
+    it("given 151 archived and 6 pending candidates, when the notice is built, then it speaks for the 6", () => {
+      // the measure of "quietly": the session-start line reports what is left to
+      // decide, not the backlog that was swept out from under it
+      for (let i = 0; i < 151; i++) writePendingCandidate(home, `swept-${i}`);
+      for (let i = 0; i < 6; i++) writePendingCandidate(home, `waiting-${i}`);
+      for (let i = 0; i < 151; i++) archiveCandidate(home, `swept-${i}`, "swept");
+      sessionStartNotice(cwd, home); // burn the one-time welcome
+
+      const notice = sessionStartNotice(cwd, home);
+
+      // writePendingCandidate leaves origin unset, so these take the plain
+      // "awaiting your review" line rather than the harvest headline
+      expect(notice).toContain("6 candidate skills are awaiting your review");
+      expect(notice).not.toContain("157");
+      expect(notice).not.toContain("151");
     });
 
     it("stays silent when notifications are disabled", () => {

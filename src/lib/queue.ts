@@ -1,12 +1,17 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
+import { detectSecret } from "./secrets.js";
+import { copySkillPayload, listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict } from "./score.js";
 
-export type CandidateStatus = "pending" | "approved" | "rejected";
+// "archived" is a queue state, not a verdict: the developer never looked at these.
+// It exists so a queue that grew past reading can be shrunk to the handful still
+// worth a decision, and it is reversible by design - see the archive manifest below.
+export type CandidateStatus = "pending" | "approved" | "rejected" | "archived";
 
 export interface CandidateMeta {
   slug: string;
@@ -29,9 +34,18 @@ export interface CandidateMeta {
   // how many sessions this lesson was taught in before the one that produced it —
   // the "you have said this twice" evidence, absent when it is the first time
   taughtBefore?: number;
+  // written together when a candidate is archived and both removed on restore, so a
+  // restored meta matches its pre-archive snapshot field for field
+  archivedAt?: string;
+  archiveReason?: string;
 }
 
-const STATUSES: CandidateStatus[] = ["pending", "approved", "rejected"];
+// Every status readCandidateMeta will accept. Leaving one out does not hide the
+// candidates carrying it - the parse below rejects the file, synthesizeMeta rebuilds
+// it as "pending", and gate/taughtBefore/sessionId/suggestedTarget are lost with it.
+// So writing an unlisted status resurrects a candidate stripped of its evidence
+// instead of quieting it, which is the one failure archiving must not have.
+const STATUSES: CandidateStatus[] = ["pending", "approved", "rejected", "archived"];
 
 export function isSafeSlug(slug: string): boolean {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
@@ -125,6 +139,112 @@ export function readCandidateMeta(dir: string): CandidateMeta | null {
   return synthesizeMeta(dir);
 }
 
+export interface IntakeResult {
+  ok: boolean;
+  slug?: string;
+  dir?: string;
+  /** how many files were taken in, so the caller can say the extras came along */
+  fileCount?: number;
+  error?: string;
+  /** set when the secret sieve is what refused the skill: the pattern, and where */
+  secret?: { pattern: string; file: string };
+}
+
+/**
+ * Take a skill somebody wrote by hand into the review queue.
+ *
+ * Until this existed, a hand-written skill had no route to a team at all: the queue was
+ * reachable only by re-living the lesson and hoping the harvest caught it. From here the
+ * existing chain takes over unchanged - /handbook:review, approveAndDeliver, and for the
+ * team answer publishCandidate. No candidate.json is written on purpose, so the meta is
+ * synthesized from the frontmatter by readCandidateMeta, and the review flow sees an
+ * ordinary pending candidate.
+ *
+ * The secret sieve has to be re-established here, and this is the load-bearing part of
+ * the function. The harvest reaches the queue through pipeline.ts, which runs
+ * signalSecret over every captured field before a candidate is ever written. A directory
+ * copied straight into candidatesDir() never passes that point, so this is the second
+ * door into the pending queue and it needs its own lock: no captured secret reaches the
+ * queue, a candidate, or a PR.
+ *
+ * It refuses rather than redacts. Redaction is the right answer for a transcript slice,
+ * where the lesson survives losing a token. It is the wrong answer for a skill: a blanked
+ * out reference file or a pruned script still installs, still reads as complete to the
+ * teammate who receives it, and fails only when they run it. A skill that never arrives
+ * is better than a skill that arrives hollow, so the whole intake stops and names the
+ * file, which is the one thing that lets the author fix it.
+ *
+ * Every file that would be copied is screened first, and the screened list is the list
+ * that gets copied. Screening file by file as they are copied would leave the files that
+ * sort earlier sitting in the queue when a later one trips the sieve.
+ */
+export function intakeSkill(sourceDir: string, home: string = handbookHome()): IntakeResult {
+  const slug = basename(sourceDir);
+  if (!isSafeSlug(slug)) {
+    return { ok: false, error: `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
+  let skillMd: string;
+  try {
+    skillMd = readFileSync(join(sourceDir, "SKILL.md"), "utf8");
+  } catch {
+    return { ok: false, error: `no readable SKILL.md in ${sourceDir}` };
+  }
+  if (!parseSkillFrontmatter(skillMd)) {
+    return { ok: false, error: `the SKILL.md in ${sourceDir} has no name and description frontmatter` };
+  }
+  const dir = join(candidatesDir(home), slug);
+  if (existsSync(dir)) {
+    // Overwriting would silently discard a decision already made about that slug: an
+    // approved candidate keeps its meta here, and rewriting it would offer a delivered
+    // skill for review a second time. A decided one is named as decided, because
+    // "waiting in the review queue" would send the user to look for something
+    // /handbook:review will not show them.
+    const existing = readCandidateMeta(dir);
+    const decided = existing && existing.status !== "pending" ? existing.status : null;
+    return {
+      ok: false,
+      error: decided
+        ? `"${slug}" was already ${decided} here; nothing was changed`
+        : `"${slug}" is already waiting in the review queue`,
+    };
+  }
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    // A symlink cannot be screened for what it will resolve to at copy time, and
+    // dropping it quietly is the pruning this card exists to stop. Neither is allowed,
+    // so the skill is refused with the entry named.
+    return {
+      ok: false,
+      error: `${slug} contains "${skipped[0]}", which is not a regular file; nothing was queued`,
+    };
+  }
+  if (files.length === 0) {
+    return { ok: false, error: `${slug} has no files to queue` };
+  }
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(join(sourceDir, file), "utf8");
+    } catch {
+      // unreadable means unscreened, and unscreened must not ship
+      return { ok: false, error: `cannot read "${file}" in ${sourceDir}; nothing was queued` };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return {
+        ok: false,
+        secret: { pattern, file },
+        error:
+          `"${file}" looks like it contains a secret (${pattern}), so ${slug} was not queued. ` +
+          `Skills are reviewed and shared as they are, and a redacted one would install and then ` +
+          `fail; take the credential out of the skill and try again.`,
+      };
+    }
+  }
+  copySkillPayload(sourceDir, dir, skillMd, files);
+  return { ok: true, slug, dir, fileCount: files.length };
+}
+
 /**
  * Amend a candidate only while it is still pending. The harvest runs in a background
  * process, so between reading the queue and writing to it the user may have approved
@@ -213,6 +333,137 @@ export function decideCandidate(
   return { ok: true, meta: updated, muted };
 }
 
+/**
+ * A queue that grew past reading is not a review queue. Archiving moves a candidate
+ * out of the pending list without deciding it: the directory stays where it is, the
+ * artifact is untouched, and only the status line changes. It is deliberately NOT a
+ * rejection - it records no verdict and never mutes the fingerprint, because nobody
+ * looked at these and silencing a lesson the developer never saw is not reversible
+ * in the way the archive is.
+ */
+export interface ArchiveEntry {
+  slug: string;
+  // what the candidate must go back to on restore. Only "pending" can reach here
+  // today, but the entry carries it rather than assuming it.
+  previousStatus: CandidateStatus;
+  archivedAt: string;
+  reason: string;
+}
+
+export interface ArchiveManifest {
+  sweptAt: string;
+  reason: string;
+  entries: ArchiveEntry[];
+}
+
+export interface ArchiveResult {
+  ok: boolean;
+  entry?: ArchiveEntry;
+  error?: string;
+}
+
+export function archiveCandidate(
+  home: string,
+  slug: string,
+  reason: string,
+  archivedAt: string = new Date().toISOString(),
+): ArchiveResult {
+  if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
+  const dir = join(candidatesDir(home), slug);
+  const meta = readCandidateMeta(dir);
+  if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
+  // Pending only, and that includes already-archived: archiving twice would record
+  // "archived" as the status to restore to, and the candidate could never come back.
+  // An approved candidate has already been installed somewhere; hiding it here would
+  // leave the queue disagreeing with the skill on disk.
+  if (meta.status !== "pending") {
+    return { ok: false, error: `candidate "${slug}" is ${meta.status}, not pending` };
+  }
+  // no decidedAt: archiving is not a decision the developer made, and the restored
+  // meta has to match the pre-archive snapshot exactly
+  writeCandidateMeta(dir, { ...meta, status: "archived", archivedAt, archiveReason: reason });
+  return { ok: true, entry: { slug, previousStatus: meta.status, archivedAt, reason } };
+}
+
+export function archivesDir(home: string = handbookHome()): string {
+  return join(home, "archives");
+}
+
+/**
+ * Every archiving run writes one of these. It is not a log: it is the undo. Putting
+ * 151 candidates back by hand is not an option a person would take, so without a
+ * manifest "the archive is reversible" would be a claim nobody could act on - and
+ * that reversibility is the whole reason archiving needs no approval.
+ */
+export function writeArchiveManifest(home: string, manifest: ArchiveManifest): string {
+  const dir = archivesDir(home);
+  mkdirSync(dir, { recursive: true });
+  // the timestamp is the file name, so manifests sort chronologically by name
+  const file = join(dir, `${manifest.sweptAt.replace(/[:.]/g, "-")}.json`);
+  writeFileAtomic(file, JSON.stringify(manifest, null, 2) + "\n");
+  return file;
+}
+
+export function readArchiveManifest(file: string): ArchiveManifest | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+  const m = parsed as Partial<ArchiveManifest>;
+  if (typeof m?.sweptAt !== "string" || !Array.isArray(m.entries)) return null;
+  const entries = m.entries.filter(
+    (e): e is ArchiveEntry =>
+      typeof e?.slug === "string" && STATUSES.includes(e?.previousStatus as CandidateStatus),
+  );
+  return { sweptAt: m.sweptAt, reason: typeof m.reason === "string" ? m.reason : "", entries };
+}
+
+/** Manifest files, oldest first; the last one is the most recent run. */
+export function listArchiveManifests(home: string = handbookHome()): string[] {
+  try {
+    return readdirSync(archivesDir(home))
+      .filter((f) => f.endsWith(".json"))
+      .sort()
+      .map((f) => join(archivesDir(home), f));
+  } catch {
+    return [];
+  }
+}
+
+export interface RestoreResult {
+  restored: string[];
+  skipped: { slug: string; reason: string }[];
+}
+
+/** Put a manifest's candidates back exactly as they were before it ran. */
+export function restoreArchived(home: string, manifest: ArchiveManifest): RestoreResult {
+  const result: RestoreResult = { restored: [], skipped: [] };
+  for (const entry of manifest.entries) {
+    if (!isSafeSlug(entry.slug)) {
+      result.skipped.push({ slug: entry.slug, reason: "invalid candidate name" });
+      continue;
+    }
+    const dir = join(candidatesDir(home), entry.slug);
+    const meta = readCandidateMeta(dir);
+    if (!meta) {
+      result.skipped.push({ slug: entry.slug, reason: "no longer in the queue" });
+      continue;
+    }
+    if (meta.status !== "archived") {
+      result.skipped.push({ slug: entry.slug, reason: `already ${meta.status}` });
+      continue;
+    }
+    // drop the keys rather than blanking them: a restored candidate has to be
+    // indistinguishable from one that was never archived
+    const { archivedAt: _archivedAt, archiveReason: _archiveReason, ...rest } = meta;
+    writeCandidateMeta(dir, { ...rest, status: entry.previousStatus });
+    result.restored.push(entry.slug);
+  }
+  return result;
+}
+
 // A plain rejection does NOT suppress future recurrences — changing your mind (or
 // misclicking) must stay possible. Only an explicit "don't suggest this again"
 // adds the fingerprint here, and the sieve then drops automatic recurrences.
@@ -236,9 +487,13 @@ export function muteFingerprint(fingerprint: string, home: string = handbookHome
   writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
 }
 
-export function formatCandidateList(metas: CandidateMeta[], now: number = Date.now()): string {
-  if (metas.length === 0) return "No pending candidates.";
-  const lines = [`Pending candidates (${metas.length}), newest first:`, ""];
+export function formatCandidateList(
+  metas: CandidateMeta[],
+  now: number = Date.now(),
+  label = "Pending",
+): string {
+  if (metas.length === 0) return `No ${label.toLowerCase()} candidates.`;
+  const lines = [`${label} candidates (${metas.length}), newest first:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
     const kind = meta.kind ? `[${meta.kind}]  ` : "";

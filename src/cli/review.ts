@@ -1,14 +1,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approveAndDeliver } from "../lib/deliver.js";
+import { approveAndDeliver, projectTargetLabel } from "../lib/deliver.js";
 import type { DeliveryTarget } from "../lib/deliver.js";
 import {
   decideCandidate,
   formatCandidateList,
   isSafeSlug,
+  listArchiveManifests,
   listCandidates,
+  readArchiveManifest,
   readCandidateMeta,
+  restoreArchived,
 } from "../lib/queue.js";
+import { formatSweepReport, sweepQueue } from "../lib/sweep.js";
 import { loadScoreConfig } from "../lib/score.js";
 import { loadHarvestConfig } from "../lib/harvest.js";
 import { pendingHarvestCount } from "../lib/notify.js";
@@ -18,7 +22,8 @@ import { candidatesDir } from "../lib/skill-index.js";
 
 function usage(): never {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>> [--all] [--never] [--to personal|project|team]",
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
+      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team]",
   );
   process.exit(2);
 }
@@ -51,12 +56,21 @@ function showCandidate(home: string, slug: string): void {
   } else {
     console.log("score:     n/a");
   }
+  // "Add it to a project" is offered for every candidate, whatever we suggest, and it
+  // installs where the candidate was captured - which is not always the project the
+  // reviewer is in. The dialog is built from this output, so the destination is printed
+  // for all of them; only the suggestion below, when it already names it, makes this
+  // line a repeat. It reads the cwd approveAndDeliver itself falls back to, so the
+  // destination shown here is the one the copy will use.
+  if (meta && meta.suggestedTarget !== "project") {
+    console.log(`project:   ${projectTargetLabel(meta, process.cwd())}`);
+  }
   if (meta?.suggestedTarget) {
     const where =
       meta.suggestedTarget === "personal"
         ? "keep for yourself (~/.claude/skills)"
         : meta.suggestedTarget === "project"
-          ? "this project's .claude/skills"
+          ? projectTargetLabel(meta, process.cwd())
           : "share with the team (PR)";
     console.log(`suggested: ${where}`);
   }
@@ -134,10 +148,12 @@ function approveOne(home: string, slug: string, to?: DeliveryTarget): void {
     const loads = result.originProject
       ? `Claude will load it in ${result.originProject} (where it was captured) next session`
       : "Claude will load it next session";
-    console.log(
-      `Approved "${slug}" and installed it at ${result.deliveredTo}. ` +
-        `${loads}. Commit this directory so the skill travels with the repo.`,
-    );
+    // "this directory" is only the right repo to commit when the skill landed here; when
+    // it landed in the project it was captured in, that is the repo the skill travels with.
+    const commit = result.originProject
+      ? "Commit it there so the skill travels with that repo."
+      : "Commit this directory so the skill travels with the repo.";
+    console.log(`Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
   }
 }
 
@@ -158,10 +174,44 @@ function rejectOne(home: string, slug: string, never: boolean): void {
   }
 }
 
-function main(): void {
+/**
+ * The archive, shown only when asked for. The default list stays the pending queue:
+ * an archived candidate is one the developer chose not to be shown, and putting it
+ * back on the review screen would undo the only thing archiving does.
+ */
+function listArchived(home: string): void {
+  console.log(formatCandidateList(listCandidates(home, "archived"), Date.now(), "Archived"));
+}
+
+async function sweep(home: string, dryRun: boolean): Promise<void> {
+  const report = await sweepQueue(home, { dryRun });
+  console.log(formatSweepReport(report, dryRun));
+}
+
+function restore(home: string, file?: string): void {
+  // no argument means the most recent run, which is what "undo that sweep" means to
+  // anyone who just ran one
+  const target = file ?? listArchiveManifests(home).at(-1);
+  if (!target) {
+    console.error("error: no archive manifest to restore from");
+    process.exit(1);
+  }
+  const manifest = readArchiveManifest(target);
+  if (!manifest) {
+    console.error(`error: "${target}" is not a readable archive manifest`);
+    process.exit(1);
+  }
+  const result = restoreArchived(home, manifest);
+  console.log(`Restored ${result.restored.length} candidate(s) from ${target}.`);
+  for (const s of result.skipped) console.log(`  skipped ${s.slug} - ${s.reason}`);
+}
+
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const never = args.includes("--never");
   const all = args.includes("--all");
+  const archived = args.includes("--archived");
+  const dryRun = args.includes("--dry-run");
   // Accept both `--to personal` and `--to=personal`. Silently ignoring the `=`
   // spelling would fall back to the candidate's suggested target — which is often
   // "team" — so "keep this to myself" could publish to the team instead.
@@ -174,7 +224,19 @@ function main(): void {
   const positional = args.filter((a, i) => !a.startsWith("--") && (toIndex === -1 || i !== toIndex + 1));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
+  if (cmd === "sweep") {
+    await sweep(home, dryRun);
+    return;
+  }
+  if (cmd === "restore") {
+    restore(home, slugArgs[0]);
+    return;
+  }
   if (cmd === "list") {
+    if (archived) {
+      listArchived(home);
+      return;
+    }
     const pending = listCandidates(home, "pending");
     console.log(formatCandidateList(pending));
     if (pending.length === 0) {
@@ -213,4 +275,9 @@ function main(): void {
   }
 }
 
-main();
+// no explicit exit: stdout to a pipe flushes asynchronously, and exiting on the
+// promise would truncate a long `list` or `show`
+main().catch((err) => {
+  console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+  process.exitCode = 1;
+});

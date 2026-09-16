@@ -457,7 +457,7 @@ function parseItem(raw: unknown, grounding: HarvestGrounding): HarvestItem | nul
 /** Strict parse of the harvest reply. Unparseable → null (fail closed, caller logs
  * an error); individually invalid items are dropped, valid ones survive. */
 /** The balanced end of the JSON array starting at `from`, string literals respected. */
-function balancedArrayAt(raw: string, from: number): string | null {
+export function balancedArrayAt(raw: string, from: number): string | null {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -672,7 +672,15 @@ export async function harvestSession(
   // Descriptions, not just slugs: told only "testcontainers-postgres-tests: pending"
   // the model cannot tell what that candidate already covers, and proposes a
   // near-duplicate of it — which is how a review queue fills up with the same lesson.
+  // Archived candidates are left out on purpose. This window is twenty items wide and
+  // the prompt tells the model not to re-propose anything in it; an archiving run can
+  // put hundreds of candidates in the queue at once, and they would fill the window
+  // and push out the decisions the developer actually made. The honest cost is that an
+  // archived lesson can be proposed again - which is right, since archiving is not a
+  // verdict and nobody read these. Muting them instead would silence a lesson the
+  // developer never saw, and the discovery bar now drops the weak ones at the source.
   const recentDecisions = listCandidates(home)
+    .filter((c) => c.status !== "archived")
     .slice(0, 20)
     .map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
 

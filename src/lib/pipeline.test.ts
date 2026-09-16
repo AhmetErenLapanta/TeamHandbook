@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   abandonedFile,
   drainHarvestJobs,
+  harvestedDir,
   releaseHarvestJob,
   enqueueHarvestJob,
   pendingDir,
@@ -20,6 +21,7 @@ import { ledgerFingerprintCounts } from "./signals.js";
 import type { Signal } from "./signals.js";
 import type { HarvestJob } from "./harvest.js";
 import { candidatesDir } from "./skill-index.js";
+import { emptySessionState, loadSessionState, saveSessionState } from "./session-state.js";
 
 function candidate(overrides: Partial<Signal> = {}): Signal {
   return {
@@ -192,6 +194,255 @@ describe("runHarvestJob", () => {
     expect(summary.outcome).toBe("skipped");
     const line = JSON.parse(readFileSync(pipelineLogFile(home), "utf8").trim());
     expect(line.harvest.skipped).toContain("no transcript");
+  });
+});
+
+describe("harvest once per transcript state", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const deps = { listSkills: () => [], skillDirs: () => [], remoteUrl: () => null };
+
+  function countingRunner(calls: { n: number }): ClaudeRunner {
+    return async () => {
+      calls.n += 1;
+      return harvestReply;
+    };
+  }
+
+  function logLines(h: string): Array<Record<string, unknown>> {
+    return readFileSync(pipelineLogFile(h), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+  }
+
+  it("given a completed run for a session, when the same job is claimed again, then no model call, no candidate, and a logged reason", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+    expect(calls.n).toBe(1);
+
+    const again = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+
+    expect(calls.n).toBe(1);
+    expect(again.outcome).toBe("skipped");
+    expect(again.written).toEqual([]);
+    const lines = logLines(home);
+    expect(lines).toHaveLength(2);
+    expect((lines[1]!.harvest as { skipped?: string }).skipped).toBe(
+      "already harvested at this transcript length",
+    );
+    expect(readdirSync(candidatesDir(home))).toEqual(["prefer-config-feature-flags"]);
+  });
+
+  it("given a different sessionId, when its job is claimed, then it harvests normally", async () => {
+    const calls = { n: 0 };
+    await runHarvestJob(job(home), home, { ...deps, runner: countingRunner(calls) });
+
+    const other = join(home, "other.jsonl");
+    writeFileSync(
+      other,
+      JSON.stringify({
+        type: "user",
+        isSidechain: false,
+        message: { role: "user", content: "we keep flags in config" },
+      }) + "\n",
+    );
+    const summary = await runHarvestJob(
+      { sessionId: "s2", cwd: home, transcriptPath: other, evidence: { pairs: [], recurrence: {} } },
+      home,
+      { ...deps, runner: countingRunner(calls) },
+    );
+
+    expect(calls.n).toBe(2);
+    expect(summary.outcome).toBe("harvested");
+  });
+
+  it("given a reclaimed stale claim and no completed run for that session, when it is drained, then it harvests", async () => {
+    const calls = { n: 0 };
+    enqueueHarvestJob(job(home), home);
+    const entry = readdirSync(pendingDir(home))[0]!;
+    const claimed = join(pendingDir(home), `${entry}.claimed-99999`);
+    renameSync(join(pendingDir(home), entry), claimed);
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimed, old, old);
+
+    const reclaimed = drainHarvestJobs(home);
+    expect(reclaimed).toHaveLength(1);
+    const summary = await runHarvestJob(reclaimed[0]!.job, home, {
+      ...deps,
+      runner: countingRunner(calls),
+    });
+
+    expect(calls.n).toBe(1);
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+  });
+
+  it("given a runner killed mid-harvest, when the queue hands its job back, then the harvest runs", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    enqueueHarvestJob(j, home);
+    const entry = readdirSync(pendingDir(home))[0]!;
+    // exactly what a SIGKILL leaves on disk: the claim the runner never released,
+    // and a marker that never graduated from "claimed" to "done"
+    const claimed = join(pendingDir(home), `${entry}.claimed-99999`);
+    renameSync(join(pendingDir(home), entry), claimed);
+    mkdirSync(harvestedDir(home), { recursive: true });
+    const marker = join(harvestedDir(home), `s1-${statSync(j.transcriptPath!).size}`);
+    writeFileSync(marker, "claimed");
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimed, old, old);
+    utimesSync(marker, old, old);
+
+    const reclaimed = drainHarvestJobs(home);
+    const summary = await runHarvestJob(reclaimed[0]!.job, home, {
+      ...deps,
+      runner: countingRunner(calls),
+    });
+
+    expect(reclaimed).toHaveLength(1);
+    expect(calls.n).toBe(1);
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+  });
+
+  it("given an abandoned claim and no drain in between, when the job runs, then the guard steps aside", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    // the sweep only runs at drain time, so a marker that crosses the horizon while
+    // a runner is already working through its drained jobs reaches the guard itself
+    mkdirSync(harvestedDir(home), { recursive: true });
+    const marker = join(harvestedDir(home), `s1-${statSync(j.transcriptPath!).size}`);
+    writeFileSync(marker, "claimed");
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(marker, old, old);
+
+    const summary = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+
+    expect(calls.n).toBe(1);
+    expect(summary.outcome).toBe("harvested");
+    expect(readFileSync(marker, "utf8")).toBe("done");
+  });
+
+  it("given a run that errored, when the retry claims the same transcript, then the model is called again", async () => {
+    const j = job(home);
+    const down: ClaudeRunner = async () => {
+      throw new Error("logged out");
+    };
+    await runHarvestJob(j, home, { ...deps, runner: down });
+    expect(readdirSync(harvestedDir(home))).toEqual([]);
+
+    const calls = { n: 0 };
+    const retried = drainHarvestJobs(home);
+    const summary = await runHarvestJob(retried[0]!.job, home, {
+      ...deps,
+      runner: countingRunner(calls),
+    });
+
+    expect(calls.n).toBe(1);
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+  });
+
+  it("given a resumed session whose transcript grew, when it is claimed again, then it harvests the new tail", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+
+    appendFileSync(
+      j.transcriptPath!,
+      JSON.stringify({
+        type: "user",
+        isSidechain: false,
+        message: { role: "user", content: "and never commit without asking" },
+      }) + "\n",
+    );
+    const summary = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+
+    expect(calls.n).toBe(2);
+    expect(summary.outcome).toBe("harvested");
+  });
+
+  it("given two runners in flight before either has logged, when both claim one transcript, then only one model call happens", async () => {
+    let calls = 0;
+    let enteredCall!: () => void;
+    let releaseCall!: () => void;
+    const inCall = new Promise<void>((resolve) => (enteredCall = resolve));
+    const held = new Promise<void>((resolve) => (releaseCall = resolve));
+    const runner: ClaudeRunner = async () => {
+      calls += 1;
+      enteredCall();
+      await held;
+      return harvestReply;
+    };
+    const j = job(home);
+
+    const first = runHarvestJob(j, home, { ...deps, runner });
+    await inCall;
+    expect(existsSync(pipelineLogFile(home))).toBe(false);
+    const second = await runHarvestJob(j, home, { ...deps, runner });
+
+    expect(second.outcome).toBe("skipped");
+    expect(calls).toBe(1);
+    releaseCall();
+    await first;
+    expect(calls).toBe(1);
+  });
+
+  it("given a stamped and an unstamped session, when the marker guard runs, then the harvestedAt session-end branches on is unchanged for both", async () => {
+    const stamped = emptySessionState("s1");
+    stamped.harvestedAt = "2026-09-09T12:00:00Z";
+    saveSessionState(stamped, home);
+    saveSessionState(emptySessionState("s2"), home);
+
+    await runHarvestJob(job(home), home, { ...deps, runner: async () => harvestReply });
+
+    // the exact expression session-end.ts reads before it enqueues anything
+    expect(!!loadSessionState("s1", home).harvestedAt).toBe(true);
+    expect(!!loadSessionState("s2", home).harvestedAt).toBe(false);
+  });
+
+  it("given a marker past the sweep horizon, when the queue is drained, then it is removed and a fresh marker is kept", async () => {
+    await runHarvestJob(job(home), home, { ...deps, runner: async () => harvestReply });
+    const markers = readdirSync(harvestedDir(home));
+    expect(markers).toHaveLength(1);
+    const stale = join(harvestedDir(home), markers[0]!);
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+    const fresh = join(harvestedDir(home), "s2-4096");
+    writeFileSync(fresh, "");
+
+    drainHarvestJobs(home);
+
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+  });
+
+  it("given a finished marker older than the claim horizon, when the queue is drained, then it survives and still refuses the session", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+    const marker = join(harvestedDir(home), readdirSync(harvestedDir(home))[0]!);
+    // past the horizon an UNFINISHED marker expires at, far inside the one a
+    // finished marker expires at: a completed harvest must not decay into a
+    // ten minute dedup just because its runner has long since exited
+    const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    utimesSync(marker, old, old);
+
+    drainHarvestJobs(home);
+
+    expect(existsSync(marker)).toBe(true);
+    const again = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+    expect(calls.n).toBe(1);
+    expect(again.outcome).toBe("skipped");
   });
 });
 
