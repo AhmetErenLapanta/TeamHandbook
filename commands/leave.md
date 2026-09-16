@@ -1,5 +1,5 @@
 ---
-description: Leave the current team skill base (return to solo mode) or switch teams
+description: Leave the current team skill base and return to solo mode, or clear the binding so you can join a different team. It removes only the local link: no skills are deleted, and Claude Code's marketplace subscription is a separate command you run yourself. Triggers: "disconnect me from this team", "I am not working with them anymore", "unlink the team repo", "switch me to a different team handbook", "go back to just my own skills".
 ---
 
 You are running TeamHandbook's team leave flow. This clears the local team binding so the user

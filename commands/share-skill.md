@@ -1,5 +1,5 @@
 ---
-description: Put a skill you wrote by hand into the review queue, so you can share it with your team
+description: Put a skill that already exists on disk, one you wrote by hand rather than one TeamHandbook harvested, into the review queue so it can reach the team. One skill per run, through the same review as everything else. Use only when the skill is already written; to capture something out of the current session, use /handbook:learn instead. Triggers: "one of my own skills should go to the team", "add a skill I already have to the queue", "this skill of mine belongs in the team handbook", "queue an existing skill".
 ---
 
 The user wants to take a skill that already exists on disk - one they wrote themselves, not

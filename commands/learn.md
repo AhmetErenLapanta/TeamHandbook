@@ -1,5 +1,5 @@
 ---
-description: Turn something from this session — an error→fix moment OR a completed task's procedure — into a skill candidate
+description: Turn one specific thing from THIS session into a skill candidate: either an error that got fixed, or the procedure of a task that was just completed. Use only when the user points at something concrete they want preserved; it queues a candidate for review and installs nothing. Triggers: "capture this as a skill", "turn what we just did into a skill", "this is worth teaching the rest of the team", "record how we got past that", "write this procedure down for next time", "keep this for future sessions".
 argument-hint: [optional hint about which moment or task to capture]
 ---
 

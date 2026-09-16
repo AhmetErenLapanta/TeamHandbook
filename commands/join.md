@@ -1,5 +1,5 @@
 ---
-description: Join your team's shared skills repository set up by a champion via /handbook:init
+description: Join a team skills repository someone else already created with /handbook:init: points this machine at that repo and subscribes Claude Code to its plugin marketplace, so skills merged there arrive automatically. Use when the repo already exists and you are not the person who made it. Triggers: "connect me to my team's skill base", "my team already has one, add me", "point me at the repo they set up", "someone gave me the address, wire me in", "hook this machine up to the team handbook".
 argument-hint: <git URL shared by your team's champion>
 ---
 

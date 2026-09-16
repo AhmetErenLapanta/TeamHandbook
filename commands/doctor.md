@@ -1,5 +1,5 @@
 ---
-description: Diagnose the TeamHandbook installation — checks node, the claude CLI, hooks, config, and the team repo
+description: Diagnose the TeamHandbook installation: node, the claude CLI it shells out to, the hooks, the config, and the team repo, with a fix for every failure it finds. Use when TeamHandbook itself looks inert or misconfigured, and before editing any Claude Code settings by hand. Triggers: "is TeamHandbook set up right", "nothing is being captured", "check my install", "why is it not picking anything up", "it stopped working", "verify the plugin is healthy".
 ---
 
 The user wants to check whether TeamHandbook is healthy. Run:
