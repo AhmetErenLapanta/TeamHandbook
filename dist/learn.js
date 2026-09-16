@@ -104,11 +104,14 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
-      ...typeof parsed.lastPromptWasSlashLearn === "boolean" ? { lastPromptWasSlashLearn: parsed.lastPromptWasSlashLearn } : {}
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
     };
   } catch {
     return emptySessionState(sessionId);
   }
+}
+function saveSessionState(state, home = handbookHome()) {
+  writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
@@ -187,9 +190,17 @@ function currentSessionId(env = process.env) {
   const id = env.CLAUDE_CODE_SESSION_ID;
   return typeof id === "string" && id.trim() ? id.trim() : void 0;
 }
-function learnWasExplicit(sessionId, home = handbookHome()) {
+function peekExplicitLearnInvocation(sessionId, home = handbookHome()) {
   if (!sessionId) return true;
-  return loadSessionState(sessionId, home).lastPromptWasSlashLearn !== false;
+  return loadSessionState(sessionId, home).explicitLearnPending !== false;
+}
+function finalizeExplicitLearnInvocation(sessionId, home = handbookHome()) {
+  if (!sessionId) return;
+  const state = loadSessionState(sessionId, home);
+  if (state.explicitLearnPending) {
+    state.explicitLearnPending = false;
+    saveSessionState(state, home);
+  }
 }
 function signalFromLearnPayload(payload, ts, trigger = "manual") {
   if (payload.kind === "procedure") {
@@ -367,11 +378,11 @@ function buildScorePrompt(signal, occurrences, existingSkills = []) {
     `- kind: ${signal.task ? "completed task procedure" : "error\u2192fix moment"}`,
     `- times this fingerprint was seen in the local ledger: ${occurrences}`,
     `- occurrences within the session: ${signal.count}`,
-    ...signal.trigger === "manual" ? [
-      "- trigger: the user EXPLICITLY asked to capture this. A manual capture has no",
-      "  ledger history by definition \u2014 judge recurrence by how plausibly the team will",
-      "  face similar situations again, not by the count above. Still reject trivia the",
-      "  team could trivially rediscover."
+    ...signal.trigger === "manual" || signal.trigger === "manual-model" ? [
+      "- trigger: this is a manual capture (via /handbook:learn), not the automatic",
+      "  end-of-session harvest, so it has no ledger history by definition \u2014 judge",
+      "  recurrence by how plausibly the team will face similar situations again, not",
+      "  by the count above. Still reject trivia the team could trivially rediscover."
     ] : [],
     caseBlock,
     "",
@@ -1098,9 +1109,11 @@ async function main() {
     console.error(`error: ${error}`);
     return 2;
   }
-  const trigger = learnWasExplicit(currentSessionId()) ? "manual" : "manual-model";
+  const sessionId = currentSessionId();
+  const trigger = peekExplicitLearnInvocation(sessionId) ? "manual" : "manual-model";
   const signal = signalFromLearnPayload(payload, (/* @__PURE__ */ new Date()).toISOString(), trigger);
   const outcome = await runManualSignal(signal);
+  if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));

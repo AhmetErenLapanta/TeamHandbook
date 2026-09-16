@@ -71,7 +71,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
-      ...typeof parsed.lastPromptWasSlashLearn === "boolean" ? { lastPromptWasSlashLearn: parsed.lastPromptWasSlashLearn } : {}
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
     };
   } catch {
     return emptySessionState(sessionId);

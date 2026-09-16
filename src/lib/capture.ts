@@ -88,21 +88,81 @@ export function captureCorrection(input: HookInput, home: string = handbookHome(
 // $ARGUMENTS after it, never a prompt that merely mentions the command in prose.
 const LEARN_SLASH_COMMAND = /^\/handbook:learn(\s|$)/;
 
+// Any OTHER literal slash command. Seeing one while an ask is pending is positive
+// evidence the user moved on to a different explicit action, so it is the one
+// thing (short of the CLI actually consuming the ask) allowed to clear a pending
+// flag early. A plain-language prompt is not this — it is what learn.md step 2's
+// clarifying question gets answered with. Shaped like a command name (letters,
+// digits, ":", "_", "-", then whitespace or end), the same way LEARN_SLASH_COMMAND
+// is anchored and terminated, specifically so it does NOT match a pasted absolute
+// path ("/Users/x/..."), a regex literal, or a diff line — any of those would
+// otherwise silently kill a still-live ask, which is exactly the lost-case class
+// this card exists to close.
+const ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
+
 /**
- * Record whether the prompt just typed literally is the /handbook:learn slash
- * command, unexpanded. Measured, not assumed: dumping real hook stdin for both a
+ * Track whether the user's own literal /handbook:learn slash command is still an
+ * open, unconsumed ask. Measured, not assumed: dumping real hook stdin for both a
  * typed slash command and a plain-language request that made the model invoke the
  * same command via the Skill tool showed UserPromptSubmit carries the raw text a
  * human submitted in both cases (the slash command included), and that the model's
- * own Skill-tool call produces no UserPromptSubmit event of its own. So the most
- * recent value here is the only place the two paths are told apart. Overwritten on
- * every prompt (not just learn-shaped ones) so a stale true from three turns ago
- * never survives into an unrelated later capture.
+ * own Skill-tool call produces no UserPromptSubmit event of its own. So this is the
+ * only place the two paths are told apart.
+ *
+ * The flag's lifecycle has to close two opposite failure modes at once:
+ *
+ *   - STALE TRUE: if the flag just stayed true forever after being set, a capture
+ *     the model starts on its own much later (in the same session, via the Skill
+ *     tool) would wrongly inherit the user's long-past explicit ask.
+ *   - LOST TRUE: learn.md step 2 can ask the user a clarifying question when
+ *     nothing in the session matches yet, and that exchange can take more than
+ *     one round trip (which mode, which case, more detail). Every answer is a new
+ *     UserPromptSubmit, in prose, not the literal slash command. Clearing the flag
+ *     on the first one of those — or even the second — would misjudge the capture
+ *     that follows as "the model invoked this on its own", when the user started
+ *     it and is still mid-conversation answering the product's own questions.
+ *
+ * A plain-language prompt therefore never clears a pending ask by itself, no
+ * matter how many of them intervene — an arbitrary turn budget would just move
+ * where LOST TRUE reappears, and criterion here is zero lost cases, not "usually
+ * enough". Instead:
+ *
+ *   - The ask is CONSUMED (cleared) the moment cli/learn.ts actually decides a
+ *     trigger on it and the pipeline reaches a non-error outcome (see learn.ts's
+ *     peekExplicitLearnInvocation / finalizeExplicitLearnInvocation, and
+ *     pipeline.ts's runManualSignal caller) — this is what stops a genuinely-used
+ *     true from leaking into a later, unrelated capture; it covers the ordinary
+ *     "typed it, it ran" case exactly.
+ *   - The ask is INVALIDATED early if the user types a DIFFERENT literal slash
+ *     command while one is pending: that is a deliberate, explicit context
+ *     switch, unlike ambiguous prose, so it is safe to treat as "the user moved
+ *     on from that ask".
+ *   - An ask that is pending, gets no different slash command, but is also never
+ *     consumed (the user simply drops the topic mid-conversation) stays pending
+ *     until one of the above happens. This is an accepted, asymmetric risk: it
+ *     can cause a later unrelated model-initiated capture in the same session to
+ *     wrongly get the "explicit" pass, which only means it is queued for the
+ *     user to accept or reject at /handbook:review — never that a real request is
+ *     silently destroyed. The opposite mistake (treating a live explicit ask as
+ *     the model's own) throws the user's capture away with no recovery, which
+ *     both learn.ts's own fail-open default and this card treat as strictly
+ *     worse.
  */
 export function captureLearnInvocation(input: HookInput, home: string = handbookHome()): boolean {
   if (!input.session_id || typeof input.prompt !== "string") return false;
   const state = loadSessionState(input.session_id, home);
-  state.lastPromptWasSlashLearn = LEARN_SLASH_COMMAND.test(input.prompt.trim());
+  const prompt = input.prompt.trim();
+  if (LEARN_SLASH_COMMAND.test(prompt)) {
+    state.explicitLearnPending = true;
+  } else if (state.explicitLearnPending !== true) {
+    // Not currently pending (never recorded, or already false): record a concrete
+    // "not pending" so a session that never typed the command doesn't fall back to
+    // peekExplicitLearnInvocation's "never recorded" default of true.
+    state.explicitLearnPending = false;
+  } else if (ANY_SLASH_COMMAND.test(prompt)) {
+    state.explicitLearnPending = false; // explicit context switch: the ask is over
+  }
+  // else: a plain-language prompt while pending — left untouched on purpose.
   if (input.transcript_path) state.transcriptPath = input.transcript_path;
   saveSessionState(state, home);
   return true;

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
 import type { Signal, TaskCase } from "./signals.js";
-import { handbookHome, loadSessionState } from "./session-state.js";
+import { handbookHome, loadSessionState, saveSessionState } from "./session-state.js";
 
 export interface ErrorFixPayload {
   kind: "error-fix";
@@ -125,12 +125,41 @@ export function currentSessionId(env: NodeJS.ProcessEnv = process.env): string |
  * (no session id, no session-state file, the UserPromptSubmit hook never having run)
  * defaults to true, because a wrong "false" here would silently start rejecting
  * the user's own explicit request, which is worse than never having built this
- * check at all. Only a session whose most recently recorded prompt was measurably
- * NOT the literal /handbook:learn command returns false.
+ * check at all. Only a session with a recorded, measurably-not-pending ask
+ * returns false.
+ *
+ * A PURE read — it does not clear anything. cli/learn.ts calls this to decide the
+ * trigger, then calls finalizeExplicitLearnInvocation only once the pipeline's
+ * outcome is known, so a pending ask survives a failed run (claude unreachable,
+ * timed out) for the user's natural retry instead of being spent on an attempt
+ * that produced nothing.
  */
-export function learnWasExplicit(sessionId: string | undefined, home: string = handbookHome()): boolean {
+export function peekExplicitLearnInvocation(
+  sessionId: string | undefined,
+  home: string = handbookHome(),
+): boolean {
   if (!sessionId) return true;
-  return loadSessionState(sessionId, home).lastPromptWasSlashLearn !== false;
+  return loadSessionState(sessionId, home).explicitLearnPending !== false;
+}
+
+/**
+ * Consume a pending explicit ask once cli/learn.ts's pipeline run has reached a
+ * real outcome (written, vetoed, or sieved — anything but "error"). This is the
+ * other half of peekExplicitLearnInvocation: clearing it here, and only here, is
+ * what stops a genuinely-used true from leaking into a later, unrelated capture
+ * the model starts on its own within the same session (see capture.ts's
+ * captureLearnInvocation for the set/invalidate side of this same lifecycle).
+ */
+export function finalizeExplicitLearnInvocation(
+  sessionId: string | undefined,
+  home: string = handbookHome(),
+): void {
+  if (!sessionId) return;
+  const state = loadSessionState(sessionId, home);
+  if (state.explicitLearnPending) {
+    state.explicitLearnPending = false;
+    saveSessionState(state, home);
+  }
 }
 
 export function signalFromLearnPayload(

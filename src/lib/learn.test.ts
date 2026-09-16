@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { currentSessionId, learnWasExplicit, parseLearnPayload, signalFromLearnPayload } from "./learn.js";
+import {
+  currentSessionId,
+  finalizeExplicitLearnInvocation,
+  parseLearnPayload,
+  peekExplicitLearnInvocation,
+  signalFromLearnPayload,
+} from "./learn.js";
 import { commandFamily, fingerprint, normalizeErrorText } from "./normalize.js";
 import { loadSessionState, saveSessionState } from "./session-state.js";
 
@@ -117,8 +123,8 @@ describe("currentSessionId", () => {
 });
 
 // This is the case the K-17 card exists to prove: the same CLI invocation, told
-// apart only by what the session's most recently recorded prompt was.
-describe("learnWasExplicit (telling the user's own /handbook:learn from the model's)", () => {
+// apart only by whether the session has an open, unconsumed explicit ask.
+describe("peekExplicitLearnInvocation / finalizeExplicitLearnInvocation (telling the user's own /handbook:learn from the model's)", () => {
   let home: string;
 
   beforeEach(() => {
@@ -129,25 +135,60 @@ describe("learnWasExplicit (telling the user's own /handbook:learn from the mode
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("is true when the session's last prompt was the literal slash command", () => {
+  it("is true when the session has a pending explicit ask", () => {
     const state = loadSessionState("s1", home);
-    state.lastPromptWasSlashLearn = true;
+    state.explicitLearnPending = true;
     saveSessionState(state, home);
-    expect(learnWasExplicit("s1", home)).toBe(true);
+    expect(peekExplicitLearnInvocation("s1", home)).toBe(true);
   });
 
-  it("is false when the session's last prompt was plain language", () => {
+  it("is false when the session's ask was already recorded as not pending", () => {
     const state = loadSessionState("s1", home);
-    state.lastPromptWasSlashLearn = false;
+    state.explicitLearnPending = false;
     saveSessionState(state, home);
-    expect(learnWasExplicit("s1", home)).toBe(false);
+    expect(peekExplicitLearnInvocation("s1", home)).toBe(false);
   });
 
   it("defaults to true (preserves today's behavior) with no session id", () => {
-    expect(learnWasExplicit(undefined, home)).toBe(true);
+    expect(peekExplicitLearnInvocation(undefined, home)).toBe(true);
   });
 
   it("defaults to true (preserves today's behavior) when nothing was ever recorded", () => {
-    expect(learnWasExplicit("never-seen-session", home)).toBe(true);
+    expect(peekExplicitLearnInvocation("never-seen-session", home)).toBe(true);
+  });
+
+  it("does not mutate anything (repeated peeks see the same pending ask)", () => {
+    const state = loadSessionState("s1", home);
+    state.explicitLearnPending = true;
+    saveSessionState(state, home);
+
+    expect(peekExplicitLearnInvocation("s1", home)).toBe(true);
+    expect(peekExplicitLearnInvocation("s1", home)).toBe(true);
+    expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+  });
+
+  // K-17 BLOKE 1 (the "stale true" half): a pending ask must not outlive the CLI
+  // run that decides on it, or a later, unrelated model-initiated capture in the
+  // same session would wrongly inherit the user's earlier explicit ask.
+  it("finalize clears the pending flag, so a later peek in the same session sees it consumed", () => {
+    const state = loadSessionState("s1", home);
+    state.explicitLearnPending = true;
+    saveSessionState(state, home);
+
+    finalizeExplicitLearnInvocation("s1", home);
+    expect(peekExplicitLearnInvocation("s1", home)).toBe(false);
+  });
+
+  it("finalize on an already-false ask is a harmless no-op", () => {
+    const state = loadSessionState("s1", home);
+    state.explicitLearnPending = false;
+    saveSessionState(state, home);
+
+    finalizeExplicitLearnInvocation("s1", home);
+    expect(peekExplicitLearnInvocation("s1", home)).toBe(false);
+  });
+
+  it("finalize with no session id does nothing (does not throw)", () => {
+    expect(() => finalizeExplicitLearnInvocation(undefined, home)).not.toThrow();
   });
 });
