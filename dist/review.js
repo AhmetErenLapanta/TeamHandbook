@@ -130,6 +130,15 @@ function loadScoreConfig(home = handbookHome()) {
     timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
   };
 }
+function claudeErrorReason(err) {
+  const e = err;
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
+  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
+  return firstLine.slice(0, 200);
+}
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
@@ -1054,7 +1063,8 @@ async function sweepQueue(home, options = {}) {
       report.calls += 1;
     } catch (err) {
       report.calls += 1;
-      const why = err instanceof Error ? err.message : String(err);
+      const killed = err?.killed === true;
+      const why = killed ? `no answer within ${Math.round(timeoutMs / 1e3)}s` : claudeErrorReason(err);
       for (const s of batch) report.skipped.push({ slug: s.slug, reason: `model call failed: ${why}` });
       continue;
     }

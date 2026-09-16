@@ -157,6 +157,26 @@ describe("sweepQueue", () => {
     expect(readCandidateMeta(join(candidatesDir(home), "one-off-fact"))?.status).toBe("pending");
   });
 
+  it("given the call is killed for taking too long, when the queue is swept, then the reason says so without quoting the prompt", async () => {
+    seed("one-off-fact");
+
+    const report = await sweepQueue(home, {
+      timeoutMs: 180_000,
+      runner: async () => {
+        // what execFile throws on a timeout: the whole prompt is in the message,
+        // because the prompt is an argument of the command it reports
+        const err = new Error(`Command failed: claude -p ${buildSweepPrompt(collectSweepSubjects(home))}`);
+        Object.assign(err, { killed: true, signal: "SIGTERM" });
+        throw err;
+      },
+    });
+
+    expect(report.skipped).toEqual([
+      { slug: "one-off-fact", reason: "model call failed: no answer within 180s" },
+    ]);
+    expect(report.skipped[0]!.reason).not.toContain("one-off-fact description");
+  });
+
   it("given a candidate the reply never names, when the queue is swept, then it is left where it is", async () => {
     seed("one-off-fact");
     seed("forgotten-one");
