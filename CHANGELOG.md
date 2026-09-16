@@ -4,6 +4,87 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.2] - 2026-09-16
+
+- **The queue grew past reading and nothing could be set aside without deciding it.**
+  One developer had 157 suggestions waiting, the oldest a month old, and the only two
+  things you could do with any of them were approve and reject. So none of them got read,
+  and each session added more. Candidates can be set aside now: swept against the quality
+  bar, marked archived rather than deleted, and listed in a manifest that puts them back
+  exactly as they were, evidence and score intact. `/handbook:status` counts what was set
+  aside, because a queue that shrinks without saying so is a queue that lies.
+
+  Measured on that real queue: of 111 discovery candidates, 13 were set aside. That is
+  smaller than it sounds like it should be, and the reason is worth knowing: most of what
+  the new bar removes, it removes at harvest time, before anything reaches the queue. The
+  sweep was not tightened to make the number look better.
+
+## [0.5.1] - 2026-09-16
+
+- **The same session was harvested more than once, and its lessons arrived twice.**
+  Thirteen sessions in one developer's history were harvested again after the first run
+  finished, each repeat costing another model call and putting the same lesson back in
+  the queue under a different name. Most of those repeats were legitimate: continuing a
+  session with `--continue` keeps its id and grows the transcript, and the new tail
+  deserves a harvest. So a run is now identified by the session and the transcript it
+  read, which lets a resumed session through and turns the duplicates away.
+
+- **A harvest killed halfway through no longer locks the session out.** The marker that
+  says "this one is done" was written when the work was claimed, so a runner stopped by a
+  reboot or an out-of-memory kill left one behind that nothing would clear for thirty
+  days, while the queue handed the job back after ten minutes. The job came back and was
+  refused, and that session's lessons were lost for as long as the marker stood. Claiming
+  and completing are recorded apart now: an unfinished marker does not turn the next run
+  away.
+
+## [0.5.0] - 2026-09-16
+
+- **A team's MCP server arrived one teammate at a time, by hand.** The handbook could
+  share skills and nothing else, so the tools the team actually works through, a GitLab
+  connection say, were set up again on every machine by whoever got round to it. Now
+  `/handbook:mcp` takes a server you already run locally and sends it to the team
+  repository as a merge request, beside the skills, carrying the version bump that makes
+  everyone's copy refresh. Merge it and the next session a teammate opens already has the
+  server connected.
+
+- **A server whose address is its password is refused, not published.** Credentials in an
+  MCP definition do not only live in headers and environment values: a whole class of
+  hosted servers puts an opaque token in the URL itself, and that is the shape
+  `claude mcp add` writes. Chasing those by pattern is a race, so the rule is structural
+  instead. Anything but a plain `${VAR}` reference in a header or environment value stops
+  the share, and so does a URL segment that looks like a secret rather than a path. The
+  request that goes out says what was actually checked rather than promising that no
+  credential travels, because the developer reviewing it deserves the real scope of the
+  guarantee.
+
+## [0.4.0] - 2026-09-16
+
+- **A skill you wrote by hand had no way to reach your team.** The only route into the
+  queue was living the lesson again and hoping the harvest caught it: of the skills
+  sitting in a developer's own `~/.claude/skills`, all but one had been written by hand
+  and none of them could be shared. `/handbook:share-skill` takes one into the review
+  queue, where the ordinary approval path already knows how to deliver it. A skill is
+  more than its `SKILL.md` too: the scripts, references and helpers beside it now travel
+  with it, so what arrives is the skill that worked rather than a pruned copy of it.
+
+- **Nothing reaches the queue on trust.** The harvest sieves for secrets on its way in,
+  and a skill taken from disk skips that path entirely, so the check is done at the new
+  boundary instead: every file that would travel is scanned, and one that carries a
+  credential is refused before anything is copied. Refused, not redacted. A skill with
+  `[REDACTED]` where its token was is a skill that fails for whoever installs it, and a
+  broken thing shipped quietly is worse than nothing shipped at all.
+
+## [0.3.9] - 2026-09-16
+
+- **The review promised this project and installed the skill elsewhere.** Approving a
+  candidate with `--to project` puts it in the project the lesson was captured in, which
+  is right: that is where the rule applies. But the option you picked it from said "this
+  project", and the review runs wherever you happen to be. Reviewing from one checkout a
+  lesson caught in another installed it somewhere you did not choose, and the line naming
+  the real destination printed after the decision, not before it. The choice now names
+  the project it will install into, and the command, its documentation and the README all
+  point at the same place.
+
 ## [0.3.8] - 2026-09-15
 
 - **Discovery took most of the queue and nothing ever dropped one.** Discovery was 72% of

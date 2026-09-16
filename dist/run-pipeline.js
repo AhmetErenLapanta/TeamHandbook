@@ -1,7 +1,7 @@
 // src/lib/pipeline.ts
 import {
   appendFileSync,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   readdirSync as readdirSync4,
   readFileSync as readFileSync8,
   renameSync as renameSync2,
@@ -429,9 +429,9 @@ function maybeDumpPayload(raw, home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join7 } from "node:path";
-var STATUSES = ["pending", "approved", "rejected"];
+var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
   return join7(dir, "candidate.json");
 }
@@ -679,7 +679,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
 }
 
 // src/lib/harvest.ts
-import { existsSync as existsSync3 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 
 // src/lib/transcript.ts
 import { readFileSync as readFileSync7 } from "node:fs";
@@ -1147,7 +1147,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   }
   const dirs = deps.skillDirs ? deps.skillDirs(home, job.cwd) : defaultHarvestSkillDirs(home, job.cwd);
   const existingSkills = deps.listSkills ? deps.listSkills(dirs) : listSkillsSafe(dirs);
-  const recentDecisions = listCandidates(home).slice(0, 20).map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
+  const recentDecisions = listCandidates(home).filter((c) => c.status !== "archived").slice(0, 20).map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
   const evidence = {
     ...job.evidence,
     echoes: recordAndMatchTeachings((job.evidence.corrections ?? []).map((c) => c.text), home)
@@ -1195,7 +1195,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync3(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync4(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,
@@ -1257,7 +1257,7 @@ function pendingDir(home = handbookHome()) {
   return join10(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
-  mkdirSync4(pendingDir(home), { recursive: true });
+  mkdirSync5(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
   let file = join10(pendingDir(home), `${base}.json`);
@@ -1296,6 +1296,7 @@ function releaseHarvestJob(claimedFile) {
 }
 function drainHarvestJobs(home = handbookHome()) {
   reclaimStaleClaims(pendingDir(home));
+  cleanupStaleHarvestMarkers(home);
   let entries;
   try {
     entries = readdirSync4(pendingDir(home));
@@ -1335,7 +1336,7 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
-  mkdirSync4(home, { recursive: true });
+  mkdirSync5(home, { recursive: true });
   const file = pipelineLogFile(home);
   appendFileSync(file, JSON.stringify({ ts, ...summary }) + "\n");
   try {
@@ -1351,14 +1352,103 @@ function abandonedFile(home = handbookHome()) {
 }
 function abandonJob(job, home) {
   try {
-    mkdirSync4(home, { recursive: true });
+    mkdirSync5(home, { recursive: true });
     appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
   } catch {
   }
   bumpCounter("gateAbandoned", home);
 }
+function harvestedDir(home = handbookHome()) {
+  return join10(home, "harvested");
+}
+function harvestMarkerFile(job, home) {
+  if (!job.transcriptPath) return null;
+  let size;
+  try {
+    size = statSync(job.transcriptPath).size;
+  } catch {
+    return null;
+  }
+  const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  return join10(harvestedDir(home), `${session}-${size}`);
+}
+var MARKER_CLAIMED = "claimed";
+var MARKER_DONE = "done";
+function markerIsFinished(marker) {
+  try {
+    return readFileSync8(marker, "utf8").trim() === MARKER_DONE;
+  } catch {
+    return false;
+  }
+}
+function claimHarvest(marker, home) {
+  try {
+    mkdirSync5(harvestedDir(home), { recursive: true });
+    writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
+    return true;
+  } catch (err) {
+    if (err?.code !== "EEXIST") return true;
+    if (markerIsFinished(marker)) return false;
+    let claimedAt;
+    try {
+      claimedAt = statSync(marker).mtimeMs;
+    } catch {
+      return true;
+    }
+    if (Date.now() - claimedAt <= STALE_CLAIM_MS) return false;
+    rmSync2(marker, { force: true });
+    try {
+      writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+function finishHarvest(marker) {
+  try {
+    writeFileSync5(marker, MARKER_DONE);
+  } catch {
+  }
+}
+var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+function cleanupStaleHarvestMarkers(home, now = Date.now()) {
+  const dir = harvestedDir(home);
+  let entries;
+  try {
+    entries = readdirSync4(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    try {
+      const file = join10(dir, entry);
+      const horizon = markerIsFinished(file) ? MARKER_MAX_AGE_MS : STALE_CLAIM_MS;
+      if (now - statSync(file).mtimeMs > horizon) rmSync2(file, { force: true });
+    } catch {
+    }
+  }
+}
 var MAX_HARVEST_ATTEMPTS = 3;
 async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+  const marker = harvestMarkerFile(job, home);
+  if (marker && !claimHarvest(marker, home)) {
+    const reason = "already harvested at this transcript length";
+    appendPipelineLog(
+      {
+        received: 0,
+        sievedOut: 0,
+        scored: 0,
+        rejected: 0,
+        errored: 0,
+        written: [],
+        harvest: { sessionId: job.sessionId, skipped: reason }
+      },
+      home,
+      now()
+    );
+    return { outcome: "skipped", reason, written: [] };
+  }
   const summary = await harvestSession(job, home, deps);
   const log = {
     received: summary.produced ?? 0,
@@ -1384,6 +1474,7 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
     ]
   };
   if (summary.outcome === "error") {
+    if (marker) rmSync2(marker, { force: true });
     bumpCounter("gateErrors", home);
     const attempts = (job.attempts ?? 0) + 1;
     if (attempts < MAX_HARVEST_ATTEMPTS) {
@@ -1392,6 +1483,8 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
       log.outcomes.push({ fingerprint: job.sessionId, outcome: "error", abandoned: true });
       abandonJob(job, home);
     }
+  } else if (marker) {
+    finishHarvest(marker);
   }
   appendPipelineLog(log, home, now());
   return summary;

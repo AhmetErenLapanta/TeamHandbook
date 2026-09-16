@@ -1,17 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
+  archiveCandidate,
   candidateMetaFile,
   candidateMetaFromArtifact,
   decideCandidate,
   formatCandidateList,
+  intakeSkill,
   isSafeSlug,
+  listArchiveManifests,
   listCandidates,
   patchPendingCandidate,
   loadMutedFingerprints,
+  readArchiveManifest,
   readCandidateMeta,
+  restoreArchived,
+  writeArchiveManifest,
   writeCandidateMeta,
 } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
@@ -333,5 +339,306 @@ describe("formatCandidateList kind badge (v2)", () => {
       Date.parse("2026-08-08T01:00:00Z"),
     );
     expect(text).toContain("[correction]  [team]");
+  });
+});
+
+describe("archiving the queue", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-archive-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("given an archived candidate, when it is read back, then it stays archived with its evidence intact", () => {
+    const dir = writeCandidateDir(
+      home,
+      meta({
+        slug: "stale-discovery",
+        kind: "discovery",
+        origin: "harvest",
+        sessionId: "s-42",
+        suggestedTarget: "personal",
+        taughtBefore: 2,
+      }),
+    );
+
+    const result = archiveCandidate(home, "stale-discovery", "below the discovery bar", "2026-09-16T00:00:00Z");
+
+    expect(result.ok).toBe(true);
+    // the resurrection trap: a status readCandidateMeta does not know is not hidden,
+    // it is rebuilt as pending by synthesizeMeta and stripped of everything below
+    const read = readCandidateMeta(dir);
+    expect(read?.status).toBe("archived");
+    expect(read?.gate).toEqual(meta().gate);
+    expect(read?.taughtBefore).toBe(2);
+    expect(read?.sessionId).toBe("s-42");
+    expect(read?.suggestedTarget).toBe("personal");
+    expect(read?.archivedAt).toBe("2026-09-16T00:00:00Z");
+    expect(read?.archiveReason).toBe("below the discovery bar");
+  });
+
+  it("given an archived candidate, when the pending queue is listed, then it is gone but the unfiltered list still has it", () => {
+    writeCandidateDir(home, meta({ slug: "keeps-waiting" }));
+    writeCandidateDir(home, meta({ slug: "swept-away" }));
+
+    archiveCandidate(home, "swept-away", "below the discovery bar");
+
+    expect(listCandidates(home, "pending").map((m) => m.slug)).toEqual(["keeps-waiting"]);
+    expect(listCandidates(home, "archived").map((m) => m.slug)).toEqual(["swept-away"]);
+    expect(listCandidates(home).map((m) => m.slug).sort()).toEqual(["keeps-waiting", "swept-away"]);
+  });
+
+  it("given three archived candidates, when restored from the manifest, then each meta matches its pre-archive snapshot", () => {
+    const slugs = ["one-rule", "two-rule", "three-rule"];
+    const dirs = slugs.map((slug, i) =>
+      writeCandidateDir(home, meta({ slug, kind: "discovery", taughtBefore: i, sessionId: `s-${i}` })),
+    );
+    const before = dirs.map((dir) => readCandidateMeta(dir));
+
+    const entries = slugs.map((slug) => archiveCandidate(home, slug, "swept", "2026-09-16T00:00:00Z").entry!);
+    const file = writeArchiveManifest(home, {
+      sweptAt: "2026-09-16T00:00:00Z",
+      reason: "swept",
+      entries,
+    });
+    expect(listCandidates(home, "pending")).toEqual([]);
+
+    const restored = restoreArchived(home, readArchiveManifest(file)!);
+
+    expect(restored.restored.sort()).toEqual([...slugs].sort());
+    expect(restored.skipped).toEqual([]);
+    expect(dirs.map((dir) => readCandidateMeta(dir))).toEqual(before);
+    expect(listCandidates(home, "pending").map((m) => m.slug).sort()).toEqual([...slugs].sort());
+    expect(listArchiveManifests(home)).toEqual([file]);
+  });
+
+  it("given a candidate that is not pending, when archiving is tried, then it is refused", () => {
+    writeCandidateDir(home, meta({ slug: "already-kept", status: "approved" }));
+    writeCandidateDir(home, meta({ slug: "turned-down", status: "rejected" }));
+    writeCandidateDir(home, meta({ slug: "swept-once" }));
+    archiveCandidate(home, "swept-once", "swept");
+
+    expect(archiveCandidate(home, "already-kept", "swept").error).toContain("approved");
+    expect(archiveCandidate(home, "turned-down", "swept").error).toContain("rejected");
+    // archiving twice would record "archived" as the status to restore to
+    expect(archiveCandidate(home, "swept-once", "swept").error).toContain("archived");
+    expect(readCandidateMeta(join(candidatesDir(home), "already-kept"))?.status).toBe("approved");
+  });
+
+  it("given an archived candidate, when a decision is attempted, then the review CLI refuses it", () => {
+    writeCandidateDir(home, meta({ slug: "swept-away" }));
+    archiveCandidate(home, "swept-away", "swept");
+
+    const result = decideCandidate(home, "swept-away", "approved");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("already archived");
+  });
+
+  it("given a manifest naming a candidate that was decided since, when restoring, then it is skipped rather than reopened", () => {
+    writeCandidateDir(home, meta({ slug: "swept-away" }));
+    const entry = archiveCandidate(home, "swept-away", "swept").entry!;
+    const dir = join(candidatesDir(home), "swept-away");
+    writeCandidateMeta(dir, { ...readCandidateMeta(dir)!, status: "approved" });
+
+    const result = restoreArchived(home, { sweptAt: "2026-09-16T00:00:00Z", reason: "swept", entries: [entry] });
+
+    expect(result.restored).toEqual([]);
+    expect(result.skipped).toEqual([{ slug: "swept-away", reason: "already approved" }]);
+  });
+});
+
+describe("intakeSkill", () => {
+  let home: string;
+  let local: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    local = mkdtempSync(join(tmpdir(), "handbook-local-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(local, { recursive: true, force: true });
+  });
+
+  // A hand-written skill directory, the shape a manager already has on disk: no
+  // candidate.json and no grounded-case.json, because nothing harvested it.
+  function handWrittenSkill(
+    name: string,
+    extras: Record<string, string> = {},
+  ): string {
+    const dir = join(local, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: "Use when the nightly report has to be rebuilt by hand."\nscope: "team"\n---\n\nBody.\n`,
+    );
+    for (const [rel, content] of Object.entries(extras)) {
+      const file = join(dir, rel);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
+    }
+    return dir;
+  }
+
+  it("given a hand-written SKILL.md, when it is taken in, then the queue reads it as pending", () => {
+    const source = handWrittenSkill("rebuild-nightly-report");
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(true);
+    expect(result.slug).toBe("rebuild-nightly-report");
+    // no candidate.json is written: the meta comes from the frontmatter via synthesizeMeta
+    const dir = join(candidatesDir(home), "rebuild-nightly-report");
+    expect(existsSync(candidateMetaFile(dir))).toBe(false);
+    const meta = readCandidateMeta(dir);
+    expect(meta?.status).toBe("pending");
+    expect(meta?.scope).toBe("team");
+    expect(meta?.description).toBe("Use when the nightly report has to be rebuilt by hand.");
+    expect(listCandidates(home, "pending").map((m) => m.slug)).toContain("rebuild-nightly-report");
+  });
+
+  it("given a skill with scripts and references, when it is taken in, then every file comes with it", () => {
+    const source = handWrittenSkill("rebuild-nightly-report", {
+      "preflight.sh": "#!/bin/sh\necho ready\n",
+      "scripts/server.cjs": "module.exports = {};\n",
+      "references/queries.sql": "select count(*) from orders;\n",
+    });
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(true);
+    expect(result.fileCount).toBe(4);
+    const dir = join(candidatesDir(home), "rebuild-nightly-report");
+    expect(readFileSync(join(dir, "preflight.sh"), "utf8")).toContain("echo ready");
+    expect(readFileSync(join(dir, "scripts", "server.cjs"), "utf8")).toContain("module.exports");
+    expect(readFileSync(join(dir, "references", "queries.sql"), "utf8")).toContain("select count(*)");
+  });
+
+  it("given a secret in a file that is not SKILL.md, when it is taken in, then nothing is written to the queue", () => {
+    // the scan cannot stop at SKILL.md: the credential lives in the file the skill runs
+    const source = handWrittenSkill("rebuild-nightly-report", {
+      "references/queries.sql": "-- connect first\nPGPASSWORD=hunter2trustno1 psql -h db -U reports\n",
+    });
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.secret?.file).toBe("references/queries.sql");
+    expect(result.error).toContain("references/queries.sql");
+    // the refusal happens BEFORE the copy: the candidate directory was never created,
+    // so not even the clean SKILL.md reached the queue
+    expect(existsSync(join(candidatesDir(home), "rebuild-nightly-report"))).toBe(false);
+    expect(listCandidates(home)).toEqual([]);
+  });
+
+  it("given a secret in SKILL.md itself, when it is taken in, then it is refused too", () => {
+    const dir = join(local, "rebuild-nightly-report");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      '---\nname: rebuild-nightly-report\ndescription: "Rebuild the report."\n---\n\n' +
+        "Authenticate with token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 first.\n",
+    );
+
+    const result = intakeSkill(dir, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.secret?.file).toBe("SKILL.md");
+    expect(existsSync(join(candidatesDir(home), "rebuild-nightly-report"))).toBe(false);
+  });
+
+  it("given a refusal, when the skill is fixed, then it is refused for the secret and not for a leftover directory", () => {
+    // proves the failed intake left no half-built candidate that would block a retry
+    const source = handWrittenSkill("rebuild-nightly-report", {
+      "notes.md": "export API_KEY=sk_live_0123456789abcdef0123\n",
+    });
+    expect(intakeSkill(source, home).ok).toBe(false);
+
+    writeFileSync(join(source, "notes.md"), "no credentials here\n");
+    const retry = intakeSkill(source, home);
+
+    expect(retry.ok).toBe(true);
+    expect(retry.fileCount).toBe(2);
+  });
+
+  it("given a symlink in the skill, when it is taken in, then it is refused rather than silently dropped", () => {
+    const source = handWrittenSkill("rebuild-nightly-report");
+    symlinkSync(join(local, "elsewhere.txt"), join(source, "linked.txt"));
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("linked.txt");
+    expect(existsSync(join(candidatesDir(home), "rebuild-nightly-report"))).toBe(false);
+  });
+
+  it("given a slug already in the queue, when it is taken in again, then the queued one is left alone", () => {
+    const source = handWrittenSkill("rebuild-nightly-report");
+    expect(intakeSkill(source, home).ok).toBe(true);
+    writeFileSync(join(source, "SKILL.md"), '---\nname: rebuild-nightly-report\ndescription: "Rewritten."\n---\n\nNew body.\n');
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("already waiting in the review queue");
+    const queued = join(candidatesDir(home), "rebuild-nightly-report", "SKILL.md");
+    expect(readFileSync(queued, "utf8")).toContain("Body.");
+  });
+
+  it("given a slug already decided, when it is taken in again, then the decision is named and kept", () => {
+    const source = handWrittenSkill("rebuild-nightly-report");
+    expect(intakeSkill(source, home).ok).toBe(true);
+    const dir = join(candidatesDir(home), "rebuild-nightly-report");
+    const approved = readCandidateMeta(dir)!;
+    writeCandidateMeta(dir, { ...approved, status: "approved", deliveredMode: "personal" });
+
+    const result = intakeSkill(source, home);
+
+    expect(result.ok).toBe(false);
+    // "waiting in the review queue" would send the user to a queue that will not show it
+    expect(result.error).toContain("already approved");
+    expect(readCandidateMeta(dir)?.status).toBe("approved");
+    expect(readCandidateMeta(dir)?.deliveredMode).toBe("personal");
+  });
+
+  it("given a directory with no SKILL.md, when it is taken in, then it is refused", () => {
+    const dir = join(local, "not-a-skill");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "notes.md"), "just notes\n");
+
+    const result = intakeSkill(dir, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no readable SKILL.md");
+    expect(existsSync(join(candidatesDir(home), "not-a-skill"))).toBe(false);
+  });
+
+  it("given a SKILL.md without frontmatter, when it is taken in, then it is refused", () => {
+    const dir = join(local, "bare-skill");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "# just a heading\n");
+
+    const result = intakeSkill(dir, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("frontmatter");
+    expect(existsSync(join(candidatesDir(home), "bare-skill"))).toBe(false);
+  });
+
+  it("given a directory name that is not a safe slug, when it is taken in, then it is refused", () => {
+    const dir = join(local, "Not A Slug");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), '---\nname: x\ndescription: "y"\n---\n\nBody.\n');
+
+    const result = intakeSkill(dir, home);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("cannot be a skill name");
   });
 });
