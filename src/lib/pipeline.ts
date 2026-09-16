@@ -248,24 +248,88 @@ function harvestMarkerFile(job: HarvestJob, home: string): string | null {
   return join(harvestedDir(home), `${session}-${size}`);
 }
 
-function claimHarvest(marker: string, home: string): boolean {
+// A marker is written in two phases, because a harvest can die between them. The
+// exclusive create that wins the race says "claimed"; only a harvest that RETURNED
+// overwrites it with "done". A marker still reading "claimed" long after its claim
+// belongs to a runner that never came back (SIGKILL, OOM, a machine that slept and
+// then shut down), and it must NOT turn the session away. Measured against this
+// file before the phases existed: a runner killed mid-harvest left its marker
+// behind, and the job reclaimStaleClaims handed back was skipped with zero model
+// calls, so the session's lessons were lost until its transcript grew.
+const MARKER_CLAIMED = "claimed";
+const MARKER_DONE = "done";
+
+function markerIsFinished(marker: string): boolean {
   try {
-    mkdirSync(harvestedDir(home), { recursive: true });
-    writeFileSync(marker, "", { flag: "wx" });
-    return true;
-  } catch (err) {
-    // EEXIST is the whole point: this session was already harvested at this exact
-    // transcript length. Any OTHER failure (unwritable home, full disk) lets the
-    // harvest proceed - this guard exists to save duplicate work, not to become a
-    // new way to lose a session's lessons.
-    return (err as NodeJS.ErrnoException)?.code !== "EEXIST";
+    return readFileSync(marker, "utf8").trim() === MARKER_DONE;
+  } catch {
+    // An unreadable marker counts as unfinished on purpose: re-harvesting costs one
+    // model call, believing it costs the session's lessons.
+    return false;
   }
 }
 
-// A marker outlives the session file it guards (SESSION_MAX_AGE_MS, 7d) and then
-// stops meaning anything: a resumed session gets a different length and so a
-// different marker. Swept at drain time, where reclaimStaleClaims already does the
-// queue's housekeeping, so the directory cannot grow without bound.
+function claimHarvest(marker: string, home: string): boolean {
+  try {
+    mkdirSync(harvestedDir(home), { recursive: true });
+    writeFileSync(marker, MARKER_CLAIMED, { flag: "wx" });
+    return true;
+  } catch (err) {
+    // Any failure OTHER than EEXIST (unwritable home, full disk) lets the harvest
+    // proceed - this guard exists to save duplicate work, not to become a new way to
+    // lose a session's lessons.
+    if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") return true;
+    // EEXIST on a finished marker is the whole point: this session was already
+    // harvested at this exact transcript length.
+    if (markerIsFinished(marker)) return false;
+    let claimedAt: number;
+    try {
+      claimedAt = statSync(marker).mtimeMs;
+    } catch {
+      return true; // swept between the create and the stat: nothing holds it now
+    }
+    // Still "claimed" inside the horizon is a runner sitting in its model call,
+    // which is the concurrent-duplicate case this guard was built to stop.
+    if (Date.now() - claimedAt <= STALE_CLAIM_MS) return false;
+    // Past the horizon with no "done": its runner was killed mid-harvest. Take the
+    // marker over the way it was won in the first place, by deleting it and racing
+    // for the exclusive create again. A plain overwrite would be the one non-atomic
+    // step in a guard whose correctness rests on O_EXCL, and two runners reclaiming
+    // the same abandoned marker would then both harvest.
+    rmSync(marker, { force: true });
+    try {
+      writeFileSync(marker, MARKER_CLAIMED, { flag: "wx" });
+      return true;
+    } catch {
+      return false; // another runner took it over first, and is harvesting it now
+    }
+  }
+}
+
+function finishHarvest(marker: string): void {
+  try {
+    writeFileSync(marker, MARKER_DONE);
+  } catch {
+    // The marker stays "claimed" and is swept at the claim horizon below: at worst
+    // one duplicate harvest later, never a lost one.
+  }
+}
+
+// TWO HORIZONS, deliberately different because they answer different questions.
+//
+// An UNFINISHED marker expires at STALE_CLAIM_MS, the same ten minutes
+// reclaimStaleClaims uses to put a killed runner's job back in the queue. The two
+// must agree: a longer-lived unfinished marker is the queue handing the session
+// back and the marker turning it away at the door. Nothing legitimate lives that
+// long on this side of the line either, because the harvest's own claude call is
+// capped at 180s (defaultHarvestConfig.timeoutMs), so a running harvest cannot be
+// mistaken for an abandoned one.
+//
+// A FINISHED marker expires at MARKER_MAX_AGE_MS. It records work that really
+// happened, so it outlives the session file it guards (SESSION_MAX_AGE_MS, 7d) and
+// then stops meaning anything: a resumed session gets a different length and so a
+// different marker. Both are swept at drain time, where reclaimStaleClaims already
+// does the queue's housekeeping, so the directory cannot grow without bound.
 const MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function cleanupStaleHarvestMarkers(home: string, now: number = Date.now()): void {
@@ -279,7 +343,8 @@ function cleanupStaleHarvestMarkers(home: string, now: number = Date.now()): voi
   for (const entry of entries) {
     try {
       const file = join(dir, entry);
-      if (now - statSync(file).mtimeMs > MARKER_MAX_AGE_MS) rmSync(file, { force: true });
+      const horizon = markerIsFinished(file) ? MARKER_MAX_AGE_MS : STALE_CLAIM_MS;
+      if (now - statSync(file).mtimeMs > horizon) rmSync(file, { force: true });
     } catch {
       // raced with a live runner; leave it
     }
@@ -356,6 +421,11 @@ export async function runHarvestJob(
       log.outcomes!.push({ fingerprint: job.sessionId, outcome: "error", abandoned: true });
       abandonJob(job, home);
     }
+  } else if (marker) {
+    // The harvest returned, so the claim graduates to "done" and starts refusing
+    // duplicates for real. Until this line runs the marker only means "a runner took
+    // this on", which is why a run that never reached it does not block the next one.
+    finishHarvest(marker);
   }
   appendPipelineLog(log, home, now());
   return summary;

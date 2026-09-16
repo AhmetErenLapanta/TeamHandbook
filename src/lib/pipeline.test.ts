@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -287,6 +287,52 @@ describe("harvest once per transcript state", () => {
     expect(summary.written).toEqual(["prefer-config-feature-flags"]);
   });
 
+  it("given a runner killed mid-harvest, when the queue hands its job back, then the harvest runs", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    enqueueHarvestJob(j, home);
+    const entry = readdirSync(pendingDir(home))[0]!;
+    // exactly what a SIGKILL leaves on disk: the claim the runner never released,
+    // and a marker that never graduated from "claimed" to "done"
+    const claimed = join(pendingDir(home), `${entry}.claimed-99999`);
+    renameSync(join(pendingDir(home), entry), claimed);
+    mkdirSync(harvestedDir(home), { recursive: true });
+    const marker = join(harvestedDir(home), `s1-${statSync(j.transcriptPath!).size}`);
+    writeFileSync(marker, "claimed");
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimed, old, old);
+    utimesSync(marker, old, old);
+
+    const reclaimed = drainHarvestJobs(home);
+    const summary = await runHarvestJob(reclaimed[0]!.job, home, {
+      ...deps,
+      runner: countingRunner(calls),
+    });
+
+    expect(reclaimed).toHaveLength(1);
+    expect(calls.n).toBe(1);
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+  });
+
+  it("given an abandoned claim and no drain in between, when the job runs, then the guard steps aside", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    // the sweep only runs at drain time, so a marker that crosses the horizon while
+    // a runner is already working through its drained jobs reaches the guard itself
+    mkdirSync(harvestedDir(home), { recursive: true });
+    const marker = join(harvestedDir(home), `s1-${statSync(j.transcriptPath!).size}`);
+    writeFileSync(marker, "claimed");
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(marker, old, old);
+
+    const summary = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+
+    expect(calls.n).toBe(1);
+    expect(summary.outcome).toBe("harvested");
+    expect(readFileSync(marker, "utf8")).toBe("done");
+  });
+
   it("given a run that errored, when the retry claims the same transcript, then the model is called again", async () => {
     const j = job(home);
     const down: ClaudeRunner = async () => {
@@ -378,6 +424,25 @@ describe("harvest once per transcript state", () => {
 
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
+  });
+
+  it("given a finished marker older than the claim horizon, when the queue is drained, then it survives and still refuses the session", async () => {
+    const calls = { n: 0 };
+    const j = job(home);
+    await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+    const marker = join(harvestedDir(home), readdirSync(harvestedDir(home))[0]!);
+    // past the horizon an UNFINISHED marker expires at, far inside the one a
+    // finished marker expires at: a completed harvest must not decay into a
+    // ten minute dedup just because its runner has long since exited
+    const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    utimesSync(marker, old, old);
+
+    drainHarvestJobs(home);
+
+    expect(existsSync(marker)).toBe(true);
+    const again = await runHarvestJob(j, home, { ...deps, runner: countingRunner(calls) });
+    expect(calls.n).toBe(1);
+    expect(again.outcome).toBe("skipped");
   });
 });
 
