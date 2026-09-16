@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.2] - 2026-09-16
+
+- **The queue grew past reading and nothing could be set aside without deciding it.**
+  One developer had 157 suggestions waiting, the oldest a month old, and the only two
+  things you could do with any of them were approve and reject. So none of them got read,
+  and each session added more. Candidates can be set aside now: swept against the quality
+  bar, marked archived rather than deleted, and listed in a manifest that puts them back
+  exactly as they were, evidence and score intact. `/handbook:status` counts what was set
+  aside, because a queue that shrinks without saying so is a queue that lies.
+
+  Measured on that real queue: of 111 discovery candidates, 13 were set aside. That is
+  smaller than it sounds like it should be, and the reason is worth knowing: most of what
+  the new bar removes, it removes at harvest time, before anything reaches the queue. The
+  sweep was not tightened to make the number look better.
+
 ## [0.5.1] - 2026-09-16
 
 - **The same session was harvested more than once, and its lessons arrived twice.**
