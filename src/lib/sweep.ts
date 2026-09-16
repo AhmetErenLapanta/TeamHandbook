@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fenceUntrusted } from "./prompt-safety.js";
 import { balancedArrayAt, loadHarvestConfig } from "./harvest.js";
-import { runClaudeCli } from "./score.js";
+import { claudeErrorReason, runClaudeCli } from "./score.js";
 import type { ClaudeRunner } from "./score.js";
 import { candidatesDir } from "./skill-index.js";
 import {
@@ -241,7 +241,12 @@ export async function sweepQueue(home: string, options: SweepOptions = {}): Prom
       report.calls += 1;
     } catch (err) {
       report.calls += 1;
-      const why = err instanceof Error ? err.message : String(err);
+      // Never the raw error: the child was run with the prompt as an argument, so its
+      // message repeats every candidate in the batch back at whoever reads the report.
+      // A timeout is called out by name because it is the one failure whose symptom -
+      // 25 candidates left pending - is indistinguishable from the model keeping them.
+      const killed = (err as { killed?: boolean })?.killed === true;
+      const why = killed ? `no answer within ${Math.round(timeoutMs / 1000)}s` : claudeErrorReason(err);
       for (const s of batch) report.skipped.push({ slug: s.slug, reason: `model call failed: ${why}` });
       continue;
     }
