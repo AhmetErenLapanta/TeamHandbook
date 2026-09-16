@@ -53,6 +53,22 @@ export function enqueueHarvestJob(job: HarvestJob, home: string = handbookHome()
   return null;
 }
 
+/**
+ * Whether the queue holds a job no runner has taken yet. The predicate is deliberately
+ * the one drainHarvestJobs claims on - `.json` exactly. A job in flight is renamed to
+ * `<job>.json.claimed-<pid>` and fails that test, so a live harvest cannot talk a
+ * second runner into starting beside it: the O_EXCL claim would reject it anyway, but
+ * not spawning it at all is what keeps "one model call per transcript" cheap as well
+ * as correct.
+ */
+export function hasPendingHarvestJobs(home: string = handbookHome()): boolean {
+  try {
+    return readdirSync(pendingDir(home)).some((entry) => entry.endsWith(".json"));
+  } catch {
+    return false; // no pending dir yet: nothing to run
+  }
+}
+
 // A runner that crashed between claim and delete leaves a *.claimed-<pid> file no
 // drain would ever pick up again — that job would be silently lost. Reclaim claims
 // older than this back into the queue.
