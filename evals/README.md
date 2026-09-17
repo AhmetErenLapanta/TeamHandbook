@@ -6,6 +6,7 @@ often that lands. It runs the real plugin in a throwaway sandbox and checks whic
 command, if any, actually fired.
 
     evals/run-suite.sh nl-tutma      --model claude-sonnet-5 -j 4   # the headline
+    evals/run-suite.sh zor           --model claude-sonnet-5 -j 4   # its hard subset
     evals/run-suite.sh nl-gelistirme --model claude-sonnet-5 -j 4   # iteration only
     evals/run-suite.sh fp-gelistirme --model claude-sonnet-5 -j 3   # must fire nothing
     evals/run-suite.sh kontrol       --model claude-sonnet-5        # must be 1.00
@@ -28,9 +29,54 @@ you can raise by copying the test into the answer is not a measurement.
 Product writes the held-out sentences and keeps them sealed. `tutma/README.md` says how
 to add them.
 
-The held-out half holds sixteen routing sentences and four false-positive probes, all
+The held-out half holds twenty-five routing sentences and six false-positive probes, all
 written by Product against the team-facing framing, and none of them seen by any
-description in this repo.
+description in this repo. One more was retired after the gate's leak check was fixed, and
+one is held out of the headline while its expected answer is in dispute;
+`tutma/README.md` says which and why.
+
+## The ceiling, and why there is a hard subset
+
+Four unchanged runs of the sixteen-case package returned 0.8958, 0.9583, 0.9167 and
+0.9792. Mean 0.9375, observed range 0.0833, empirical two standard deviations 0.0761.
+That leaves 0.0625 of room below the ceiling, against a band of 0.0761:
+
+    room below the ceiling  0.0625
+    noise band              0.0761
+
+The largest improvement the package can express is smaller than its own noise. Read
+plainly: this half can show a regression and cannot show an improvement. The cause is not
+the number of cases. Twelve of the sixteen returned 3/3 in every run and so contribute
+exactly zero variance and exactly zero room; only four cases move at all. Adding more
+cases like them widens nothing, which is why going from twelve cases to sixteen did not
+narrow the band.
+
+The cases are easy because the sentences carry their own answer. Fifteen of the sixteen
+can be routed by someone who has never read a description but knows the command list, just
+from the wording.
+
+So the held-out half is split. The existing cases keep their job, which is to notice a
+regression, and they are not thrown away for being easy: a case that cannot fail is useless
+for improvement and still valuable for damage. New cases tagged `zor` carry the other job,
+which is to leave the score somewhere to go. Both tags sit on a hard case, so the headline
+covers it and `run-suite.sh zor` reports the hard subset on its own.
+
+**The test this split has to pass, written down before the cases exist:** the room below
+the ceiling must exceed the band, both measured on at least three runs of the package as it
+then stands. With fifteen easy cases holding a mean of 14/15, `H` hard cases at a mean pass
+rate of `p_hard`, and a band `B`, the condition is
+
+    (1 + H(1 - p_hard)) / (15 + H)  >  B
+
+At today's band of 0.0761 that solves to `H > 0.1415 / (0.9239 - p_hard)`: one hard case is
+enough at `p_hard` of 0.5, two at 0.8, six at 0.9, and no number of cases is enough at 0.92
+or above. The count is not the binding constraint. How hard the cases actually are is the
+binding constraint, and a batch that scores near the ceiling fails this test no matter how
+many of them there are.
+
+`B` has to be measured again rather than carried over. The easy cases added structurally
+zero variance; cases that sit mid-band add real variance, so the band may widen rather than
+narrow.
 
 ## Reading a number from here
 
