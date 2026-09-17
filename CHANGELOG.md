@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.7] - 2026-09-17
+
+- **Every command said what it was; none of them said when to reach for it.** A
+  description like "Show TeamHandbook health" tells you what you get once you have
+  already decided to run `/handbook:status`, which is no help at all when what you
+  actually typed was "bu makinede her sey ne durumda". The descriptions now carry the
+  phrasings people really use, so asking in ordinary language lands on the right command
+  more often. Measured on the eval suite that shipped in 0.5.4: 0.5556 to 0.6667. The
+  review command also documents the sweep path, which existed in the code and nowhere a
+  reader would look.
+
 ## [0.5.6] - 2026-09-17
 
 - **A harvest cut off halfway never spent the attempt it was given.** The retry budget was
