@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.8] - 2026-09-17
+
+- **Installing the plugin pulled down 58 MB of build tooling nobody running it needs.**
+  A lockfile beside `package.json` is the signal the installer looks for, and finding one
+  it installs the dependency tree without dropping dev dependencies: the test runner, the
+  bundler and everything they rest on, into every version directory it keeps. None of it
+  is used at runtime, because what actually runs is the bundled output in `dist/`. The
+  lockfile is gone from the repository, so an install now copies the plugin and stops.
+  Development is unaffected: `npm install` still resolves the same four dev dependencies
+  from `package.json`.
+
 ## [0.5.7] - 2026-09-17
 
 - **Every command said what it was; none of them said when to reach for it.** A
