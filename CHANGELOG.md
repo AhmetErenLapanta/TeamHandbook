@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.6.3] - 2026-09-17
+
+- **The ruler could tell you where you stood and not whether you were getting better.**
+  The eval suite that arrived in 0.5.4 measured whether a plain sentence reaches the right
+  command, but nearly every case it contained was one the descriptions already handled, so
+  the room left above the score was smaller than the noise between two runs of it: any
+  change looked like a change. The suite is now two halves. The easy cases are there to
+  catch a regression, and the hard ones, the phrasings that name no command and describe
+  the problem instead, are where an improvement has room to show. Nothing an installed
+  copy does changes; what changes is that the next change to a description can be shown
+  to have worked.
+
 ## [0.6.2] - 2026-09-17
 
 - **Two commands described work they were not doing.** Joining a team said it subscribed
