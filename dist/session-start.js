@@ -73,7 +73,8 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
-      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}
+      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -908,6 +909,24 @@ function enqueueHarvestJob(job, home = handbookHome()) {
   return null;
 }
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
+function hasPendingHarvestJobs(home = handbookHome()) {
+  const dir = pendingDir(home);
+  let entries;
+  try {
+    entries = readdirSync6(dir);
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => {
+    if (entry.endsWith(".json")) return true;
+    if (!/^.+\.json\.claimed-\d+$/.test(entry)) return false;
+    try {
+      return Date.now() - statSync2(join10(dir, entry)).mtimeMs > STALE_CLAIM_MS;
+    } catch {
+      return false;
+    }
+  });
+}
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
@@ -948,7 +967,7 @@ function salvageOrphans(currentSessionId) {
     saveSessionState(fresh);
     enqueued += 1;
   }
-  if (enqueued > 0) {
+  if (enqueued > 0 || hasPendingHarvestJobs()) {
     spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
   }
 }

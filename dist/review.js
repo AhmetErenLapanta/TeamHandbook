@@ -130,22 +130,40 @@ function loadScoreConfig(home = handbookHome()) {
     timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
   };
 }
+function stripAnsi(text) {
+  return text.replace(/\u001B\[[0-9;]*m/g, "");
+}
+var BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
+function failureStderr(raw) {
+  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
+}
 function claudeErrorReason(err) {
   const e = err;
   if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
-  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
-  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
+  if (stderr) return stderr;
+  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
+  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
+  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
   if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
   return firstLine.slice(0, 200);
 }
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
-  const { stdout } = await execFileAsync("claude", args, {
+  const call = execFileAsync("claude", args, {
     timeout: timeoutMs,
     maxBuffer: 1024 * 1024
   });
+  const stdin = call.child.stdin;
+  if (stdin) {
+    stdin.on("error", () => {
+    });
+    stdin.end();
+  }
+  const { stdout } = await call;
   return stdout;
 };
 

@@ -54,6 +54,68 @@ function fingerprint(family, normalizedError) {
   return createHash("sha256").update(`${family}\0${normalizedError}`).digest("hex").slice(0, 16);
 }
 
+// src/lib/session-state.ts
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+
+// src/lib/fs-atomic.ts
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+var seq = 0;
+function writeFileAtomic(file, data) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${seq++}-${process.hrtime.bigint().toString(36)}`;
+  try {
+    writeFileSync(tmp, data);
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+// src/lib/session-state.ts
+var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+function emptySessionState(sessionId) {
+  return { sessionId, openErrors: [], resolvedPairs: [] };
+}
+function handbookHome() {
+  return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
+}
+function sessionFile(sessionId, home) {
+  const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
+  return join(home, "sessions", `${safe}.json`);
+}
+function loadSessionState(sessionId, home = handbookHome()) {
+  try {
+    const raw = readFileSync(sessionFile(sessionId, home), "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
+      return emptySessionState(sessionId);
+    }
+    const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
+    return {
+      sessionId,
+      openErrors: parsed.openErrors.map((e) => ({ ...e, edits: e.edits ?? [] })),
+      resolvedPairs: Array.isArray(parsed.resolvedPairs) ? parsed.resolvedPairs : [],
+      ...activity ? { activity } : {},
+      ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
+      ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
+      ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
+    };
+  } catch {
+    return emptySessionState(sessionId);
+  }
+}
+function saveSessionState(state, home = handbookHome()) {
+  writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
+}
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
+
 // src/lib/learn.ts
 function parseCommon(p, defaultCwd) {
   if (p.edits !== void 0 && (!Array.isArray(p.edits) || p.edits.some((e) => typeof e !== "string"))) {
@@ -124,7 +186,23 @@ function parseLearnPayload(raw, defaultCwd = process.cwd()) {
     }
   };
 }
-function signalFromLearnPayload(payload, ts) {
+function currentSessionId(env = process.env) {
+  const id = env.CLAUDE_CODE_SESSION_ID;
+  return typeof id === "string" && id.trim() ? id.trim() : void 0;
+}
+function peekExplicitLearnInvocation(sessionId, home = handbookHome()) {
+  if (!sessionId) return true;
+  return loadSessionState(sessionId, home).explicitLearnPending !== false;
+}
+function finalizeExplicitLearnInvocation(sessionId, home = handbookHome()) {
+  if (!sessionId) return;
+  const state = loadSessionState(sessionId, home);
+  if (state.explicitLearnPending) {
+    state.explicitLearnPending = false;
+    saveSessionState(state, home);
+  }
+}
+function signalFromLearnPayload(payload, ts, trigger = "manual") {
   if (payload.kind === "procedure") {
     const normalizedGoal = normalizeErrorText(payload.task.goal.toLowerCase());
     return {
@@ -139,7 +217,7 @@ function signalFromLearnPayload(payload, ts) {
       count: 1,
       edits: payload.edits,
       task: payload.task,
-      trigger: "manual"
+      trigger
     };
   }
   const error = normalizeErrorText(payload.error);
@@ -156,19 +234,19 @@ function signalFromLearnPayload(payload, ts) {
     count: 1,
     edits: payload.edits,
     ...payload.resolvedCommand ? { resolvedCommand: payload.resolvedCommand, resolvedAt: ts } : {},
-    trigger: "manual"
+    trigger
   };
 }
 
 // src/lib/pipeline.ts
 import {
   appendFileSync as appendFileSync2,
-  mkdirSync as mkdirSync5,
-  readdirSync as readdirSync3,
-  readFileSync as readFileSync6,
+  mkdirSync as mkdirSync6,
+  readdirSync as readdirSync4,
+  readFileSync as readFileSync7,
   renameSync as renameSync2,
-  rmSync as rmSync2,
-  statSync,
+  rmSync as rmSync3,
+  statSync as statSync2,
   utimesSync,
   writeFileSync as writeFileSync4
 } from "node:fs";
@@ -180,46 +258,18 @@ import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join4 } from "node:path";
 
-// src/lib/session-state.ts
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-
-// src/lib/fs-atomic.ts
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-var seq = 0;
-function writeFileAtomic(file, data) {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${seq++}-${process.hrtime.bigint().toString(36)}`;
-  try {
-    writeFileSync(tmp, data);
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-// src/lib/session-state.ts
-var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
-function handbookHome() {
-  return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
-}
-var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
-var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
-
 // src/lib/config.ts
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
 function configFile(home = handbookHome()) {
   return join2(home, "config.json");
 }
 function readConfigFile(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync(configFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync2(configFile(home), "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -328,11 +378,11 @@ function buildScorePrompt(signal, occurrences, existingSkills = []) {
     `- kind: ${signal.task ? "completed task procedure" : "error\u2192fix moment"}`,
     `- times this fingerprint was seen in the local ledger: ${occurrences}`,
     `- occurrences within the session: ${signal.count}`,
-    ...signal.trigger === "manual" ? [
-      "- trigger: the user EXPLICITLY asked to capture this. A manual capture has no",
-      "  ledger history by definition \u2014 judge recurrence by how plausibly the team will",
-      "  face similar situations again, not by the count above. Still reject trivia the",
-      "  team could trivially rediscover."
+    ...signal.trigger === "manual" || signal.trigger === "manual-model" ? [
+      "- trigger: this is a manual capture (via /handbook:learn), not the automatic",
+      "  end-of-session harvest, so it has no ledger history by definition - judge",
+      "  recurrence by how plausibly the team will face similar situations again, not",
+      "  by the count above. Still reject trivia the team could trivially rediscover."
     ] : [],
     caseBlock,
     "",
@@ -373,22 +423,40 @@ function parseScoreResponse(text, threshold) {
     ...isDuplicate ? { duplicateOf: duplicateOf.trim() } : {}
   };
 }
+function stripAnsi(text) {
+  return text.replace(/\u001B\[[0-9;]*m/g, "");
+}
+var BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
+function failureStderr(raw) {
+  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
+}
 function claudeErrorReason(err) {
   const e = err;
   if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
-  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
-  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
+  if (stderr) return stderr;
+  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
+  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
+  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
   if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
   return firstLine.slice(0, 200);
 }
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
-  const { stdout } = await execFileAsync("claude", args, {
+  const call = execFileAsync("claude", args, {
     timeout: timeoutMs,
     maxBuffer: 1024 * 1024
   });
+  const stdin = call.child.stdin;
+  if (stdin) {
+    stdin.on("error", () => {
+    });
+    stdin.end();
+  }
+  const { stdout } = await call;
   return stdout;
 };
 async function scoreSignal(signal, occurrences, config = defaultScoreConfig, runner = runClaudeCli, existingSkills = []) {
@@ -408,7 +476,7 @@ async function scoreSignal(signal, occurrences, config = defaultScoreConfig, run
 }
 
 // src/lib/skill-index.ts
-import { readdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { readdirSync as readdirSync2, readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
@@ -438,7 +506,7 @@ function parseSkillFrontmatter(md) {
 }
 function isDecidedCandidate(dir, entry) {
   try {
-    const meta = JSON.parse(readFileSync2(join3(dir, entry, "candidate.json"), "utf8"));
+    const meta = JSON.parse(readFileSync3(join3(dir, entry, "candidate.json"), "utf8"));
     return meta?.status === "rejected" || meta?.status === "approved";
   } catch {
     return false;
@@ -449,7 +517,7 @@ function listExistingSkills(dirs) {
   for (const dir of dirs) {
     let entries;
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync2(dir);
     } catch {
       continue;
     }
@@ -457,7 +525,7 @@ function listExistingSkills(dirs) {
       if (isDecidedCandidate(dir, entry)) continue;
       let raw;
       try {
-        raw = readFileSync2(join3(dir, entry, "SKILL.md"), "utf8");
+        raw = readFileSync3(join3(dir, entry, "SKILL.md"), "utf8");
       } catch {
         continue;
       }
@@ -747,7 +815,7 @@ function writeCandidate(artifact, home = handbookHome()) {
   const base = candidatesDir(home);
   const slug = uniqueSlug(artifact.slug, (s) => existsSync2(join4(base, s)));
   const dir = join4(base, slug);
-  mkdirSync2(dir, { recursive: true });
+  mkdirSync3(dir, { recursive: true });
   const skillMd = slug === artifact.slug ? artifact.skillMd : renameSkillMd(artifact.skillMd, slug);
   writeFileSync2(join4(dir, "SKILL.md"), skillMd);
   writeFileSync2(join4(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
@@ -782,11 +850,11 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 
 // src/lib/signals.ts
-import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync6 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
@@ -809,7 +877,7 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0
   };
   try {
-    const parsed = JSON.parse(readFileSync4(countersFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync5(countersFile(home), "utf8"));
     for (const f of FIELDS) base[f] = Number(parsed?.[f]) || 0;
   } catch {
   }
@@ -818,7 +886,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync3(home, { recursive: true });
+  mkdirSync4(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -855,7 +923,7 @@ function ledgerFingerprintCounts(home = handbookHome()) {
   const counts = /* @__PURE__ */ new Map();
   let raw;
   try {
-    raw = readFileSync5(signalsFile(home), "utf8");
+    raw = readFileSync6(signalsFile(home), "utf8");
   } catch {
     return counts;
   }
@@ -875,7 +943,7 @@ function appendSignals(signals, home = handbookHome()) {
   if (signals.length === 0) return;
   const { clean, redacted } = sanitizeSignalsForPersistence(signals);
   if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync4(home, { recursive: true });
+  mkdirSync5(home, { recursive: true });
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
@@ -952,12 +1020,12 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
-  mkdirSync5(home, { recursive: true });
+  mkdirSync6(home, { recursive: true });
   const file = pipelineLogFile(home);
   appendFileSync2(file, JSON.stringify({ ts, ...summary }) + "\n");
   try {
-    if (statSync(file).size > LOG_ROTATE_BYTES) {
-      const lines = readFileSync6(file, "utf8").trim().split("\n");
+    if (statSync2(file).size > LOG_ROTATE_BYTES) {
+      const lines = readFileSync7(file, "utf8").trim().split("\n");
       writeFileAtomic(file, lines.slice(-LOG_KEEP_LINES).join("\n") + "\n");
     }
   } catch {
@@ -1010,6 +1078,15 @@ async function runManualSignal(signal, home = handbookHome(), deps = {}, now = (
   }
   const total = verdict.result?.total ?? null;
   const belowThreshold = total !== null && total < scoreConfig.threshold;
+  if (verdict.outcome !== "promote" && signal.trigger !== "manual") {
+    summary.rejected = 1;
+    return finish({
+      stage: "vetoed",
+      gateTotal: total,
+      threshold: scoreConfig.threshold,
+      ...verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}
+    });
+  }
   const duplicateOf = verdict.result?.duplicateOf;
   const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
   if (outcome.outcome !== "distilled" || !outcome.artifact) {
@@ -1050,11 +1127,19 @@ async function main() {
     console.error(`error: ${error}`);
     return 2;
   }
-  const signal = signalFromLearnPayload(payload, (/* @__PURE__ */ new Date()).toISOString());
+  const sessionId = currentSessionId();
+  const trigger = peekExplicitLearnInvocation(sessionId) ? "manual" : "manual-model";
+  const signal = signalFromLearnPayload(payload, (/* @__PURE__ */ new Date()).toISOString(), trigger);
   const outcome = await runManualSignal(signal);
+  if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));
+      return 0;
+    case "vetoed":
+      console.log(
+        `Not captured: the gate scored it ${outcome.gateTotal ?? "?"}/10, below the ${outcome.threshold}/10 threshold` + (outcome.rationale ? ` (${outcome.rationale})` : "") + `. This request came from the model rather than something you explicitly typed, so the gate's rejection stands and nothing was queued.`
+      );
       return 0;
     case "error":
       console.error(

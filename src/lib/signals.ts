@@ -30,7 +30,11 @@ export interface Signal {
   edits: string[];
   resolvedCommand?: string;
   resolvedAt?: string;
-  trigger?: "manual";
+  // "manual": the user literally typed /handbook:learn, so the gate's rejection is
+  // advice only (distill.ts, score.ts). "manual-model": the model invoked the same
+  // command on its own, from plain language, so the gate's rejection is enforced,
+  // same as the automatic harvest. Absent: an automatic end-of-session harvest signal.
+  trigger?: "manual" | "manual-model";
   secretRedacted?: boolean;
   // retry bookkeeping for signals whose gate/distill call failed (e.g. logged-out
   // claude); re-enqueued up to a small cap instead of being lost

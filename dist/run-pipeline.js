@@ -117,22 +117,40 @@ ${indent(clean)}`;
 
 // src/lib/score.ts
 var execFileAsync = promisify(execFile);
+function stripAnsi(text) {
+  return text.replace(/\u001B\[[0-9;]*m/g, "");
+}
+var BENIGN_CLAUDE_WARNING = /^Warning: no stdin data received in \d+s\b/;
+function failureStderr(raw) {
+  return stripAnsi(raw).split("\n").map((line) => line.trim()).filter((line) => line && !BENIGN_CLAUDE_WARNING.test(line)).slice(-2).join(" ").slice(0, 200);
+}
 function claudeErrorReason(err) {
   const e = err;
   if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
-  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-  if (stderr) return stderr.split("\n").slice(-2).join(" ").slice(0, 200);
-  const firstLine = String(e?.message ?? err).split("\n")[0] ?? "";
+  const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
+  if (stderr) return stderr;
+  if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
+  if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "claude wrote past the 1 MB output cap - run /handbook:doctor";
+  if (typeof e?.code === "number") return `claude exited with code ${e.code} and wrote no error output - run /handbook:doctor`;
+  if (e?.signal) return `claude was killed by ${e.signal} - run /handbook:doctor`;
+  const firstLine = stripAnsi(String(e?.message ?? err)).split("\n")[0] ?? "";
   if (/^Command failed:\s*claude\b/.test(firstLine)) return "claude invocation failed (run /handbook:doctor)";
   return firstLine.slice(0, 200);
 }
 var runClaudeCli = async (prompt, model, timeoutMs) => {
   const args = ["-p", prompt];
   if (model) args.push("--model", model);
-  const { stdout } = await execFileAsync("claude", args, {
+  const call = execFileAsync("claude", args, {
     timeout: timeoutMs,
     maxBuffer: 1024 * 1024
   });
+  const stdin = call.child.stdin;
+  if (stdin) {
+    stdin.on("error", () => {
+    });
+    stdin.end();
+  }
+  const { stdout } = await call;
   return stdout;
 };
 
@@ -1272,6 +1290,8 @@ function enqueueHarvestJob(job, home = handbookHome()) {
   return null;
 }
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
+var RECLAIM_STAMP = /^reclaimed-\d+-/;
+var CLAIM_TEMP = /\.tmp-\d+-\d+-[0-9a-z]+$/;
 function reclaimStaleClaims(dir) {
   let entries;
   try {
@@ -1280,12 +1300,19 @@ function reclaimStaleClaims(dir) {
     return;
   }
   for (const entry of entries) {
+    const file = join10(dir, entry);
+    if (CLAIM_TEMP.test(entry)) {
+      try {
+        if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) rmSync2(file, { force: true });
+      } catch {
+      }
+      continue;
+    }
     const m = entry.match(/^(.+\.json)\.claimed-\d+$/);
     if (!m) continue;
     try {
-      const file = join10(dir, entry);
       if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) {
-        renameSync2(file, join10(dir, `reclaimed-${Date.now()}-${m[1]}`));
+        renameSync2(file, join10(dir, `reclaimed-${Date.now()}-${m[1].replace(RECLAIM_STAMP, "")}`));
       }
     } catch {
     }
@@ -1293,6 +1320,18 @@ function reclaimStaleClaims(dir) {
 }
 function releaseHarvestJob(claimedFile) {
   rmSync2(claimedFile, { force: true });
+}
+var MAX_HARVEST_ATTEMPTS = 3;
+function abandonedFile(home = handbookHome()) {
+  return join10(home, "abandoned.jsonl");
+}
+function abandonJob(job, home) {
+  try {
+    mkdirSync5(home, { recursive: true });
+    appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
+  } catch {
+  }
+  bumpCounter("gateAbandoned", home);
 }
 function drainHarvestJobs(home = handbookHome()) {
   reclaimStaleClaims(pendingDir(home));
@@ -1322,11 +1361,23 @@ function drainHarvestJobs(home = handbookHome()) {
       continue;
     }
     const job = parsed;
-    if (job && typeof job === "object" && typeof job.sessionId === "string" && job.evidence) {
-      jobs.push({ job, claimedFile: claimed });
-    } else {
+    if (!job || typeof job !== "object" || typeof job.sessionId !== "string" || !job.evidence) {
       rmSync2(claimed, { force: true });
+      continue;
     }
+    const attempts = (job.attempts ?? 0) + 1;
+    if (attempts > MAX_HARVEST_ATTEMPTS) {
+      abandonJob(job, home);
+      rmSync2(claimed, { force: true });
+      continue;
+    }
+    const claimedJob = { ...job, attempts };
+    try {
+      writeFileAtomic(claimed, JSON.stringify(claimedJob));
+    } catch {
+      continue;
+    }
+    jobs.push({ job: claimedJob, claimedFile: claimed });
   }
   return jobs;
 }
@@ -1346,17 +1397,6 @@ function appendPipelineLog(summary, home, ts) {
     }
   } catch {
   }
-}
-function abandonedFile(home = handbookHome()) {
-  return join10(home, "abandoned.jsonl");
-}
-function abandonJob(job, home) {
-  try {
-    mkdirSync5(home, { recursive: true });
-    appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
-  } catch {
-  }
-  bumpCounter("gateAbandoned", home);
 }
 function harvestedDir(home = handbookHome()) {
   return join10(home, "harvested");
@@ -1429,7 +1469,6 @@ function cleanupStaleHarvestMarkers(home, now = Date.now()) {
     }
   }
 }
-var MAX_HARVEST_ATTEMPTS = 3;
 async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   const marker = harvestMarkerFile(job, home);
   if (marker && !claimHarvest(marker, home)) {
@@ -1476,7 +1515,7 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
   if (summary.outcome === "error") {
     if (marker) rmSync2(marker, { force: true });
     bumpCounter("gateErrors", home);
-    const attempts = (job.attempts ?? 0) + 1;
+    const attempts = job.attempts ?? 0;
     if (attempts < MAX_HARVEST_ATTEMPTS) {
       enqueueHarvestJob({ ...job, attempts }, home);
     } else {

@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { loadHarvestConfig } from "./harvest.js";
 import {
   buildScorePrompt,
+  claudeErrorReason,
   defaultScoreConfig,
   loadScoreConfig,
   gateAutoEnabled,
   parseScoreResponse,
+  runClaudeCli,
   scoreSignal,
 } from "./score.js";
 import type { Signal } from "./signals.js";
@@ -69,6 +71,27 @@ describe("buildScorePrompt", () => {
     expect(prompt).toContain("Existing skills already available to the team");
     expect(prompt).toContain("fix-npm-cache:\n  Use when npm install fails on a stale cache.");
     expect(prompt).toContain('"duplicateOf"');
+  });
+
+  // A manual-model capture (the model invoked /handbook:learn on its
+  // own) has no ledger history either - it is scored on this same call, the same
+  // as a user-typed manual capture - so it must get the same no-ledger-history
+  // recurrence guidance, not be silently judged by the raw occurrence count.
+  it("gives manual-model the same no-ledger-history recurrence guidance as manual", () => {
+    const manualPrompt = buildScorePrompt(candidate({ trigger: "manual" }), 1);
+    const manualModelPrompt = buildScorePrompt(candidate({ trigger: "manual-model" }), 1);
+    expect(manualPrompt).toContain("no ledger history");
+    expect(manualModelPrompt).toContain("no ledger history");
+    // same trigger framing text for both, so scoring is not skewed by which one
+    // asked
+    const extractTriggerLine = (p: string) => p.split("\n").find((l) => l.startsWith("- trigger:"));
+    expect(extractTriggerLine(manualModelPrompt)).toBe(extractTriggerLine(manualPrompt));
+  });
+
+  it("omits the no-ledger-history guidance for an automatic harvest signal", () => {
+    const prompt = buildScorePrompt(candidate({ trigger: undefined }), 4);
+    expect(prompt).not.toContain("no ledger history");
+    expect(prompt).not.toMatch(/^- trigger:/m);
   });
 });
 
@@ -259,5 +282,85 @@ describe("gateAutoEnabled fail-closed (B4)", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runClaudeCli against a real claude process", () => {
+  let bin: string;
+  let originalPath: string | undefined;
+
+  beforeEach(() => {
+    bin = mkdtempSync(join(tmpdir(), "handbook-bin-"));
+    originalPath = process.env.PATH;
+    process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    rmSync(bin, { recursive: true, force: true });
+  });
+
+  /** A stand-in `claude` on PATH. The real binary is never called from a test. */
+  function fakeClaude(script: string): void {
+    const file = join(bin, "claude");
+    writeFileSync(file, script, { mode: 0o755 });
+  }
+
+  const STDIN_WARNING =
+    "Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.";
+
+  it("given a claude that warns on stderr and exits 0, when the runner calls it, then the run succeeds", async () => {
+    fakeClaude(`#!/bin/sh\nprintf '${STDIN_WARNING}\\n' >&2\nprintf 'the reply\\n'\nexit 0\n`);
+    await expect(runClaudeCli("prompt", "haiku", 20_000)).resolves.toBe("the reply\n");
+  });
+
+  it("given a claude that colorizes that warning, when the runner calls it, then the run still succeeds", async () => {
+    fakeClaude(`#!/bin/sh\nprintf '\\033[33m${STDIN_WARNING}\\033[39m\\n' >&2\nprintf 'the reply\\n'\nexit 0\n`);
+    await expect(runClaudeCli("prompt", "haiku", 20_000)).resolves.toBe("the reply\n");
+  });
+
+  it("given a claude that exits non-zero, when the runner calls it, then it throws and the reason names the exit code, not the warning", async () => {
+    fakeClaude(`#!/bin/sh\nprintf '${STDIN_WARNING}\\n' >&2\nexit 3\n`);
+    const err = await runClaudeCli("prompt", "haiku", 20_000).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    const reason = claudeErrorReason(err);
+    expect(reason).toContain("exited with code 3");
+    expect(reason).not.toContain("no stdin data");
+  });
+
+  it("given a claude that fails with a real message, when the runner calls it, then that message is the reason", async () => {
+    fakeClaude(`#!/bin/sh\nprintf '${STDIN_WARNING}\\n' >&2\nprintf 'Invalid API key\\n' >&2\nexit 1\n`);
+    const err = await runClaudeCli("prompt", "haiku", 20_000).catch((e: unknown) => e);
+    expect(claudeErrorReason(err)).toBe("Invalid API key");
+  });
+
+  it("given a claude that reports what it found on stdin, when the runner calls it, then stdin is already closed", async () => {
+    // The defect this proves: execFile leaves the child's stdin an open pipe, so the
+    // CLI waits on input that is never coming and warns about it on every single call.
+    fakeClaude(
+      `#!/usr/bin/env node\n` +
+        `let ended = false;\n` +
+        `process.stdin.on("end", () => { ended = true; process.stdout.write("STDIN_CLOSED"); process.exit(0); });\n` +
+        `setTimeout(() => { if (!ended) { process.stdout.write("STDIN_LEFT_OPEN"); process.exit(0); } }, 3000);\n` +
+        `process.stdin.resume();\n`,
+    );
+    await expect(runClaudeCli("prompt", "haiku", 20_000)).resolves.toBe("STDIN_CLOSED");
+  });
+
+  it("given a claude that writes past the output cap, when the runner calls it, then the reason names the cap and not a timeout", async () => {
+    // node kills the child on overflow, so this error can look like the timeout branch
+    // right below it; the whole point of this commit is that the reason names the knob
+    // the user actually has to turn
+    fakeClaude(`#!/usr/bin/env node\nprocess.stdout.write("x".repeat(2 * 1024 * 1024));\n`);
+    const err = await runClaudeCli("prompt", "haiku", 20_000).catch((e: unknown) => e);
+    const reason = claudeErrorReason(err);
+    expect(reason).toContain("1 MB output cap");
+    expect(reason).not.toContain("timed out");
+  });
+
+  it("given no claude on PATH at all, when the runner calls it, then the reason says so instead of crashing the runner", async () => {
+    process.env.PATH = bin; // empty dir: nothing to find
+    const err = await runClaudeCli("prompt", "haiku", 20_000).catch((e: unknown) => e);
+    expect(claudeErrorReason(err)).toContain("claude CLI not found on PATH");
   });
 });
