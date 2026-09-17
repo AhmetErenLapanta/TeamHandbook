@@ -45,6 +45,14 @@ export interface SessionState {
   // set when salvage already harvested this (possibly still-alive) session, so an
   // orphan is never harvested twice
   harvestedAt?: string;
+  // Whether the user's own literal, unexpanded /handbook:learn slash command is
+  // still an open, unconsumed ask (see capture.ts's captureLearnInvocation for the
+  // set/invalidate side of the lifecycle, and learn.ts's
+  // peekExplicitLearnInvocation / finalizeExplicitLearnInvocation for the read and
+  // consume side). This is what lets the learn gate tell the user's own explicit
+  // ask apart from the model invoking the same command on its own initiative via
+  // the Skill tool, which produces no UserPromptSubmit event at all.
+  explicitLearnPending?: boolean;
 }
 
 export function emptySessionState(sessionId: string): SessionState {
@@ -104,6 +112,9 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
         : {}),
       ...(typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {}),
       ...(Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}),
+      ...(typeof parsed.explicitLearnPending === "boolean"
+        ? { explicitLearnPending: parsed.explicitLearnPending }
+        : {}),
     };
   } catch {
     return emptySessionState(sessionId);

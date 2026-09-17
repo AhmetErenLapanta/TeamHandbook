@@ -7,6 +7,7 @@ import {
   captureBashSuccess,
   captureCorrection,
   captureFileEdit,
+  captureLearnInvocation,
   recordActivity,
 } from "./capture.js";
 import { loadSessionState } from "./session-state.js";
@@ -290,5 +291,76 @@ describe("captureCorrection (recording what the developer typed)", () => {
       captureCorrection(promptInput("always use Bearer sk-proj-abcdef1234567890ABCDEFGH"), home),
     ).toBe(false);
     expect(loadSessionState("s1", home).corrections).toBeUndefined();
+  });
+});
+
+describe("captureLearnInvocation (telling the user's own /handbook:learn from the model's)", () => {
+  function promptInput(prompt: string): HookInput {
+    return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt };
+  }
+
+  it("marks the session pending when the prompt literally is the slash command", () => {
+    expect(captureLearnInvocation(promptInput("/handbook:learn"), home)).toBe(true);
+    expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+  });
+
+  it("marks the session pending when the slash command carries $ARGUMENTS", () => {
+    captureLearnInvocation(promptInput("/handbook:learn the npm test fix from earlier"), home);
+    expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+  });
+
+  it("does not match a prompt that merely mentions the command in prose", () => {
+    captureLearnInvocation(promptInput("does /handbook:learn also catch this?"), home);
+    expect(loadSessionState("s1", home).explicitLearnPending).toBe(false);
+  });
+
+  it("ignores a missing session id or prompt", () => {
+    expect(captureLearnInvocation({ session_id: "s1" }, home)).toBe(false);
+    expect(captureLearnInvocation({ prompt: "/handbook:learn" }, home)).toBe(false);
+  });
+
+  // K-17 BLOKE 1: the audit's exact repro. learn.md step 2 can ask the user a
+  // clarifying question when nothing in the session matches yet, and that
+  // exchange can take more than one round trip. Every answer is a new
+  // UserPromptSubmit, in prose, that must not be mistaken for the user having
+  // moved on to something unrelated - no matter how many of them intervene.
+  describe("a pending ask survives plain-language prompts", () => {
+    it("survives one intervening prompt (a single clarifying answer)", () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(
+        promptInput("it was the npm test flakiness we fixed with a retry wrapper"),
+        home,
+      );
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+    });
+
+    it("survives several intervening prompts (a multi-turn clarification)", () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("the npm test flakiness"), home);
+      captureLearnInvocation(promptInput("mode A, the error->fix one"), home);
+      captureLearnInvocation(promptInput("the retry wrapper is what fixed it"), home);
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+    });
+
+    it("is invalidated by a different literal slash command (an explicit context switch)", () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("/handbook:status"), home);
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(false);
+    });
+
+    it("survives a pasted absolute path, a regex, or a diff line (not command-shaped)", () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("/tmp/repo/src/lib/capture.ts"), home);
+      captureLearnInvocation(promptInput("/^\\/handbook:learn(\\s|$)/"), home);
+      captureLearnInvocation(promptInput("/dev/null 2>&1"), home);
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+    });
+
+    it("a fresh literal command re-arms an already-cleared ask", () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("/handbook:status"), home);
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
+    });
   });
 });
