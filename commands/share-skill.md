@@ -1,12 +1,13 @@
 ---
-description: Put a skill that already exists on disk, one you wrote by hand rather than one TeamHandbook harvested, into the review queue so it can reach the team. One skill per run, through the same review as everything else. Use only when the skill is already written; to capture something out of the current session, use /handbook:learn instead. Triggers: "one of my own skills should go to the team", "add a skill I already have to the queue", "this skill of mine belongs in the team handbook", "queue an existing skill".
+description: Put a skill that already exists on disk, one you wrote by hand rather than one TeamHandbook harvested, into the review queue so it can reach the team. One skill per run, through the same review as everything else. Use only when the skill is already written; to capture something out of the current session, use /handbook:learn instead, and to pick several skills and MCP servers from a list of everything installed here, use /handbook:migrate. Triggers: "one of my own skills should go to the team", "add a skill I already have to the queue", "this skill of mine belongs in the team handbook", "queue an existing skill".
 ---
 
 The user wants to take a skill that already exists on disk - one they wrote themselves, not
 one TeamHandbook harvested - and put it in the review queue. Until now the only route into
 that queue was to re-live the lesson and hope the harvest caught it.
 
-One skill per run. If the user names several, do them one at a time and report each result.
+One skill per run. If the user names several, or does not yet know which ones, /handbook:migrate
+lists everything installed on this machine and takes as many as they pick in one go.
 
 1. Work out which skill they mean. Skills live in `~/.claude/skills/<name>` (personal, loads
    everywhere) and `.claude/skills/<name>` in the current project. If they named one, use it.

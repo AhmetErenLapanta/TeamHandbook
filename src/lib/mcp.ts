@@ -271,11 +271,10 @@ export function refusalMessage(name: string, audit: McpAudit): string {
  * an `mcpServers` key to a file written as a bare map would turn that map's entries into
  * siblings of a wrapper - the team's working server silently stops being a declaration.
  */
-export function mergeServerIntoMcpJson(
+export function mergeServersIntoMcpJson(
   existing: string | null,
-  name: string,
-  config: Record<string, unknown>,
-): string {
+  servers: McpServerEntry[],
+): { merged: string; collided: string[] } {
   let target: Record<string, unknown> = {};
   let document: Record<string, unknown> | null = null;
   if (existing !== null && existing.trim()) {
@@ -284,7 +283,9 @@ export function mergeServerIntoMcpJson(
       parsed = JSON.parse(existing);
     } catch {
       // Never rewrite a file we cannot read: the servers the team already depends on are
-      // in there, and replacing them with ours would be the loudest possible bug.
+      // in there, and replacing them with ours would be the loudest possible bug. This
+      // throws rather than joining the per-server refusals below because it is a property
+      // of the repository, not of any one server: no selection can be salvaged from it.
       throw new Error(
         ".mcp.json in the team repository is not valid JSON. Fix it there first; " +
           "TeamHandbook will not overwrite a file it cannot read.",
@@ -296,21 +297,42 @@ export function mergeServerIntoMcpJson(
     document = parsed;
     target = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
   }
-  if (Object.prototype.hasOwnProperty.call(target, name)) {
+  // The file is parsed once for the whole selection. Merging one server at a time would
+  // re-read a document the previous merge had already rewritten, and the shape detection
+  // above only holds against the file the team actually wrote.
+  const collided: string[] = [];
+  for (const server of servers) {
+    if (Object.prototype.hasOwnProperty.call(target, server.name)) {
+      collided.push(server.name);
+      continue;
+    }
+    if (document === null) {
+      // A file we create uses the documented wrapper.
+      document = { mcpServers: target };
+    }
+    target[server.name] = server.config;
+  }
+  return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided };
+}
+
+/** One server, the shape /handbook:mcp shares. A collision is its only outcome, so it throws. */
+export function mergeServerIntoMcpJson(
+  existing: string | null,
+  name: string,
+  config: Record<string, unknown>,
+): string {
+  const { merged, collided } = mergeServersIntoMcpJson(existing, [{ name, scope: "user", config }]);
+  if (collided.length) {
     throw new Error(
       `the team repository already declares an MCP server named "${name}". ` +
         "Rename yours, or edit the team's .mcp.json directly.",
     );
   }
-  target[name] = config;
-  if (document === null) {
-    // A file we create uses the documented wrapper.
-    document = { mcpServers: { [name]: config } };
-  }
-  return JSON.stringify(document, null, 2) + "\n";
+  return merged;
 }
 
-function refusalSummary(audit: McpAudit): string {
+/** The short form for a list, where refusalMessage's three sentences of advice do not fit. */
+export function refusalSummary(audit: McpAudit): string {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
   return String(audit.detail);
