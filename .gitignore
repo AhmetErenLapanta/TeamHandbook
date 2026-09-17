@@ -2,3 +2,7 @@
 node_modules/
 .claude/settings.local.json
 evals/results/
+package-lock.json
+npm-shrinkwrap.json
+bun.lock
+bun.lockb

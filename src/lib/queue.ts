@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
+import type { SkillSummary } from "./skill-index.js";
 import { detectSecret } from "./secrets.js";
 import { copySkillPayload, listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
@@ -150,6 +151,74 @@ export interface IntakeResult {
   secret?: { pattern: string; file: string };
 }
 
+export type SkillRefusal =
+  | "unsafe-name"
+  | "no-skill-md"
+  | "no-frontmatter"
+  | "irregular-entry"
+  | "no-files"
+  | "unreadable"
+  | "secret";
+
+export interface SkillAudit {
+  shareable: boolean;
+  reason?: SkillRefusal;
+  /** the entry, file or pattern name the refusal is about, so the author knows what to fix */
+  detail?: string;
+  /** only on a clean audit: the text read, and the exact file list that was screened */
+  skillMd?: string;
+  files?: string[];
+  /** the frontmatter this directory parsed as, which a listing shows instead of re-reading it */
+  summary?: SkillSummary;
+  secret?: { pattern: string; file: string };
+}
+
+/**
+ * Everything that can be decided about a skill directory by reading it, and nothing
+ * that depends on the queue.
+ *
+ * It exists because there are now two callers and they must not drift: intakeSkill
+ * enforces this, and the inventory screen previews it. A screen that decided
+ * shareability with its own copy of the rules would eventually offer a skill the
+ * enforcing path refuses - or, far worse, stop offering one it would have accepted and
+ * then grow a shortcut past the sieve to "fix" that. The sieve runs here, once, and the
+ * list it cleared is the list the caller copies.
+ */
+export function auditSkillDir(sourceDir: string): SkillAudit {
+  const name = basename(sourceDir);
+  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+  let skillMd: string;
+  try {
+    skillMd = readFileSync(join(sourceDir, "SKILL.md"), "utf8");
+  } catch {
+    return { shareable: false, reason: "no-skill-md" };
+  }
+  const summary = parseSkillFrontmatter(skillMd);
+  if (!summary) return { shareable: false, reason: "no-frontmatter" };
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    // A symlink cannot be screened for what it will resolve to at copy time, and
+    // dropping it quietly is the pruning K-8 exists to stop. Neither is allowed, so the
+    // skill is refused with the entry named.
+    return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
+  }
+  if (files.length === 0) return { shareable: false, reason: "no-files" };
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(join(sourceDir, file), "utf8");
+    } catch {
+      // unreadable means unscreened, and unscreened must not ship
+      return { shareable: false, reason: "unreadable", detail: file };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    }
+  }
+  return { shareable: true, skillMd, files, summary };
+}
+
 /**
  * Take a skill somebody wrote by hand into the review queue.
  *
@@ -180,20 +249,11 @@ export interface IntakeResult {
  */
 export function intakeSkill(sourceDir: string, home: string = handbookHome()): IntakeResult {
   const slug = basename(sourceDir);
-  if (!isSafeSlug(slug)) {
-    return { ok: false, error: `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)` };
-  }
-  let skillMd: string;
-  try {
-    skillMd = readFileSync(join(sourceDir, "SKILL.md"), "utf8");
-  } catch {
-    return { ok: false, error: `no readable SKILL.md in ${sourceDir}` };
-  }
-  if (!parseSkillFrontmatter(skillMd)) {
-    return { ok: false, error: `the SKILL.md in ${sourceDir} has no name and description frontmatter` };
-  }
   const dir = join(candidatesDir(home), slug);
-  if (existsSync(dir)) {
+  // Ahead of the audit because it is the cheapest refusal and, on a machine with a full
+  // queue, by far the commonest: a batch of twenty skills should not read every file of
+  // the fifteen that are already waiting to find that out.
+  if (isSafeSlug(slug) && existsSync(dir)) {
     // Overwriting would silently discard a decision already made about that slug: an
     // approved candidate keeps its meta here, and rewriting it would offer a delivered
     // skill for review a second time. A decided one is named as decided, because
@@ -208,41 +268,39 @@ export function intakeSkill(sourceDir: string, home: string = handbookHome()): I
         : `"${slug}" is already waiting in the review queue`,
     };
   }
-  const { files, skipped } = listSkillFiles(sourceDir);
-  if (skipped.length > 0) {
-    // A symlink cannot be screened for what it will resolve to at copy time, and
-    // dropping it quietly is the pruning this card exists to stop. Neither is allowed,
-    // so the skill is refused with the entry named.
+  const audit = auditSkillDir(sourceDir);
+  if (!audit.shareable) {
     return {
       ok: false,
-      error: `${slug} contains "${skipped[0]}", which is not a regular file; nothing was queued`,
+      ...(audit.secret ? { secret: audit.secret } : {}),
+      error: intakeRefusal(sourceDir, slug, audit),
     };
   }
-  if (files.length === 0) {
-    return { ok: false, error: `${slug} has no files to queue` };
+  copySkillPayload(sourceDir, dir, audit.skillMd!, audit.files!);
+  return { ok: true, slug, dir, fileCount: audit.files!.length };
+}
+
+function intakeRefusal(sourceDir: string, slug: string, audit: SkillAudit): string {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
+    case "no-skill-md":
+      return `no readable SKILL.md in ${sourceDir}`;
+    case "no-frontmatter":
+      return `the SKILL.md in ${sourceDir} has no name and description frontmatter`;
+    case "irregular-entry":
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
+    case "no-files":
+      return `${slug} has no files to queue`;
+    case "unreadable":
+      return `cannot read "${audit.detail}" in ${sourceDir}; nothing was queued`;
+    default:
+      return (
+        `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was ` +
+        `not queued. Skills are reviewed and shared as they are, and a redacted one would install ` +
+        `and then fail; take the credential out of the skill and try again.`
+      );
   }
-  for (const file of files) {
-    let content: string;
-    try {
-      content = readFileSync(join(sourceDir, file), "utf8");
-    } catch {
-      // unreadable means unscreened, and unscreened must not ship
-      return { ok: false, error: `cannot read "${file}" in ${sourceDir}; nothing was queued` };
-    }
-    const pattern = detectSecret(content);
-    if (pattern) {
-      return {
-        ok: false,
-        secret: { pattern, file },
-        error:
-          `"${file}" looks like it contains a secret (${pattern}), so ${slug} was not queued. ` +
-          `Skills are reviewed and shared as they are, and a redacted one would install and then ` +
-          `fail; take the credential out of the skill and try again.`,
-      };
-    }
-  }
-  copySkillPayload(sourceDir, dir, skillMd, files);
-  return { ok: true, slug, dir, fileCount: files.length };
 }
 
 /**

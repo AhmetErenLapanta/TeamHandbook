@@ -7,7 +7,7 @@
     {
       "name": "handbook",
       "source": "./",
-      "description": "The team handbook that writes itself — the corrections you give Claude, captured once and shared with your team as reviewed skills."
+      "description": "Manage your team's Claude Code setup from one git repository: approve a skill or an MCP server once, and every teammate's copy picks it up."
     }
   ]
 }
