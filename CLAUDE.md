@@ -19,7 +19,7 @@ you hit — and offers each one as a personal, project, or team skill. See
   wiring, discovered by Claude Code by convention.
 - `dist/` — esbuild bundles, committed (the plugin is installed by git clone).
 - `evals/` - the natural-language routing suite: 16 cases tagged `nl`/`control`/`fp`,
-  run with `claude plugin eval .` (see `evals/README.md`).
+  run via `claude plugin eval` (see `evals/README.md` for the required flags).
 
 ## Conventions
 
