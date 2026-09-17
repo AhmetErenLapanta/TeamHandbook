@@ -14,7 +14,7 @@ subscribe to that repository's plugin marketplace so merged skills reach this ma
    This clones the repo shallowly to validate it, reads the marketplace name, and records
    the team target in the local TeamHandbook config.
 3. Relay the CLI output verbatim. It ends with two built-in commands
-   (`/plugin marketplace add <url>` and `/plugin install <name>@<name>`) — tell the user to run
+   (`/plugin marketplace add <url>` and `/plugin install <name>@<name>`); tell the user to run
    those two commands themselves to finish the marketplace connection.
 4. If the clone fails, show the error as-is; the most common causes are a typo in the URL
    or missing SSH access to the repository.
