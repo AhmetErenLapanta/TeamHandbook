@@ -600,7 +600,9 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
       url,
       scaffoldBranch,
       "chore: set up the team handbook",
-      "Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest, the version-bump CI, and a `skills/` directory.\n\nOpened by TeamHandbook.",
+      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
+
+Opened by TeamHandbook.`,
       repoDir,
       forge
     );
@@ -626,6 +628,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     defaultBranch: branch,
     merged: direct,
     skipped,
+    withCi,
     ...prUrl ? { prUrl } : {},
     ...prError ? { prError } : {},
     ...!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
@@ -638,8 +641,10 @@ function formatInitSuccess(result) {
     "",
     `  repository:  ${result.url}`,
     `  marketplace: ${result.name}`,
-    ...result.merged ? [`  pushed:      marketplace skeleton + version-bump CI, straight to ${result.branch} (the repo was empty)`] : [
-      `  pushed:      marketplace skeleton + version-bump CI to branch ${result.branch}`,
+    ...result.merged ? [
+      `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""}, straight to ${result.branch} (the repo was empty)`
+    ] : [
+      `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""} to branch ${result.branch}`,
       result.prUrl ? `  request:     ${result.prUrl}` : `  request:     open it here \u2014 ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
       ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
       `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`

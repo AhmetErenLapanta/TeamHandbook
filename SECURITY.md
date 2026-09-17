@@ -29,17 +29,25 @@ This document states exactly what it reads, what it writes, and where data goes.
   read and harvested after the fact. Each session is salvaged at most once.
 - Your local git config and credentials — only when *you* approve a candidate and it
   opens a pull request, using your own identity.
-- **`~/.claude.json`, read-only, and only when you run `/handbook:mcp`:** the MCP servers
-  Claude Code has configured for your user and for the current project, so one of them can
-  be offered to your team. TeamHandbook never writes to this file: it belongs to the running
-  client, and sharing a server does not remove your own. A server definition holding a
-  literal value in `headers` or `env` is refused rather than carried, because only a plain
-  `${VAR}` reference proves the credential itself stays on this machine. That rule is
-  structural and absolute for those two fields. It is not a promise about the whole
-  definition: a URL is additionally scanned for an embedded token, but that scan is a
-  heuristic that can miss a short or word-shaped one, and a credential passed through a
-  stdio server's `args` is not checked at all. The merge request prints the endpoint and the
-  full command so a person reads them before the server reaches anyone.
+- **Your installed skills, read-only, and only when you run `/handbook:migrate`:** the
+  directory names, `SKILL.md` frontmatter and file contents under `~/.claude/skills` and
+  this project's `.claude/skills`, so the list can say which of them could travel. Nothing
+  there is modified, moved or deleted, and the contents are read in order to screen them:
+  a skill carrying a credential in any of its files is refused rather than queued. The same
+  command reads the review queue under `~/.teamhandbook/` to avoid offering you a skill you
+  have already decided about.
+- **`~/.claude.json`, read-only, and only when you run `/handbook:mcp` or
+  `/handbook:migrate`:** the MCP servers Claude Code has configured for your user and for
+  the current project, so they can be offered to your team. TeamHandbook never writes to
+  this file: it belongs to the running client, and sharing a server does not remove your
+  own. A server definition holding a literal value in `headers` or `env` is refused rather
+  than carried, because only a plain `${VAR}` reference proves the credential itself stays
+  on this machine. That rule is structural and absolute for those two fields. It is not a
+  promise about the whole definition: a URL is additionally scanned for an embedded token,
+  but that scan is a heuristic that can miss a short or word-shaped one, and a credential
+  passed through a stdio server's `args` is not checked at all. The merge request prints
+  the endpoint and the full command so a person reads them before the server reaches
+  anyone.
 
 ## What it writes, and where
 
@@ -127,8 +135,10 @@ Two things, and only these:
 2. **On your approval:** `/handbook:review` → approve installs the skill locally or
    opens a PR to the team repo you configured (your git credentials, your chosen
    repo). `/handbook:mcp <name>` does the same for one MCP server you name, adding its
-   definition to the team plugin in a PR you can read before merging. Nothing is shared
-   with your team before this.
+   definition to the team plugin in a PR you can read before merging. `/handbook:migrate`
+   does it for as many servers as you pick, in a single PR, and for the skills you pick it
+   only fills the review queue - they still leave by route 2 above, one verdict at a time.
+   Nothing is shared with your team before this.
 
 ## Removing your data
 

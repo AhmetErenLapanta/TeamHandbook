@@ -1,12 +1,12 @@
 ---
-description: Join a team skills repository someone else already created with /handbook:init: points this machine at that repo and subscribes Claude Code to its plugin marketplace, so skills merged there arrive automatically. Use when the repo already exists and you are not the person who made it. Triggers: "connect me to my team's skill base", "my team already has one, add me", "point me at the repo they set up", "someone gave me the address, wire me in", "hook this machine up to the team handbook".
+description: Join a team skills repository someone else already created with /handbook:init: points this machine at that repo and prints the commands to subscribe Claude Code to its plugin marketplace, so skills merged there arrive automatically once you run them. Use when the repo already exists and you are not the person who made it. Triggers: "connect me to my team's skill base", "my team already has one, add me", "point me at the repo they set up", "someone gave me the address, wire me in", "hook this machine up to the team handbook".
 argument-hint: <git URL shared by your team's champion>
 ---
 
-You are running TeamHandbook's team join flow. Joining does two things: it points the local
-TeamHandbook engine at the team's skills repository (where approved skills will be proposed),
-and it connects Claude Code to that repository's plugin marketplace so merged skills reach
-this machine automatically.
+You are running TeamHandbook's team join flow. Joining points the local TeamHandbook engine
+at the team's skills repository (where approved skills will be proposed). It does not connect
+Claude Code to anything by itself: it prints two built-in commands, and the user runs them to
+subscribe to that repository's plugin marketplace so merged skills reach this machine.
 
 1. The team repo URL is required ($ARGUMENTS). If missing, ask the user for the URL their
    team champion shared and stop until they provide it.
@@ -14,7 +14,7 @@ this machine automatically.
    This clones the repo shallowly to validate it, reads the marketplace name, and records
    the team target in the local TeamHandbook config.
 3. Relay the CLI output verbatim. It ends with two built-in commands
-   (`/plugin marketplace add <url>` and `/plugin install <name>`) — tell the user to run
+   (`/plugin marketplace add <url>` and `/plugin install <name>@<name>`); tell the user to run
    those two commands themselves to finish the marketplace connection.
 4. If the clone fails, show the error as-is; the most common causes are a typo in the URL
    or missing SSH access to the repository.

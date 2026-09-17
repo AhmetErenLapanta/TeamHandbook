@@ -28,6 +28,43 @@ describe("parseSkillFrontmatter", () => {
     });
   });
 
+  it("given a folded block scalar, when the frontmatter is parsed, then the description is its text and not its marker", () => {
+    // Hand-written skills reach for ">-" as soon as the description runs past a line, and
+    // 11 of the 23 installed on the machine this was measured against do. Reading only the
+    // header gave every one of them the description ">-".
+    const md = [
+      "---",
+      "name: dev-db",
+      "description: >-",
+      "  Query the DEV database READ-ONLY to see what really happened.",
+      "  Use when only dev data can answer the question.",
+      "",
+      '  Triggers: "dev db", "dev veritabani".',
+      "---",
+      "",
+      "Body.",
+    ].join("\n");
+
+    expect(parseSkillFrontmatter(md)).toEqual({
+      name: "dev-db",
+      description:
+        "Query the DEV database READ-ONLY to see what really happened. Use when only dev data can answer the question.\n" +
+        'Triggers: "dev db", "dev veritabani".',
+    });
+  });
+
+  it("given a literal block scalar, when the frontmatter is parsed, then its line breaks survive", () => {
+    const md = "---\nname: fix-npm\ndescription: |\n  first line\n  second line\n---\n";
+
+    expect(parseSkillFrontmatter(md)?.description).toBe("first line\nsecond line");
+  });
+
+  it("given a key after a block scalar, when the frontmatter is parsed, then it is still read", () => {
+    const md = "---\nname: fix-npm\ndescription: >-\n  folded text\nscope: team\n---\n";
+
+    expect(parseSkillFrontmatter(md)).toEqual({ name: "fix-npm", description: "folded text", scope: "team" });
+  });
+
   it("reads unquoted values", () => {
     expect(parseSkillFrontmatter("---\nname: fix-npm\ndescription: plain text\n---\n")).toEqual({
       name: "fix-npm",
