@@ -3,8 +3,7 @@
 TeamHandbook is a Claude Code plugin (TypeScript/Node) that harvests durable lessons from
 real coding sessions — the corrections you gave, the procedures you completed, the traps
 you hit — and offers each one as a personal, project, or team skill. See
-[README.md](README.md) for the product story and [docs/SPEC-P1-HARVEST.md] for the v2
-design decisions (K1–K8).
+[README.md](README.md) for the product story.
 
 ## Layout
 
@@ -19,6 +18,8 @@ design decisions (K1–K8).
 - `hooks/hooks.json`, `commands/*.md`, `.claude-plugin/` — the plugin manifest and
   wiring, discovered by Claude Code by convention.
 - `dist/` — esbuild bundles, committed (the plugin is installed by git clone).
+- `evals/` - the natural-language routing suite: 16 cases tagged `nl`/`control`/`fp`,
+  run with `claude plugin eval .` (see `evals/README.md`).
 
 ## Conventions
 
