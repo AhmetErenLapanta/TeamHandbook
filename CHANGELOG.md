@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.9] - 2026-09-17
+
+- **A sentence meant to reassure was pushing away the people it described.** The MCP
+  command's description ended by promising it only reads your local configuration and
+  never writes to it, which is true and worth knowing once you are already there. Asked
+  in the language people actually use, though, "update the team's MCP settings" reads as
+  a request to change something, and a description whose last word is that it never
+  writes anything reads like the wrong door. Rephrasing the same guarantee without the
+  negation put the case back where it was: nine out of nine.
+
 ## [0.5.8] - 2026-09-17
 
 - **Installing the plugin pulled down 58 MB of build tooling nobody running it needs.**
