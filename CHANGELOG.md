@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.6.1] - 2026-09-17
+
+- **The README sold a personal notebook that fills itself in.** It opened on the handbook
+  that writes itself, which described the harvest rather than the reason a team installs
+  anything: one person sets up a GitLab server, a lint rule, a way of reviewing, and
+  everyone else repeats it by hand or does without. That is the job, and the harvest is
+  one of the tools for it. The opening says so now, the setup instructions separate the
+  person who creates the team handbook from the people who join it and from someone
+  working alone, and the plugin's own description matches what the README promises.
+
+## [0.6.0] - 2026-09-17
+
+- **Moving a setup to the team meant one command per piece.** A skill went out with
+  `/handbook:share-skill`, a server with `/handbook:mcp`, one at a time, each opening its
+  own merge request, and nothing anywhere showed you what you had to send in the first
+  place. `/handbook:migrate` lists what is on this machine, skills and MCP servers
+  together, and you pick. What you choose travels as a single merge request. Nothing is
+  selected for you and nothing goes without you saying so, which matters more here than
+  usual: what leaves this machine is your own configuration.
+
 ## [0.5.9] - 2026-09-17
 
 - **A sentence meant to reassure was pushing away the people it described.** The MCP

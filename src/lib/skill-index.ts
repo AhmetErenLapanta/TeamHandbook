@@ -20,15 +20,47 @@ export function defaultSkillDirs(home: string = handbookHome(), cwd: string = pr
   return [candidatesDir(home), join(cwd, ".claude", "skills"), join(homedir(), ".claude", "skills")];
 }
 
+// A YAML block scalar header: `description: >-` and the indented lines that follow it are
+// the value. Descriptions are long enough that hand-written skills reach for this
+// routinely - 11 of the 23 installed on the machine this was measured on - and reading
+// only the header gives every one of them the description ">-".
+const BLOCK_SCALAR = /^[|>][-+]?\d*$/;
+
+function foldBlockScalar(lines: string[], start: number, folded: boolean): { value: string; next: number } {
+  const body: string[] = [];
+  let i = start;
+  for (; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === "") {
+      body.push("");
+      continue;
+    }
+    if (!/^\s/.test(line)) break;
+    body.push(line.trim());
+  }
+  while (body.length && body.at(-1) === "") body.pop();
+  // ">" folds its lines into one paragraph and keeps a blank line as a break; "|" keeps
+  // every newline. Both are trimmed of the trailing blank lines "-" strips.
+  const value = folded
+    ? body.reduce((text, line) => (line === "" ? `${text}\n` : text === "" || text.endsWith("\n") ? text + line : `${text} ${line}`), "")
+    : body.join("\n");
+  return { value, next: i - 1 };
+}
+
 export function parseSkillFrontmatter(md: string): SkillSummary | null {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
   const fields = new Map<string, string>();
-  for (const line of match[1]!.split("\n")) {
-    const kv = line.match(/^([A-Za-z-]+):\s*(.*)$/);
+  const lines = match[1]!.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i]!.match(/^([A-Za-z-]+):\s*(.*)$/);
     if (!kv) continue;
     let value = kv[2]!.trim();
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+    if (BLOCK_SCALAR.test(value)) {
+      const block = foldBlockScalar(lines, i + 1, value.startsWith(">"));
+      value = block.value;
+      i = block.next;
+    } else if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
       value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
     }
     fields.set(kv[1]!, value);

@@ -485,15 +485,38 @@ function candidatesDir(home = handbookHome()) {
 function defaultSkillDirs(home = handbookHome(), cwd = process.cwd()) {
   return [candidatesDir(home), join3(cwd, ".claude", "skills"), join3(homedir2(), ".claude", "skills")];
 }
+var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
+function foldBlockScalar(lines, start, folded) {
+  const body = [];
+  let i = start;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      body.push("");
+      continue;
+    }
+    if (!/^\s/.test(line)) break;
+    body.push(line.trim());
+  }
+  while (body.length && body.at(-1) === "") body.pop();
+  const value = folded ? body.reduce((text, line) => line === "" ? `${text}
+` : text === "" || text.endsWith("\n") ? text + line : `${text} ${line}`, "") : body.join("\n");
+  return { value, next: i - 1 };
+}
 function parseSkillFrontmatter(md) {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
   const fields = /* @__PURE__ */ new Map();
-  for (const line of match[1].split("\n")) {
-    const kv = line.match(/^([A-Za-z-]+):\s*(.*)$/);
+  const lines = match[1].split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([A-Za-z-]+):\s*(.*)$/);
     if (!kv) continue;
     let value = kv[2].trim();
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+    if (BLOCK_SCALAR.test(value)) {
+      const block = foldBlockScalar(lines, i + 1, value.startsWith(">"));
+      value = block.value;
+      i = block.next;
+    } else if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
       value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
     }
     fields.set(kv[1], value);
