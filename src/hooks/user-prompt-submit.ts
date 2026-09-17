@@ -1,5 +1,5 @@
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
-import { captureCorrection } from "../lib/capture.js";
+import { captureCorrection, captureLearnInvocation } from "../lib/capture.js";
 
 // The user's own teachings ("we never use X here", "always run Y first") are the
 // highest-value lessons a session produces. Flagging them the moment they are typed
@@ -9,6 +9,7 @@ async function main(): Promise<void> {
   const input = parseHookInput(await readStdin());
   if (!input) return;
   captureCorrection(input);
+  captureLearnInvocation(input);
 }
 
 main().then(

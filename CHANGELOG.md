@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.5] - 2026-09-16
+
+- **Asking Claude in plain language for a capture got the same free pass as typing the
+  command.** `/handbook:learn` skips the quality gate on purpose: you asked for this
+  skill, so the score travels as advice rather than a veto. But nothing stopped Claude
+  from reaching for the command itself off an ordinary sentence, and in that moment the
+  reason for the exemption is simply not true. The exemption now belongs to the person:
+  when you type the command, everything works as it did and the candidate is queued
+  whatever the gate thinks; when Claude reaches for it on your behalf, the gate keeps its
+  veto. Answering the question the command itself asks you counts as you, which took some
+  care to get right: the flag that records your request survives the turns in between
+  without ever leaking into a later, unrelated capture.
+
+## [0.5.4] - 2026-09-16
+
+- **The repository can now measure whether a plain sentence reaches the right command.**
+  Nothing an installed copy does changes with this release. What changes is that the
+  question "does asking in ordinary language actually work" stopped being a matter of
+  opinion: there is an eval suite under `evals/`, written in the phrasings a developer
+  would really use, English and Turkish both, and running it prints a hit rate. The first
+  run scored 0.5556, and of the misses, most were not the wrong command being chosen but
+  no command being chosen at all. That number is the baseline the next two changes to the
+  command descriptions have to beat, and without it neither of them could honestly claim
+  to have improved anything.
+
 ## [0.5.3] - 2026-09-16
 
 - **A suggestion that said nothing once the names came out no longer gets through.**

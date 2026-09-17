@@ -107,12 +107,12 @@ export function buildScorePrompt(
     `- kind: ${signal.task ? "completed task procedure" : "error→fix moment"}`,
     `- times this fingerprint was seen in the local ledger: ${occurrences}`,
     `- occurrences within the session: ${signal.count}`,
-    ...(signal.trigger === "manual"
+    ...(signal.trigger === "manual" || signal.trigger === "manual-model"
       ? [
-          "- trigger: the user EXPLICITLY asked to capture this. A manual capture has no",
-          "  ledger history by definition — judge recurrence by how plausibly the team will",
-          "  face similar situations again, not by the count above. Still reject trivia the",
-          "  team could trivially rediscover.",
+          "- trigger: this is a manual capture (via /handbook:learn), not the automatic",
+          "  end-of-session harvest, so it has no ledger history by definition - judge",
+          "  recurrence by how plausibly the team will face similar situations again, not",
+          "  by the count above. Still reject trivia the team could trivially rediscover.",
         ]
       : []),
     caseBlock,
