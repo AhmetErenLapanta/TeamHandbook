@@ -542,6 +542,7 @@ export interface InitResult {
   prError?: string;
   // files the repository already had, left untouched
   skipped?: string[];
+  withCi?: boolean;
 }
 
 export function initTeamRepo(
@@ -650,7 +651,7 @@ export function initTeamRepo(
       url,
       scaffoldBranch,
       "chore: set up the team handbook",
-      "Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest, the version-bump CI, and a `skills/` directory.\n\nOpened by TeamHandbook.",
+      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.\n\nOpened by TeamHandbook.`,
       repoDir,
       forge,
     );
@@ -676,6 +677,7 @@ export function initTeamRepo(
     defaultBranch: branch,
     merged: direct,
     skipped,
+    withCi,
     ...(prUrl ? { prUrl } : {}),
     ...(prError ? { prError } : {}),
     ...(!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
@@ -693,9 +695,11 @@ export function formatInitSuccess(result: InitResult): string {
     `  repository:  ${result.url}`,
     `  marketplace: ${result.name}`,
     ...(result.merged
-      ? [`  pushed:      marketplace skeleton + version-bump CI, straight to ${result.branch} (the repo was empty)`]
+      ? [
+          `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""}, straight to ${result.branch} (the repo was empty)`,
+        ]
       : [
-          `  pushed:      marketplace skeleton + version-bump CI to branch ${result.branch}`,
+          `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""} to branch ${result.branch}`,
           result.prUrl
             ? `  request:     ${result.prUrl}`
             : `  request:     open it here — ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
