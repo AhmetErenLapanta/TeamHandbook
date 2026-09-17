@@ -554,6 +554,64 @@ describe("initTeamRepo", () => {
     }
   });
 
+  function capturingForge(): { forge: (tool: string, args: string[], cwd: string) => string; body: () => string } {
+    let captured = "";
+    const forge = (tool: string, args: string[], cwd: string): string => {
+      const flag = tool === "gh" ? "--body" : "--description";
+      const idx = args.indexOf(flag);
+      captured = idx >= 0 ? args[idx + 1]! : "";
+      return "https://gitlab.acme.com/team/handbook/-/merge_requests/1";
+    };
+    return { forge, body: () => captured };
+  }
+
+  it("given --with-ci, when the request is opened, then the pushed summary and PR body both mention the CI file", () => {
+    const remote = seededRepo("master");
+    try {
+      const { forge, body } = capturingForge();
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, forge, undefined, "", true);
+
+      expect(result.withCi).toBe(true);
+      expect(body()).toContain("the version-bump CI");
+      expect(formatInitSuccess(result)).toContain("marketplace skeleton + version-bump CI to branch");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given no --with-ci (the default), when the request is opened, then neither the pushed summary nor the PR body claims a CI file that was never written", () => {
+    const remote = seededRepo("master");
+    try {
+      const { forge, body } = capturingForge();
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, forge);
+
+      expect(result.withCi).toBeFalsy();
+      expect(body()).not.toContain("CI");
+      const files = execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "handbook/scaffold"], {
+        encoding: "utf8",
+      });
+      expect(files).not.toContain(".gitlab-ci.yml");
+      const summary = formatInitSuccess(result);
+      expect(summary).toContain("marketplace skeleton to branch");
+      expect(summary).not.toContain("CI");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given --with-ci on an empty repo (direct push), then the merged summary mentions the CI file", () => {
+    const remote = mkdtempSync(join(tmpdir(), "handbook-team-"));
+    execFileSync("git", ["init", "--bare", "-b", "master", remote]);
+    try {
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, noForge, undefined, "", true);
+
+      expect(result).toMatchObject({ ok: true, merged: true, withCi: true });
+      expect(formatInitSuccess(result)).toContain("marketplace skeleton + version-bump CI, straight to");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
   it("refuses empty URLs, underivable names, and re-initialization", () => {
     expect(initTeamRepo("  ", undefined, home)).toMatchObject({ ok: false });
     expect(initTeamRepo("nonsense", undefined, home, () => {})).toMatchObject({
