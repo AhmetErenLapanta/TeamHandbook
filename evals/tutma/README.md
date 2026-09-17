@@ -10,17 +10,23 @@ Product owns these sentences and keeps the sources sealed under `.fabrika/muhur/
 | | routing sentences | must route nowhere | tag |
 |---|---|---|---|
 | easy | 15 (8 TR, 7 EN), all ten commands | 4 | `nl-tutma`, `fp-tutma` |
-| hard | 10 (5 TR, 5 EN), eight commands | 2 | `nl-tutma` + `zor`, `fp-tutma` + `zor` |
+| hard | 10 (5 TR, 5 EN), eight commands | 2 | `nl-tutma` + `zor`, `fp-tutma` + `fp-zor` |
 | contested | | 1 | `itirazli`, outside the headline |
+
+`zor` selects the ten routing cases and nothing else, so `run-suite.sh zor` reports the
+score that has room in it. The two hard probes carry `fp-zor` instead, because a package
+that mixes "must route here" with "must route nowhere" averages two different questions.
 
 The hard set skips `demo` and `doctor` on purpose: the SessionStart notice prints both
 names into every run, so a held-out case targeting either measures the notice.
 
-`fp-remember-commit-style-tr` is tagged into no package. Product reads it as no command,
+`fp-remember-commit-style-tr` is in no scored package. Product reads it as no command,
 because nothing in the session was finished to harvest, while
 `evals/gelistirme/capture-this-fix/` treats memory as learn's loss rather than its
-competitor. Until that is settled the case has a number and the number is not readable, so
-it is run on its own with `run-suite.sh itirazli` and reported apart from the headline.
+competitor. It is run on its own with `run-suite.sh itirazli` and reported apart from the
+headline, because the run is the same either way and only the reading changes: three runs
+score 1.00 under Product's reading and the identical behaviour is 0.00 under the other one.
+Folding that into the headline would make a number move when a definition changed.
 
 One sentence was retired rather than scored. `t-setting-up-squad-en` repeated two entries
 of `init`'s trigger list clause for clause, so it would have stayed green through a routing

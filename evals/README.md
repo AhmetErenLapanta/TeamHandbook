@@ -78,6 +78,31 @@ many of them there are.
 zero variance; cases that sit mid-band add real variance, so the band may widen rather than
 narrow.
 
+**Measured, three runs of the twenty-five-case package, nothing changed between them:**
+0.8000, 0.7733, 0.8000. Mean 0.7911, observed range 0.0267, empirical two standard
+deviations 0.0308, model-based 0.0523. Room below the ceiling 0.2089, against the widest
+band available, the 0.0761 carried from the previous package:
+
+    room 0.2089  >  band 0.0761
+
+The test passes with a factor of 2.7 against the most conservative band, and still passes
+at 0.1289 if you assume the two cases the sealed source marks as fragile can never pass.
+Three runs is thin for a band, which is why the criterion is tested against the wider
+carried figure rather than the narrower one these runs produced.
+
+The split does what it was for, and the halves say different things:
+
+| | mean | room | band (carried) | can it show improvement |
+|---|---:|---:|---:|---|
+| all 25 | 0.7911 | 0.2089 | 0.0761 | yes |
+| easy 15 | 0.9259 | 0.0741 | 0.0761 | **no**, still |
+| hard 10 | 0.5889 | 0.4111 | 0.0761 | yes |
+
+The easy half on its own still cannot show an improvement, by the same arithmetic that
+condemned the sixteen-case package. That is the argument for keeping it and for reporting
+it separately rather than for throwing it away: it is the regression instrument, and the
+room to improve lives entirely in the hard half.
+
 ## Reading a number from here
 
 - **It is not comparable to the number this package reported before.** Different

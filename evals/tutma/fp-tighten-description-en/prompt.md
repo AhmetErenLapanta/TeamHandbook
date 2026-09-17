@@ -5,7 +5,7 @@ description: >-
     here.
 expected_outcome: >-
     No handbook command. The request is to edit the frontmatter of a file on disk.
-tags: [fp-tutma, zor]
+tags: [fp-tutma, fp-zor]
 max_turns: 8
 timeout_seconds: 300
 allowed_tools: [Read, Glob, Grep, Skill]
