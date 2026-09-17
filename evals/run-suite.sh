@@ -8,7 +8,13 @@
 # so this script recomputes the score over valid runs only and reports the rest.
 #
 # Usage: evals/run-suite.sh <tag> [extra claude args...]
-#   tag: nl-tutma (headline) | nl-gelistirme | fp-tutma | fp-gelistirme | kontrol
+#   tag: nl-tutma (headline) | zor (the hard subset of it) | nl-gelistirme | fp-tutma |
+#        fp-gelistirme | kontrol
+#
+# A hard case carries both nl-tutma and zor, so the headline covers it and `zor` reports it
+# on its own. That split is not cosmetic: the easy cases are the regression instrument and
+# the hard ones are the only room the score has left to improve in. Reporting one number
+# over both hides which of the two moved.
 set -uo pipefail
 
 TAG="${1:?usage: run-suite.sh <tag> [extra args...]}"; shift
