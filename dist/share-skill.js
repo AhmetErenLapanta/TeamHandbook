@@ -20,15 +20,38 @@ import { join as join2 } from "node:path";
 function candidatesDir(home = handbookHome()) {
   return join2(home, "candidates");
 }
+var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
+function foldBlockScalar(lines, start, folded) {
+  const body = [];
+  let i = start;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      body.push("");
+      continue;
+    }
+    if (!/^\s/.test(line)) break;
+    body.push(line.trim());
+  }
+  while (body.length && body.at(-1) === "") body.pop();
+  const value = folded ? body.reduce((text, line) => line === "" ? `${text}
+` : text === "" || text.endsWith("\n") ? text + line : `${text} ${line}`, "") : body.join("\n");
+  return { value, next: i - 1 };
+}
 function parseSkillFrontmatter(md) {
   const match = md.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
   const fields = /* @__PURE__ */ new Map();
-  for (const line of match[1].split("\n")) {
-    const kv = line.match(/^([A-Za-z-]+):\s*(.*)$/);
+  const lines = match[1].split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([A-Za-z-]+):\s*(.*)$/);
     if (!kv) continue;
     let value = kv[2].trim();
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+    if (BLOCK_SCALAR.test(value)) {
+      const block = foldBlockScalar(lines, i + 1, value.startsWith(">"));
+      value = block.value;
+      i = block.next;
+    } else if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
       value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
     }
     fields.set(kv[1], value);
@@ -167,22 +190,40 @@ function readCandidateMeta(dir) {
   }
   return synthesizeMeta(dir);
 }
-function intakeSkill(sourceDir, home = handbookHome()) {
-  const slug = basename(sourceDir);
-  if (!isSafeSlug(slug)) {
-    return { ok: false, error: `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)` };
-  }
+function auditSkillDir(sourceDir) {
+  const name = basename(sourceDir);
+  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let skillMd;
   try {
     skillMd = readFileSync(join4(sourceDir, "SKILL.md"), "utf8");
   } catch {
-    return { ok: false, error: `no readable SKILL.md in ${sourceDir}` };
+    return { shareable: false, reason: "no-skill-md" };
   }
-  if (!parseSkillFrontmatter(skillMd)) {
-    return { ok: false, error: `the SKILL.md in ${sourceDir} has no name and description frontmatter` };
+  const summary = parseSkillFrontmatter(skillMd);
+  if (!summary) return { shareable: false, reason: "no-frontmatter" };
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
   }
+  if (files.length === 0) return { shareable: false, reason: "no-files" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync(join4(sourceDir, file), "utf8");
+    } catch {
+      return { shareable: false, reason: "unreadable", detail: file };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    }
+  }
+  return { shareable: true, skillMd, files, summary };
+}
+function intakeSkill(sourceDir, home = handbookHome()) {
+  const slug = basename(sourceDir);
   const dir = join4(candidatesDir(home), slug);
-  if (existsSync(dir)) {
+  if (isSafeSlug(slug) && existsSync(dir)) {
     const existing = readCandidateMeta(dir);
     const decided = existing && existing.status !== "pending" ? existing.status : null;
     return {
@@ -190,34 +231,34 @@ function intakeSkill(sourceDir, home = handbookHome()) {
       error: decided ? `"${slug}" was already ${decided} here; nothing was changed` : `"${slug}" is already waiting in the review queue`
     };
   }
-  const { files, skipped } = listSkillFiles(sourceDir);
-  if (skipped.length > 0) {
+  const audit = auditSkillDir(sourceDir);
+  if (!audit.shareable) {
     return {
       ok: false,
-      error: `${slug} contains "${skipped[0]}", which is not a regular file; nothing was queued`
+      ...audit.secret ? { secret: audit.secret } : {},
+      error: intakeRefusal(sourceDir, slug, audit)
     };
   }
-  if (files.length === 0) {
-    return { ok: false, error: `${slug} has no files to queue` };
+  copySkillPayload(sourceDir, dir, audit.skillMd, audit.files);
+  return { ok: true, slug, dir, fileCount: audit.files.length };
+}
+function intakeRefusal(sourceDir, slug, audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
+    case "no-skill-md":
+      return `no readable SKILL.md in ${sourceDir}`;
+    case "no-frontmatter":
+      return `the SKILL.md in ${sourceDir} has no name and description frontmatter`;
+    case "irregular-entry":
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
+    case "no-files":
+      return `${slug} has no files to queue`;
+    case "unreadable":
+      return `cannot read "${audit.detail}" in ${sourceDir}; nothing was queued`;
+    default:
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not queued. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
-  for (const file of files) {
-    let content;
-    try {
-      content = readFileSync(join4(sourceDir, file), "utf8");
-    } catch {
-      return { ok: false, error: `cannot read "${file}" in ${sourceDir}; nothing was queued` };
-    }
-    const pattern = detectSecret(content);
-    if (pattern) {
-      return {
-        ok: false,
-        secret: { pattern, file },
-        error: `"${file}" looks like it contains a secret (${pattern}), so ${slug} was not queued. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`
-      };
-    }
-  }
-  copySkillPayload(sourceDir, dir, skillMd, files);
-  return { ok: true, slug, dir, fileCount: files.length };
 }
 
 // src/cli/share-skill.ts
