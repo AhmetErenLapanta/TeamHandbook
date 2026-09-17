@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.6.2] - 2026-09-17
+
+- **Two commands described work they were not doing.** Joining a team said it subscribed
+  Claude Code to the handbook's plugin marketplace; what it does is print the two commands
+  that subscribe you, which you then run. Someone reading the first version would think
+  the wiring was finished and wonder later why merged skills never showed up. And setting
+  up a team handbook reported that it had pushed a version-bump workflow whether or not
+  one had been asked for, when that file only ships with `--with-ci`. Both now describe
+  what actually happened.
+
 ## [0.6.1] - 2026-09-17
 
 - **The README sold a personal notebook that fills itself in.** It opened on the handbook
