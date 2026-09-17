@@ -13,7 +13,7 @@ export { manualPrUrl, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
-import { auditServer, mergeServerIntoMcpJson, refusalMessage } from "./mcp.js";
+import { auditServer, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
 import { slugifySkillName } from "./distill.js";
 
@@ -379,6 +379,10 @@ export const TEAM_MCP_FILE = ".mcp.json";
 export interface McpPublishOutcome {
   ok: boolean;
   serverName?: string;
+  // every server this one request carries, which is one or many
+  serverNames?: string[];
+  // servers the selection named that did not travel, each with the reason it did not
+  refused?: { name: string; reason: string }[];
   branch?: string;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
@@ -392,8 +396,14 @@ export interface McpPublishOutcome {
   prError?: string;
 }
 
-export function buildMcpPrTitle(name: string): string {
-  return `feat(mcp): add ${name}`;
+/** A server that cleared the audit, kept together with the audit that cleared it. */
+export interface McpShareSubject {
+  entry: McpServerEntry;
+  audit: McpAudit;
+}
+
+export function buildMcpPrTitle(names: string[]): string {
+  return `feat(mcp): add ${names.join(", ")}`;
 }
 
 /**
@@ -406,27 +416,61 @@ export function buildMcpPrTitle(name: string): string {
  * full. The reviewer's merge is the team's consent, and consent needs the facts.
  */
 export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
-  const config = entry.config;
-  const lines = [
-    `Adds the \`${entry.name}\` MCP server to this plugin. Once this is merged, every`,
-    "teammate whose copy refreshes has it connected: nobody installs or configures anything.",
-    "",
-    `- server: \`${entry.name}\``,
-    `- transport: \`${audit.transport}\``,
-  ];
-  if (typeof config.url === "string") lines.push(`- endpoint: \`${config.url}\``);
-  if (audit.startsProcess) {
-    const args = Array.isArray(config.args) ? config.args.map(String) : [];
+  return buildMcpServersPrBody([{ entry, audit }]);
+}
+
+export function buildMcpServersPrBody(subjects: McpShareSubject[]): string {
+  const single = subjects.length === 1;
+  const lines = single
+    ? [
+        `Adds the \`${subjects[0]!.entry.name}\` MCP server to this plugin. Once this is merged, every`,
+        "teammate whose copy refreshes has it connected: nobody installs or configures anything.",
+      ]
+    : [
+        `Adds ${subjects.length} MCP servers to this plugin. Once this is merged, every teammate whose`,
+        "copy refreshes has them connected: nobody installs or configures anything.",
+      ];
+  for (const { entry, audit } of subjects) {
+    const config = entry.config;
+    lines.push("", `- server: \`${entry.name}\``, `- transport: \`${audit.transport}\``);
+    if (typeof config.url === "string") lines.push(`- endpoint: \`${config.url}\``);
+    if (audit.startsProcess) {
+      const args = Array.isArray(config.args) ? config.args.map(String) : [];
+      lines.push(`- command: \`${String(config.command)}${args.length ? ` ${args.join(" ")}` : ""}\``);
+    }
+  }
+  // The warning is written once for the whole request rather than under each server: a
+  // reviewer who reads it three times reads it none. It names the servers it is about,
+  // because in a request of six the other three are only a connection.
+  const processes = subjects.filter((s) => s.audit.startsProcess).map((s) => s.entry.name);
+  if (processes.length === 1) {
     lines.push(
-      `- command: \`${String(config.command)}${args.length ? ` ${args.join(" ")}` : ""}\``,
       "",
-      "## This one starts a process",
+      single ? "## This one starts a process" : `## \`${processes[0]}\` starts a process`,
       "",
       "Enabling the plugin runs that command on every teammate's machine, with their",
       "privileges, for as long as the session lasts. Review it the way you would review a",
       "dependency you are adding, not the way you would review a document.",
     );
+  } else if (processes.length > 1) {
+    lines.push(
+      "",
+      "## Some of these start a process",
+      "",
+      `Enabling the plugin runs the commands above for ${processes.map((n) => `\`${n}\``).join(", ")} on`,
+      "every teammate's machine, with their privileges, for as long as the session lasts.",
+      "Review them the way you would review a dependency you are adding, not the way you",
+      "would review a document.",
+    );
   }
+  const requiresEnv: string[] = [];
+  for (const { audit } of subjects) {
+    for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
+  }
+  return finishMcpPrBody(lines, requiresEnv);
+}
+
+function finishMcpPrBody(lines: string[], requiresEnv: string[]): string {
   // State the check, never the conclusion. An earlier version of this section promised
   // outright that no credential travelled, which was a guarantee wider than anything
   // actually verified: a provider that embeds the token in the endpoint (Zapier, Composio,
@@ -441,10 +485,10 @@ export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
     "no credential travels in those fields. The endpoint was also scanned for an embedded",
     "token and none was found.",
   );
-  if (audit.requiresEnv.length) {
+  if (requiresEnv.length) {
     lines.push(
       "",
-      `Each teammate supplies these from their own environment: ${audit.requiresEnv.map((v) => `\`${v}\``).join(", ")}.` +
+      `Each teammate supplies these from their own environment: ${requiresEnv.map((v) => `\`${v}\``).join(", ")}.` +
         " Until they do, the server will not start for them.",
     );
   }
@@ -460,62 +504,115 @@ export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
   return lines.join("\n");
 }
 
-/**
- * Write the chosen server into the team repository as a merge request that also raises the
- * plugin version, so a merge reaches everyone the same way a skill does.
- *
- * Nothing here reads ~/.claude.json and nothing writes it: the caller hands over one entry
- * it already read, and the manager's own local server is left exactly as it was.
- */
+/** One server, the shape /handbook:mcp shares. */
 export function publishMcpServer(
   entry: McpServerEntry,
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
 ): McpPublishOutcome {
+  return publishMcpServers([entry], team, git, forge);
+}
+
+function collisionMessage(name: string): string {
+  return (
+    `the team repository already declares an MCP server named "${name}". ` +
+    "Rename yours, or edit the team's .mcp.json directly."
+  );
+}
+
+/**
+ * Write the chosen servers into the team repository as ONE merge request that also raises
+ * the plugin version, so a merge reaches everyone the same way a skill does.
+ *
+ * One request for the whole selection, not one per server, and the version is the reason.
+ * `bumpPluginVersion` reads the version from a fresh clone, so two requests opened before
+ * either is merged both claim the same number; git merges the identical line without a
+ * conflict and the second change lands with no version of its own, which means no
+ * teammate's copy refreshes for it. Selecting six servers would have
+ * hit that five times over. Collecting them into one commit makes the arithmetic right by
+ * construction: one clone, one bump, one request.
+ *
+ * Nothing here reads ~/.claude.json and nothing writes it: the caller hands over entries
+ * it already read, and the manager's own local servers are left exactly as they were.
+ */
+export function publishMcpServers(
+  entries: McpServerEntry[],
+  team: TeamConfig,
+  git: GitRunner = runGit,
+  forge: ForgeRunner = runForge,
+): McpPublishOutcome {
+  const single = entries.length === 1 ? { serverName: entries[0]!.name } : {};
   // FIRST, before assertSafeGitUrl and before the identity preflight, because those call
   // git. A refusal has to happen while the credential still exists nowhere but this
   // process: not in a clone, not in an index, not in a working tree that a later crash
-  // could leave behind. The order of these lines is the boundary.
-  const audit = auditServer(entry.config);
-  if (!audit.migratable) {
-    return { ok: false, serverName: entry.name, error: refusalMessage(entry.name, audit) };
+  // could leave behind. The order of these lines is the boundary, and EVERY entry is
+  // audited before the first git call, so a credential in the last one of six cannot
+  // reach a clone opened for the first five.
+  const subjects: McpShareSubject[] = [];
+  const refused: { name: string; reason: string }[] = [];
+  for (const entry of entries) {
+    const audit = auditServer(entry.config);
+    if (audit.migratable) subjects.push({ entry, audit });
+    else refused.push({ name: entry.name, reason: refusalMessage(entry.name, audit) });
   }
+  if (!subjects.length) {
+    return {
+      ok: false,
+      ...single,
+      refused,
+      error: refused[0]?.reason ?? "no MCP server was named to share",
+    };
+  }
+  // Every early return from here on carries `refused` with it. A server that was turned
+  // back for holding a credential has been judged, and losing that judgement to a later,
+  // unrelated failure would report the credential as an unset git identity.
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
-    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+    return { ok: false, refused, error: String(err instanceof Error ? err.message : err) };
   }
-  const base = slugifySkillName(entry.name);
-  if (!base) {
-    return { ok: false, error: `cannot derive a branch name from the server name "${entry.name}"` };
+  for (const { entry } of subjects) {
+    if (!slugifySkillName(entry.name)) {
+      return { ok: false, refused, error: `cannot derive a branch name from the server name "${entry.name}"` };
+    }
   }
   const identity = resolveGitIdentity(git);
-  if ("error" in identity) return { ok: false, error: identity.error };
+  if ("error" in identity) return { ok: false, refused, error: identity.error };
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
   const repoDir = join(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
-    if (cloneError) return { ok: false, error: cloneError };
+    if (cloneError) return { ok: false, refused, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const slug = uniqueSlug(`mcp-${base}`, (s) => remoteBranches.has(`${prefix}${s}`));
+    const target = join(repoDir, TEAM_MCP_FILE);
+    let merged: string;
+    let collided: string[];
+    try {
+      ({ merged, collided } = mergeServersIntoMcpJson(
+        existsSync(target) ? readFileSync(target, "utf8") : null,
+        subjects.map((s) => s.entry),
+      ));
+    } catch (err) {
+      // A team file we cannot read is not one server's problem, so no part of the
+      // selection is salvaged from it: nothing is committed and nothing is pushed.
+      return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
+    }
+    for (const name of collided) refused.push({ name, reason: collisionMessage(name) });
+    const going = subjects.filter((s) => !collided.includes(s.entry.name));
+    if (!going.length) {
+      return { ok: false, ...single, refused, error: collisionMessage(collided[0]!) };
+    }
+    const names = going.map((s) => s.entry.name);
+    const first = slugifySkillName(names[0]!);
+    const base = names.length === 1 ? `mcp-${first}` : `mcp-${first}-and-${names.length - 1}-more`;
+    const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
-    const target = join(repoDir, TEAM_MCP_FILE);
-    let merged: string;
-    try {
-      merged = mergeServerIntoMcpJson(
-        existsSync(target) ? readFileSync(target, "utf8") : null,
-        entry.name,
-        entry.config,
-      );
-    } catch (err) {
-      return { ok: false, serverName: entry.name, error: String(err instanceof Error ? err.message : err) };
-    }
-    const title = buildMcpPrTitle(entry.name);
+    const title = buildMcpPrTitle(names);
     try {
       git(["checkout", "-b", branch], repoDir);
       writeFileSync(target, merged);
@@ -528,7 +625,8 @@ export function publishMcpServer(
     } catch (err) {
       return {
         ok: false,
-        serverName: entry.name,
+        ...single,
+        refused,
         error: pushFailureReason(
           team.repoUrl,
           branch,
@@ -538,13 +636,19 @@ export function publishMcpServer(
         ),
       };
     }
-    const pr = openPr(team.repoUrl, branch, title, buildMcpPrBody(entry, audit), repoDir, forge);
+    const requiresEnv: string[] = [];
+    for (const { audit } of going) {
+      for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
+    }
+    const pr = openPr(team.repoUrl, branch, title, buildMcpServersPrBody(going), repoDir, forge);
     return {
       ok: true,
-      serverName: entry.name,
+      ...single,
+      serverNames: names,
+      ...(refused.length ? { refused } : {}),
       branch,
-      requiresEnv: audit.requiresEnv,
-      startsProcess: audit.startsProcess,
+      requiresEnv,
+      startsProcess: going.some((s) => s.audit.startsProcess),
       ...(version ? { version } : {}),
       ...(pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined }),
       ...(pr.url ? {} : pr.error ? { prError: pr.error } : {}),
@@ -568,7 +672,14 @@ export function formatMcpShareResult(outcome: McpPublishOutcome, marketplaceName
     `Shared "${outcome.serverName}" with the team.`,
     "",
     `- branch: ${outcome.branch}`,
-    outcome.prUrl ? `- merge request: ${outcome.prUrl}` : `- open the merge request: ${outcome.manualUrl}`,
+    // manualPrUrl returns null for a remote whose host it does not know how to build a
+    // "new merge request" link for, and printing "undefined" at someone is worse than
+    // telling them the branch is there and the link is theirs to find.
+    outcome.prUrl
+      ? `- merge request: ${outcome.prUrl}`
+      : outcome.manualUrl
+        ? `- open the merge request: ${outcome.manualUrl}`
+        : "- the branch is pushed; open the merge request in your forge",
   ];
   if (outcome.prError) lines.push(`  (the forge CLI could not open it: ${outcome.prError})`);
   if (outcome.version) lines.push(`- plugin version raised to ${outcome.version}, which is what makes teammates fetch it`);
