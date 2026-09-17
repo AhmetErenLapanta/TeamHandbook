@@ -58,6 +58,21 @@ export function enqueueHarvestJob(job: HarvestJob, home: string = handbookHome()
 // older than this back into the queue.
 const STALE_CLAIM_MS = 10 * 60 * 1000;
 
+// ONE stamp per job, never a chain. Every reclaim used to prepend another
+// `reclaimed-<ms>-`, so a job handed back round after round grew its name by 24 bytes
+// each time: measured at 139 bytes after four reclaims, and renameSync would have
+// started failing with ENAMETOOLONG at the 255-byte limit about five rounds later. A
+// loop that ends by breaking is not a loop that ends. Replacing the stamp keeps the
+// name a constant length while still telling the job coming back apart from a fresh
+// enqueue of the same session in the same millisecond.
+const RECLAIM_STAMP = /^reclaimed-\d+-/;
+
+// writeFileAtomic's temp sibling below. It survives its own rename only if a runner
+// was killed in the microseconds between the two, and it is not a job - but it is
+// named `<job>.json.tmp-...`, and notify's pending count reads every name containing
+// ".json", so a leaked one would report a session as harvesting forever.
+const CLAIM_TEMP = /\.tmp-\d+-\d+-[0-9a-z]+$/;
+
 function reclaimStaleClaims(dir: string): void {
   let entries: string[];
   try {
@@ -66,17 +81,58 @@ function reclaimStaleClaims(dir: string): void {
     return;
   }
   for (const entry of entries) {
+    const file = join(dir, entry);
+    if (CLAIM_TEMP.test(entry)) {
+      try {
+        if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) rmSync(file, { force: true });
+      } catch {
+        // raced with the runner that is writing it; it will still be here next drain
+      }
+      continue;
+    }
     const m = entry.match(/^(.+\.json)\.claimed-\d+$/);
     if (!m) continue;
     try {
-      const file = join(dir, entry);
       if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) {
-        renameSync(file, join(dir, `reclaimed-${Date.now()}-${m[1]}`));
+        renameSync(file, join(dir, `reclaimed-${Date.now()}-${m[1]!.replace(RECLAIM_STAMP, "")}`));
       }
     } catch {
       // another process may have raced us; nothing to do
     }
   }
+}
+
+/**
+ * Whether the queue owes a runner any work. The predicate mirrors what the next drain
+ * will actually DO, which is more than "an unclaimed file": drainHarvestJobs reclaims
+ * stale claims first, so both shapes count.
+ *
+ * A FRESH claim is not work owed. Its runner is alive and sitting in its model call,
+ * and waking a second runner beside it is the duplicate harvest K-6 hardened against.
+ *
+ * A STALE claim is the only kind of work nothing else will ever notice. Its runner was
+ * killed mid-harvest, and reclaimStaleClaims - which runs INSIDE the drain - is what
+ * hands the job back. Leaving it out here would have rebuilt the very defect this
+ * function exists to close, reached from a different file state: no unclaimed `.json`
+ * means no runner spawned, no drain, and so nothing to reclaim it, forever.
+ */
+export function hasPendingHarvestJobs(home: string = handbookHome()): boolean {
+  const dir = pendingDir(home);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false; // no pending dir yet: nothing to run
+  }
+  return entries.some((entry) => {
+    if (entry.endsWith(".json")) return true;
+    if (!/^.+\.json\.claimed-\d+$/.test(entry)) return false;
+    try {
+      return Date.now() - statSync(join(dir, entry)).mtimeMs > STALE_CLAIM_MS;
+    } catch {
+      return false; // swept while we looked; the next start will see whatever is left
+    }
+  });
 }
 
 export interface ClaimedJob {
@@ -87,6 +143,31 @@ export interface ClaimedJob {
 
 export function releaseHarvestJob(claimedFile: string): void {
   rmSync(claimedFile, { force: true });
+}
+
+// How many times a runner may take one job out of the queue before it is given up
+// on, instead of losing the session's lessons to a CLI that is logged out or a
+// machine that keeps dying. It is a CLAIM budget, not an error budget: a run that
+// ends in a logged failure and a run whose runner is killed without logging anything
+// cost exactly one each.
+const MAX_HARVEST_ATTEMPTS = 3;
+
+export function abandonedFile(home: string = handbookHome()): string {
+  return join(home, "abandoned.jsonl");
+}
+
+// A harvest job that used up MAX_HARVEST_ATTEMPTS is given up on, but never
+// silently: keep the job (its evidence is already secret-sanitized; the transcript
+// path is just a path) in abandoned.jsonl so the work is recoverable, and count it
+// so status/doctor can report the loss.
+function abandonJob(job: HarvestJob, home: string): void {
+  try {
+    mkdirSync(home, { recursive: true });
+    appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
+  } catch {
+    // best-effort; the counter below is the durable signal that this happened
+  }
+  bumpCounter("gateAbandoned", home);
 }
 
 export function drainHarvestJobs(home: string = handbookHome()): ClaimedJob[] {
@@ -120,13 +201,39 @@ export function drainHarvestJobs(home: string = handbookHome()): ClaimedJob[] {
       continue;
     }
     const job = parsed as HarvestJob;
-    if (job && typeof job === "object" && typeof job.sessionId === "string" && job.evidence) {
-      // NOT deleted here: a runner killed mid-harvest must leave the claim behind so
-      // reclaimStaleClaims can put the whole session back in the queue
-      jobs.push({ job, claimedFile: claimed });
-    } else {
+    if (!job || typeof job !== "object" || typeof job.sessionId !== "string" || !job.evidence) {
       rmSync(claimed, { force: true });
+      continue;
     }
+    // THE ATTEMPT IS SPENT HERE, at the claim, and not where a failure is reported.
+    // A runner killed mid-harvest (machine asleep, OOM, kill -9) never reaches the
+    // error branch in runHarvestJob, so counting there capped only the failures that
+    // lived long enough to log themselves. Measured on that path before this line
+    // existed: four session starts, five model calls, attempts stuck at 0, the job
+    // never leaving the queue - one call per session start for as long as the user
+    // keeps opening sessions. Claiming is the ONE moment both endings pass through,
+    // so `attempts` counts times a runner took this job out of the queue, and the cap
+    // holds however that runner ended.
+    const attempts = (job.attempts ?? 0) + 1;
+    if (attempts > MAX_HARVEST_ATTEMPTS) {
+      abandonJob(job, home); // out of the queue, into abandoned.jsonl: never silent
+      rmSync(claimed, { force: true });
+      continue;
+    }
+    const claimedJob: HarvestJob = { ...job, attempts };
+    try {
+      // Durable BEFORE the model call, or a kill would not cost what it just spent.
+      // Atomic because a torn rewrite would be read back as a malformed job and
+      // deleted above, which is the one outcome worse than the loop. A write that
+      // fails spends no model call at all: the claim keeps the fresh mtime stamped
+      // above, so nothing reclaims this job for another claim horizon.
+      writeFileAtomic(claimed, JSON.stringify(claimedJob));
+    } catch {
+      continue;
+    }
+    // NOT deleted here: a runner killed mid-harvest must leave the claim behind so
+    // reclaimStaleClaims can put the whole session back in the queue
+    jobs.push({ job: claimedJob, claimedFile: claimed });
   }
   return jobs;
 }
@@ -193,24 +300,6 @@ function appendPipelineLog(summary: PipelineSummary, home: string, ts: string): 
   } catch {
     // rotation is best-effort
   }
-}
-
-export function abandonedFile(home: string = handbookHome()): string {
-  return join(home, "abandoned.jsonl");
-}
-
-// A harvest job that failed MAX_HARVEST_ATTEMPTS times is given up on, but never
-// silently: keep the job (its evidence is already secret-sanitized; the transcript
-// path is just a path) in abandoned.jsonl so the work is recoverable, and count it
-// so status/doctor can report the loss.
-function abandonJob(job: HarvestJob, home: string): void {
-  try {
-    mkdirSync(home, { recursive: true });
-    appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
-  } catch {
-    // best-effort; the counter below is the durable signal that this happened
-  }
-  bumpCounter("gateAbandoned", home);
 }
 
 // ── harvest once per transcript state ───────────────────────────────────────
@@ -351,10 +440,6 @@ function cleanupStaleHarvestMarkers(home: string, now: number = Date.now()): voi
   }
 }
 
-// Re-try a harvest whose claude call failed (logged-out CLI, timeout) this many
-// times across runs before giving up, instead of losing the session's lessons.
-const MAX_HARVEST_ATTEMPTS = 3;
-
 /** Run one harvest job: harvest → write candidates → log; retry or abandon on error. */
 export async function runHarvestJob(
   job: HarvestJob,
@@ -414,7 +499,10 @@ export async function runHarvestJob(
     // merely happened.
     if (marker) rmSync(marker, { force: true });
     bumpCounter("gateErrors", home);
-    const attempts = (job.attempts ?? 0) + 1;
+    // This attempt was already spent, and written into the job, when the runner
+    // claimed it. Counting it again here would charge a reported failure twice what a
+    // silent kill costs and burn the budget in half the runs.
+    const attempts = job.attempts ?? 0;
     if (attempts < MAX_HARVEST_ATTEMPTS) {
       enqueueHarvestJob({ ...job, attempts }, home);
     } else {
@@ -431,11 +519,15 @@ export async function runHarvestJob(
   return summary;
 }
 
-// ── manual path (/handbook:learn) — unchanged behavior ─────────────────────
+// ── manual path (/handbook:learn) ───────────────────────────────────────────
 
 export type ManualOutcome =
   | { stage: "sieved"; reason: DropReason; detail?: string }
   | { stage: "error"; message: string }
+  // the model invoked /handbook:learn on its own (signal.trigger === "manual-model")
+  // and the gate rejected it: enforced, not carried as advice, because there was no
+  // explicit ask to honor
+  | { stage: "vetoed"; gateTotal: number | null; threshold: number; rationale?: string }
   | {
       stage: "written";
       slug: string;
@@ -506,11 +598,23 @@ export async function runManualSignal(
     summary.errored = 1;
     return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });
   }
-  // The user explicitly asked for this skill, so it is ALWAYS distilled and
-  // queued; the gate's dissent travels with it as advice. The share decision —
-  // publish to the team or not — is the user's, at /handbook:review.
+  // A capture the user explicitly typed is ALWAYS distilled and queued; the gate's
+  // dissent travels with it as advice, and the share decision (publish to the team
+  // or not) is the user's, at /handbook:review. One the model started on its own
+  // (signal.trigger === "manual-model") gets no such pass: a rejected verdict is
+  // enforced here, the same as the automatic end-of-session harvest, because there
+  // was no explicit ask to honor.
   const total = verdict.result?.total ?? null;
   const belowThreshold = total !== null && total < scoreConfig.threshold;
+  if (verdict.outcome !== "promote" && signal.trigger !== "manual") {
+    summary.rejected = 1;
+    return finish({
+      stage: "vetoed",
+      gateTotal: total,
+      threshold: scoreConfig.threshold,
+      ...(verdict.result?.rationale ? { rationale: verdict.result.rationale } : {}),
+    });
+  }
   const duplicateOf = verdict.result?.duplicateOf;
   const outcome = await distillVerdict(verdict, occurrences, distillConfig, runner, remoteUrl);
   if (outcome.outcome !== "distilled" || !outcome.artifact) {

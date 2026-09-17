@@ -299,8 +299,10 @@ export async function distillVerdict(
   remoteUrl: (cwd: string) => string | null = gitRemoteUrl,
 ): Promise<DistillOutcome> {
   const signal = verdict.signal;
-  // Manual captures are distilled regardless of the gate's verdict — the user
-  // explicitly asked for the skill; the score is advice shown at review time.
+  // Only a capture the user explicitly typed (trigger === "manual") is distilled
+  // regardless of the gate's verdict; the score is advice shown at review time.
+  // pipeline.ts already returns "vetoed" before reaching here for every other
+  // rejected signal (manual-model or automatic); this is defense in depth.
   if (verdict.outcome !== "promote" && signal.trigger !== "manual") {
     return { signal, outcome: "error", error: "signal was not promoted by the gate" };
   }

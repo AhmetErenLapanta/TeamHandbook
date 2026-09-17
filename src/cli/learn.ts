@@ -1,5 +1,11 @@
 import { readStdin } from "../lib/hook-io.js";
-import { parseLearnPayload, signalFromLearnPayload } from "../lib/learn.js";
+import {
+  currentSessionId,
+  finalizeExplicitLearnInvocation,
+  parseLearnPayload,
+  peekExplicitLearnInvocation,
+  signalFromLearnPayload,
+} from "../lib/learn.js";
 import { runManualSignal } from "../lib/pipeline.js";
 
 function describeSieve(reason: string, detail?: string): string {
@@ -18,11 +24,25 @@ async function main(): Promise<number> {
     console.error(`error: ${error}`);
     return 2;
   }
-  const signal = signalFromLearnPayload(payload, new Date().toISOString());
+  const sessionId = currentSessionId();
+  const trigger = peekExplicitLearnInvocation(sessionId) ? "manual" : "manual-model";
+  const signal = signalFromLearnPayload(payload, new Date().toISOString(), trigger);
   const outcome = await runManualSignal(signal);
+  // Consume the pending ask only once the run actually produced an outcome. An
+  // "error" (claude unreachable, timed out) leaves the ask pending so the user's
+  // natural next move, retrying in plain language, is still judged "manual",
+  // not silently downgraded because the first attempt happened to fail.
+  if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));
+      return 0;
+    case "vetoed":
+      console.log(
+        `Not captured: the gate scored it ${outcome.gateTotal ?? "?"}/10, below the ${outcome.threshold}/10 threshold` +
+          (outcome.rationale ? ` (${outcome.rationale})` : "") +
+          `. This request came from the model rather than something you explicitly typed, so the gate's rejection stands and nothing was queued.`,
+      );
       return 0;
     case "error":
       console.error(

@@ -9,7 +9,7 @@ import {
   sessionHasSubstance,
 } from "../lib/session-state.js";
 import { flushResolvedPairs, ledgerFingerprintCounts, ledgerPairsForSession } from "../lib/signals.js";
-import { enqueueHarvestJob, spawnPipelineRunner } from "../lib/pipeline.js";
+import { enqueueHarvestJob, hasPendingHarvestJobs, spawnPipelineRunner } from "../lib/pipeline.js";
 import { gateAutoEnabled } from "../lib/score.js";
 import { loadHarvestConfig } from "../lib/harvest.js";
 
@@ -56,7 +56,20 @@ function salvageOrphans(currentSessionId?: string): void {
     saveSessionState(fresh);
     enqueued += 1;
   }
-  if (enqueued > 0) {
+  // The runner is spawned for the QUEUE, not only for what this start just added to
+  // it. A harvest whose model call fails re-queues itself with attempts+1, but nothing
+  // ever drained that retry: salvage stamps each session harvestedAt once, so `enqueued`
+  // is 0 at every later start, and SessionEnd skips a stamped session too. Measured on a
+  // real home: two jobs sat at attempts 1 for 23 hours across many sessions, while the
+  // start notice kept telling the user they were "harvesting in the background". A
+  // transient failure became a permanent loss. Draining an empty queue costs one
+  // readdir and no model call, and the retry cannot run away: drainHarvestJobs spends
+  // an attempt at the CLAIM and writes it to the job before the model call, so a job
+  // whose runners keep being killed is abandoned after MAX_HARVEST_ATTEMPTS claims
+  // rather than costing one model call per session start forever. Counting attempts
+  // where the failure is reported would have capped nothing here, because a killed
+  // runner never gets to report anything.
+  if (enqueued > 0 || hasPendingHarvestJobs()) {
     spawnPipelineRunner(fileURLToPath(new URL("./run-pipeline.js", import.meta.url)));
   }
 }

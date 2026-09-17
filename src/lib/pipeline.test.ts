@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   abandonedFile,
   drainHarvestJobs,
   harvestedDir,
   releaseHarvestJob,
   enqueueHarvestJob,
+  hasPendingHarvestJobs,
   pendingDir,
   pipelineLogFile,
   runHarvestJob,
@@ -22,6 +23,9 @@ import type { Signal } from "./signals.js";
 import type { HarvestJob } from "./harvest.js";
 import { candidatesDir } from "./skill-index.js";
 import { emptySessionState, loadSessionState, saveSessionState } from "./session-state.js";
+import { captureLearnInvocation } from "./capture.js";
+import { finalizeExplicitLearnInvocation, peekExplicitLearnInvocation } from "./learn.js";
+import type { HookInput } from "./hook-io.js";
 
 function candidate(overrides: Partial<Signal> = {}): Signal {
   return {
@@ -182,7 +186,9 @@ describe("runHarvestJob", () => {
     for (const c of requeued) releaseHarvestJob(c.claimedFile);
     expect(readCounters(home).gateErrors).toBe(1);
 
-    await runHarvestJob({ ...job(home), attempts: 2 }, home, { ...deps, runner: down });
+    // attempts counts CLAIMS, so a job carrying 3 has spent the budget: this failure
+    // is the third, and it ends the job rather than queueing a fourth
+    await runHarvestJob({ ...job(home), attempts: 3 }, home, { ...deps, runner: down });
     expect(drainHarvestJobs(home)).toEqual([]); // gone from the queue
     expect(readCounters(home).gateAbandoned).toBe(1); // but counted
     expect(JSON.parse(readFileSync(abandonedFile(home), "utf8").trim()).sessionId).toBe("s1");
@@ -446,6 +452,201 @@ describe("harvest once per transcript state", () => {
   });
 });
 
+describe("a failed harvest is picked up again", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const deps = { listSkills: () => [], skillDirs: () => [], remoteUrl: () => null };
+  const down: ClaudeRunner = async () => {
+    throw new Error("logged out");
+  };
+
+  it("given a job whose model call failed, when the queue is drained again, then it is claimed again and its attempts go up", async () => {
+    await runHarvestJob(job(home), home, { ...deps, runner: down });
+
+    const second = drainHarvestJobs(home);
+    expect(second).toHaveLength(1);
+    expect(second[0]!.job.attempts).toBe(1);
+    await runHarvestJob(second[0]!.job, home, { ...deps, runner: down });
+    releaseHarvestJob(second[0]!.claimedFile);
+
+    const third = drainHarvestJobs(home);
+    expect(third).toHaveLength(1);
+    expect(third[0]!.job.attempts).toBe(2);
+    // the retry carries the ORIGINAL evidence, not a re-derived one: a transient
+    // failure must cost nothing but the attempt
+    expect(third[0]!.job.sessionId).toBe("s1");
+    expect(readCounters(home).gateErrors).toBe(2);
+    expect(readCounters(home).gateAbandoned).toBe(0);
+    for (const c of third) releaseHarvestJob(c.claimedFile);
+  });
+
+  it("given a retry whose model call works, when it runs, then the session's lessons land after all", async () => {
+    await runHarvestJob(job(home), home, { ...deps, runner: down });
+    const retry = drainHarvestJobs(home);
+    const summary = await runHarvestJob(retry[0]!.job, home, { ...deps, runner: async () => harvestReply });
+    releaseHarvestJob(retry[0]!.claimedFile);
+
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+    expect(hasPendingHarvestJobs(home)).toBe(false); // nothing left owed
+  });
+
+  it("given a queue holding a retry, when a session starts, then the runner has something to find", () => {
+    expect(hasPendingHarvestJobs(home)).toBe(false); // no pending dir at all yet
+    enqueueHarvestJob(job(home), home);
+    expect(hasPendingHarvestJobs(home)).toBe(true);
+  });
+
+  it("given a runner killed mid-harvest, when a session starts, then the queue still owes its job a runner", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed = drainHarvestJobs(home);
+    expect(claimed).toHaveLength(1);
+    // the runner dies here: the claim is never released, and only a drain reclaims it
+    const dead = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimed[0]!.claimedFile, dead, dead);
+
+    expect(hasPendingHarvestJobs(home)).toBe(true);
+    const reclaimed = drainHarvestJobs(home);
+    expect(reclaimed).toHaveLength(1);
+    expect(reclaimed[0]!.job.sessionId).toBe("s1");
+    for (const c of reclaimed) releaseHarvestJob(c.claimedFile);
+  });
+
+  it("given a job another runner is already harvesting, when a session starts, then no second runner is spawned for it", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed = drainHarvestJobs(home);
+    expect(claimed).toHaveLength(1);
+    // in flight as `<job>.json.claimed-<pid>`: the queue owes nothing to a new runner
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+    releaseHarvestJob(claimed[0]!.claimedFile);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+  });
+});
+
+describe("a job whose runner is killed instead of failing", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const deps = { listSkills: () => [], skillDirs: () => [], remoteUrl: () => null };
+
+  /** the machine dies mid-harvest: nothing is logged, nothing is released, and the
+   * claim sits there until it ages past the horizon and the queue hands it back */
+  function killRunner(claimedFile: string): void {
+    const dead = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(claimedFile, dead, dead);
+  }
+
+  it("given a runner killed before it could report anything, when the queue hands the job back, then the attempt it spent is already on the job", () => {
+    enqueueHarvestJob(job(home), home);
+    const first = drainHarvestJobs(home);
+    expect(first[0]!.job.attempts).toBe(1);
+    killRunner(first[0]!.claimedFile);
+
+    const second = drainHarvestJobs(home);
+    expect(second[0]!.job.attempts).toBe(2);
+    // on disk too, or the next kill would start counting from zero all over again
+    expect(JSON.parse(readFileSync(second[0]!.claimedFile, "utf8")).attempts).toBe(2);
+    for (const c of second) releaseHarvestJob(c.claimedFile);
+  });
+
+  it("given every runner killed mid-harvest, when session after session hands the job back, then it is abandoned at the cap and leaves the queue", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed: number[] = [];
+    for (let session = 0; session < 5; session++) {
+      for (const c of drainHarvestJobs(home)) {
+        claimed.push(c.job.attempts!);
+        killRunner(c.claimedFile);
+      }
+    }
+    expect(claimed).toEqual([1, 2, 3]); // the fourth session finds nothing left to claim
+    expect(readdirSync(pendingDir(home))).toEqual([]);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+    expect(readCounters(home).gateAbandoned).toBe(1);
+    expect(JSON.parse(readFileSync(abandonedFile(home), "utf8").trim()).sessionId).toBe("s1");
+  });
+
+  it("given one killed runner, when the next session's runner claims the job, then the harvest runs and the session's lessons land", async () => {
+    enqueueHarvestJob(job(home), home);
+    const killed = drainHarvestJobs(home);
+    killRunner(killed[0]!.claimedFile);
+
+    const next = drainHarvestJobs(home);
+    const summary = await runHarvestJob(next[0]!.job, home, { ...deps, runner: async () => harvestReply });
+    releaseHarvestJob(next[0]!.claimedFile);
+
+    expect(summary.outcome).toBe("harvested");
+    expect(summary.written).toEqual(["prefer-config-feature-flags"]);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+    expect(readCounters(home).gateAbandoned).toBe(0);
+  });
+
+  it("given a model call that keeps failing, when the retries are drained, then the job still costs exactly three model calls", async () => {
+    let calls = 0;
+    const down: ClaudeRunner = async () => {
+      calls += 1;
+      throw new Error("logged out");
+    };
+    enqueueHarvestJob(job(home), home);
+    for (let session = 0; session < 5; session++) {
+      for (const c of drainHarvestJobs(home)) {
+        await runHarvestJob(c.job, home, { ...deps, runner: down });
+        releaseHarvestJob(c.claimedFile);
+      }
+    }
+    // charging the claim must not shorten the retry budget a transient failure gets
+    expect(calls).toBe(3);
+    expect(readCounters(home).gateAbandoned).toBe(1);
+    expect(readdirSync(pendingDir(home))).toEqual([]);
+  });
+
+  it("given a job handed back round after round, when it is reclaimed, then its file name does not grow", () => {
+    enqueueHarvestJob(job(home), home);
+    const names: string[] = [];
+    for (let session = 0; session < 3; session++) {
+      for (const c of drainHarvestJobs(home)) {
+        names.push(basename(c.claimedFile));
+        killRunner(c.claimedFile);
+      }
+    }
+    // one stamp, replaced each round: a chain of them grew 24 bytes a reclaim and
+    // would have ended the loop with ENAMETOOLONG instead of with a decision
+    expect(names[2]!.length).toBe(names[1]!.length);
+    expect(names[2]!.match(/reclaimed-/g)).toHaveLength(1);
+  });
+
+  it("given a temp left behind by a runner killed mid-write, when the queue is drained past the claim horizon, then it is swept", () => {
+    enqueueHarvestJob(job(home), home);
+    const claimed = drainHarvestJobs(home)[0]!.claimedFile;
+    // built the way fs-atomic builds it (pid, seq, base36 hrtime), so this stays a
+    // test of the sweep's pattern rather than of a name typed out here
+    const leaked = `${claimed}.tmp-${process.pid}-0-${process.hrtime.bigint().toString(36)}`;
+    writeFileSync(leaked, JSON.stringify({ sessionId: "s1" }));
+    const dead = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(leaked, dead, dead);
+    utimesSync(claimed, dead, dead);
+
+    drainHarvestJobs(home);
+    // notify counts every pending name containing ".json" as a session being
+    // harvested, so a leaked temp would report one forever
+    expect(existsSync(leaked)).toBe(false);
+  });
+});
+
 describe("runManualSignal", () => {
   let home: string;
 
@@ -527,6 +728,137 @@ describe("runManualSignal", () => {
     });
     expect(outcome).toMatchObject({ stage: "error" });
     expect(existsSync(candidatesDir(home))).toBe(false);
+  });
+
+  // This is the K-17 gate distinction: the same low-scoring signal, told apart only
+  // by trigger, ends up queued for one and dropped for the other.
+  describe("the same rejected candidate, explicit vs. model-initiated", () => {
+    const lowScore = JSON.stringify({
+      scores: { recurrence: 0, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      rationale: "too situational to generalize",
+      duplicateOf: null,
+    });
+    const runner: ClaudeRunner = async (prompt) =>
+      prompt.includes("kebab-case-skill-name") ? distillResponse : lowScore;
+
+    it("still queues it when the user explicitly typed the command (trigger: manual)", async () => {
+      const outcome = await runManualSignal(manual(), home, { runner, remoteUrl: () => null });
+      expect(outcome).toMatchObject({ stage: "written", slug: "fix-npm-test" });
+      expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+    });
+
+    it("drops it when the model invoked the command on its own (trigger: manual-model)", async () => {
+      const outcome = await runManualSignal(manual({ trigger: "manual-model" }), home, {
+        runner,
+        remoteUrl: () => null,
+      });
+      expect(outcome).toMatchObject({
+        stage: "vetoed",
+        gateTotal: 4,
+        threshold: 7,
+        rationale: "too situational to generalize",
+      });
+      expect(existsSync(candidatesDir(home))).toBe(false);
+    });
+  });
+
+  // K-17 BLOKE 1: end-to-end proof of the exact scenario an independent audit
+  // measured as broken. Before the fix, step 2 of the flow below (the user
+  // answering the gate's own clarifying question, itself a fresh UserPromptSubmit)
+  // overwrote the pending explicit-ask flag to false, so trigger came out
+  // "manual-model" and a low-scoring candidate the user explicitly asked for was
+  // vetoed and lost. After the fix it stays "manual": the candidate is queued
+  // regardless of the gate's score, exactly like a single-turn explicit capture.
+  describe("BLOKE 1: the user answers the gate's own clarifying question", () => {
+    function promptInput(prompt: string): HookInput {
+      return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt };
+    }
+
+    const lowScore = JSON.stringify({
+      scores: { recurrence: 0, unfindability: 1, generality: 1, durability: 1, costOfError: 1 },
+      rationale: "too situational to generalize",
+      duplicateOf: null,
+    });
+    const runner: ClaudeRunner = async (prompt) =>
+      prompt.includes("kebab-case-skill-name") ? distillResponse : lowScore;
+
+    it("still queues the candidate after a single clarifying answer", async () => {
+      // 1. user types '/handbook:learn'
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      // 2. learn.md step 2: nothing matched yet, so the product asks; the user
+      //    answers in plain language, which is itself a new UserPromptSubmit
+      captureLearnInvocation(
+        promptInput("it was the npm test flakiness we fixed with a retry wrapper"),
+        home,
+      );
+      // 3. the capture runs, exactly as cli/learn.ts decides its trigger
+      const trigger = peekExplicitLearnInvocation("s1", home) ? "manual" : "manual-model";
+      expect(trigger).toBe("manual");
+
+      const outcome = await runManualSignal(
+        manual({
+          trigger,
+          task: { goal: "fix npm test flakiness", steps: ["add retry wrapper", "rerun npm test"] },
+        }),
+        home,
+        { runner, remoteUrl: () => null },
+      );
+      finalizeExplicitLearnInvocation("s1", home);
+
+      expect(outcome).toMatchObject({ stage: "written", gateTotal: 4, belowThreshold: true });
+      expect(existsSync(candidatesDir(home))).toBe(true);
+      // and the ask is now consumed, not left to leak into a later capture
+      expect(loadSessionState("s1", home).explicitLearnPending).toBe(false);
+    });
+
+    // Criterion 2 is "not a single case lost" - including a clarification that
+    // takes more than one round trip (which mode? which case? more detail?).
+    it("still queues the candidate after a multi-turn clarification", async () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("the npm test flakiness"), home);
+      captureLearnInvocation(promptInput("mode A, the error->fix one"), home);
+      captureLearnInvocation(promptInput("the retry wrapper is what fixed it"), home);
+
+      const trigger = peekExplicitLearnInvocation("s1", home) ? "manual" : "manual-model";
+      expect(trigger).toBe("manual");
+
+      const outcome = await runManualSignal(manual({ trigger }), home, { runner, remoteUrl: () => null });
+
+      expect(outcome).toMatchObject({ stage: "written" });
+      expect(existsSync(candidatesDir(home))).toBe(true);
+    });
+
+    // K-17's second risk, closed together with the first: a failed run (claude
+    // unreachable) must not spend the user's explicit ask, or their natural
+    // retry gets misjudged as the model acting on its own.
+    it("keeps the ask pending across a failed run, so a retry is still judged manual", async () => {
+      captureLearnInvocation(promptInput("/handbook:learn"), home);
+      captureLearnInvocation(promptInput("the npm test flakiness fix"), home);
+
+      const failingOutcome = await runManualSignal(manual({ trigger: "manual" }), home, {
+        runner: async () => {
+          throw new Error("claude unavailable");
+        },
+        remoteUrl: () => null,
+      });
+      expect(failingOutcome).toMatchObject({ stage: "error" });
+      // cli/learn.ts only finalizes on a non-error outcome
+      expect(peekExplicitLearnInvocation("s1", home)).toBe(true);
+
+      // the user retries in plain language; the ask is still pending
+      captureLearnInvocation(promptInput("let's try that capture again"), home);
+      const retryTrigger = peekExplicitLearnInvocation("s1", home) ? "manual" : "manual-model";
+      expect(retryTrigger).toBe("manual");
+
+      const outcome = await runManualSignal(manual({ trigger: retryTrigger }), home, {
+        runner,
+        remoteUrl: () => null,
+      });
+      finalizeExplicitLearnInvocation("s1", home);
+
+      expect(outcome).toMatchObject({ stage: "written" });
+      expect(existsSync(candidatesDir(home))).toBe(true);
+    });
   });
 });
 
