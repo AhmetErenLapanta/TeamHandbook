@@ -16,6 +16,13 @@ The plugin runs `dist/`, not `src/` — **after editing anything under `src/hook
 or `src/cli/`, run `npm run build`** and commit the updated bundles. `dist/` is
 committed on purpose (the plugin is installed by git clone).
 
+**No lockfile is committed**, and `.gitignore` keeps it out. Claude Code installs a
+plugin's dependencies itself whenever the plugin root holds both a `package.json` and
+a lockfile it recognizes (`package-lock.json`, `npm-shrinkwrap.json`, `bun.lock`,
+`bun.lockb`), and it does not pass `--omit=dev`, so every devDependency lands in each
+installed copy: about 58 MB per version. Use `npm install` locally and do not commit
+the resulting lockfile.
+
 ## Ground rules
 
 - **Fail closed at trust boundaries.** An unparseable model reply, or any chance
