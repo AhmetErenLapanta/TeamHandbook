@@ -6,8 +6,14 @@ description written against a sentence stops measuring routing and starts measur
 string matching, and that has already happened once, to `team-mcp-settings`.
 
 Product owns these sentences and keeps the source sealed at
-a sealed file outside this repository. Sixteen routing sentences, eight Turkish and eight
+a sealed file outside this repository. Fifteen routing sentences, eight Turkish and seven
 English, covering all ten commands; four false-positive probes that must route nowhere.
+
+One sentence was retired rather than scored. `t-setting-up-squad-en` repeated two entries
+of `init`'s trigger list clause for clause, so it would have stayed green through a routing
+regression, which is the one job the held-out half has. Its directory is still here, tagged
+out of every package, because the record of a case that had to go is worth more than a
+clean directory listing. That leaves `init` with one sentence instead of two.
 
 ## Context
 
