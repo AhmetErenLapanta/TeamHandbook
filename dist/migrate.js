@@ -65,12 +65,60 @@ function configIsBroken(home = handbookHome()) {
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
+
+// src/lib/skill-index.ts
+import { join as join3 } from "node:path";
+function candidatesDir(home = handbookHome()) {
+  return join3(home, "candidates");
+}
+var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
+function foldBlockScalar(lines, start, folded) {
+  const body = [];
+  let i = start;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      body.push("");
+      continue;
+    }
+    if (!/^\s/.test(line)) break;
+    body.push(line.trim());
+  }
+  while (body.length && body.at(-1) === "") body.pop();
+  const value = folded ? body.reduce((text, line) => line === "" ? `${text}
+` : text === "" || text.endsWith("\n") ? text + line : `${text} ${line}`, "") : body.join("\n");
+  return { value, next: i - 1 };
+}
+function parseSkillFrontmatter(md) {
+  const match = md.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  const fields = /* @__PURE__ */ new Map();
+  const lines = match[1].split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([A-Za-z-]+):\s*(.*)$/);
+    if (!kv) continue;
+    let value = kv[2].trim();
+    if (BLOCK_SCALAR.test(value)) {
+      const block = foldBlockScalar(lines, i + 1, value.startsWith(">"));
+      value = block.value;
+      i = block.next;
+    } else if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    }
+    fields.set(kv[1], value);
+  }
+  const name = fields.get("name");
+  const description = fields.get("description");
+  if (!name || !description) return null;
+  const scope = fields.get("scope");
+  return { name, description, ...scope ? { scope } : {} };
+}
 
 // src/lib/secrets.ts
 var SECRET_PATTERNS = [
@@ -219,7 +267,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -228,7 +276,7 @@ function saveTeamConfig(team, home = handbookHome()) {
   if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   config.team = team;
-  writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  writeFileAtomic(join4(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -302,10 +350,15 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
   return `pushing the scaffold to ${branch} on ${url} failed: ${detail}`;
 }
 
+// src/lib/migrate.ts
+import { existsSync as existsSync4, readdirSync as readdirSync4, statSync as statSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename as basename2, join as join9 } from "node:path";
+
 // src/lib/mcp.ts
 import { readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
 function isPlainObject(value) {
@@ -313,7 +366,7 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join4(dir || homedir2(), ".claude.json");
+  return join5(dir || homedir2(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
@@ -461,37 +514,180 @@ function refusalSummary(audit) {
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
   return String(audit.detail);
 }
-function formatServerList(entries) {
-  if (!entries.length) {
-    return "No MCP servers are configured for this machine or this project, so there is nothing to share yet. Add one the way you normally would (claude mcp add), then run this again.";
+
+// src/lib/queue.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { basename, join as join7 } from "node:path";
+
+// src/lib/skill-files.ts
+import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname3, join as join6 } from "node:path";
+function isQueueBookkeeping(name) {
+  return name.startsWith("candidate.json");
+}
+function listSkillFiles(dir) {
+  const files = [];
+  const skipped = [];
+  const walk = (current, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync2(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
+      const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(join6(current, entry.name), rel);
+      else if (entry.isFile()) files.push(rel);
+      else skipped.push(rel);
+    }
+  };
+  walk(dir, "");
+  return { files, skipped };
+}
+function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
+  mkdirSync3(destDir, { recursive: true });
+  writeFileSync2(join6(destDir, "SKILL.md"), skillMd);
+  for (const rel of files) {
+    if (rel === "SKILL.md") continue;
+    const target = join6(destDir, rel);
+    mkdirSync3(dirname3(target), { recursive: true });
+    copyFileSync(join6(srcDir, rel), target);
   }
-  const lines = ["Your MCP servers, as Claude Code has them here:", ""];
-  for (const entry of entries) {
-    const audit = auditServer(entry.config);
-    const state = audit.migratable ? audit.startsProcess ? "shareable (starts a process on every teammate's machine)" : "shareable" : `not shareable: ${refusalSummary(audit)}`;
-    const needs = audit.requiresEnv.length ? `, needs ${audit.requiresEnv.join(", ")}` : "";
-    lines.push(`  ${entry.name}  [${entry.scope}, ${audit.transport}]  ${state}${needs}`);
+}
+
+// src/lib/queue.ts
+var STATUSES = ["pending", "approved", "rejected", "archived"];
+function isSafeSlug(slug) {
+  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
+}
+function candidateMetaFile(dir) {
+  return join7(dir, "candidate.json");
+}
+function synthesizeMeta(dir) {
+  let md;
+  try {
+    md = readFileSync4(join7(dir, "SKILL.md"), "utf8");
+  } catch {
+    return null;
   }
-  lines.push(
-    "",
-    "Nothing has been shared. Anything in headers or env that is not a plain ${VAR}",
-    "reference stays here: the name of a secret can travel, the secret itself cannot."
-  );
-  return lines.join("\n");
+  const summary = parseSkillFrontmatter(md);
+  if (!summary) return null;
+  let grounded = {};
+  try {
+    grounded = JSON.parse(readFileSync4(join7(dir, "grounded-case.json"), "utf8"));
+  } catch {
+  }
+  const gate = grounded.gate;
+  return {
+    slug: basename(dir),
+    status: "pending",
+    createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
+    scope: summary.scope ?? "team",
+    description: summary.description,
+    fingerprint: typeof grounded.fingerprint === "string" ? grounded.fingerprint : "",
+    sessionId: "",
+    gate: gate && typeof gate.total === "number" ? gate : null
+  };
+}
+function readCandidateMeta(dir) {
+  try {
+    const parsed = JSON.parse(readFileSync4(candidateMetaFile(dir), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
+      return {
+        ...parsed,
+        slug: basename(dir),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
+      };
+    }
+  } catch {
+  }
+  return synthesizeMeta(dir);
+}
+function auditSkillDir(sourceDir) {
+  const name = basename(sourceDir);
+  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+  let skillMd;
+  try {
+    skillMd = readFileSync4(join7(sourceDir, "SKILL.md"), "utf8");
+  } catch {
+    return { shareable: false, reason: "no-skill-md" };
+  }
+  const summary = parseSkillFrontmatter(skillMd);
+  if (!summary) return { shareable: false, reason: "no-frontmatter" };
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
+  }
+  if (files.length === 0) return { shareable: false, reason: "no-files" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync4(join7(sourceDir, file), "utf8");
+    } catch {
+      return { shareable: false, reason: "unreadable", detail: file };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    }
+  }
+  return { shareable: true, skillMd, files, summary };
+}
+function intakeSkill(sourceDir, home = handbookHome()) {
+  const slug = basename(sourceDir);
+  const dir = join7(candidatesDir(home), slug);
+  if (isSafeSlug(slug) && existsSync2(dir)) {
+    const existing = readCandidateMeta(dir);
+    const decided = existing && existing.status !== "pending" ? existing.status : null;
+    return {
+      ok: false,
+      error: decided ? `"${slug}" was already ${decided} here; nothing was changed` : `"${slug}" is already waiting in the review queue`
+    };
+  }
+  const audit = auditSkillDir(sourceDir);
+  if (!audit.shareable) {
+    return {
+      ok: false,
+      ...audit.secret ? { secret: audit.secret } : {},
+      error: intakeRefusal(sourceDir, slug, audit)
+    };
+  }
+  copySkillPayload(sourceDir, dir, audit.skillMd, audit.files);
+  return { ok: true, slug, dir, fileCount: audit.files.length };
+}
+function intakeRefusal(sourceDir, slug, audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
+    case "no-skill-md":
+      return `no readable SKILL.md in ${sourceDir}`;
+    case "no-frontmatter":
+      return `the SKILL.md in ${sourceDir} has no name and description frontmatter`;
+    case "irregular-entry":
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
+    case "no-files":
+      return `${slug} has no files to queue`;
+    case "unreadable":
+      return `cannot read "${audit.detail}" in ${sourceDir}; nothing was queued`;
+    default:
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not queued. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+  }
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync2, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join8 } from "node:path";
 function bumpPluginVersion(repoDir) {
-  const file = join5(repoDir, ".claude-plugin", "plugin.json");
+  const file = join8(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const plugin = JSON.parse(readFileSync4(file, "utf8"));
+    const plugin = JSON.parse(readFileSync5(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
     plugin.version = parts.join(".");
-    writeFileSync2(file, JSON.stringify(plugin, null, 2) + "\n");
+    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
@@ -639,9 +835,6 @@ function finishMcpPrBody(lines, requiresEnv) {
   );
   return lines.join("\n");
 }
-function publishMcpServer(entry, team, git = runGit, forge = runForge) {
-  return publishMcpServers([entry], team, git, forge);
-}
 function collisionMessage(name) {
   return `the team repository already declares an MCP server named "${name}". Rename yours, or edit the team's .mcp.json directly.`;
 }
@@ -677,17 +870,17 @@ function publishMcpServers(entries, team, git = runGit, forge = runForge) {
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
-  const repoDir = join5(workdir, "repo");
+  const repoDir = join8(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const target = join5(repoDir, TEAM_MCP_FILE);
+    const target = join8(repoDir, TEAM_MCP_FILE);
     let merged;
     let collided;
     try {
       ({ merged, collided } = mergeServersIntoMcpJson(
-        existsSync2(target) ? readFileSync4(target, "utf8") : null,
+        existsSync3(target) ? readFileSync5(target, "utf8") : null,
         subjects.map((s) => s.entry)
       ));
     } catch (err) {
@@ -708,7 +901,7 @@ function publishMcpServers(entries, team, git = runGit, forge = runForge) {
     const title = buildMcpPrTitle(names);
     try {
       git(["checkout", "-b", branch], repoDir);
-      writeFileSync2(target, merged);
+      writeFileSync4(target, merged);
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
@@ -750,59 +943,266 @@ function publishMcpServers(entries, team, git = runGit, forge = runForge) {
     rmSync3(workdir, { recursive: true, force: true });
   }
 }
-function formatMcpShareResult(outcome, marketplaceName) {
-  const lines = [
-    `Shared "${outcome.serverName}" with the team.`,
-    "",
-    `- branch: ${outcome.branch}`,
-    // manualPrUrl returns null for a remote whose host it does not know how to build a
-    // "new merge request" link for, and printing "undefined" at someone is worse than
-    // telling them the branch is there and the link is theirs to find.
-    outcome.prUrl ? `- merge request: ${outcome.prUrl}` : outcome.manualUrl ? `- open the merge request: ${outcome.manualUrl}` : "- the branch is pushed; open the merge request in your forge"
+
+// src/lib/migrate.ts
+function localSkillDirs(paths = {}) {
+  return [
+    { dir: join9(paths.userHome ?? homedir3(), ".claude", "skills"), scope: "personal" },
+    { dir: join9(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
-  if (outcome.prError) lines.push(`  (the forge CLI could not open it: ${outcome.prError})`);
-  if (outcome.version) lines.push(`- plugin version raised to ${outcome.version}, which is what makes teammates fetch it`);
-  if (outcome.requiresEnv?.length) {
-    lines.push(
-      `- each teammate must set ${outcome.requiresEnv.join(", ")} in their own environment, or the server will not start for them`
-    );
+}
+function isDirectory(path) {
+  try {
+    return statSync2(path).isDirectory();
+  } catch {
+    return false;
   }
-  if (outcome.startsProcess) {
-    lines.push("- this server starts a process on every teammate's machine; the merge request says which");
+}
+function queueState(home, name) {
+  const dir = join9(candidatesDir(home), name);
+  if (!existsSync4(dir)) return null;
+  return readCandidateMeta(dir)?.status ?? "pending";
+}
+function skillRefusal(audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return "its directory name cannot be a skill name (lowercase letters, digits and dashes)";
+    case "no-skill-md":
+      return "it has no readable SKILL.md";
+    case "no-frontmatter":
+      return "its SKILL.md has no name and description frontmatter";
+    case "irregular-entry":
+      return `it contains "${audit.detail}", which is not a regular file`;
+    case "no-files":
+      return "it has no files to share";
+    case "unreadable":
+      return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    default:
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
+  }
+}
+function readSkillDir(dir, scope, home) {
+  const name = basename2(dir);
+  const audit = auditSkillDir(dir);
+  const queued = queueState(home, name);
+  const base = { kind: "skill", name, scope, dir, description: audit.summary?.description ?? "" };
+  if (queued) {
+    return {
+      ...base,
+      shareable: false,
+      reason: queued === "pending" ? "already waiting in the review queue" : `already ${queued} in the review queue`
+    };
+  }
+  return audit.shareable ? { ...base, shareable: true } : { ...base, shareable: false, reason: skillRefusal(audit) };
+}
+function serverItem(entry, audit) {
+  const base = {
+    kind: "mcp",
+    name: entry.name,
+    scope: entry.scope,
+    entry,
+    transport: audit.transport,
+    startsProcess: audit.startsProcess,
+    requiresEnv: audit.requiresEnv
+  };
+  return audit.migratable ? { ...base, shareable: true } : { ...base, shareable: false, reason: refusalSummary(audit), fullReason: refusalMessage(entry.name, audit) };
+}
+function buildInventory(paths = {}) {
+  const home = paths.home ?? handbookHome();
+  const byName = /* @__PURE__ */ new Map();
+  for (const { dir, scope } of localSkillDirs(paths)) {
+    let entries;
+    try {
+      entries = readdirSync4(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries.sort()) {
+      if (!isDirectory(join9(dir, entry))) continue;
+      byName.set(entry, readSkillDir(join9(dir, entry), scope, home));
+    }
+  }
+  const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
+    (entry) => serverItem(entry, auditServer(entry.config))
+  );
+  return { skills: [...byName.values()], servers };
+}
+var DESCRIPTION_CHARS = 150;
+function oneLine(text) {
+  const first = text.split("\n")[0].trim();
+  return first.length > DESCRIPTION_CHARS ? `${first.slice(0, DESCRIPTION_CHARS).trimEnd()}...` : first;
+}
+function formatInventory(inv) {
+  if (!inv.skills.length && !inv.servers.length) {
+    return "No skills and no MCP servers are set up on this machine or in this project, so there is nothing to take to the team yet.";
+  }
+  const lines = ["Your local Claude Code setup, as it is on this machine:"];
+  if (inv.skills.length) {
+    lines.push(
+      "",
+      `Skills (${inv.skills.length}) - the ones you pick are copied into the review queue; nothing leaves this machine`,
+      ""
+    );
+    inv.skills.forEach((skill, i) => {
+      lines.push(`  ${i + 1}. ${skill.name}  [${skill.scope}]${skill.shareable ? "" : `  not shareable: ${skill.reason}`}`);
+      if (skill.shareable) lines.push(`     ${oneLine(skill.description) || "(no description)"}`);
+    });
+  }
+  if (inv.servers.length) {
+    lines.push(
+      "",
+      `MCP servers (${inv.servers.length}) - the ones you pick go out together as ONE merge request to the team repository`,
+      ""
+    );
+    inv.servers.forEach((server, i) => {
+      const needs = server.requiresEnv.length ? `, needs ${server.requiresEnv.join(", ")}` : "";
+      const state = server.shareable ? server.startsProcess ? `shareable (starts a process on every teammate's machine)${needs}` : `shareable${needs}` : `not shareable: ${server.reason}`;
+      lines.push(`  ${i + 1}. ${server.name}  [${server.scope}, ${server.transport}]  ${state}`);
+    });
   }
   lines.push(
     "",
-    `After the merge it appears as plugin:${marketplaceName}:${outcome.serverName}. Your own copy is`,
-    "untouched, so you will see both: this command never writes to ~/.claude.json. Remove the",
-    `local "${outcome.serverName}" yourself (claude mcp remove) once the team's one is connected.`
+    "Nothing is selected and nothing has been shared. A skill carrying a credential is",
+    "refused rather than redacted, and anything in a server's headers or env that is not a",
+    "plain ${VAR} reference stays here: the name of a secret can travel, the secret cannot."
   );
   return lines.join("\n");
 }
+function shareSelection(selection, team, paths = {}, git = runGit, forge = runForge) {
+  const home = paths.home ?? handbookHome();
+  const result = { queued: [], refused: [] };
+  const inv = buildInventory(paths);
+  for (const name of selection.skills) {
+    const skill = inv.skills.find((s) => s.name === name);
+    if (!skill) {
+      result.refused.push({ name, kind: "skill", reason: "no skill of that name is installed here" });
+      continue;
+    }
+    const intake = intakeSkill(skill.dir, home);
+    if (intake.ok) result.queued.push(intake.slug);
+    else result.refused.push({ name, kind: "skill", reason: intake.error });
+  }
+  if (!selection.servers.length) return result;
+  const entries = [];
+  for (const name of selection.servers) {
+    const server = inv.servers.find((s) => s.name === name);
+    if (!server) result.refused.push({ name, kind: "mcp", reason: "no MCP server of that name is configured here" });
+    else entries.push(server.entry);
+  }
+  if (!entries.length) return result;
+  if (!team) {
+    for (const entry of entries) {
+      result.refused.push({
+        name: entry.name,
+        kind: "mcp",
+        reason: "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first"
+      });
+    }
+    return result;
+  }
+  const outcome = publishMcpServers(entries, team, git, forge);
+  result.mcp = outcome;
+  for (const refusal of outcome.refused ?? []) {
+    result.refused.push({ name: refusal.name, kind: "mcp", reason: refusal.reason });
+  }
+  if (!outcome.ok && outcome.error) {
+    const judged = new Set((outcome.refused ?? []).map((r) => r.name));
+    for (const entry of entries) {
+      if (!judged.has(entry.name)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
+    }
+  }
+  return result;
+}
+function formatMigrateResult(result, marketplaceName) {
+  const lines = [];
+  if (result.queued.length) {
+    lines.push(
+      `Queued for review (${result.queued.length}) - nothing has left this machine yet:`,
+      ...result.queued.map((slug) => `  ${slug}`),
+      "",
+      "Run /handbook:review to send them to the team, add them to a project, or keep them."
+    );
+  }
+  const mcp = result.mcp;
+  if (mcp?.ok) {
+    const names = mcp.serverNames ?? [];
+    if (lines.length) lines.push("");
+    lines.push(
+      `Shared with the team (${names.length}) in one merge request: ${names.join(", ")}`,
+      `  - branch: ${mcp.branch}`,
+      // see formatMcpShareResult: a remote whose host manualPrUrl cannot build a link for
+      // still got the branch, and "undefined" is not a link
+      mcp.prUrl ? `  - merge request: ${mcp.prUrl}` : mcp.manualUrl ? `  - open the merge request: ${mcp.manualUrl}` : "  - the branch is pushed; open the merge request in your forge"
+    );
+    if (mcp.prError) lines.push(`    (the forge CLI could not open it: ${mcp.prError})`);
+    if (mcp.version) {
+      lines.push(`  - plugin version raised to ${mcp.version}, which is what makes teammates fetch it`);
+    }
+    if (mcp.requiresEnv?.length) {
+      lines.push(
+        `  - each teammate must set ${mcp.requiresEnv.join(", ")} in their own environment, or those servers will not start for them`
+      );
+    }
+    if (mcp.startsProcess) {
+      lines.push("  - at least one of these starts a process on every teammate's machine; the request says which");
+    }
+    if (marketplaceName) {
+      lines.push(
+        `  - after the merge they appear as plugin:${marketplaceName}:<name>. Your own copies are untouched:`,
+        "    this never writes to ~/.claude.json, so you will see both until you remove yours."
+      );
+    }
+  }
+  if (result.refused.length) {
+    if (lines.length) lines.push("");
+    lines.push(`Not taken (${result.refused.length}):`, ...result.refused.map((r) => `  ${r.name} - ${r.reason}`));
+  }
+  if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";
+  return lines.join("\n");
+}
 
-// src/cli/mcp.ts
+// src/cli/migrate.ts
 function usage() {
-  console.error("usage: mcp.js [<server-name>]");
+  console.error("usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]...");
   process.exit(2);
 }
-function find(servers, wanted) {
-  const exact = servers.find((s) => s.name === wanted);
-  if (exact) return exact;
-  const loose = servers.filter((s) => s.name.toLowerCase() === wanted.toLowerCase());
-  if (loose.length === 1) return loose[0];
-  return `no MCP server named "${wanted}" is configured here. Available: ${servers.map((s) => s.name).join(", ") || "(none)"}`;
+function resolve(available, wanted) {
+  if (available.includes(wanted)) return wanted;
+  const loose = available.filter((name) => name.toLowerCase() === wanted.toLowerCase());
+  return loose.length === 1 ? loose[0] : wanted;
+}
+function parseSelection(args, inv) {
+  const selection = { skills: [], servers: [] };
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const value = args[i + 1];
+    if (flag !== "--skill" && flag !== "--mcp") continue;
+    if (!value || value.startsWith("--")) usage();
+    if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
+    else selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
+    i++;
+  }
+  return selection;
 }
 function main() {
   const args = process.argv.slice(2);
-  if (args.length > 1 || args[0]?.startsWith("-")) usage();
-  const servers = readLocalServers();
-  const wanted = args[0];
-  if (!wanted) {
-    console.log(formatServerList(servers));
+  const selected = args.some((a) => a === "--skill" || a === "--mcp");
+  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
+  if (rest.length || cmd !== "list" && cmd !== "share") usage();
+  if (cmd === "list" && selected) usage();
+  const inv = buildInventory();
+  if (cmd === "list") {
+    console.log(formatInventory(inv));
     if (!loadTeamConfig()) {
       console.log(
-        "\nNo team repository is configured yet, so there is nowhere to share these. Run /handbook:init (or /handbook:join <url>) first."
+        "\nNo team repository is configured yet. Skills can still be queued for review, but the MCP servers have nowhere to go: run /handbook:init (or /handbook:join <url>) first."
       );
     }
+    return;
+  }
+  const selection = parseSelection(args, inv);
+  if (!selection.skills.length && !selection.servers.length) {
+    console.log("Nothing was selected, so nothing was queued and nothing was shared.");
     return;
   }
   if (configIsBroken()) {
@@ -813,26 +1213,11 @@ function main() {
     return;
   }
   const team = loadTeamConfig();
-  if (!team) {
-    console.error("error: no team repository is configured. Run /handbook:init (or /handbook:join <url>) first.");
-    process.exitCode = 1;
-    return;
+  const result = shareSelection(selection, team);
+  if (team && result.mcp?.learnedBranchPrefix) {
+    saveTeamConfig({ ...team, branchPrefix: result.mcp.learnedBranchPrefix });
   }
-  const entry = find(servers, wanted);
-  if (typeof entry === "string") {
-    console.error(`error: ${entry}`);
-    process.exitCode = 1;
-    return;
-  }
-  const result = publishMcpServer(entry, team);
-  if (!result.ok) {
-    console.error(`error: ${result.error}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (result.learnedBranchPrefix) {
-    saveTeamConfig({ ...team, branchPrefix: result.learnedBranchPrefix });
-  }
-  console.log(formatMcpShareResult(result, team.marketplaceName));
+  console.log(formatMigrateResult(result, team?.marketplaceName));
+  if (result.refused.length) process.exitCode = 1;
 }
 main();

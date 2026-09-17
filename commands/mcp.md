@@ -1,5 +1,5 @@
 ---
-description: Share one of the MCP servers already configured on this machine with the team, as a merge request to the team's plugin repository, so nobody has to install or configure it by hand. It only reads your local MCP config and never writes to it. Triggers: "share this MCP server with everyone", "the team should have this server too", "push my MCP config to the team", "set this server up for the whole team", "distribute an MCP server".
+description: Share one of the MCP servers already configured on this machine with the team, as a merge request to the team's plugin repository: this is how the team's shared MCP setup gets updated, so nobody has to install or configure a server by hand. It only reads your own local MCP config; it never modifies your machine's copy. One server per run; to pick several servers, or servers and skills together, use /handbook:migrate. Triggers: "share this MCP server with everyone", "the team should have this server too", "push my MCP config to the team", "set this server up for the whole team", "distribute an MCP server", "update the team's MCP settings".
 argument-hint: [optional name of the server to share]
 ---
 
@@ -30,4 +30,7 @@ copy of the server stays exactly where it is.
    whether the server starts a process on their machine, and that the user's local copy is
    still there to remove themselves.
 
-Never share a server the user has not explicitly named.
+Never share a server the user has not explicitly named. If they want more than one, run
+/handbook:migrate instead of this command repeatedly: it sends them as a single merge
+request, where running this one twice would open two that each claim the same plugin
+version, and the second to be merged would then reach nobody.

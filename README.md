@@ -230,6 +230,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
 | `/handbook:mcp [name]` | List your MCP servers; share one with the team so nobody sets it up by hand. |
 | `/handbook:share-skill` | Put a skill you wrote by hand into the review queue. |
+| `/handbook:migrate` | List every skill and MCP server on this machine; pick which ones the team gets. |
 | `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |
 | `/handbook:learn` | Capture something on demand instead of waiting for the session to end. |
 | `/handbook:status` | Queue, ledger, how often your skills actually fired, config. |
