@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.7.0] - 2026-09-19
+
+- **The slash commands a team types every day could not be sent to the team.** A team
+  writes its own commands, the ones everybody runs without thinking, and they sat on the
+  machine that wrote them: the migration screen listed skills and MCP servers and stopped
+  there. Commands are the third kind on that screen now. You pick them the same way, they
+  travel in the same merge request, and they go through the same scan that refuses
+  anything carrying a credential, because a command is a file with instructions in it and
+  a token pasted into one would have gone out with the rest.
+
 ## [0.6.4] - 2026-09-19
 
 - **Four lines of documentation described a repository that does not exist.** The
