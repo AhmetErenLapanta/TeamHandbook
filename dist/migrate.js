@@ -351,9 +351,9 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/migrate.ts
-import { existsSync as existsSync4, readdirSync as readdirSync4, statSync as statSync2 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { basename as basename2, join as join9 } from "node:path";
+import { existsSync as existsSync4, readdirSync as readdirSync5, statSync as statSync2 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/mcp.ts
 import { readFileSync as readFileSync3 } from "node:fs";
@@ -677,12 +677,79 @@ function intakeRefusal(sourceDir, slug, audit) {
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
-function bumpPluginVersion(repoDir) {
-  const file = join8(repoDir, ".claude-plugin", "plugin.json");
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
+
+// src/lib/commands.ts
+import { readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename as basename2, join as join8 } from "node:path";
+function localCommandDirs(userHome = homedir3(), cwd = process.cwd()) {
+  return [
+    { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
+    { dir: join8(cwd, ".claude", "commands"), scope: "project" }
+  ];
+}
+function readLocalCommands(userHome = homedir3(), cwd = process.cwd()) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
+    let entries;
+    try {
+      entries = readdirSync4(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
+    } catch {
+      continue;
+    }
+    for (const entry of entries.sort()) {
+      const name = basename2(entry, ".md");
+      byName.set(name, { name, scope, file: join8(dir, entry) });
+    }
+  }
+  return [...byName.values()];
+}
+function commandDescription(content) {
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+  const described = frontmatter?.[1]?.match(/^description:\s*(.+)$/m)?.[1]?.trim();
+  if (described) return described.replace(/^["']|["']$/g, "");
+  const body = frontmatter ? content.slice(frontmatter[0].length) : content;
+  return body.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#")) ?? "";
+}
+function auditCommand(file) {
+  const name = basename2(file, ".md");
+  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+  let content;
   try {
-    const plugin = JSON.parse(readFileSync5(file, "utf8"));
+    content = readFileSync5(file, "utf8");
+  } catch {
+    return { shareable: false, reason: "unreadable", detail: basename2(file) };
+  }
+  const pattern = detectSecret(content);
+  if (pattern) {
+    return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file: basename2(file) } };
+  }
+  return { shareable: true, content, description: commandDescription(content) };
+}
+function commandRefusalSummary(audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes)`;
+    case "unreadable":
+      return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    default:
+      return `it looks like it contains a secret (${audit.detail})`;
+  }
+}
+function commandRefusalMessage(name, audit) {
+  if (audit.reason === "secret") {
+    return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${name} was not shared. Commands are reviewed and merged as they are, and a redacted one would arrive and then misfire; take the credential out of the command and try again.`;
+  }
+  return commandRefusalSummary(audit);
+}
+
+// src/lib/publish.ts
+function bumpPluginVersion(repoDir) {
+  const file = join9(repoDir, ".claude-plugin", "plugin.json");
+  try {
+    const plugin = JSON.parse(readFileSync6(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
@@ -761,18 +828,41 @@ function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
   }
 }
 var TEAM_MCP_FILE = ".mcp.json";
-function buildMcpPrTitle(names) {
-  return `feat(mcp): add ${names.join(", ")}`;
+var TEAM_COMMANDS_DIR = "commands";
+function buildSelectionPrTitle(serverNames, commandNames) {
+  const scopes = [serverNames.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean);
+  return `feat(${scopes.join(",")}): add ${[...serverNames, ...commandNames].join(", ")}`;
 }
-function buildMcpServersPrBody(subjects) {
-  const single = subjects.length === 1;
-  const lines = single ? [
-    `Adds the \`${subjects[0].entry.name}\` MCP server to this plugin. Once this is merged, every`,
-    "teammate whose copy refreshes has it connected: nobody installs or configures anything."
-  ] : [
-    `Adds ${subjects.length} MCP servers to this plugin. Once this is merged, every teammate whose`,
-    "copy refreshes has them connected: nobody installs or configures anything."
+function selectionIntro(servers, commands) {
+  if (!servers) {
+    return commands === 1 ? [
+      "Adds one slash command to this plugin. Once this is merged, every teammate whose copy",
+      "refreshes can type it: nobody copies a file into their own setup."
+    ] : [
+      `Adds ${commands} slash commands to this plugin. Once this is merged, every teammate whose`,
+      "copy refreshes can type them: nobody copies a file into their own setup."
+    ];
+  }
+  if (!commands) {
+    return servers === 1 ? [
+      `Adds the \`SERVER_NAME\` MCP server to this plugin. Once this is merged, every`,
+      "teammate whose copy refreshes has it connected: nobody installs or configures anything."
+    ] : [
+      `Adds ${servers} MCP servers to this plugin. Once this is merged, every teammate whose`,
+      "copy refreshes has them connected: nobody installs or configures anything."
+    ];
+  }
+  return [
+    `Adds ${servers} MCP server${servers === 1 ? "" : "s"} and ${commands} slash command${commands === 1 ? "" : "s"} to this`,
+    "plugin. Once this is merged, every teammate whose copy refreshes has the servers connected",
+    "and can type the commands: nobody installs, configures or copies anything."
   ];
+}
+function buildSelectionPrBody(subjects, commands) {
+  const single = subjects.length === 1 && !commands.length;
+  const lines = selectionIntro(subjects.length, commands.length).map(
+    (line) => line.replace("SERVER_NAME", subjects[0]?.entry.name ?? "")
+  );
   for (const { entry, audit } of subjects) {
     const config = entry.config;
     lines.push("", `- server: \`${entry.name}\``, `- transport: \`${audit.transport}\``);
@@ -803,32 +893,73 @@ function buildMcpServersPrBody(subjects) {
       "would review a document."
     );
   }
+  for (const command of commands) {
+    lines.push("", `- command: \`/${command.name}\``, `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``);
+  }
+  if (commands.length) {
+    lines.push(
+      "",
+      commands.length === 1 ? "## This one is read as instructions" : "## These are read as instructions",
+      "",
+      "A merged command is typed by a teammate and then read by Claude as its instructions for",
+      "that turn, with their tools and their permissions. Read the bod" + (commands.length === 1 ? "y" : "ies") + " in this diff the way you",
+      "would read a runbook someone else is about to run, not the way you would read a note."
+    );
+  }
   const requiresEnv = [];
   for (const { audit } of subjects) {
     for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
   }
-  return finishMcpPrBody(lines, requiresEnv);
+  return finishMcpPrBody(lines, requiresEnv, subjects.length > 0, commands.length);
 }
-function finishMcpPrBody(lines, requiresEnv) {
-  lines.push(
-    "",
-    "## What was checked",
-    "",
-    "Every value in `headers` and `env` is a plain ${VAR} reference rather than a literal, so",
-    "no credential travels in those fields. The endpoint was also scanned for an embedded",
-    "token and none was found."
-  );
+function finishMcpPrBody(lines, requiresEnv, hasServers, commandCount) {
+  lines.push("", "## What was checked", "");
+  if (hasServers) {
+    lines.push(
+      "Every value in `headers` and `env` is a plain ${VAR} reference rather than a literal, so",
+      "no credential travels in those fields. The endpoint was also scanned for an embedded",
+      "token and none was found."
+    );
+  }
+  if (commandCount) {
+    if (hasServers) lines.push("");
+    lines.push(
+      `Each command file was scanned for known credential shapes before it was copied, and one`,
+      "that matched would have stopped this request rather than arriving with the token blanked",
+      "out. That scan is a heuristic over the shapes it knows, not a proof."
+    );
+  }
   if (requiresEnv.length) {
     lines.push(
       "",
       `Each teammate supplies these from their own environment: ${requiresEnv.map((v) => `\`${v}\``).join(", ")}. Until they do, the server will not start for them.`
     );
   }
+  lines.push("");
+  if (hasServers) {
+    lines.push(
+      'That is the whole of the check, and it is a narrower claim than "this definition holds',
+      'no secret": the endpoint scan is a heuristic, and a credential passed in `args` is not',
+      "checked at all. Read the endpoint and the command above before merging."
+    );
+  }
+  if (commandCount) {
+    const read = `Read the ${commandCount === 1 ? "file" : "files"} in this diff before merging.`;
+    if (hasServers) {
+      lines.push(
+        "",
+        "A command body is prose, and a credential in a shape the scan has never seen reads to it",
+        `as prose too. ${read}`
+      );
+    } else {
+      lines.push(
+        'That is the whole of the check, and it is a narrower claim than "these commands hold no',
+        'secret": a command body is prose, and a credential in a shape the scan has never seen',
+        `reads to it as prose too. ${read}`
+      );
+    }
+  }
   lines.push(
-    "",
-    'That is the whole of the check, and it is a narrower claim than "this definition holds',
-    'no secret": the endpoint scan is a heuristic, and a credential passed in `args` is not',
-    "checked at all. Read the endpoint and the command above before merging.",
     "",
     "---",
     "Opened by TeamHandbook at the explicit request of whoever ran the command."
@@ -838,21 +969,32 @@ function finishMcpPrBody(lines, requiresEnv) {
 function collisionMessage(name) {
   return `the team repository already declares an MCP server named "${name}". Rename yours, or edit the team's .mcp.json directly.`;
 }
-function publishMcpServers(entries, team, git = runGit, forge = runForge) {
-  const single = entries.length === 1 ? { serverName: entries[0].name } : {};
+function commandCollisionMessage(name) {
+  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is; rename yours, or change theirs in the team repository.`;
+}
+function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
+  const entries = selection.servers ?? [];
+  const commandEntries = selection.commands ?? [];
+  const single = entries.length === 1 && !commandEntries.length ? { serverName: entries[0].name } : {};
   const subjects = [];
   const refused = [];
   for (const entry of entries) {
     const audit = auditServer(entry.config);
     if (audit.migratable) subjects.push({ entry, audit });
-    else refused.push({ name: entry.name, reason: refusalMessage(entry.name, audit) });
+    else refused.push({ name: entry.name, kind: "mcp", reason: refusalMessage(entry.name, audit) });
   }
-  if (!subjects.length) {
+  const commands = [];
+  for (const entry of commandEntries) {
+    const audit = auditCommand(entry.file);
+    if (audit.shareable) commands.push({ name: entry.name, content: audit.content });
+    else refused.push({ name: entry.name, kind: "command", reason: commandRefusalMessage(entry.name, audit) });
+  }
+  if (!subjects.length && !commands.length) {
     return {
       ok: false,
       ...single,
       refused,
-      error: refused[0]?.reason ?? "no MCP server was named to share"
+      error: refused[0]?.reason ?? "nothing was named to share"
     };
   }
   try {
@@ -870,38 +1012,60 @@ function publishMcpServers(entries, team, git = runGit, forge = runForge) {
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
-  const repoDir = join8(workdir, "repo");
+  const repoDir = join9(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const target = join8(repoDir, TEAM_MCP_FILE);
-    let merged;
-    let collided;
-    try {
-      ({ merged, collided } = mergeServersIntoMcpJson(
-        existsSync3(target) ? readFileSync5(target, "utf8") : null,
-        subjects.map((s) => s.entry)
-      ));
-    } catch (err) {
-      return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
+    const target = join9(repoDir, TEAM_MCP_FILE);
+    let merged = "";
+    let collided = [];
+    if (subjects.length) {
+      try {
+        ({ merged, collided } = mergeServersIntoMcpJson(
+          existsSync3(target) ? readFileSync6(target, "utf8") : null,
+          subjects.map((s) => s.entry)
+        ));
+      } catch (err) {
+        return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
+      }
     }
-    for (const name of collided) refused.push({ name, reason: collisionMessage(name) });
+    const collisions = [];
+    for (const name of collided) {
+      collisions.push(collisionMessage(name));
+      refused.push({ name, kind: "mcp", reason: collisionMessage(name) });
+    }
     const going = subjects.filter((s) => !collided.includes(s.entry.name));
-    if (!going.length) {
-      return { ok: false, ...single, refused, error: collisionMessage(collided[0]) };
+    const goingCommands = [];
+    for (const command of commands) {
+      if (existsSync3(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+        collisions.push(commandCollisionMessage(command.name));
+        refused.push({ name: command.name, kind: "command", reason: commandCollisionMessage(command.name) });
+        continue;
+      }
+      goingCommands.push(command);
+    }
+    if (!going.length && !goingCommands.length) {
+      return { ok: false, ...single, refused, error: collisions[0] ?? refused[0]?.reason ?? "nothing was left to share" };
     }
     const names = going.map((s) => s.entry.name);
-    const first = slugifySkillName(names[0]);
-    const base = names.length === 1 ? `mcp-${first}` : `mcp-${first}-and-${names.length - 1}-more`;
+    const commandNames = goingCommands.map((c) => c.name);
+    const all = [...names, ...commandNames];
+    const label = names.length ? commandNames.length ? "share" : "mcp" : "commands";
+    const first = slugifySkillName(all[0]);
+    const base = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix;
     let version = null;
-    const title = buildMcpPrTitle(names);
+    const title = buildSelectionPrTitle(names, commandNames);
     try {
       git(["checkout", "-b", branch], repoDir);
-      writeFileSync4(target, merged);
+      if (going.length) writeFileSync4(target, merged);
+      if (goingCommands.length) mkdirSync5(join9(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
+      for (const command of goingCommands) {
+        writeFileSync4(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+      }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
@@ -925,11 +1089,12 @@ function publishMcpServers(entries, team, git = runGit, forge = runForge) {
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const pr = openPr(team.repoUrl, branch, title, buildMcpServersPrBody(going), repoDir, forge);
+    const pr = openPr(team.repoUrl, branch, title, buildSelectionPrBody(going, goingCommands), repoDir, forge);
     return {
       ok: true,
       ...single,
-      serverNames: names,
+      ...names.length ? { serverNames: names } : {},
+      ...commandNames.length ? { commandNames } : {},
       ...refused.length ? { refused } : {},
       branch,
       requiresEnv,
@@ -947,8 +1112,8 @@ function publishMcpServers(entries, team, git = runGit, forge = runForge) {
 // src/lib/migrate.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join9(paths.userHome ?? homedir3(), ".claude", "skills"), scope: "personal" },
-    { dir: join9(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
+    { dir: join10(paths.userHome ?? homedir4(), ".claude", "skills"), scope: "personal" },
+    { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
 function isDirectory(path) {
@@ -959,7 +1124,7 @@ function isDirectory(path) {
   }
 }
 function queueState(home, name) {
-  const dir = join9(candidatesDir(home), name);
+  const dir = join10(candidatesDir(home), name);
   if (!existsSync4(dir)) return null;
   return readCandidateMeta(dir)?.status ?? "pending";
 }
@@ -982,7 +1147,7 @@ function skillRefusal(audit) {
   }
 }
 function readSkillDir(dir, scope, home) {
-  const name = basename2(dir);
+  const name = basename3(dir);
   const audit = auditSkillDir(dir);
   const queued = queueState(home, name);
   const base = { kind: "skill", name, scope, dir, description: audit.summary?.description ?? "" };
@@ -994,6 +1159,10 @@ function readSkillDir(dir, scope, home) {
     };
   }
   return audit.shareable ? { ...base, shareable: true } : { ...base, shareable: false, reason: skillRefusal(audit) };
+}
+function commandItem(entry, audit) {
+  const base = { kind: "command", name: entry.name, scope: entry.scope, file: entry.file };
+  return audit.shareable ? { ...base, description: audit.description ?? "", shareable: true } : { ...base, description: "", shareable: false, reason: commandRefusalSummary(audit) };
 }
 function serverItem(entry, audit) {
   const base = {
@@ -1013,19 +1182,22 @@ function buildInventory(paths = {}) {
   for (const { dir, scope } of localSkillDirs(paths)) {
     let entries;
     try {
-      entries = readdirSync4(dir);
+      entries = readdirSync5(dir);
     } catch {
       continue;
     }
     for (const entry of entries.sort()) {
-      if (!isDirectory(join9(dir, entry))) continue;
-      byName.set(entry, readSkillDir(join9(dir, entry), scope, home));
+      if (!isDirectory(join10(dir, entry))) continue;
+      byName.set(entry, readSkillDir(join10(dir, entry), scope, home));
     }
   }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => serverItem(entry, auditServer(entry.config))
   );
-  return { skills: [...byName.values()], servers };
+  const commands = readLocalCommands(paths.userHome ?? homedir4(), paths.cwd ?? process.cwd()).map(
+    (entry) => commandItem(entry, auditCommand(entry.file))
+  );
+  return { skills: [...byName.values()], servers, commands };
 }
 var DESCRIPTION_CHARS = 150;
 function oneLine(text) {
@@ -1033,8 +1205,8 @@ function oneLine(text) {
   return first.length > DESCRIPTION_CHARS ? `${first.slice(0, DESCRIPTION_CHARS).trimEnd()}...` : first;
 }
 function formatInventory(inv) {
-  if (!inv.skills.length && !inv.servers.length) {
-    return "No skills and no MCP servers are set up on this machine or in this project, so there is nothing to take to the team yet.";
+  if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
+    return "No skills, MCP servers or commands are set up on this machine or in this project, so there is nothing to take to the team yet.";
   }
   const lines = ["Your local Claude Code setup, as it is on this machine:"];
   if (inv.skills.length) {
@@ -1051,7 +1223,7 @@ function formatInventory(inv) {
   if (inv.servers.length) {
     lines.push(
       "",
-      `MCP servers (${inv.servers.length}) - the ones you pick go out together as ONE merge request to the team repository`,
+      `MCP servers (${inv.servers.length}) - the ones you pick go out as part of ONE merge request to the team repository`,
       ""
     );
     inv.servers.forEach((server, i) => {
@@ -1060,11 +1232,26 @@ function formatInventory(inv) {
       lines.push(`  ${i + 1}. ${server.name}  [${server.scope}, ${server.transport}]  ${state}`);
     });
   }
+  if (inv.commands.length) {
+    lines.push(
+      "",
+      `Commands (${inv.commands.length}) - the ones you pick travel in that SAME merge request, as commands/<name>.md`,
+      ""
+    );
+    inv.commands.forEach((command, i) => {
+      lines.push(
+        `  ${i + 1}. /${command.name}  [${command.scope}]${command.shareable ? "" : `  not shareable: ${command.reason}`}`
+      );
+      if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
+    });
+    lines.push("", "  Commands namespaced in a subdirectory (/git:sync) cannot travel yet and are not listed.");
+  }
   lines.push(
     "",
-    "Nothing is selected and nothing has been shared. A skill carrying a credential is",
-    "refused rather than redacted, and anything in a server's headers or env that is not a",
-    "plain ${VAR} reference stays here: the name of a secret can travel, the secret cannot."
+    "Nothing is selected and nothing has been shared. A skill or a command carrying a",
+    "credential is refused rather than redacted, and anything in a server's headers or env",
+    "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
+    "secret cannot."
   );
   return lines.join("\n");
 }
@@ -1082,33 +1269,39 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     if (intake.ok) result.queued.push(intake.slug);
     else result.refused.push({ name, kind: "skill", reason: intake.error });
   }
-  if (!selection.servers.length) return result;
   const entries = [];
   for (const name of selection.servers) {
     const server = inv.servers.find((s) => s.name === name);
     if (!server) result.refused.push({ name, kind: "mcp", reason: "no MCP server of that name is configured here" });
     else entries.push(server.entry);
   }
-  if (!entries.length) return result;
+  const commands = [];
+  for (const name of selection.commands) {
+    const command = inv.commands.find((c) => c.name === name);
+    if (!command) result.refused.push({ name, kind: "command", reason: "no command of that name is installed here" });
+    else commands.push({ name: command.name, scope: command.scope === "project" ? "project" : "personal", file: command.file });
+  }
+  if (!entries.length && !commands.length) return result;
   if (!team) {
-    for (const entry of entries) {
-      result.refused.push({
-        name: entry.name,
-        kind: "mcp",
-        reason: "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first"
-      });
-    }
+    const reason = "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first";
+    for (const entry of entries) result.refused.push({ name: entry.name, kind: "mcp", reason });
+    for (const command of commands) result.refused.push({ name: command.name, kind: "command", reason });
     return result;
   }
-  const outcome = publishMcpServers(entries, team, git, forge);
-  result.mcp = outcome;
+  const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge);
+  result.team = outcome;
   for (const refusal of outcome.refused ?? []) {
-    result.refused.push({ name: refusal.name, kind: "mcp", reason: refusal.reason });
+    result.refused.push({ name: refusal.name, kind: refusal.kind, reason: refusal.reason });
   }
   if (!outcome.ok && outcome.error) {
-    const judged = new Set((outcome.refused ?? []).map((r) => r.name));
+    const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
     for (const entry of entries) {
-      if (!judged.has(entry.name)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
+      if (!judged.has(`mcp:${entry.name}`)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
+    }
+    for (const command of commands) {
+      if (!judged.has(`command:${command.name}`)) {
+        result.refused.push({ name: command.name, kind: "command", reason: outcome.error });
+      }
     }
   }
   return result;
@@ -1123,33 +1316,42 @@ function formatMigrateResult(result, marketplaceName) {
       "Run /handbook:review to send them to the team, add them to a project, or keep them."
     );
   }
-  const mcp = result.mcp;
-  if (mcp?.ok) {
-    const names = mcp.serverNames ?? [];
+  const shared = result.team;
+  if (shared?.ok) {
+    const servers = shared.serverNames ?? [];
+    const commands = shared.commandNames ?? [];
     if (lines.length) lines.push("");
+    lines.push(`Shared with the team (${servers.length + commands.length}) in one merge request:`);
+    if (servers.length) lines.push(`  - MCP servers (${servers.length}): ${servers.join(", ")}`);
+    if (commands.length) lines.push(`  - commands (${commands.length}): ${commands.join(", ")}`);
     lines.push(
-      `Shared with the team (${names.length}) in one merge request: ${names.join(", ")}`,
-      `  - branch: ${mcp.branch}`,
+      `  - branch: ${shared.branch}`,
       // see formatMcpShareResult: a remote whose host manualPrUrl cannot build a link for
       // still got the branch, and "undefined" is not a link
-      mcp.prUrl ? `  - merge request: ${mcp.prUrl}` : mcp.manualUrl ? `  - open the merge request: ${mcp.manualUrl}` : "  - the branch is pushed; open the merge request in your forge"
+      shared.prUrl ? `  - merge request: ${shared.prUrl}` : shared.manualUrl ? `  - open the merge request: ${shared.manualUrl}` : "  - the branch is pushed; open the merge request in your forge"
     );
-    if (mcp.prError) lines.push(`    (the forge CLI could not open it: ${mcp.prError})`);
-    if (mcp.version) {
-      lines.push(`  - plugin version raised to ${mcp.version}, which is what makes teammates fetch it`);
+    if (shared.prError) lines.push(`    (the forge CLI could not open it: ${shared.prError})`);
+    if (shared.version) {
+      lines.push(`  - plugin version raised to ${shared.version}, which is what makes teammates fetch it`);
     }
-    if (mcp.requiresEnv?.length) {
+    if (shared.requiresEnv?.length) {
       lines.push(
-        `  - each teammate must set ${mcp.requiresEnv.join(", ")} in their own environment, or those servers will not start for them`
+        `  - each teammate must set ${shared.requiresEnv.join(", ")} in their own environment, or those servers will not start for them`
       );
     }
-    if (mcp.startsProcess) {
+    if (shared.startsProcess) {
       lines.push("  - at least one of these starts a process on every teammate's machine; the request says which");
     }
-    if (marketplaceName) {
+    if (marketplaceName && servers.length) {
       lines.push(
         `  - after the merge they appear as plugin:${marketplaceName}:<name>. Your own copies are untouched:`,
         "    this never writes to ~/.claude.json, so you will see both until you remove yours."
+      );
+    }
+    if (marketplaceName && commands.length) {
+      lines.push(
+        `  - after the merge the commands are typed as /${marketplaceName}:<name>. Your own are untouched:`,
+        "    this never writes to ~/.claude/commands, so both names keep working."
       );
     }
   }
@@ -1163,7 +1365,9 @@ function formatMigrateResult(result, marketplaceName) {
 
 // src/cli/migrate.ts
 function usage() {
-  console.error("usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]...");
+  console.error(
+    "usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]..."
+  );
   process.exit(2);
 }
 function resolve(available, wanted) {
@@ -1171,22 +1375,24 @@ function resolve(available, wanted) {
   const loose = available.filter((name) => name.toLowerCase() === wanted.toLowerCase());
   return loose.length === 1 ? loose[0] : wanted;
 }
+var FLAGS = ["--skill", "--mcp", "--command"];
 function parseSelection(args, inv) {
-  const selection = { skills: [], servers: [] };
+  const selection = { skills: [], servers: [], commands: [] };
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     const value = args[i + 1];
-    if (flag !== "--skill" && flag !== "--mcp") continue;
+    if (!FLAGS.includes(flag)) continue;
     if (!value || value.startsWith("--")) usage();
     if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
-    else selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
+    else if (flag === "--mcp") selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
+    else selection.commands.push(resolve(inv.commands.map((c) => c.name), value.replace(/^\//, "")));
     i++;
   }
   return selection;
 }
 function main() {
   const args = process.argv.slice(2);
-  const selected = args.some((a) => a === "--skill" || a === "--mcp");
+  const selected = args.some((a) => FLAGS.includes(a));
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
   if (cmd === "list" && selected) usage();
@@ -1195,13 +1401,13 @@ function main() {
     console.log(formatInventory(inv));
     if (!loadTeamConfig()) {
       console.log(
-        "\nNo team repository is configured yet. Skills can still be queued for review, but the MCP servers have nowhere to go: run /handbook:init (or /handbook:join <url>) first."
+        "\nNo team repository is configured yet. Skills can still be queued for review, but the MCP servers and commands have nowhere to go: run /handbook:init (or /handbook:join <url>) first."
       );
     }
     return;
   }
   const selection = parseSelection(args, inv);
-  if (!selection.skills.length && !selection.servers.length) {
+  if (!selection.skills.length && !selection.servers.length && !selection.commands.length) {
     console.log("Nothing was selected, so nothing was queued and nothing was shared.");
     return;
   }
@@ -1214,8 +1420,8 @@ function main() {
   }
   const team = loadTeamConfig();
   const result = shareSelection(selection, team);
-  if (team && result.mcp?.learnedBranchPrefix) {
-    saveTeamConfig({ ...team, branchPrefix: result.mcp.learnedBranchPrefix });
+  if (team && result.team?.learnedBranchPrefix) {
+    saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
   }
   console.log(formatMigrateResult(result, team?.marketplaceName));
   if (result.refused.length) process.exitCode = 1;

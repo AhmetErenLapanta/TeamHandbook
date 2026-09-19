@@ -8,6 +8,7 @@ import {
   buildMcpPrBody,
   buildPrBody,
   buildPrTitle,
+  buildSelectionPrBody,
   formatMcpShareResult,
   manualPrUrl,
   publishCandidate,
@@ -558,6 +559,33 @@ describe("buildMcpPrBody / formatMcpShareResult", () => {
     expect(body).toContain("narrower claim");
     expect(body).toContain("heuristic");
     expect(body).toContain("`args` is not");
+  });
+
+  it("given commands travel too, when the request is written, then each file is named and the check stays a check", () => {
+    const body = buildSelectionPrBody(
+      [{ entry: stdio, audit: auditServer(stdio.config) }],
+      [{ name: "explain", content: "Explain it.\n" }],
+    );
+
+    expect(body).toContain("- command: `/explain`");
+    expect(body).toContain("- file: `commands/explain.md`");
+    // a merged command is read by Claude as instructions on a teammate's machine, which
+    // is a consent fact the reviewer cannot get from the title
+    expect(body).toContain("read as instructions");
+    expect(body).toContain("## What was checked");
+    // the command paragraph says what the scan looked for and stops there: the sentence
+    // that tells a reviewer the files are clean is the sentence that stops them looking
+    expect(body).toContain("not a proof");
+    expect(body).toContain("Read the file in this diff before merging.");
+  });
+
+  it("given a request of commands alone, when it is written, then it claims nothing about servers it does not carry", () => {
+    const body = buildSelectionPrBody([], [{ name: "explain", content: "Explain it.\n" }]);
+
+    expect(body).toContain("Adds one slash command to this plugin");
+    expect(body).not.toContain("`headers`");
+    expect(body).not.toContain("endpoint");
+    expect(body).toContain("narrower claim");
   });
 
   it("given the request is open, when the result is reported, then the local server is named as still present", () => {

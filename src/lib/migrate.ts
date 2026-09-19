@@ -7,8 +7,10 @@ import { auditSkillDir, intakeSkill, readCandidateMeta } from "./queue.js";
 import type { CandidateStatus, SkillAudit } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 import { handbookHome } from "./session-state.js";
-import { publishMcpServers } from "./publish.js";
-import type { McpPublishOutcome } from "./publish.js";
+import { publishTeamSelection } from "./publish.js";
+import type { TeamPublishOutcome } from "./publish.js";
+import { auditCommand, commandRefusalSummary, readLocalCommands } from "./commands.js";
+import type { CommandAudit, CommandEntry } from "./commands.js";
 import { runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { runForge } from "./forge.js";
@@ -24,12 +26,12 @@ import type { ForgeRunner } from "./forge.js";
 // repository in the month before this existed.
 //
 // This module reads that setup and runs the selection. It opens no new route out of the
-// machine: a selected skill goes through intakeSkill, a selected server through
-// publishMcpServers, and both of those screen for credentials themselves. The screen is
+// machine: a selected skill goes through intakeSkill, a selected server or command through
+// publishTeamSelection, and all of those screen for credentials themselves. The screen is
 // advisory; the refusal lives where it lived before.
 //
-// Everything here reads ~/.claude/skills, the current project's .claude/skills and
-// ~/.claude.json. It writes to none of them.
+// Everything here reads ~/.claude/skills, ~/.claude/commands, the current project's
+// .claude/skills and .claude/commands, and ~/.claude.json. It writes to none of them.
 
 export type InventoryScope = "personal" | "project" | "user";
 
@@ -58,14 +60,26 @@ export interface ServerItem {
   fullReason?: string;
 }
 
+export interface CommandItem {
+  kind: "command";
+  name: string;
+  scope: InventoryScope;
+  file: string;
+  description: string;
+  shareable: boolean;
+  reason?: string;
+}
+
 export interface Inventory {
   skills: SkillItem[];
   servers: ServerItem[];
+  commands: CommandItem[];
 }
 
 export interface Selection {
   skills: string[];
   servers: string[];
+  commands: string[];
 }
 
 /**
@@ -80,7 +94,7 @@ export interface InventoryPaths {
   home?: string;
   /** the project whose .claude/skills and MCP scope apply here */
   cwd?: string;
-  /** the home whose ~/.claude/skills holds the skills that load everywhere */
+  /** the home whose ~/.claude/skills and ~/.claude/commands load everywhere */
   userHome?: string;
   /** Claude Code's own config file, which holds the MCP servers */
   configFile?: string;
@@ -154,6 +168,13 @@ function readSkillDir(dir: string, scope: InventoryScope, home: string): SkillIt
     : { ...base, shareable: false, reason: skillRefusal(audit) };
 }
 
+function commandItem(entry: CommandEntry, audit: CommandAudit): CommandItem {
+  const base = { kind: "command" as const, name: entry.name, scope: entry.scope, file: entry.file };
+  return audit.shareable
+    ? { ...base, description: audit.description ?? "", shareable: true }
+    : { ...base, description: "", shareable: false, reason: commandRefusalSummary(audit) };
+}
+
 function serverItem(entry: McpServerEntry, audit: McpAudit): ServerItem {
   const base = {
     kind: "mcp" as const,
@@ -203,7 +224,10 @@ export function buildInventory(paths: InventoryPaths = {}): Inventory {
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => serverItem(entry, auditServer(entry.config)),
   );
-  return { skills: [...byName.values()], servers };
+  const commands = readLocalCommands(paths.userHome ?? homedir(), paths.cwd ?? process.cwd()).map((entry) =>
+    commandItem(entry, auditCommand(entry.file)),
+  );
+  return { skills: [...byName.values()], servers, commands };
 }
 
 // Long enough to tell two skills apart, short enough that twenty-two of them still read
@@ -229,10 +253,10 @@ function oneLine(text: string): string {
  * merge request. Reading "shared" over both would be wrong about one of them.
  */
 export function formatInventory(inv: Inventory): string {
-  if (!inv.skills.length && !inv.servers.length) {
+  if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
     return (
-      "No skills and no MCP servers are set up on this machine or in this project, so there " +
-      "is nothing to take to the team yet."
+      "No skills, MCP servers or commands are set up on this machine or in this project, so " +
+      "there is nothing to take to the team yet."
     );
   }
   const lines = ["Your local Claude Code setup, as it is on this machine:"];
@@ -250,7 +274,7 @@ export function formatInventory(inv: Inventory): string {
   if (inv.servers.length) {
     lines.push(
       "",
-      `MCP servers (${inv.servers.length}) - the ones you pick go out together as ONE merge request to the team repository`,
+      `MCP servers (${inv.servers.length}) - the ones you pick go out as part of ONE merge request to the team repository`,
       "",
     );
     inv.servers.forEach((server, i) => {
@@ -263,11 +287,28 @@ export function formatInventory(inv: Inventory): string {
       lines.push(`  ${i + 1}. ${server.name}  [${server.scope}, ${server.transport}]  ${state}`);
     });
   }
+  if (inv.commands.length) {
+    lines.push(
+      "",
+      `Commands (${inv.commands.length}) - the ones you pick travel in that SAME merge request, as commands/<name>.md`,
+      "",
+    );
+    inv.commands.forEach((command, i) => {
+      lines.push(
+        `  ${i + 1}. /${command.name}  [${command.scope}]${command.shareable ? "" : `  not shareable: ${command.reason}`}`,
+      );
+      if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
+    });
+    // Said once, in the list, rather than left for the person who wonders later why
+    // /git:sync is missing: what is not offered here is not a setup this screen judged.
+    lines.push("", "  Commands namespaced in a subdirectory (/git:sync) cannot travel yet and are not listed.");
+  }
   lines.push(
     "",
-    "Nothing is selected and nothing has been shared. A skill carrying a credential is",
-    "refused rather than redacted, and anything in a server's headers or env that is not a",
-    "plain ${VAR} reference stays here: the name of a secret can travel, the secret cannot.",
+    "Nothing is selected and nothing has been shared. A skill or a command carrying a",
+    "credential is refused rather than redacted, and anything in a server's headers or env",
+    "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
+    "secret cannot.",
   );
   return lines.join("\n");
 }
@@ -275,10 +316,10 @@ export function formatInventory(inv: Inventory): string {
 export interface MigrateResult {
   /** skills now waiting in the review queue */
   queued: string[];
-  /** the request the selected servers went out in, absent when none were selected */
-  mcp?: McpPublishOutcome;
+  /** the request the selected servers and commands went out in, absent when neither was */
+  team?: TeamPublishOutcome;
   /** anything named that did not travel, with the reason the path that refused it gave */
-  refused: Array<{ name: string; kind: "skill" | "mcp"; reason: string }>;
+  refused: Array<{ name: string; kind: "skill" | "mcp" | "command"; reason: string }>;
 }
 
 /**
@@ -289,9 +330,9 @@ export interface MigrateResult {
  * that other people can see. A failure in the second half must not cost the first.
  *
  * Every selected skill is handed to intakeSkill even when the screen already marked it
- * refused, and every selected server to publishMcpServers. Those two own the credential
- * sieve, and a batch that decided for itself which items were worth screening would be
- * exactly the shortcut this card is easiest to break with.
+ * refused, and every selected server and command to publishTeamSelection. Those two own
+ * the credential sieve, and a batch that decided for itself which items were worth
+ * screening would be exactly the shortcut this card is easiest to break with.
  */
 export function shareSelection(
   selection: Selection,
@@ -313,36 +354,45 @@ export function shareSelection(
     if (intake.ok) result.queued.push(intake.slug!);
     else result.refused.push({ name, kind: "skill", reason: intake.error! });
   }
-  if (!selection.servers.length) return result;
   const entries: McpServerEntry[] = [];
   for (const name of selection.servers) {
     const server = inv.servers.find((s) => s.name === name);
     if (!server) result.refused.push({ name, kind: "mcp", reason: "no MCP server of that name is configured here" });
     else entries.push(server.entry);
   }
-  if (!entries.length) return result;
+  const commands: CommandEntry[] = [];
+  for (const name of selection.commands) {
+    const command = inv.commands.find((c) => c.name === name);
+    if (!command) result.refused.push({ name, kind: "command", reason: "no command of that name is installed here" });
+    else commands.push({ name: command.name, scope: command.scope === "project" ? "project" : "personal", file: command.file });
+  }
+  if (!entries.length && !commands.length) return result;
   if (!team) {
-    for (const entry of entries) {
-      result.refused.push({
-        name: entry.name,
-        kind: "mcp",
-        reason: "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first",
-      });
-    }
+    // Both kinds need the repository, so both are turned back by name. The skills above
+    // are already queued and stay queued: a missing team repo is not their problem.
+    const reason = "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first";
+    for (const entry of entries) result.refused.push({ name: entry.name, kind: "mcp", reason });
+    for (const command of commands) result.refused.push({ name: command.name, kind: "command", reason });
     return result;
   }
-  const outcome = publishMcpServers(entries, team, git, forge);
-  result.mcp = outcome;
+  const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge);
+  result.team = outcome;
   for (const refusal of outcome.refused ?? []) {
-    result.refused.push({ name: refusal.name, kind: "mcp", reason: refusal.reason });
+    result.refused.push({ name: refusal.name, kind: refusal.kind, reason: refusal.reason });
   }
   // A whole-request failure (an unreadable team file, a rejected push, no git identity)
-  // names no single server, so it would otherwise be reported about nothing at all. The
-  // ones already turned back keep the reason they were turned back for.
+  // names no single item, so it would otherwise be reported about nothing at all. The ones
+  // already turned back keep the reason they were turned back for - and the set is keyed
+  // by kind as well as name, because a server and a command may share one.
   if (!outcome.ok && outcome.error) {
-    const judged = new Set((outcome.refused ?? []).map((r) => r.name));
+    const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
     for (const entry of entries) {
-      if (!judged.has(entry.name)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
+      if (!judged.has(`mcp:${entry.name}`)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
+    }
+    for (const command of commands) {
+      if (!judged.has(`command:${command.name}`)) {
+        result.refused.push({ name: command.name, kind: "command", reason: outcome.error });
+      }
     }
   }
   return result;
@@ -366,38 +416,50 @@ export function formatMigrateResult(result: MigrateResult, marketplaceName?: str
       "Run /handbook:review to send them to the team, add them to a project, or keep them.",
     );
   }
-  const mcp = result.mcp;
-  if (mcp?.ok) {
-    const names = mcp.serverNames ?? [];
+  const shared = result.team;
+  if (shared?.ok) {
+    const servers = shared.serverNames ?? [];
+    const commands = shared.commandNames ?? [];
     if (lines.length) lines.push("");
+    // Named by kind rather than totalled. One request carried them, but a server that
+    // connects and a command somebody types are not interchangeable, and a manager
+    // checking what they just sent reads this line, not the merge request.
+    lines.push(`Shared with the team (${servers.length + commands.length}) in one merge request:`);
+    if (servers.length) lines.push(`  - MCP servers (${servers.length}): ${servers.join(", ")}`);
+    if (commands.length) lines.push(`  - commands (${commands.length}): ${commands.join(", ")}`);
     lines.push(
-      `Shared with the team (${names.length}) in one merge request: ${names.join(", ")}`,
-      `  - branch: ${mcp.branch}`,
+      `  - branch: ${shared.branch}`,
       // see formatMcpShareResult: a remote whose host manualPrUrl cannot build a link for
       // still got the branch, and "undefined" is not a link
-      mcp.prUrl
-        ? `  - merge request: ${mcp.prUrl}`
-        : mcp.manualUrl
-          ? `  - open the merge request: ${mcp.manualUrl}`
+      shared.prUrl
+        ? `  - merge request: ${shared.prUrl}`
+        : shared.manualUrl
+          ? `  - open the merge request: ${shared.manualUrl}`
           : "  - the branch is pushed; open the merge request in your forge",
     );
-    if (mcp.prError) lines.push(`    (the forge CLI could not open it: ${mcp.prError})`);
-    if (mcp.version) {
-      lines.push(`  - plugin version raised to ${mcp.version}, which is what makes teammates fetch it`);
+    if (shared.prError) lines.push(`    (the forge CLI could not open it: ${shared.prError})`);
+    if (shared.version) {
+      lines.push(`  - plugin version raised to ${shared.version}, which is what makes teammates fetch it`);
     }
-    if (mcp.requiresEnv?.length) {
+    if (shared.requiresEnv?.length) {
       lines.push(
-        `  - each teammate must set ${mcp.requiresEnv.join(", ")} in their own environment, ` +
+        `  - each teammate must set ${shared.requiresEnv.join(", ")} in their own environment, ` +
           "or those servers will not start for them",
       );
     }
-    if (mcp.startsProcess) {
+    if (shared.startsProcess) {
       lines.push("  - at least one of these starts a process on every teammate's machine; the request says which");
     }
-    if (marketplaceName) {
+    if (marketplaceName && servers.length) {
       lines.push(
         `  - after the merge they appear as plugin:${marketplaceName}:<name>. Your own copies are untouched:`,
         "    this never writes to ~/.claude.json, so you will see both until you remove yours.",
+      );
+    }
+    if (marketplaceName && commands.length) {
+      lines.push(
+        `  - after the merge the commands are typed as /${marketplaceName}:<name>. Your own are untouched:`,
+        "    this never writes to ~/.claude/commands, so both names keep working.",
       );
     }
   }

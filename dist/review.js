@@ -442,8 +442,202 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync2, readFileSync as readFileSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
+
+// src/lib/queue.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { basename, join as join6 } from "node:path";
+var STATUSES = ["pending", "approved", "rejected", "archived"];
+function isSafeSlug(slug) {
+  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
+}
+function candidateMetaFile(dir) {
+  return join6(dir, "candidate.json");
+}
+function writeCandidateMeta(dir, meta) {
+  writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
+}
+function synthesizeMeta(dir) {
+  let md;
+  try {
+    md = readFileSync3(join6(dir, "SKILL.md"), "utf8");
+  } catch {
+    return null;
+  }
+  const summary = parseSkillFrontmatter(md);
+  if (!summary) return null;
+  let grounded = {};
+  try {
+    grounded = JSON.parse(readFileSync3(join6(dir, "grounded-case.json"), "utf8"));
+  } catch {
+  }
+  const gate = grounded.gate;
+  return {
+    slug: basename(dir),
+    status: "pending",
+    createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
+    scope: summary.scope ?? "team",
+    description: summary.description,
+    fingerprint: typeof grounded.fingerprint === "string" ? grounded.fingerprint : "",
+    sessionId: "",
+    gate: gate && typeof gate.total === "number" ? gate : null
+  };
+}
+function readCandidateMeta(dir) {
+  try {
+    const parsed = JSON.parse(readFileSync3(candidateMetaFile(dir), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
+      return {
+        ...parsed,
+        slug: basename(dir),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
+      };
+    }
+  } catch {
+  }
+  return synthesizeMeta(dir);
+}
+function listCandidates(home = handbookHome(), status) {
+  const base = candidatesDir(home);
+  let entries;
+  try {
+    entries = readdirSync3(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join6(base, e.name))).filter((m) => m !== null);
+  const filtered = status ? metas.filter((m) => m.status === status) : metas;
+  return filtered.sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
+  );
+}
+function relativeAge(iso, now) {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "unknown age";
+  const mins = Math.max(0, Math.round((now - then) / 6e4));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+function originProject(meta) {
+  if (!meta.cwd) return "unknown project";
+  return meta.cwd.split("/").filter(Boolean).pop() ?? meta.cwd;
+}
+function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString(), options = {}) {
+  if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
+  const dir = join6(candidatesDir(home), slug);
+  const meta = readCandidateMeta(dir);
+  if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
+  if (meta.status !== "pending") {
+    return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
+  }
+  const updated = { ...meta, status, decidedAt };
+  writeCandidateMeta(dir, updated);
+  let muted = false;
+  if (status === "rejected" && options.mute && meta.fingerprint) {
+    muteFingerprint(meta.fingerprint, home);
+    muted = true;
+  }
+  return { ok: true, meta: updated, muted };
+}
+function archiveCandidate(home, slug, reason, archivedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
+  const dir = join6(candidatesDir(home), slug);
+  const meta = readCandidateMeta(dir);
+  if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
+  if (meta.status !== "pending") {
+    return { ok: false, error: `candidate "${slug}" is ${meta.status}, not pending` };
+  }
+  writeCandidateMeta(dir, { ...meta, status: "archived", archivedAt, archiveReason: reason });
+  return { ok: true, entry: { slug, previousStatus: meta.status, archivedAt, reason } };
+}
+function archivesDir(home = handbookHome()) {
+  return join6(home, "archives");
+}
+function writeArchiveManifest(home, manifest) {
+  const dir = archivesDir(home);
+  mkdirSync4(dir, { recursive: true });
+  const file = join6(dir, `${manifest.sweptAt.replace(/[:.]/g, "-")}.json`);
+  writeFileAtomic(file, JSON.stringify(manifest, null, 2) + "\n");
+  return file;
+}
+function readArchiveManifest(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync3(file, "utf8"));
+  } catch {
+    return null;
+  }
+  const m = parsed;
+  if (typeof m?.sweptAt !== "string" || !Array.isArray(m.entries)) return null;
+  const entries = m.entries.filter(
+    (e) => typeof e?.slug === "string" && STATUSES.includes(e?.previousStatus)
+  );
+  return { sweptAt: m.sweptAt, reason: typeof m.reason === "string" ? m.reason : "", entries };
+}
+function listArchiveManifests(home = handbookHome()) {
+  try {
+    return readdirSync3(archivesDir(home)).filter((f) => f.endsWith(".json")).sort().map((f) => join6(archivesDir(home), f));
+  } catch {
+    return [];
+  }
+}
+function restoreArchived(home, manifest) {
+  const result = { restored: [], skipped: [] };
+  for (const entry of manifest.entries) {
+    if (!isSafeSlug(entry.slug)) {
+      result.skipped.push({ slug: entry.slug, reason: "invalid candidate name" });
+      continue;
+    }
+    const dir = join6(candidatesDir(home), entry.slug);
+    const meta = readCandidateMeta(dir);
+    if (!meta) {
+      result.skipped.push({ slug: entry.slug, reason: "no longer in the queue" });
+      continue;
+    }
+    if (meta.status !== "archived") {
+      result.skipped.push({ slug: entry.slug, reason: `already ${meta.status}` });
+      continue;
+    }
+    const { archivedAt: _archivedAt, archiveReason: _archiveReason, ...rest } = meta;
+    writeCandidateMeta(dir, { ...rest, status: entry.previousStatus });
+    result.restored.push(entry.slug);
+  }
+  return result;
+}
+function mutedFile(home = handbookHome()) {
+  return join6(home, "muted.json");
+}
+function loadMutedFingerprints(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync3(mutedFile(home), "utf8"));
+    if (Array.isArray(parsed)) return new Set(parsed.filter((f) => typeof f === "string"));
+  } catch {
+  }
+  return /* @__PURE__ */ new Set();
+}
+function muteFingerprint(fingerprint, home = handbookHome()) {
+  const muted = loadMutedFingerprints(home);
+  muted.add(fingerprint);
+  writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
+}
+function formatCandidateList(metas, now = Date.now(), label = "Pending") {
+  if (metas.length === 0) return `No ${label.toLowerCase()} candidates.`;
+  const lines = [`${label} candidates (${metas.length}), newest first:`, ""];
+  metas.forEach((meta, i) => {
+    const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
+    const kind = meta.kind ? `[${meta.kind}]  ` : "";
+    lines.push(
+      `  ${i + 1}. ${meta.slug}  ${kind}[${meta.scope}]  ${gate}  \xB7  ${relativeAge(meta.createdAt, now)}  \xB7  from ${originProject(meta)}`
+    );
+    lines.push(`     ${meta.description}`);
+  });
+  return lines.join("\n");
+}
+
+// src/lib/publish.ts
 function buildPrTitle(slug) {
   return `feat(skill): add ${slug}`;
 }
@@ -492,7 +686,7 @@ function buildPrBody(meta, grounded) {
 }
 function readGroundedCase(candidateDir) {
   try {
-    const parsed = JSON.parse(readFileSync3(join6(candidateDir, "grounded-case.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync4(join7(candidateDir, "grounded-case.json"), "utf8"));
     if (typeof parsed?.command === "string" && typeof parsed?.error === "string" && typeof parsed?.expect === "string" && Array.isArray(parsed?.edits)) {
       return parsed;
     }
@@ -501,14 +695,14 @@ function readGroundedCase(candidateDir) {
   return null;
 }
 function bumpPluginVersion(repoDir) {
-  const file = join6(repoDir, ".claude-plugin", "plugin.json");
+  const file = join7(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const plugin = JSON.parse(readFileSync3(file, "utf8"));
+    const plugin = JSON.parse(readFileSync4(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
     plugin.version = parts.join(".");
-    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
+    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
@@ -591,7 +785,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   }
   let candidateSkillMd;
   try {
-    candidateSkillMd = readFileSync3(join6(candidateDir, "SKILL.md"), "utf8");
+    candidateSkillMd = readFileSync4(join7(candidateDir, "SKILL.md"), "utf8");
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
@@ -599,14 +793,14 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   if ("error" in identity) return { ok: false, error: identity.error };
   const identityArgs = identity.args;
   const workdir = handbookWorkdir("handbook-publish-");
-  const repoDir = join6(workdir, "repo");
+  const repoDir = join7(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
     const slug = uniqueSlug(
       meta.slug,
-      (s) => existsSync2(join6(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
+      (s) => existsSync3(join7(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
     );
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix;
@@ -617,7 +811,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       git(["checkout", "-b", branch], repoDir);
       copySkillPayload(
         candidateDir,
-        join6(repoDir, skillDir),
+        join7(repoDir, skillDir),
         slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
       );
       version = bumpPluginVersion(repoDir);
@@ -655,198 +849,6 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   } finally {
     rmSync3(workdir, { recursive: true, force: true });
   }
-}
-
-// src/lib/queue.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join7 } from "node:path";
-var STATUSES = ["pending", "approved", "rejected", "archived"];
-function isSafeSlug(slug) {
-  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
-}
-function candidateMetaFile(dir) {
-  return join7(dir, "candidate.json");
-}
-function writeCandidateMeta(dir, meta) {
-  writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
-}
-function synthesizeMeta(dir) {
-  let md;
-  try {
-    md = readFileSync4(join7(dir, "SKILL.md"), "utf8");
-  } catch {
-    return null;
-  }
-  const summary = parseSkillFrontmatter(md);
-  if (!summary) return null;
-  let grounded = {};
-  try {
-    grounded = JSON.parse(readFileSync4(join7(dir, "grounded-case.json"), "utf8"));
-  } catch {
-  }
-  const gate = grounded.gate;
-  return {
-    slug: basename(dir),
-    status: "pending",
-    createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
-    scope: summary.scope ?? "team",
-    description: summary.description,
-    fingerprint: typeof grounded.fingerprint === "string" ? grounded.fingerprint : "",
-    sessionId: "",
-    gate: gate && typeof gate.total === "number" ? gate : null
-  };
-}
-function readCandidateMeta(dir) {
-  try {
-    const parsed = JSON.parse(readFileSync4(candidateMetaFile(dir), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
-      return {
-        ...parsed,
-        slug: basename(dir),
-        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
-      };
-    }
-  } catch {
-  }
-  return synthesizeMeta(dir);
-}
-function listCandidates(home = handbookHome(), status) {
-  const base = candidatesDir(home);
-  let entries;
-  try {
-    entries = readdirSync3(base, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join7(base, e.name))).filter((m) => m !== null);
-  const filtered = status ? metas.filter((m) => m.status === status) : metas;
-  return filtered.sort(
-    (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
-  );
-}
-function relativeAge(iso, now) {
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "unknown age";
-  const mins = Math.max(0, Math.round((now - then) / 6e4));
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-function originProject(meta) {
-  if (!meta.cwd) return "unknown project";
-  return meta.cwd.split("/").filter(Boolean).pop() ?? meta.cwd;
-}
-function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString(), options = {}) {
-  if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
-  const dir = join7(candidatesDir(home), slug);
-  const meta = readCandidateMeta(dir);
-  if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
-  if (meta.status !== "pending") {
-    return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
-  }
-  const updated = { ...meta, status, decidedAt };
-  writeCandidateMeta(dir, updated);
-  let muted = false;
-  if (status === "rejected" && options.mute && meta.fingerprint) {
-    muteFingerprint(meta.fingerprint, home);
-    muted = true;
-  }
-  return { ok: true, meta: updated, muted };
-}
-function archiveCandidate(home, slug, reason, archivedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-  if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
-  const dir = join7(candidatesDir(home), slug);
-  const meta = readCandidateMeta(dir);
-  if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
-  if (meta.status !== "pending") {
-    return { ok: false, error: `candidate "${slug}" is ${meta.status}, not pending` };
-  }
-  writeCandidateMeta(dir, { ...meta, status: "archived", archivedAt, archiveReason: reason });
-  return { ok: true, entry: { slug, previousStatus: meta.status, archivedAt, reason } };
-}
-function archivesDir(home = handbookHome()) {
-  return join7(home, "archives");
-}
-function writeArchiveManifest(home, manifest) {
-  const dir = archivesDir(home);
-  mkdirSync4(dir, { recursive: true });
-  const file = join7(dir, `${manifest.sweptAt.replace(/[:.]/g, "-")}.json`);
-  writeFileAtomic(file, JSON.stringify(manifest, null, 2) + "\n");
-  return file;
-}
-function readArchiveManifest(file) {
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync4(file, "utf8"));
-  } catch {
-    return null;
-  }
-  const m = parsed;
-  if (typeof m?.sweptAt !== "string" || !Array.isArray(m.entries)) return null;
-  const entries = m.entries.filter(
-    (e) => typeof e?.slug === "string" && STATUSES.includes(e?.previousStatus)
-  );
-  return { sweptAt: m.sweptAt, reason: typeof m.reason === "string" ? m.reason : "", entries };
-}
-function listArchiveManifests(home = handbookHome()) {
-  try {
-    return readdirSync3(archivesDir(home)).filter((f) => f.endsWith(".json")).sort().map((f) => join7(archivesDir(home), f));
-  } catch {
-    return [];
-  }
-}
-function restoreArchived(home, manifest) {
-  const result = { restored: [], skipped: [] };
-  for (const entry of manifest.entries) {
-    if (!isSafeSlug(entry.slug)) {
-      result.skipped.push({ slug: entry.slug, reason: "invalid candidate name" });
-      continue;
-    }
-    const dir = join7(candidatesDir(home), entry.slug);
-    const meta = readCandidateMeta(dir);
-    if (!meta) {
-      result.skipped.push({ slug: entry.slug, reason: "no longer in the queue" });
-      continue;
-    }
-    if (meta.status !== "archived") {
-      result.skipped.push({ slug: entry.slug, reason: `already ${meta.status}` });
-      continue;
-    }
-    const { archivedAt: _archivedAt, archiveReason: _archiveReason, ...rest } = meta;
-    writeCandidateMeta(dir, { ...rest, status: entry.previousStatus });
-    result.restored.push(entry.slug);
-  }
-  return result;
-}
-function mutedFile(home = handbookHome()) {
-  return join7(home, "muted.json");
-}
-function loadMutedFingerprints(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync4(mutedFile(home), "utf8"));
-    if (Array.isArray(parsed)) return new Set(parsed.filter((f) => typeof f === "string"));
-  } catch {
-  }
-  return /* @__PURE__ */ new Set();
-}
-function muteFingerprint(fingerprint, home = handbookHome()) {
-  const muted = loadMutedFingerprints(home);
-  muted.add(fingerprint);
-  writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
-}
-function formatCandidateList(metas, now = Date.now(), label = "Pending") {
-  if (metas.length === 0) return `No ${label.toLowerCase()} candidates.`;
-  const lines = [`${label} candidates (${metas.length}), newest first:`, ""];
-  metas.forEach((meta, i) => {
-    const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
-    const kind = meta.kind ? `[${meta.kind}]  ` : "";
-    lines.push(
-      `  ${i + 1}. ${meta.slug}  ${kind}[${meta.scope}]  ${gate}  \xB7  ${relativeAge(meta.createdAt, now)}  \xB7  from ${originProject(meta)}`
-    );
-    lines.push(`     ${meta.description}`);
-  });
-  return lines.join("\n");
 }
 
 // src/lib/deliver.ts

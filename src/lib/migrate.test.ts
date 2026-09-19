@@ -20,7 +20,7 @@ function paths(): InventoryPaths {
 }
 
 function select(overrides: Partial<Selection> = {}): Selection {
-  return { skills: [], servers: [], ...overrides };
+  return { skills: [], servers: [], commands: [], ...overrides };
 }
 
 function gitIn(cwd: string, args: string[]): string {
@@ -35,6 +35,12 @@ function writeSkill(root: string, name: string, files: Record<string, string> = 
     mkdirSync(join(dir, dirname(path)), { recursive: true });
     writeFileSync(join(dir, path), content);
   }
+}
+
+function writeCommand(root: string, name: string, body: string): void {
+  const dir = join(root, ".claude", "commands");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.md`), body);
 }
 
 function writeServers(servers: Record<string, unknown>): void {
@@ -253,11 +259,11 @@ describe("shareSelection", () => {
 
     expect(result.queued).toEqual(["deploy-runbook", "repo-conventions"]);
     expect(result.refused).toEqual([]);
-    expect(result.mcp).toMatchObject({ ok: true, serverNames: ["gitlab", "linear"], version: "1.0.1" });
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab", "linear"], version: "1.0.1" });
     expect(listCandidates(home, "pending").map((c) => c.slug).sort()).toEqual(["deploy-runbook", "repo-conventions"]);
     // the skill nobody picked is still only on this machine
     expect(existsSync(join(candidatesDir(home), "incident-drill"))).toBe(false);
-    const branch = result.mcp!.branch!;
+    const branch = result.team!.branch!;
     const declared = JSON.parse(gitIn(remote, ["show", `${branch}:.mcp.json`]));
     expect(Object.keys(declared.mcpServers).sort()).toEqual(["gitlab", "linear"]);
   });
@@ -275,11 +281,11 @@ describe("shareSelection", () => {
     // both write "1.0.1", git merges the identical line without a conflict, and the second
     // server lands with no version of its own, so no teammate's copy refreshes for it.
     const branches = gitIn(remote, ["branch", "--list"]).trim().split("\n").map((b) => b.replace("*", "").trim());
-    expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([result.mcp!.branch]);
-    expect(result.mcp!.version).toBe("1.0.1");
-    expect(JSON.parse(gitIn(remote, ["show", `${result.mcp!.branch}:.claude-plugin/plugin.json`])).version).toBe("1.0.1");
+    expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([result.team!.branch]);
+    expect(result.team!.version).toBe("1.0.1");
+    expect(JSON.parse(gitIn(remote, ["show", `${result.team!.branch}:.claude-plugin/plugin.json`])).version).toBe("1.0.1");
     // one commit, carrying both servers and the version signal together
-    const commits = gitIn(remote, ["log", "--format=%s", `main..${result.mcp!.branch}`]).trim().split("\n");
+    const commits = gitIn(remote, ["log", "--format=%s", `main..${result.team!.branch}`]).trim().split("\n");
     expect(commits).toHaveLength(1);
     expect(commits[0]).toBe("feat(mcp): add gitlab, linear");
   });
@@ -306,7 +312,7 @@ describe("shareSelection", () => {
       { name: "incident-drill", kind: "skill", reason: expect.stringContaining("references/queries.sql") },
     ]);
     expect(existsSync(join(candidatesDir(home), "incident-drill"))).toBe(false);
-    expect(result.mcp).toMatchObject({ ok: true, serverNames: ["gitlab"] });
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
   });
 
   it("given everything was selected, when one server carries a credential, then it never reaches git and the clean one still goes", () => {
@@ -320,7 +326,7 @@ describe("shareSelection", () => {
 
     const result = shareSelection(select({ servers: ["acme-api", "gitlab"] }), team(), paths(), recordingGit, forge);
 
-    expect(result.mcp).toMatchObject({ ok: true, serverNames: ["gitlab"] });
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
     expect(result.refused).toEqual([
       { name: "acme-api", kind: "mcp", reason: expect.stringContaining("headers.Authorization") },
     ]);
@@ -328,7 +334,7 @@ describe("shareSelection", () => {
     // in the whole run contains it, and the file that was committed does not declare it
     const everyArgument = calls.flat().join(" ");
     expect(everyArgument).not.toContain("8f2c41d9ab7e05631cd4a29f");
-    const declared = JSON.parse(gitIn(remote, ["show", `${result.mcp!.branch}:.mcp.json`]));
+    const declared = JSON.parse(gitIn(remote, ["show", `${result.team!.branch}:.mcp.json`]));
     expect(Object.keys(declared.mcpServers)).toEqual(["gitlab"]);
   });
 
@@ -346,9 +352,9 @@ describe("shareSelection", () => {
     // Selecting several does not lower the bar to the weakest of the three nets: this one
     // passes the headers/env rule and detectSecret, and only the URL scan catches it.
     expect(result.refused).toEqual([{ name: "zapier", kind: "mcp", reason: expect.stringContaining("its URL carries") }]);
-    expect(result.mcp).toMatchObject({ ok: true, serverNames: ["gitlab"] });
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
     expect(calls.flat().join(" ")).not.toContain(TOKEN_IN_URL);
-    expect(JSON.parse(gitIn(remote, ["show", `${result.mcp!.branch}:.mcp.json`])).mcpServers.zapier).toBeUndefined();
+    expect(JSON.parse(gitIn(remote, ["show", `${result.team!.branch}:.mcp.json`])).mcpServers.zapier).toBeUndefined();
   });
 
   it("given every selected server carries a credential, when the selection runs, then git is never run at all", () => {
@@ -367,7 +373,7 @@ describe("shareSelection", () => {
       forge,
     );
 
-    expect(result.mcp!.ok).toBe(false);
+    expect(result.team!.ok).toBe(false);
     expect(calls).toEqual([]);
   });
 
@@ -382,9 +388,9 @@ describe("shareSelection", () => {
 
     const result = shareSelection(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge);
 
-    expect(result.mcp).toMatchObject({ ok: true, serverNames: ["gitlab"] });
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
     expect(result.refused).toEqual([{ name: "linear", kind: "mcp", reason: expect.stringContaining("already declares") }]);
-    const declared = JSON.parse(gitIn(remote, ["show", `${result.mcp!.branch}:.mcp.json`]));
+    const declared = JSON.parse(gitIn(remote, ["show", `${result.team!.branch}:.mcp.json`]));
     expect(declared.mcpServers.linear.url).toBe("https://mcp.linear.app/theirs");
   });
 
@@ -394,7 +400,7 @@ describe("shareSelection", () => {
 
     const result = shareSelection(select({ servers: ["gitlab"] }), team(), paths(), undefined, forge);
 
-    expect(result.mcp!.ok).toBe(false);
+    expect(result.team!.ok).toBe(false);
     expect(result.refused[0]!.reason).toContain("not valid JSON");
     expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
   });
@@ -421,7 +427,7 @@ describe("shareSelection", () => {
 
     expect(result.queued).toEqual(["deploy-runbook"]);
     expect(result.refused[0]!.reason).toContain("/handbook:init");
-    expect(result.mcp).toBeUndefined();
+    expect(result.team).toBeUndefined();
   });
 
   it("given a name nothing on this machine answers to, when it is selected, then it is reported rather than silently dropped", () => {
@@ -432,12 +438,199 @@ describe("shareSelection", () => {
   });
 });
 
+describe("shareSelection carries commands", () => {
+  const SECRET_COMMAND = "Deploy with: curl -H 'Authorization: Bearer ghp_aaaabbbbccccddddeeeeffff' ...\n";
+
+  it("given commands on this machine, when the inventory is read, then they are listed with their scope and description", () => {
+    writeCommand(userHome, "explain", "---\ndescription: Deep-dive explanation of code.\n---\n\nBody.\n");
+    writeCommand(project, "deploy", "Deploy this repo.\n");
+
+    const inv = buildInventory(paths());
+
+    expect(inv.commands.map((c) => [c.name, c.scope, c.shareable])).toEqual([
+      ["explain", "personal", true],
+      ["deploy", "project", true],
+    ]);
+    expect(inv.commands[0]!.description).toBe("Deep-dive explanation of code.");
+    const text = formatInventory(inv);
+    expect(text).toContain("Commands (2)");
+    expect(text).toContain("  1. /explain  [personal]");
+  });
+
+  it("given no command was selected, when the selection runs, then none travels and git is never called", () => {
+    writeCommand(userHome, "explain", "Explain something.\n");
+    const calls: string[][] = [];
+    const recordingGit: GitRunner = (args) => {
+      calls.push(args);
+      return "";
+    };
+
+    const result = shareSelection(select(), team(), paths(), recordingGit, forge);
+
+    expect(result.team).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
+  it("given one command was selected, when the selection runs, then it lands in the team repo as commands/<name>.md", () => {
+    remote = teamRepo();
+    writeCommand(userHome, "explain", "---\ndescription: Deep-dive.\n---\n\nBody.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+
+    const result = shareSelection(select({ commands: ["explain"] }), team(), paths(), undefined, forge);
+
+    expect(result.team).toMatchObject({ ok: true, commandNames: ["explain"], version: "1.0.1" });
+    expect(result.refused).toEqual([]);
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["show", `${branch}:commands/explain.md`])).toBe("---\ndescription: Deep-dive.\n---\n\nBody.\n");
+    // the one nobody picked is still only on this machine
+    expect(() => gitIn(remote, ["show", `${branch}:commands/fix-tests.md`])).toThrow();
+  });
+
+  it("given every kind was selected, when the selection runs, then ONE request carries them and claims ONE version", () => {
+    remote = teamRepo();
+    writeSkill(userHome, "deploy-runbook");
+    writeCommand(userHome, "explain", "Explain something.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+    const inv = buildInventory(paths());
+
+    const result = shareSelection(
+      select({
+        skills: inv.skills.map((s) => s.name),
+        servers: inv.servers.map((s) => s.name),
+        commands: inv.commands.map((c) => c.name),
+      }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+    );
+
+    expect(result.queued).toEqual(["deploy-runbook"]);
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"], commandNames: ["explain", "fix-tests"] });
+    const branch = result.team!.branch!;
+    // DENETIM-URUN-1 U1, within one run: a second request opened off the same clone would
+    // claim the same version and the change in it would reach nobody
+    const branches = gitIn(remote, ["branch", "--list"]).trim().split("\n").map((b) => b.replace("*", "").trim());
+    expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([branch]);
+    const commits = gitIn(remote, ["log", "--format=%s", `main..${branch}`]).trim().split("\n");
+    expect(commits).toEqual(["feat(mcp,commands): add gitlab, explain, fix-tests"]);
+    expect(JSON.parse(gitIn(remote, ["show", `${branch}:.claude-plugin/plugin.json`])).version).toBe("1.0.1");
+    expect(gitIn(remote, ["show", `${branch}:commands/fix-tests.md`])).toBe("Fix the tests.\n");
+  });
+
+  it("given a selected command hides a credential, when the selection runs, then it is refused and the clean ones still travel", () => {
+    remote = teamRepo();
+    writeCommand(userHome, "explain", "Explain something.\n");
+    writeCommand(userHome, "deploy", SECRET_COMMAND);
+
+    const result = shareSelection(select({ commands: ["explain", "deploy"] }), team(), paths(), undefined, forge);
+
+    expect(result.team).toMatchObject({ ok: true, commandNames: ["explain"] });
+    expect(result.refused).toEqual([
+      { name: "deploy", kind: "command", reason: expect.stringContaining("github-token") },
+    ]);
+    const branch = result.team!.branch!;
+    // not one byte of it reached the team repository, redacted or otherwise
+    expect(() => gitIn(remote, ["show", `${branch}:commands/deploy.md`])).toThrow();
+    expect(gitIn(remote, ["log", "-p", `main..${branch}`])).not.toContain("ghp_");
+  });
+
+  it("given every selected command carries a credential, when the selection runs, then git is never run at all", () => {
+    const calls: string[][] = [];
+    const recordingGit: GitRunner = (args) => {
+      calls.push(args);
+      return "";
+    };
+    writeCommand(userHome, "deploy", SECRET_COMMAND);
+
+    const result = shareSelection(
+      select({ commands: ["deploy"] }),
+      { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "acme" },
+      paths(),
+      recordingGit,
+      forge,
+    );
+
+    // the credential never reached a clone, an index, or a working tree
+    expect(calls).toEqual([]);
+    expect(result.team?.ok).toBe(false);
+    expect(result.refused[0]!.reason).toContain("deploy.md");
+  });
+
+  it("given the team already has a command by that name, when it is shared, then theirs is untouched and the rest still go", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+
+    const result = shareSelection(select({ commands: ["explain", "fix-tests"] }), team(), paths(), undefined, forge);
+
+    expect(result.team).toMatchObject({ ok: true, commandNames: ["fix-tests"] });
+    expect(result.refused).toEqual([
+      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command") },
+    ]);
+    // the reason says what to do instead of leaving the user to guess why nothing happened
+    expect(result.refused[0]!.reason).toContain("rename yours");
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["show", `${branch}:commands/explain.md`])).toBe("The team's own explain.\n");
+  });
+
+  it("given a command collides while a server travels, when they are shared, then the request still goes and the collision is reported", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+
+    const result = shareSelection(select({ servers: ["gitlab"], commands: ["explain"] }), team(), paths(), undefined, forge);
+
+    // a collision in one kind must not turn back the other: the server has nothing to do
+    // with a name the team already uses for a command
+    expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
+    expect(result.team!.commandNames).toBeUndefined();
+    expect(result.refused).toEqual([
+      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command") },
+    ]);
+    const branch = result.team!.branch!;
+    expect(Object.keys(JSON.parse(gitIn(remote, ["show", `${branch}:.mcp.json`])).mcpServers)).toEqual(["gitlab"]);
+    expect(gitIn(remote, ["show", `${branch}:commands/explain.md`])).toBe("The team's own explain.\n");
+  });
+
+  it("given the team already has the only command selected, when it is shared, then nothing is pushed over theirs", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+
+    const result = shareSelection(select({ commands: ["explain"] }), team(), paths(), undefined, forge);
+
+    expect(result.team!.ok).toBe(false);
+    expect(result.team!.error).toContain("already has a command");
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+  });
+
+  it("given no team repository is configured, when commands are selected, then they say why not rather than vanishing", () => {
+    writeCommand(userHome, "explain", "Explain something.\n");
+
+    const result = shareSelection(select({ commands: ["explain"] }), null, paths());
+
+    expect(result.refused).toEqual([
+      { name: "explain", kind: "command", reason: expect.stringContaining("/handbook:init") },
+    ]);
+    expect(result.team).toBeUndefined();
+  });
+
+  it("given a command name nothing on this machine answers to, when it is selected, then it is reported rather than dropped", () => {
+    const result = shareSelection(select({ commands: ["not-here"] }), null, paths());
+
+    expect(result.refused).toEqual([
+      { name: "not-here", kind: "command", reason: "no command of that name is installed here" },
+    ]);
+  });
+});
+
 describe("formatMigrateResult", () => {
   it("given both halves ran, when the result is reported, then queued and shared are two groups rather than one total", () => {
     const text = formatMigrateResult(
       {
         queued: ["deploy-runbook", "repo-conventions"],
-        mcp: { ok: true, serverNames: ["gitlab"], branch: "handbook/mcp-gitlab", prUrl: "https://example.com/mr/1", version: "1.0.1" },
+        team: { ok: true, serverNames: ["gitlab"], branch: "handbook/mcp-gitlab", prUrl: "https://example.com/mr/1", version: "1.0.1" },
         refused: [],
       },
       "acme",
@@ -446,7 +639,10 @@ describe("formatMigrateResult", () => {
     // the selection was one dialog but it had two consequences, and a single "shared 3
     // things" line would tell the manager they sent two skills they have not sent
     expect(text).toContain("Queued for review (2) - nothing has left this machine yet:");
-    expect(text).toContain("Shared with the team (1) in one merge request: gitlab");
+    expect(text).toContain("Shared with the team (1) in one merge request:");
+    // named by kind, because one request now carries two kinds and "shared 1" does not
+    // say whether the thing that travelled connects to something or gets typed
+    expect(text).toContain("  - MCP servers (1): gitlab");
     expect(text).toContain("/handbook:review");
     expect(text).toContain("plugin:acme:<name>");
   });

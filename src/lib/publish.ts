@@ -1,6 +1,6 @@
 import { handbookWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
@@ -15,6 +15,8 @@ import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import { auditServer, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
+import { auditCommand, commandRefusalMessage } from "./commands.js";
+import type { CommandEntry } from "./commands.js";
 import { slugifySkillName } from "./distill.js";
 
 export function buildPrTitle(slug: string): string {
@@ -363,7 +365,7 @@ export function publishCandidate(
 
 
 // ---------------------------------------------------------------------------
-// Sharing an MCP server with the team.
+// Sharing the rest of a setup with the team: MCP servers and slash commands.
 //
 // Same repository, same merge request, same version signal as a skill: what widens is
 // the KIND of thing that travels. A skill is inert markdown; an MCP server is a
@@ -376,13 +378,24 @@ export function publishCandidate(
 /** The file a plugin declares its MCP servers in. See mergeServerIntoMcpJson for why. */
 export const TEAM_MCP_FILE = ".mcp.json";
 
-export interface McpPublishOutcome {
+/**
+ * Where a plugin's slash commands live. Claude Code discovers this directory by
+ * convention - it is how this repository's own commands reach the people who install it -
+ * so a merged command needs no registration anywhere else.
+ */
+export const TEAM_COMMANDS_DIR = "commands";
+
+export interface TeamPublishOutcome {
   ok: boolean;
   serverName?: string;
   // every server this one request carries, which is one or many
   serverNames?: string[];
-  // servers the selection named that did not travel, each with the reason it did not
-  refused?: { name: string; reason: string }[];
+  // every command it carries, for the same reason
+  commandNames?: string[];
+  // what the selection named that did not travel, each with the reason it did not. The
+  // kind travels with the name: a caller reporting "explain" back to the user has to be
+  // able to say which of its three lists that name came from.
+  refused?: { name: string; kind: "mcp" | "command"; reason: string }[];
   branch?: string;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
@@ -403,7 +416,19 @@ export interface McpShareSubject {
 }
 
 export function buildMcpPrTitle(names: string[]): string {
-  return `feat(mcp): add ${names.join(", ")}`;
+  return buildSelectionPrTitle(names, []);
+}
+
+/**
+ * One title for a request that may carry two kinds of thing.
+ *
+ * The conventional scope stays honest about what is inside: a reviewer who reads
+ * `feat(mcp)` and finds four slash commands in the diff learns not to trust the subject
+ * line, and the subject line is the only part of a merge request everyone reads.
+ */
+export function buildSelectionPrTitle(serverNames: string[], commandNames: string[]): string {
+  const scopes = [serverNames.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean);
+  return `feat(${scopes.join(",")}): add ${[...serverNames, ...commandNames].join(", ")}`;
 }
 
 /**
@@ -420,16 +445,59 @@ export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
 }
 
 export function buildMcpServersPrBody(subjects: McpShareSubject[]): string {
-  const single = subjects.length === 1;
-  const lines = single
-    ? [
-        `Adds the \`${subjects[0]!.entry.name}\` MCP server to this plugin. Once this is merged, every`,
-        "teammate whose copy refreshes has it connected: nobody installs or configures anything.",
-      ]
-    : [
-        `Adds ${subjects.length} MCP servers to this plugin. Once this is merged, every teammate whose`,
-        "copy refreshes has them connected: nobody installs or configures anything.",
-      ];
+  return buildSelectionPrBody(subjects, []);
+}
+
+/** A command that cleared the audit, with the text that cleared it. */
+export interface CommandSubject {
+  name: string;
+  content: string;
+}
+
+function selectionIntro(servers: number, commands: number): string[] {
+  if (!servers) {
+    return commands === 1
+      ? [
+          "Adds one slash command to this plugin. Once this is merged, every teammate whose copy",
+          "refreshes can type it: nobody copies a file into their own setup.",
+        ]
+      : [
+          `Adds ${commands} slash commands to this plugin. Once this is merged, every teammate whose`,
+          "copy refreshes can type them: nobody copies a file into their own setup.",
+        ];
+  }
+  if (!commands) {
+    return servers === 1
+      ? [
+          `Adds the \`SERVER_NAME\` MCP server to this plugin. Once this is merged, every`,
+          "teammate whose copy refreshes has it connected: nobody installs or configures anything.",
+        ]
+      : [
+          `Adds ${servers} MCP servers to this plugin. Once this is merged, every teammate whose`,
+          "copy refreshes has them connected: nobody installs or configures anything.",
+        ];
+  }
+  return [
+    `Adds ${servers} MCP server${servers === 1 ? "" : "s"} and ${commands} slash command${commands === 1 ? "" : "s"} to this`,
+    "plugin. Once this is merged, every teammate whose copy refreshes has the servers connected",
+    "and can type the commands: nobody installs, configures or copies anything.",
+  ];
+}
+
+/**
+ * The whole request, described for a reviewer who has to decide knowingly.
+ *
+ * Two kinds of thing travel here and they ask the reviewer for different consent. A server
+ * means something connects, or runs, on every subscribed machine - so the transport, the
+ * endpoint or the exact command, and every variable the teammate must supply are stated in
+ * full. A command means Claude reads a teammate's file as its instructions when they type
+ * a word. Neither is reviewable by reading the title, so neither is summarised away.
+ */
+export function buildSelectionPrBody(subjects: McpShareSubject[], commands: CommandSubject[]): string {
+  const single = subjects.length === 1 && !commands.length;
+  const lines = selectionIntro(subjects.length, commands.length).map((line) =>
+    line.replace("SERVER_NAME", subjects[0]?.entry.name ?? ""),
+  );
   for (const { entry, audit } of subjects) {
     const config = entry.config;
     lines.push("", `- server: \`${entry.name}\``, `- transport: \`${audit.transport}\``);
@@ -463,28 +531,56 @@ export function buildMcpServersPrBody(subjects: McpShareSubject[]): string {
       "would review a document.",
     );
   }
+  for (const command of commands) {
+    lines.push("", `- command: \`/${command.name}\``, `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``);
+  }
+  if (commands.length) {
+    lines.push(
+      "",
+      commands.length === 1 ? "## This one is read as instructions" : "## These are read as instructions",
+      "",
+      "A merged command is typed by a teammate and then read by Claude as its instructions for",
+      "that turn, with their tools and their permissions. Read the bod" + (commands.length === 1 ? "y" : "ies") +
+        " in this diff the way you",
+      "would read a runbook someone else is about to run, not the way you would read a note.",
+    );
+  }
   const requiresEnv: string[] = [];
   for (const { audit } of subjects) {
     for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
   }
-  return finishMcpPrBody(lines, requiresEnv);
+  return finishMcpPrBody(lines, requiresEnv, subjects.length > 0, commands.length);
 }
 
-function finishMcpPrBody(lines: string[], requiresEnv: string[]): string {
+function finishMcpPrBody(
+  lines: string[],
+  requiresEnv: string[],
+  hasServers: boolean,
+  commandCount: number,
+): string {
   // State the check, never the conclusion. An earlier version of this section promised
   // outright that no credential travelled, which was a guarantee wider than anything
   // actually verified: a provider that embeds the token in the endpoint (Zapier, Composio,
   // Smithery) sailed through, and the reviewer read a written assurance over the top of the
   // credential itself. Human review was the one compensating control here, and a sentence
-  // that tells the reviewer not to look is worse than no sentence at all.
-  lines.push(
-    "",
-    "## What was checked",
-    "",
-    "Every value in `headers` and `env` is a plain ${VAR} reference rather than a literal, so",
-    "no credential travels in those fields. The endpoint was also scanned for an embedded",
-    "token and none was found.",
-  );
+  // that tells the reviewer not to look is worse than no sentence at all. The command
+  // paragraph below is written under the same rule: it says what the scan looked for.
+  lines.push("", "## What was checked", "");
+  if (hasServers) {
+    lines.push(
+      "Every value in `headers` and `env` is a plain ${VAR} reference rather than a literal, so",
+      "no credential travels in those fields. The endpoint was also scanned for an embedded",
+      "token and none was found.",
+    );
+  }
+  if (commandCount) {
+    if (hasServers) lines.push("");
+    lines.push(
+      `Each command file was scanned for known credential shapes before it was copied, and one`,
+      "that matched would have stopped this request rather than arriving with the token blanked",
+      "out. That scan is a heuristic over the shapes it knows, not a proof.",
+    );
+  }
   if (requiresEnv.length) {
     lines.push(
       "",
@@ -492,11 +588,33 @@ function finishMcpPrBody(lines: string[], requiresEnv: string[]): string {
         " Until they do, the server will not start for them.",
     );
   }
+  // The closing names what the check does NOT cover, per kind, because that is the part a
+  // reviewer cannot infer from the paragraphs above.
+  lines.push("");
+  if (hasServers) {
+    lines.push(
+      'That is the whole of the check, and it is a narrower claim than "this definition holds',
+      'no secret": the endpoint scan is a heuristic, and a credential passed in `args` is not',
+      "checked at all. Read the endpoint and the command above before merging.",
+    );
+  }
+  if (commandCount) {
+    const read = `Read the ${commandCount === 1 ? "file" : "files"} in this diff before merging.`;
+    if (hasServers) {
+      lines.push(
+        "",
+        "A command body is prose, and a credential in a shape the scan has never seen reads to it",
+        `as prose too. ${read}`,
+      );
+    } else {
+      lines.push(
+        'That is the whole of the check, and it is a narrower claim than "these commands hold no',
+        'secret": a command body is prose, and a credential in a shape the scan has never seen',
+        `reads to it as prose too. ${read}`,
+      );
+    }
+  }
   lines.push(
-    "",
-    "That is the whole of the check, and it is a narrower claim than \"this definition holds",
-    "no secret\": the endpoint scan is a heuristic, and a credential passed in `args` is not",
-    "checked at all. Read the endpoint and the command above before merging.",
     "",
     "---",
     "Opened by TeamHandbook at the explicit request of whoever ran the command.",
@@ -510,8 +628,18 @@ export function publishMcpServer(
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
-): McpPublishOutcome {
-  return publishMcpServers([entry], team, git, forge);
+): TeamPublishOutcome {
+  return publishTeamSelection({ servers: [entry] }, team, git, forge);
+}
+
+/** Servers only, the shape /handbook:migrate shared before commands could travel. */
+export function publishMcpServers(
+  entries: McpServerEntry[],
+  team: TeamConfig,
+  git: GitRunner = runGit,
+  forge: ForgeRunner = runForge,
+): TeamPublishOutcome {
+  return publishTeamSelection({ servers: entries }, team, git, forge);
 }
 
 function collisionMessage(name: string): string {
@@ -522,46 +650,76 @@ function collisionMessage(name: string): string {
 }
 
 /**
- * Write the chosen servers into the team repository as ONE merge request that also raises
- * the plugin version, so a merge reaches everyone the same way a skill does.
+ * A command the team already has is never written over. The team's copy may have been
+ * edited since it was shared, and replacing it here would take that edit out of a merge
+ * request nobody opened for it - which is a change to the team's setup made by somebody
+ * sharing their own. Updating an existing one is a different operation, with a different
+ * question for the reviewer, and it is not this one.
+ */
+function commandCollisionMessage(name: string): string {
+  return (
+    `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). ` +
+    "It was left exactly as it is; rename yours, or change theirs in the team repository."
+  );
+}
+
+export interface TeamSelection {
+  servers?: McpServerEntry[];
+  commands?: CommandEntry[];
+}
+
+/**
+ * Write the chosen servers and commands into the team repository as ONE merge request that
+ * also raises the plugin version, so a merge reaches everyone the same way a skill does.
  *
- * One request for the whole selection, not one per server, and the version is the reason.
+ * One request for the whole selection, not one per item, and the version is the reason.
  * `bumpPluginVersion` reads the version from a fresh clone, so two requests opened before
  * either is merged both claim the same number; git merges the identical line without a
  * conflict and the second change lands with no version of its own, which means no
  * teammate's copy refreshes for it (DENETIM-URUN-1 U1). Selecting six servers would have
  * hit that five times over. Collecting them into one commit makes the arithmetic right by
- * construction: one clone, one bump, one request.
+ * construction: one clone, one bump, one request - and that is why commands joined this
+ * function instead of getting a publishing path of their own, which would have re-created
+ * the defect inside a single run.
  *
- * Nothing here reads ~/.claude.json and nothing writes it: the caller hands over entries
- * it already read, and the manager's own local servers are left exactly as they were.
+ * Nothing here reads ~/.claude.json or ~/.claude/commands and nothing writes them: the
+ * caller hands over what it already read, and the local copies are left as they were.
  */
-export function publishMcpServers(
-  entries: McpServerEntry[],
+export function publishTeamSelection(
+  selection: TeamSelection,
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
-): McpPublishOutcome {
-  const single = entries.length === 1 ? { serverName: entries[0]!.name } : {};
+): TeamPublishOutcome {
+  const entries = selection.servers ?? [];
+  const commandEntries = selection.commands ?? [];
+  const single = entries.length === 1 && !commandEntries.length ? { serverName: entries[0]!.name } : {};
   // FIRST, before assertSafeGitUrl and before the identity preflight, because those call
   // git. A refusal has to happen while the credential still exists nowhere but this
   // process: not in a clone, not in an index, not in a working tree that a later crash
   // could leave behind. The order of these lines is the boundary, and EVERY entry is
   // audited before the first git call, so a credential in the last one of six cannot
-  // reach a clone opened for the first five.
+  // reach a clone opened for the first five. Commands are read here for the same reason
+  // and not again later: the text that cleared the sieve is the text that gets written.
   const subjects: McpShareSubject[] = [];
-  const refused: { name: string; reason: string }[] = [];
+  const refused: NonNullable<TeamPublishOutcome["refused"]> = [];
   for (const entry of entries) {
     const audit = auditServer(entry.config);
     if (audit.migratable) subjects.push({ entry, audit });
-    else refused.push({ name: entry.name, reason: refusalMessage(entry.name, audit) });
+    else refused.push({ name: entry.name, kind: "mcp", reason: refusalMessage(entry.name, audit) });
   }
-  if (!subjects.length) {
+  const commands: CommandSubject[] = [];
+  for (const entry of commandEntries) {
+    const audit = auditCommand(entry.file);
+    if (audit.shareable) commands.push({ name: entry.name, content: audit.content! });
+    else refused.push({ name: entry.name, kind: "command", reason: commandRefusalMessage(entry.name, audit) });
+  }
+  if (!subjects.length && !commands.length) {
     return {
       ok: false,
       ...single,
       refused,
-      error: refused[0]?.reason ?? "no MCP server was named to share",
+      error: refused[0]?.reason ?? "nothing was named to share",
     };
   }
   // Every early return from here on carries `refused` with it. A server that was turned
@@ -588,34 +746,59 @@ export function publishMcpServers(
     if (cloneError) return { ok: false, refused, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
     const target = join(repoDir, TEAM_MCP_FILE);
-    let merged: string;
-    let collided: string[];
-    try {
-      ({ merged, collided } = mergeServersIntoMcpJson(
-        existsSync(target) ? readFileSync(target, "utf8") : null,
-        subjects.map((s) => s.entry),
-      ));
-    } catch (err) {
-      // A team file we cannot read is not one server's problem, so no part of the
-      // selection is salvaged from it: nothing is committed and nothing is pushed.
-      return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
+    let merged = "";
+    let collided: string[] = [];
+    if (subjects.length) {
+      try {
+        ({ merged, collided } = mergeServersIntoMcpJson(
+          existsSync(target) ? readFileSync(target, "utf8") : null,
+          subjects.map((s) => s.entry),
+        ));
+      } catch (err) {
+        // A team file we cannot read is not one server's problem, so no part of the
+        // selection is salvaged from it: nothing is committed and nothing is pushed.
+        return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
+      }
     }
-    for (const name of collided) refused.push({ name, reason: collisionMessage(name) });
+    // Collisions are collected as their own reason rather than left to `refused[0]`: when
+    // nothing gets through, the caller is told the name is taken, not told again about a
+    // credential it was already told about.
+    const collisions: string[] = [];
+    for (const name of collided) {
+      collisions.push(collisionMessage(name));
+      refused.push({ name, kind: "mcp", reason: collisionMessage(name) });
+    }
     const going = subjects.filter((s) => !collided.includes(s.entry.name));
-    if (!going.length) {
-      return { ok: false, ...single, refused, error: collisionMessage(collided[0]!) };
+    const goingCommands: CommandSubject[] = [];
+    for (const command of commands) {
+      if (existsSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+        collisions.push(commandCollisionMessage(command.name));
+        refused.push({ name: command.name, kind: "command", reason: commandCollisionMessage(command.name) });
+        continue;
+      }
+      goingCommands.push(command);
+    }
+    if (!going.length && !goingCommands.length) {
+      return { ok: false, ...single, refused, error: collisions[0] ?? refused[0]?.reason ?? "nothing was left to share" };
     }
     const names = going.map((s) => s.entry.name);
-    const first = slugifySkillName(names[0]!);
-    const base = names.length === 1 ? `mcp-${first}` : `mcp-${first}-and-${names.length - 1}-more`;
+    const commandNames = goingCommands.map((c) => c.name);
+    const all = [...names, ...commandNames];
+    const label = names.length ? (commandNames.length ? "share" : "mcp") : "commands";
+    const first = slugifySkillName(all[0]!);
+    const base = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
-    const title = buildMcpPrTitle(names);
+    const title = buildSelectionPrTitle(names, commandNames);
     try {
       git(["checkout", "-b", branch], repoDir);
-      writeFileSync(target, merged);
+      if (going.length) writeFileSync(target, merged);
+      if (goingCommands.length) mkdirSync(join(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
+      for (const command of goingCommands) {
+        writeFileSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+      }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
@@ -640,11 +823,12 @@ export function publishMcpServers(
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const pr = openPr(team.repoUrl, branch, title, buildMcpServersPrBody(going), repoDir, forge);
+    const pr = openPr(team.repoUrl, branch, title, buildSelectionPrBody(going, goingCommands), repoDir, forge);
     return {
       ok: true,
       ...single,
-      serverNames: names,
+      ...(names.length ? { serverNames: names } : {}),
+      ...(commandNames.length ? { commandNames } : {}),
       ...(refused.length ? { refused } : {}),
       branch,
       requiresEnv,
@@ -667,7 +851,7 @@ export function publishMcpServers(
  * merge the same server is reachable under two names and the tidy-up is a decision only
  * the manager can make.
  */
-export function formatMcpShareResult(outcome: McpPublishOutcome, marketplaceName: string): string {
+export function formatMcpShareResult(outcome: TeamPublishOutcome, marketplaceName: string): string {
   const lines = [
     `Shared "${outcome.serverName}" with the team.`,
     "",
