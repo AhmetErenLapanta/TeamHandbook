@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
-import { hostFromUrl, loadTeamConfig } from "./init.js";
+import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
 import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
@@ -245,6 +245,103 @@ function checkForge(home: string, run: CommandRunner): DoctorCheck | null {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Mirrors mcp.ts's reader: a team's .mcp.json is either the documented
+// {"mcpServers": {...}} wrapper or a bare server map, and the wrapper key is only
+// trusted when it is itself a plain object — otherwise a bare map with a stray
+// "mcpServers" field would be misread as the wrapper and its real server names lost.
+function declaredMcpServerNames(mcpFile: string): string[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(mcpFile, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const map = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+  return Object.keys(map);
+}
+
+type McpLineState = "connected" | "not-connected";
+
+// `claude mcp list` is a human-readable status line, not a contract: "N.N.NNN (Claude
+// Code) - ✔ Connected" today, something else tomorrow. Only a line this regex positively
+// matches — name, then a mark, then the status text after it — ever reports connected or
+// not-connected; anything else (a changed format, empty output, a thrown error) is
+// reported unknown by the caller. Never let a miss here read as "connected".
+const MCP_LIST_LINE = /^(.+?):\s.*[-–]\s*(✔|✘|!)\s*(.+)$/;
+
+function parseMcpListing(output: string): Map<string, { state: McpLineState; detail: string }> {
+  const byName = new Map<string, { state: McpLineState; detail: string }>();
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = MCP_LIST_LINE.exec(line);
+    if (!match) continue;
+    const [, name, mark, detail] = match;
+    byName.set(name!.trim(), { state: mark === "✔" ? "connected" : "not-connected", detail: detail!.trim() });
+  }
+  return byName;
+}
+
+// Only the servers the TEAM shared, matched against the ones `claude mcp list` actually
+// reports — not the other MCP servers this machine happens to have configured for
+// itself. Measured on a live install: `claude mcp list` prefixes a plugin-declared
+// server as `plugin:<pluginName>:<serverName>`, and TeamHandbook's own skeleton makes
+// the plugin name equal team.marketplaceName, so that is the primary key; a bare name is
+// accepted too in case a future CLI stops prefixing.
+function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: string = marketplacesRoot()): DoctorCheck | null {
+  const team = loadTeamConfig(home);
+  if (!team) return null; // solo mode has no team-shared servers to verify
+  const mcpFile = join(marketRoot, team.marketplaceName, ".mcp.json");
+  // init.ts only creates .mcp.json once the team shares its first server, so a fresh
+  // team install has no such file — that is the normal pre-share state, not a fault.
+  if (!existsSync(mcpFile)) {
+    return ok("team MCP servers", "the team has not shared an MCP server yet");
+  }
+  const serverNames = declaredMcpServerNames(mcpFile);
+  if (serverNames === null) {
+    return warn("team MCP servers", `${mcpFile} is not a readable JSON object — cannot verify connection state`);
+  }
+  if (serverNames.length === 0) {
+    return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
+  }
+
+  let listing: string;
+  try {
+    listing = run("claude", ["mcp", "list"], 20_000);
+  } catch (err) {
+    const message = String(err instanceof Error ? err.message : err).split("\n")[0];
+    return warn("team MCP servers", `\`claude mcp list\` failed — connection state unknown: ${message}`);
+  }
+  const statuses = parseMcpListing(listing);
+  if (statuses.size === 0) {
+    return warn(
+      "team MCP servers",
+      "`claude mcp list` returned nothing this check recognizes — connection state unknown " +
+        "(never assumed connected)",
+    );
+  }
+
+  const results: { name: string; state: McpLineState | "unknown"; detail: string }[] = serverNames.map((name) => {
+    const status = statuses.get(`plugin:${team.marketplaceName}:${name}`) ?? statuses.get(name);
+    if (!status) return { name, state: "unknown", detail: "not listed by `claude mcp list`" };
+    return { name, state: status.state, detail: status.detail };
+  });
+  const summary = results.map((r) => `${r.name}: ${r.state === "connected" ? "connected" : r.detail}`).join("; ");
+
+  if (results.some((r) => r.state === "not-connected")) {
+    return fail("team MCP servers", summary);
+  }
+  if (results.some((r) => r.state === "unknown")) {
+    return warn("team MCP servers", `connection state unknown for at least one server — ${summary}`);
+  }
+  return ok("team MCP servers", summary);
+}
+
 function checkLastRun(home: string): DoctorCheck {
   const last = lastPipelineRun(home);
   if (!last) return ok("gate pipeline", "no runs yet (nothing recurred or was captured manually)");
@@ -271,6 +368,7 @@ function checkAbandoned(home: string): DoctorCheck | null {
 export function runDoctor(
   home: string = handbookHome(),
   run: CommandRunner = runCommand,
+  marketRoot: string = marketplacesRoot(),
 ): DoctorReport {
   const checks: DoctorCheck[] = [
     checkNode(),
@@ -284,6 +382,8 @@ export function runDoctor(
   if (identity) checks.push(identity);
   const forge = checkForge(home, run);
   if (forge) checks.push(forge);
+  const mcpServers = checkTeamMcpServers(home, run, marketRoot);
+  if (mcpServers) checks.push(mcpServers);
   checks.push(checkLastRun(home));
   const abandoned = checkAbandoned(home);
   if (abandoned) checks.push(abandoned);
