@@ -4,7 +4,10 @@ import { buildInventory, formatInventory, formatMigrateResult, shareSelection } 
 import type { Inventory, Selection } from "../lib/migrate.js";
 
 function usage(): never {
-  console.error("usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]...");
+  console.error(
+    "usage: migrate.js [list]\n" +
+      "       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]...",
+  );
   process.exit(2);
 }
 
@@ -20,15 +23,20 @@ function resolve(available: string[], wanted: string): string {
   return loose.length === 1 ? loose[0]! : wanted;
 }
 
+const FLAGS = ["--skill", "--mcp", "--command"] as const;
+
 function parseSelection(args: string[], inv: Inventory): Selection {
-  const selection: Selection = { skills: [], servers: [] };
+  const selection: Selection = { skills: [], servers: [], commands: [] };
   for (let i = 0; i < args.length; i++) {
-    const flag = args[i];
+    const flag = args[i] as (typeof FLAGS)[number];
     const value = args[i + 1];
-    if (flag !== "--skill" && flag !== "--mcp") continue;
+    if (!FLAGS.includes(flag)) continue;
     if (!value || value.startsWith("--")) usage();
     if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
-    else selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
+    else if (flag === "--mcp") selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
+    // A command is listed and typed as /explain, so a leading slash is taken off rather
+    // than turned into a name nothing on this machine answers to.
+    else selection.commands.push(resolve(inv.commands.map((c) => c.name), value.replace(/^\//, "")));
     i++;
   }
   return selection;
@@ -36,7 +44,7 @@ function parseSelection(args: string[], inv: Inventory): Selection {
 
 function main(): void {
   const args = process.argv.slice(2);
-  const selected = args.some((a) => a === "--skill" || a === "--mcp");
+  const selected = args.some((a) => (FLAGS as readonly string[]).includes(a));
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
   if (rest.length || (cmd !== "list" && cmd !== "share")) usage();
   // A selection passed to the read-only screen would print the list and silently throw
@@ -48,7 +56,7 @@ function main(): void {
     if (!loadTeamConfig()) {
       console.log(
         "\nNo team repository is configured yet. Skills can still be queued for review, but the " +
-          "MCP servers have nowhere to go: run /handbook:init (or /handbook:join <url>) first.",
+          "MCP servers and commands have nowhere to go: run /handbook:init (or /handbook:join <url>) first.",
       );
     }
     return;
@@ -56,7 +64,7 @@ function main(): void {
   const selection = parseSelection(args, inv);
   // The point of the card, in one branch: nothing is selected by default, so a share with
   // no flags shares nothing rather than everything.
-  if (!selection.skills.length && !selection.servers.length) {
+  if (!selection.skills.length && !selection.servers.length && !selection.commands.length) {
     console.log("Nothing was selected, so nothing was queued and nothing was shared.");
     return;
   }
@@ -72,8 +80,8 @@ function main(): void {
   const result = shareSelection(selection, team);
   // The forge refused the default branch name and the push recovered under the team's own
   // prefix: remember it, so no later share pays that round trip again.
-  if (team && result.mcp?.learnedBranchPrefix) {
-    saveTeamConfig({ ...team, branchPrefix: result.mcp.learnedBranchPrefix });
+  if (team && result.team?.learnedBranchPrefix) {
+    saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
   }
   console.log(formatMigrateResult(result, team?.marketplaceName));
   // A refusal is not a crash: some of the selection may have travelled. The exit code says
