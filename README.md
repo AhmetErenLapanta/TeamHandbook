@@ -119,7 +119,7 @@ this plugin at all:
 
 Two commands, and whoever set the repository up can send them to you already filled in:
 `/handbook:init` prints that message for them. The team's own plugin carries a small hook
-that tells you when new skills or servers have landed.
+that tells you when new skills, servers, or commands have landed.
 
 ### Check the install
 
@@ -167,10 +167,11 @@ with the two `/plugin` commands above. Whoever set the repository up cannot do i
 you and cannot write to your `~/.claude`; what they can do is merge things into a
 repository you chose to subscribe to.
 
-That subscription is standing, not item by item. A merged skill or MCP server raises the
-repository's plugin version, Claude Code refreshes on that, and it is there at your next
-session. The team plugin prints what landed ("2 new skill(s) and 1 new MCP server(s)
-since your last session"), so a server never gets wired up in silence.
+That subscription is standing, not item by item. A merged skill, MCP server, or slash
+command raises the repository's plugin version, Claude Code refreshes on that, and it is
+there at your next session. The team plugin prints what landed ("2 new skill(s), 1 new
+MCP server(s), and 1 new command(s) since your last session"), so a server or a command
+never arrives in silence.
 
 If you would rather see each change before it reaches you, do not subscribe: the skills
 are plain directories you can read in the repo and copy. `/plugin marketplace remove

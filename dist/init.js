@@ -324,7 +324,7 @@ skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaf
 job that bumps the version on merge instead, together with the script it runs.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
-"N new skills" notice; it records the skill names it has already shown you under
+"N new skills/servers/commands" notice; it records what it has already shown you under
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
 It makes no network calls and needs no TeamHandbook engine.
 `;
@@ -400,12 +400,25 @@ try {
   if (freshSkills.length) parts.push(freshSkills.length + " new skill(s)");
   if (freshServers.length) parts.push(freshServers.length + " new MCP server(s)");
   if (freshCommands.length) parts.push(freshCommands.length + " new command(s)");
+  // "X and Y" reads fine, but a skill and a server and a command in the same session
+  // only became possible once commands joined this notice, and "X and Y and Z" is not
+  // how English lists three things. The Oxford comma before the last item is what makes
+  // three (or more) read naturally; two items still just get "X and Y".
+  function englishList(items) {
+    if (items.length < 3) return items.join(" and ");
+    return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
+  }
   if (parts.length) {
+    // A plugin's own commands are typed as /<plugin-name>:<command-name>, not bare
+    // /<command-name> - Claude Code namespaces every installed plugin's commands this
+    // way, and this repo's own README (and migrate.ts's post-share message) never shows
+    // a bare form. Printing the bare name here would hand the teammate a command that
+    // does not resolve, defeating the point of announcing it at all.
     const named = freshSkills
       .concat(freshServers.map((s) => s + " (MCP)"))
-      .concat(freshCommands.map((c) => "/" + c))
+      .concat(freshCommands.map((c) => "/" + name + ":" + c))
       .join(", ");
-    console.log(name + ": " + parts.join(" and ") + " since your last session: " + named + ".");
+    console.log(name + ": " + englishList(parts) + " since your last session: " + named + ".");
   }
 } catch {}
 process.exit(0);

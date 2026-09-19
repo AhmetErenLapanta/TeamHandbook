@@ -445,7 +445,9 @@ export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
 }
 
 export function buildMcpServersPrBody(subjects: McpShareSubject[]): string {
-  return buildSelectionPrBody(subjects, []);
+  // No commands ever travel through this path, so the marketplace name that would
+  // namespace them is never read.
+  return buildSelectionPrBody(subjects, [], "");
 }
 
 /** A command that cleared the audit, with the text that cleared it. */
@@ -492,8 +494,18 @@ function selectionIntro(servers: number, commands: number): string[] {
  * endpoint or the exact command, and every variable the teammate must supply are stated in
  * full. A command means Claude reads a teammate's file as its instructions when they type
  * a word. Neither is reviewable by reading the title, so neither is summarised away.
+ *
+ * `marketplaceName` is the plugin every merged command is typed under: Claude Code
+ * namespaces an installed plugin's commands as `/<plugin>:<command>`, the same form
+ * migrate.ts's own post-share message promises the sharer ("the commands are typed as
+ * /<marketplaceName>:<name>"). A bare `/<command>` here would tell the reviewer a name
+ * that does not resolve once the plugin is installed.
  */
-export function buildSelectionPrBody(subjects: McpShareSubject[], commands: CommandSubject[]): string {
+export function buildSelectionPrBody(
+  subjects: McpShareSubject[],
+  commands: CommandSubject[],
+  marketplaceName: string,
+): string {
   const single = subjects.length === 1 && !commands.length;
   const lines = selectionIntro(subjects.length, commands.length).map((line) =>
     line.replace("SERVER_NAME", subjects[0]?.entry.name ?? ""),
@@ -532,7 +544,11 @@ export function buildSelectionPrBody(subjects: McpShareSubject[], commands: Comm
     );
   }
   for (const command of commands) {
-    lines.push("", `- command: \`/${command.name}\``, `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``);
+    lines.push(
+      "",
+      `- command: \`/${marketplaceName}:${command.name}\``,
+      `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``,
+    );
   }
   if (commands.length) {
     lines.push(
@@ -823,7 +839,14 @@ export function publishTeamSelection(
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const pr = openPr(team.repoUrl, branch, title, buildSelectionPrBody(going, goingCommands), repoDir, forge);
+    const pr = openPr(
+      team.repoUrl,
+      branch,
+      title,
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName),
+      repoDir,
+      forge,
+    );
     return {
       ok: true,
       ...single,

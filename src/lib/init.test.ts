@@ -221,8 +221,11 @@ describe("skeletonFiles", () => {
       const notice = run();
 
       expect(notice).toContain("1 new command(s) since your last session");
-      expect(notice).toContain("/rollback");
-      expect(notice).not.toContain("/deploy");
+      // Claude Code namespaces an installed plugin's commands as /<plugin>:<command> -
+      // a bare /rollback would not resolve, so the full callable name is asserted here
+      // rather than accepting whatever the implementation happens to print.
+      expect(notice).toContain("/acme:rollback");
+      expect(notice).not.toContain("/acme:deploy");
       // and it does not repeat itself the next time
       expect(run()).toBe("");
     } finally {
@@ -258,6 +261,42 @@ describe("skeletonFiles", () => {
       // case 3: a record from before commands existed - {skills, servers} only
       writeFileSync(join(seenDir, "acme.json"), JSON.stringify({ skills: [], servers: [] }));
       expect(run()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(consumerHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reads standard English when a skill, a server, and a command all arrive in one session", () => {
+    // Three kinds landing in the same session was impossible before commands joined this
+    // notice (at most a skill and a server could ever both be fresh), so "X and Y and Z"
+    // never had a chance to surface until now. The list needs a comma before the final
+    // "and" to read as ordinary English.
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
+    const run = (): string =>
+      execFileSync("node", ["hooks/notice.mjs"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+      });
+    try {
+      writeSkeleton(dir, skeletonFiles("acme", "git@github.com:a/s.git", "github.com"));
+      expect(run()).toBe("");
+
+      mkdirSync(join(dir, "skills", "fix-eslint"), { recursive: true });
+      writeFileSync(
+        join(dir, ".mcp.json"),
+        JSON.stringify({ mcpServers: { gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } } }),
+      );
+      mkdirSync(join(dir, "commands"), { recursive: true });
+      writeFileSync(join(dir, "commands", "rollback.md"), "rollback instructions");
+      const notice = run();
+
+      expect(notice).toBe(
+        "acme: 1 new skill(s), 1 new MCP server(s), and 1 new command(s) since your last " +
+          "session: fix-eslint, gitlab (MCP), /acme:rollback.\n",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(consumerHome, { recursive: true, force: true });

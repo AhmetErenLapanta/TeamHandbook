@@ -646,7 +646,7 @@ function selectionIntro(servers, commands) {
     "and can type the commands: nobody installs, configures or copies anything."
   ];
 }
-function buildSelectionPrBody(subjects, commands) {
+function buildSelectionPrBody(subjects, commands, marketplaceName) {
   const single = subjects.length === 1 && !commands.length;
   const lines = selectionIntro(subjects.length, commands.length).map(
     (line) => line.replace("SERVER_NAME", subjects[0]?.entry.name ?? "")
@@ -682,7 +682,11 @@ function buildSelectionPrBody(subjects, commands) {
     );
   }
   for (const command of commands) {
-    lines.push("", `- command: \`/${command.name}\``, `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``);
+    lines.push(
+      "",
+      `- command: \`/${marketplaceName}:${command.name}\``,
+      `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``
+    );
   }
   if (commands.length) {
     lines.push(
@@ -880,7 +884,14 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const pr = openPr(team.repoUrl, branch, title, buildSelectionPrBody(going, goingCommands), repoDir, forge);
+    const pr = openPr(
+      team.repoUrl,
+      branch,
+      title,
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName),
+      repoDir,
+      forge
+    );
     return {
       ok: true,
       ...single,
