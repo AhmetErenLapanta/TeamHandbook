@@ -2,11 +2,12 @@ import { configIsBroken } from "../lib/config.js";
 import { loadTeamConfig, saveTeamConfig } from "../lib/init.js";
 import { buildInventory, formatInventory, formatMigrateResult, shareSelection } from "../lib/migrate.js";
 import type { Inventory, Selection } from "../lib/migrate.js";
+import { teamAssets } from "../lib/publish.js";
 
 function usage(): never {
   console.error(
     "usage: migrate.js [list]\n" +
-      "       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]...",
+      "       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]... [--update]",
   );
   process.exit(2);
 }
@@ -24,6 +25,11 @@ function resolve(available: string[], wanted: string): string {
 }
 
 const FLAGS = ["--skill", "--mcp", "--command"] as const;
+
+/** Sending an update to what the team already has, rather than being turned back for it.
+ * It applies to the whole selection because the selection is one merge request; the
+ * names it actually changes are reported back, one by one, after the fact. */
+const UPDATE = "--update";
 
 function parseSelection(args: string[], inv: Inventory): Selection {
   const selection: Selection = { skills: [], servers: [], commands: [] };
@@ -45,15 +51,24 @@ function parseSelection(args: string[], inv: Inventory): Selection {
 function main(): void {
   const args = process.argv.slice(2);
   const selected = args.some((a) => (FLAGS as readonly string[]).includes(a));
-  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
+  const update = args.includes(UPDATE);
+  // The value-taking flags consume the argument after them; --update does not, so it must
+  // not make the word that follows it disappear from the positional list.
+  const [cmd = "list", ...rest] = args.filter(
+    (a, i) => !a.startsWith("--") && !(args[i - 1]?.startsWith("--") && args[i - 1] !== UPDATE),
+  );
   if (rest.length || (cmd !== "list" && cmd !== "share")) usage();
   // A selection passed to the read-only screen would print the list and silently throw
   // the selection away, which reads as "I asked for four and got none".
-  if (cmd === "list" && selected) usage();
-  const inv = buildInventory();
+  if (cmd === "list" && (selected || update)) usage();
   if (cmd === "list") {
-    console.log(formatInventory(inv));
-    if (!loadTeamConfig()) {
+    // The one network call this screen makes, and only when there is a repository to ask.
+    // What comes back is a label: buildInventory marks the names the team already has so
+    // the manager picks knowing, and a repository that cannot be reached simply means no
+    // labels rather than a screen that will not open.
+    const config = loadTeamConfig();
+    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
+    if (!config) {
       console.log(
         "\nNo team repository is configured yet. Skills can still be queued for review, but the " +
           "MCP servers and commands have nowhere to go: run /handbook:init (or /handbook:join <url>) first.",
@@ -61,6 +76,7 @@ function main(): void {
     }
     return;
   }
+  const inv = buildInventory();
   const selection = parseSelection(args, inv);
   // The point of the card, in one branch: nothing is selected by default, so a share with
   // no flags shares nothing rather than everything.
@@ -77,7 +93,7 @@ function main(): void {
     return;
   }
   const team = loadTeamConfig();
-  const result = shareSelection(selection, team);
+  const result = shareSelection(selection, team, {}, undefined, undefined, update ? { update } : {});
   // The forge refused the default branch name and the push recovered under the team's own
   // prefix: remember it, so no later share pays that round trip again.
   if (team && result.team?.learnedBranchPrefix) {

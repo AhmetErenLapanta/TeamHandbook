@@ -5,7 +5,7 @@ import type { McpServerEntry } from "../lib/mcp.js";
 import { formatMcpShareResult, publishMcpServer } from "../lib/publish.js";
 
 function usage(): never {
-  console.error("usage: mcp.js [<server-name>]");
+  console.error("usage: mcp.js [<server-name>] [--update]");
   process.exit(2);
 }
 
@@ -21,10 +21,16 @@ function find(servers: McpServerEntry[], wanted: string): McpServerEntry | strin
 
 function main(): void {
   const args = process.argv.slice(2);
-  if (args.length > 1 || args[0]?.startsWith("-")) usage();
+  // The answer to "the team already declares this one": send it as an update to theirs.
+  // Nothing else sets it, so an overwrite is always something the publisher asked for
+  // after being told, never something this command inferred from a matching name.
+  const update = args.includes("--update");
+  const names = args.filter((a) => a !== "--update");
+  if (names.length > 1 || names[0]?.startsWith("-")) usage();
   const servers = readLocalServers();
-  const wanted = args[0];
+  const wanted = names[0];
   if (!wanted) {
+    if (update) usage();
     console.log(formatServerList(servers));
     if (!loadTeamConfig()) {
       console.log(
@@ -54,7 +60,7 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
-  const result = publishMcpServer(entry, team);
+  const result = publishMcpServer(entry, team, undefined, undefined, update ? { update } : {});
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exitCode = 1;

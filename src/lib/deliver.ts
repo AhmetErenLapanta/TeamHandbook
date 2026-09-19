@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
@@ -6,7 +6,7 @@ import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd, uniqueSlug } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import { publishCandidate, runForge } from "./publish.js";
-import type { ForgeRunner } from "./publish.js";
+import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
 import { isSafeSlug, readCandidateMeta, writeCandidateMeta } from "./queue.js";
@@ -81,7 +81,24 @@ export interface DeliverResult {
   // the branch prefix the forge forced this push to adopt, once, so it can be said out
   // loud instead of the branch quietly having a different name than the one reported
   learnedBranchPrefix?: string;
+  // The name the skill was actually filed under. It is not always the one the reviewer
+  // typed, and for a year it was nowhere in this type: publishCandidate picked
+  // skills/foo-2, deliver dropped the field on the way through, and the CLI printed the
+  // reviewer's own spelling back at them. Somebody who fixes a rule and re-sends it was
+  // told their correction had reached the team while the team still had the old one.
+  deliveredSlug?: string;
+  // the name that was taken, when a suffix was used instead of it
+  renamedFrom?: string;
+  // set when this delivery rewrote a skill that was already there, which only ever
+  // happens because the reviewer asked for it a second time, knowing
+  updatedExisting?: boolean;
+  // the destination already has this name and NOTHING was written; the reviewer decides
+  collision?: Collision;
 }
+
+/** How a reviewer answers a refusal: send it as an update to what is there, or under a
+ * different name. Absent on the first attempt, which is why the refusal exists. */
+export type DeliveryOptions = PublishOptions;
 
 export function approveAndDeliver(
   home: string = handbookHome(),
@@ -93,8 +110,12 @@ export function approveAndDeliver(
   forge: ForgeRunner = runForge,
   target?: DeliveryTarget,
   personalDir: string = personalSkillsDir(),
+  options: DeliveryOptions = {},
 ): DeliverResult {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
+  if (options.as !== undefined && !isSafeSlug(options.as)) {
+    return { ok: false, error: `"${options.as}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
   const dir = join(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
@@ -112,7 +133,7 @@ export function approveAndDeliver(
         error: "no team configured — run /handbook:init or /handbook:join first, or approve with --to personal",
       };
     }
-    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge);
+    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
     // The forge taught us its branch rule the only way it can: by refusing one. Remember
     // it here, where the home directory is known, so the next skill goes out first time.
     if (delivered.learnedBranchPrefix) {
@@ -120,8 +141,59 @@ export function approveAndDeliver(
     }
     return delivered;
   }
-  if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir);
-  return deliverSolo(dir, meta, fallbackCwd, decidedAt);
+  if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
+  return deliverSolo(dir, meta, fallbackCwd, decidedAt, options);
+}
+
+/**
+ * Write the skill into a local skills directory and report the name it landed under.
+ *
+ * Local delivery keeps the suffix rather than refusing the way the team path does, and the
+ * difference is measured, not stylistic: the team path told the publisher a name that was
+ * never written, while this one prints the target PATH, so `.../skills/foo-2` was already
+ * on the screen. Refusing here would turn "keep it for yourself" into an operation that can
+ * fail, which nothing asked for. What was missing is the sentence that says WHY the name
+ * changed, and that is what deliveredSlug and renamedFrom now carry out to the CLI.
+ */
+function installLocally(
+  dir: string,
+  meta: CandidateMeta,
+  skillsDir: string,
+  options: DeliveryOptions,
+): { slug: string; target: string; updatedExisting: boolean } | { error: string } {
+  const requested = options.as ?? meta.slug;
+  const occupied = existsSync(join(skillsDir, requested));
+  const updatedExisting = occupied && !!options.update;
+  const slug = updatedExisting ? requested : uniqueSlug(requested, (s) => existsSync(join(skillsDir, s)));
+  const target = join(skillsDir, slug);
+  try {
+    // read before creating the target: an unreadable candidate must not leave an
+    // empty skill dir behind (which would shift every future slug to -2)
+    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
+    // An update replaces what is there rather than merging into it, so a file the new
+    // version dropped does not stay behind and keep being read.
+    if (updatedExisting) rmSync(target, { recursive: true, force: true });
+    // rewrite the frontmatter name when the directory name is not the candidate's own, so
+    // it doesn't shadow the skill it collided with
+    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
+  } catch (err) {
+    return { error: `delivery failed: ${String(err)}` };
+  }
+  return { slug, target, updatedExisting };
+}
+
+/** The fields every successful delivery reports about the name it used. */
+function namedAs(
+  meta: CandidateMeta,
+  placed: { slug: string; updatedExisting: boolean },
+  options: DeliveryOptions,
+): Pick<DeliverResult, "deliveredSlug" | "renamedFrom" | "updatedExisting"> {
+  const requested = options.as ?? meta.slug;
+  return {
+    deliveredSlug: placed.slug,
+    ...(placed.slug === requested ? {} : { renamedFrom: requested }),
+    ...(placed.updatedExisting ? { updatedExisting: true } : {}),
+  };
 }
 
 /** Install into the user-level skills dir: available in every project, only for
@@ -131,24 +203,25 @@ export function deliverPersonal(
   meta: CandidateMeta,
   decidedAt: string,
   skillsDir: string = personalSkillsDir(),
+  options: DeliveryOptions = {},
 ): DeliverResult {
-  const slug = uniqueSlug(meta.slug, (s) => existsSync(join(skillsDir, s)));
-  const target = join(skillsDir, slug);
-  try {
-    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
-    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-  } catch (err) {
-    return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
-  }
+  const placed = installLocally(dir, meta, skillsDir, options);
+  if ("error" in placed) return { ok: false, mode: "personal", meta, error: placed.error };
   const updated: CandidateMeta = {
     ...meta,
     status: "approved",
     decidedAt,
-    deliveredTo: target,
+    deliveredTo: placed.target,
     deliveredMode: "personal",
   };
   writeCandidateMeta(dir, updated);
-  return { ok: true, mode: "personal", meta: updated, deliveredTo: target };
+  return {
+    ok: true,
+    mode: "personal",
+    meta: updated,
+    deliveredTo: placed.target,
+    ...namedAs(meta, placed, options),
+  };
 }
 
 function deliverToTeam(
@@ -158,9 +231,18 @@ function deliverToTeam(
   decidedAt: string,
   git: GitRunner,
   forge: ForgeRunner,
+  options: DeliveryOptions,
 ): DeliverResult {
-  const published = publishCandidate(dir, meta, team, git, forge);
-  if (!published.ok) return { ok: false, mode: "team", meta, error: published.error };
+  const published = publishCandidate(dir, meta, team, git, forge, options);
+  if (!published.ok) {
+    return {
+      ok: false,
+      mode: "team",
+      meta,
+      error: published.error,
+      ...(published.collision ? { collision: published.collision } : {}),
+    };
+  }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
   const updated: CandidateMeta = { ...meta, status: "approved", decidedAt, deliveredTo, deliveredMode: "team" };
   writeCandidateMeta(dir, updated);
@@ -169,6 +251,8 @@ function deliverToTeam(
     mode: "team",
     meta: updated,
     deliveredTo,
+    ...(published.skillSlug ? { deliveredSlug: published.skillSlug } : {}),
+    ...(published.updatedExisting ? { updatedExisting: true } : {}),
     branch: published.branch,
     prUrl: published.prUrl,
     ...(published.version ? { version: published.version } : {}),
@@ -183,6 +267,7 @@ function deliverSolo(
   meta: CandidateMeta,
   fallbackCwd: string,
   decidedAt: string,
+  options: DeliveryOptions,
 ): DeliverResult {
   // Surface a fall-back honestly: installing into the wrong project silently is
   // worse than a warning the reviewer can act on.
@@ -198,22 +283,13 @@ function deliverSolo(
   // is false for the session they will actually open.
   const installedProject = meta.cwd && existsSync(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject = installedProject !== fallbackCwd ? basename(installedProject) : undefined;
-  const slug = uniqueSlug(meta.slug, (s) => existsSync(join(skillsDir, s)));
-  const target = join(skillsDir, slug);
-  try {
-    // read before creating the target: an unreadable candidate must not leave an
-    // empty skill dir behind (which would shift every future slug to -2)
-    const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
-    // rewrite the frontmatter name when suffixed so it doesn't shadow the skill it collided with
-    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-  } catch (err) {
-    return { ok: false, mode: "solo", meta, error: `delivery failed: ${String(err)}` };
-  }
+  const placed = installLocally(dir, meta, skillsDir, options);
+  if ("error" in placed) return { ok: false, mode: "solo", meta, error: placed.error };
   const updated: CandidateMeta = {
     ...meta,
     status: "approved",
     decidedAt,
-    deliveredTo: target,
+    deliveredTo: placed.target,
     deliveredMode: "solo",
   };
   writeCandidateMeta(dir, updated);
@@ -221,8 +297,86 @@ function deliverSolo(
     ok: true,
     mode: "solo",
     meta: updated,
-    deliveredTo: target,
+    deliveredTo: placed.target,
+    ...namedAs(meta, placed, options),
     ...(warning ? { warning } : {}),
     ...(originProject ? { originProject } : {}),
   };
+}
+
+/**
+ * What the reviewer is told after a verdict lands.
+ *
+ * It lives here rather than in the CLI because the one thing it has to get right is a
+ * field of DeliverResult, and a message built where nothing can test it is how the
+ * suffix went unreported in the first place: publishCandidate returned
+ * `skillDir: "skills/foo-2"`, the conversion dropped it, and the line below printed the
+ * name the reviewer had typed. Every sentence here names the skill by what was written.
+ */
+export function formatApproveResult(slug: string, result: DeliverResult): string {
+  const name = result.deliveredSlug ?? slug;
+  const lines: string[] = [];
+  if (result.mode === "team") {
+    // What the reader needs is not "it worked" but what is now true and what is left for
+    // them: a request exists, it carries the version teammates update to, and nothing
+    // reaches anyone until a human merges it.
+    const bump = result.version
+      ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.`
+      : "";
+    const what = result.updatedExisting
+      ? `Sent "${name}" to the team as an update to the skill they already had`
+      : `Shared "${name}" with the team`;
+    if (result.prUrl) {
+      lines.push(`${what}: ${result.prUrl}`);
+      lines.push(`Merge that request and every teammate gets it at their next session.${bump}`);
+    } else {
+      lines.push(`${what} on branch ${result.branch}.${bump}`);
+      if (result.prError) {
+        lines.push(
+          `It could not open the request for you (${result.prError}) — install and sign in to gh or glab and it will next time.`,
+        );
+      }
+      if (result.manualUrl) lines.push(`Open it here, then merge: ${result.manualUrl}`);
+    }
+    if (result.updatedExisting) {
+      lines.push("The merge replaces their copy, so review the removed lines too, not only the added ones.");
+    }
+    // The branch is not named what it would normally be named. Say so once, rather than
+    // letting the reader find a different name than the one they expected in the forge.
+    if (result.learnedBranchPrefix) {
+      lines.push(
+        `Your project refuses the default branch name, so this went out as ${result.branch}. ` +
+          "That prefix is remembered — later skills use it straight away.",
+      );
+    }
+    return lines.join("\n");
+  }
+  if (result.mode === "personal") {
+    lines.push(
+      `Kept "${name}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`,
+    );
+  } else {
+    if (result.warning) lines.push(`Note: ${result.warning}`);
+    const loads = result.originProject
+      ? `Claude will load it in ${result.originProject} (where it was captured) next session`
+      : "Claude will load it next session";
+    // "this directory" is only the right repo to commit when the skill landed here; when
+    // it landed in the project it was captured in, that is the repo the skill travels with.
+    const commit = result.originProject
+      ? "Commit it there so the skill travels with that repo."
+      : "Commit this directory so the skill travels with the repo.";
+    lines.push(`Approved "${name}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
+  }
+  // The two sentences the reviewer could not previously get: the name they asked for was
+  // taken, and there is a second answer to that besides living with a suffix.
+  if (result.renamedFrom) {
+    lines.push(
+      `A skill named "${result.renamedFrom}" was already there, so this one is installed as "${name}". ` +
+        `Approve with --update to replace the one that is there instead, or with --as <name> to choose the name yourself.`,
+    );
+  }
+  if (result.updatedExisting) {
+    lines.push(`This replaced the "${name}" that was already there.`);
+  }
+  return lines.join("\n");
 }

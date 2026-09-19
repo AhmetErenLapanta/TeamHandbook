@@ -8,6 +8,7 @@ import type { InventoryPaths, Selection } from "./migrate.js";
 import { listCandidates } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 import type { GitRunner } from "./init.js";
+import { teamAssets } from "./publish.js";
 
 let home: string;
 let userHome: string;
@@ -661,5 +662,62 @@ describe("formatMigrateResult", () => {
 
     expect(text).toContain("Not taken (1):");
     expect(text).toContain("incident-drill - it holds a credential");
+  });
+});
+
+describe("the third state: a name the team already has", () => {
+  it("is read out of the real team repository rather than assumed", () => {
+    // given a team repository carrying one of each kind
+    remote = teamRepo({
+      "skills/fix-npm-test/SKILL.md": "---\nname: fix-npm-test\ndescription: theirs\n---\n\nTheirs.\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { gitlab: { type: "sse", url: "https://theirs.example/sse" } } }) + "\n",
+      "commands/explain.md": "---\ndescription: theirs\n---\n\nTheirs.\n",
+    });
+
+    // when the index is read from it
+    const assets = teamAssets({ repoUrl: remote, marketplaceName: "acme" });
+
+    // then every kind is found, and the skills/README.md file is not mistaken for a skill
+    expect(assets).toEqual({ skills: ["fix-npm-test"], servers: ["gitlab"], commands: ["explain"] });
+  });
+
+  it("is nothing at all when the repository cannot be read, so no label is invented", () => {
+    // given a repository that is not there
+    // when the index is read
+    const assets = teamAssets({ repoUrl: join(home, "missing.git"), marketplaceName: "acme" });
+
+    // then the screen learns nothing rather than learning that the team has nothing
+    expect(assets).toBeNull();
+  });
+
+  it("marks the local setup without withholding any of it, because an update is still a way to travel", () => {
+    // given local things whose names the team already carries
+    writeSkill(userHome, "fix-npm-test");
+    writeSkill(userHome, "unique-skill");
+    writeCommand(userHome, "explain", "---\ndescription: mine\n---\n\nMine.\n");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+
+    // when the inventory is built against what the team has
+    const inv = buildInventory(paths(), { skills: ["fix-npm-test"], servers: ["gitlab"], commands: ["explain"] });
+
+    // then the matching ones are marked and still shareable, and the others are untouched
+    expect(inv.skills.find((s) => s.name === "fix-npm-test")).toMatchObject({ shareable: true, onTeam: true });
+    expect(inv.skills.find((s) => s.name === "unique-skill")?.onTeam).toBeUndefined();
+    expect(inv.servers[0]).toMatchObject({ name: "gitlab", shareable: true, onTeam: true });
+    expect(inv.commands[0]).toMatchObject({ name: "explain", shareable: true, onTeam: true });
+
+    // and the screen says which state it is, next to the refusals but not as one
+    const printed = formatInventory(inv);
+    expect(printed).toContain("already on the team: picking it sends an update to their copy");
+    expect(printed).not.toContain("not shareable: already on the team");
+  });
+
+  it("marks nothing when no index was fetched, so an unreachable repo cannot read as an empty one", () => {
+    writeSkill(userHome, "fix-npm-test");
+
+    const inv = buildInventory(paths());
+
+    expect(inv.skills[0]?.onTeam).toBeUndefined();
+    expect(formatInventory(inv)).not.toContain("already on the team");
   });
 });

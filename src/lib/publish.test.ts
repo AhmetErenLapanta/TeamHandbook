@@ -13,6 +13,7 @@ import {
   manualPrUrl,
   publishCandidate,
   publishMcpServer,
+  publishTeamSelection,
   retryBranchAfterNameRejection,
 } from "./publish.js";
 import { auditServer } from "./mcp.js";
@@ -178,8 +179,15 @@ describe("publishCandidate", () => {
     expect(forgeCalls[0]).toContain("handbook/fix-npm-test");
   });
 
-  it("suffixes the slug when the team repo already has that skill directory", () => {
+  // Was: "suffixes the slug when the team repo already has that skill directory". The
+  // suffix was a tested preference, and what the test could not see is that nothing ever
+  // told the publisher about it: the CLI printed the name they had typed. So the preference
+  // is inverted rather than deleted, and the name of this test carries the reason.
+  it("refuses instead of suffixing when the team already has that skill, because the suffix was never reported to the publisher", () => {
+    // given a team repository that already has a skill by this name
     remote = teamRepo(["fix-npm-test"]);
+
+    // when the candidate is published under its own name
     const result = publishCandidate(
       candidateDir,
       meta(),
@@ -187,9 +195,135 @@ describe("publishCandidate", () => {
       undefined,
       () => "https://example.com/mr/1",
     );
-    expect(result.branch).toBe("handbook/fix-npm-test-2");
+
+    // then nothing was written, and the refusal names both ways forward
+    expect(result.ok).toBe(false);
+    expect(result.collision).toEqual({ kind: "skill", name: "fix-npm-test" });
+    expect(result.error).toContain('already has a skill named "fix-npm-test"');
+    expect(result.error).toContain("--update");
+    expect(result.error).toContain("--as");
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+    expect(gitIn(remote, ["show", "main:skills/fix-npm-test/SKILL.md"])).toBe("occupied\n");
+  });
+
+  it("sends the skill as an update to the team's own copy when the publisher answers the refusal with --update", () => {
+    // given the same collision, and a publisher who was shown it and asked for an update
+    remote = teamRepo(["fix-npm-test"]);
+
+    // when they approve again with --update
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      undefined,
+      () => "https://example.com/mr/1",
+      { update: true },
+    );
+
+    // then it goes out under the name it collided with, as a rewrite of theirs
+    expect(result).toMatchObject({
+      ok: true,
+      skillDir: "skills/fix-npm-test",
+      skillSlug: "fix-npm-test",
+      updatedExisting: true,
+    });
+    expect(gitIn(remote, ["show", `${result.branch}:skills/fix-npm-test/SKILL.md`])).toContain("Body.");
+    expect(gitIn(remote, ["show", `${result.branch}:skills/fix-npm-test/SKILL.md`])).not.toContain("occupied");
+  });
+
+  it("publishes under the name the publisher chose when they answer the refusal with --as", () => {
+    // given the same collision, answered with a different name instead
+    remote = teamRepo(["fix-npm-test"]);
+
+    // when the candidate is published as something else
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      undefined,
+      () => "https://example.com/mr/1",
+      { as: "fix-npm-snapshot" },
+    );
+
+    // then both skills exist, and the new one's frontmatter matches its directory
+    expect(result).toMatchObject({ ok: true, skillDir: "skills/fix-npm-snapshot", skillSlug: "fix-npm-snapshot" });
+    expect(result.updatedExisting).toBeUndefined();
+    expect(gitIn(remote, ["show", `${result.branch}:skills/fix-npm-snapshot/SKILL.md`])).toContain(
+      "name: fix-npm-snapshot",
+    );
+    expect(gitIn(remote, ["show", `${result.branch}:skills/fix-npm-test/SKILL.md`])).toBe("occupied\n");
+  });
+
+  it("refuses a chosen name the team also has, rather than suffixing past the second one too", () => {
+    // given both names taken
+    remote = teamRepo(["fix-npm-test", "fix-npm-snapshot"]);
+
+    // when the publisher picks the one that is also occupied
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      undefined,
+      () => "",
+      { as: "fix-npm-snapshot" },
+    );
+
+    // then the same answer comes back for the name they chose
+    expect(result.ok).toBe(false);
+    expect(result.collision).toEqual({ kind: "skill", name: "fix-npm-snapshot" });
+  });
+
+  it("keeps the skill's own name when only an abandoned handbook branch is in the way, and pushes past the branch", () => {
+    // given a branch left behind by an earlier approve whose request was never merged,
+    // and NO skills/ directory for it: the two used to be one check, and the branch
+    // silently renamed the skill
+    remote = teamRepo();
+    gitIn(remote, ["branch", "handbook/fix-npm-test", "main"]);
+
+    // when the candidate is published
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      undefined,
+      () => "https://example.com/mr/1",
+    );
+
+    // then the skill keeps the name it asked for, and only the BRANCH steps aside - which
+    // is the guard that stops the push being rejected non-fast-forward and the slug being
+    // locked for good
+    expect(result).toMatchObject({ ok: true, skillDir: "skills/fix-npm-test", branch: "handbook/fix-npm-test-2" });
     const files = gitIn(remote, ["ls-tree", "-r", "--name-only", "handbook/fix-npm-test-2"]);
-    expect(files).toContain("skills/fix-npm-test-2/SKILL.md");
+    expect(files).toContain("skills/fix-npm-test/SKILL.md");
+    expect(files).not.toContain("skills/fix-npm-test-2/SKILL.md");
+    expect(gitIn(remote, ["show", "handbook/fix-npm-test-2:skills/fix-npm-test/SKILL.md"])).toContain(
+      "name: fix-npm-test",
+    );
+  });
+
+  it("still finds a free branch for an update whose first attempt left a branch behind", () => {
+    // given the team has the skill AND the branch from the approve that put it there
+    remote = teamRepo(["fix-npm-test"]);
+    gitIn(remote, ["branch", "handbook/fix-npm-test", "main"]);
+
+    // when the publisher sends an update
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      undefined,
+      () => "https://example.com/mr/1",
+      { update: true },
+    );
+
+    // then the directory is the one being updated and the branch is a new one: the
+    // slug-lock guard survives --update, which is the case that needs it most
+    expect(result).toMatchObject({
+      ok: true,
+      skillDir: "skills/fix-npm-test",
+      updatedExisting: true,
+      branch: "handbook/fix-npm-test-2",
+    });
   });
 
   it("still succeeds with a manual link when the forge CLI fails", () => {
@@ -534,6 +668,102 @@ describe("publishMcpServer", () => {
   });
 });
 
+describe("a name the destination already has", () => {
+  const gitlab: McpServerEntry = {
+    name: "gitlab",
+    scope: "user",
+    config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+  };
+  const pluginJson = JSON.stringify({ name: "acme", version: "0.1.0" }, null, 2) + "\n";
+  let commandDir: string;
+
+  beforeEach(() => {
+    commandDir = mkdtempSync(join(tmpdir(), "handbook-commands-"));
+    writeFileSync(join(commandDir, "explain.md"), "---\ndescription: mine\n---\n\nMine.\n");
+  });
+  afterEach(() => rmSync(commandDir, { recursive: true, force: true }));
+
+  function occupiedTeamRepo(): string {
+    return teamRepo(["fix-npm-test"], {
+      ".claude-plugin/plugin.json": pluginJson,
+      ".mcp.json": JSON.stringify({ mcpServers: { gitlab: { type: "sse", url: "https://theirs.example/sse" } } }) + "\n",
+      "commands/explain.md": "---\ndescription: theirs\n---\n\nTheirs.\n",
+    });
+  }
+
+  it("gets the same answer whether it is a skill, an MCP server or a command", () => {
+    // given a team repository that already carries one of each, by the same names
+    remote = occupiedTeamRepo();
+    const team = { repoUrl: remote, marketplaceName: "acme" };
+
+    // when each kind is sent under the name the team already has
+    const skill = publishCandidate(candidateDir, meta(), team, undefined, () => "");
+    const selection = publishTeamSelection(
+      { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
+      team,
+      undefined,
+      () => "",
+    );
+
+    // then all three are turned back, all three are marked as a collision rather than as
+    // some other refusal, and all three name the route out of it
+    expect(skill.collision).toEqual({ kind: "skill", name: "fix-npm-test" });
+    expect(selection.refused).toEqual([
+      { name: "gitlab", kind: "mcp", reason: expect.stringContaining("--update"), collision: true },
+      { name: "explain", kind: "command", reason: expect.stringContaining("--update"), collision: true },
+    ]);
+    for (const answer of [skill.error!, ...selection.refused!.map((r) => r.reason)]) {
+      expect(answer).toContain("already");
+      expect(answer).toContain("--update");
+    }
+
+    // and nothing was pushed over anything
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+  });
+
+  it("is replaced for a server and a command too, once the publisher answers with --update", () => {
+    // given the same collisions, and a publisher who was shown them
+    remote = occupiedTeamRepo();
+    const team = { repoUrl: remote, marketplaceName: "acme" };
+
+    // when the selection is sent again as an update
+    const result = publishTeamSelection(
+      { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
+      team,
+      undefined,
+      () => "",
+      { update: true },
+    );
+
+    // then both carry the publisher's version, and the request says which names it rewrites
+    expect(result.ok).toBe(true);
+    expect(result.refused).toBeUndefined();
+    expect(result.updated).toEqual({ servers: ["gitlab"], commands: ["explain"] });
+    expect(JSON.parse(gitIn(remote, ["show", `${result.branch}:.mcp.json`])).mcpServers.gitlab).toEqual(gitlab.config);
+    expect(gitIn(remote, ["show", `${result.branch}:commands/explain.md`])).toContain("Mine.");
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
+      "feat(mcp,commands): update gitlab, explain",
+    );
+  });
+
+  it("tells the reviewer a request replaces what the team has, which the title alone does not", () => {
+    // given one new server and one that rewrites the team's own
+    remote = occupiedTeamRepo();
+    const team = { repoUrl: remote, marketplaceName: "acme" };
+    const linear: McpServerEntry = { name: "linear", scope: "user", config: { type: "sse", url: "https://mcp.linear.app/sse" } };
+
+    // when both travel in one request
+    const result = publishTeamSelection({ servers: [linear, gitlab] }, team, undefined, () => "", { update: true });
+
+    // then the title keeps the two verbs apart and the body spells out the consequence
+    expect(result.ok).toBe(true);
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
+      "feat(mcp): add linear; update gitlab",
+    );
+    expect(result.updated).toEqual({ servers: ["gitlab"], commands: [] });
+  });
+});
+
 describe("buildMcpPrBody / formatMcpShareResult", () => {
   const stdio: McpServerEntry = {
     name: "playwright",
@@ -670,7 +900,7 @@ describe("publishCandidate carries the whole skill", () => {
     expect(files).not.toContain("candidate.json");
   });
 
-  it("given a suffixed slug, when it is shared, then the extra files follow it under the new name", () => {
+  it("given a renamed slug, when it is shared, then the extra files follow it under the new name", () => {
     writeFileSync(join(candidateDir, "preflight.sh"), "#!/bin/sh\necho ready\n");
     remote = teamRepo(["fix-npm-test"]);
 
@@ -680,12 +910,37 @@ describe("publishCandidate carries the whole skill", () => {
       { repoUrl: remote, marketplaceName: "t" },
       runGit,
       () => "",
+      { as: "fix-npm-test-2" },
     );
 
     expect(result.ok).toBe(true);
     expect(result.skillDir).toBe("skills/fix-npm-test-2");
     const files = gitIn(remote, ["ls-tree", "-r", "--name-only", result.branch!]).split("\n");
     expect(files).toContain("skills/fix-npm-test-2/preflight.sh");
+  });
+
+  it("given an update, when the new version dropped a file, then the team's tree does not keep reading it", () => {
+    // given a team copy that carries a script the new version no longer has
+    remote = teamRepo([], {
+      "skills/fix-npm-test/SKILL.md": "---\nname: fix-npm-test\n---\n\nTheirs.\n",
+      "skills/fix-npm-test/preflight.sh": "#!/bin/sh\necho stale\n",
+    });
+
+    // when the publisher sends theirs as an update
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+      { update: true },
+    );
+
+    // then the directory is replaced, not merged into: a file the update dropped is gone
+    expect(result.ok).toBe(true);
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", result.branch!]).split("\n");
+    expect(files).toContain("skills/fix-npm-test/SKILL.md");
+    expect(files).not.toContain("skills/fix-npm-test/preflight.sh");
   });
 });
 

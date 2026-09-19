@@ -3,7 +3,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { approveAndDeliver, projectTargetLabel, resolveDeliveryDir, soloSkillsDir } from "./deliver.js";
+import {
+  approveAndDeliver,
+  formatApproveResult,
+  projectTargetLabel,
+  resolveDeliveryDir,
+  soloSkillsDir,
+} from "./deliver.js";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner } from "./init.js";
 import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
@@ -406,5 +412,195 @@ describe("delivery carries the whole skill", () => {
 
     expect(result.ok).toBe(false);
     expect(existsSync(join(soloSkillsDir(project), "fix-npm-test"))).toBe(false);
+  });
+});
+
+describe("the name a delivery actually used", () => {
+  it("reaches the reviewer for every destination, which is the field the type used to lack", () => {
+    // given a skill of that name already installed in each local destination
+    const personalDir = join(home, "personal-skills");
+    mkdirSync(join(personalDir, "fix-npm-test"), { recursive: true });
+    mkdirSync(join(soloSkillsDir(project), "fix-npm-test"), { recursive: true });
+    seedCandidate(meta({ slug: "fix-npm-test" }));
+
+    // when it is approved into the project
+    const solo = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    // then the result names what was written, not what was asked for, and the line the
+    // reviewer reads says the same thing
+    expect(solo).toMatchObject({ ok: true, deliveredSlug: "fix-npm-test-2", renamedFrom: "fix-npm-test" });
+    const printed = formatApproveResult("fix-npm-test", solo);
+    expect(printed).toContain('"fix-npm-test-2"');
+    expect(printed).toContain('A skill named "fix-npm-test" was already there');
+    expect(printed).toContain("--update");
+
+    // and the same holds for the personal destination
+    seedCandidate(meta({ slug: "fix-npm-test" }));
+    const personal = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "personal", personalDir,
+    );
+    expect(personal).toMatchObject({ ok: true, deliveredSlug: "fix-npm-test-2" });
+    expect(formatApproveResult("fix-npm-test", personal)).toContain('Kept "fix-npm-test-2"');
+  });
+
+  it("replaces the installed skill instead of suffixing when the reviewer asks for an update", () => {
+    // given a skill of that name already in the project, with a file the new one lacks
+    const installed = join(soloSkillsDir(project), "fix-npm-test");
+    mkdirSync(installed, { recursive: true });
+    writeFileSync(join(installed, "SKILL.md"), "---\nname: fix-npm-test\n---\n\nOld.\n");
+    writeFileSync(join(installed, "preflight.sh"), "echo stale\n");
+    seedCandidate(meta());
+
+    // when the reviewer approves it as an update
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project", undefined, { update: true },
+    );
+
+    // then one skill exists, carrying the new body, and the file the new version dropped
+    // is not left behind to be read
+    expect(result).toMatchObject({ ok: true, deliveredSlug: "fix-npm-test", updatedExisting: true });
+    expect(result.renamedFrom).toBeUndefined();
+    expect(existsSync(join(soloSkillsDir(project), "fix-npm-test-2"))).toBe(false);
+    expect(readFileSync(join(installed, "SKILL.md"), "utf8")).toContain("Body.");
+    expect(existsSync(join(installed, "preflight.sh"))).toBe(false);
+    expect(formatApproveResult("fix-npm-test", result)).toContain("This replaced the");
+  });
+
+  it("never replaces an installed skill without being asked, however many times it is approved", () => {
+    // given a skill of that name already installed
+    const installed = join(soloSkillsDir(project), "fix-npm-test");
+    mkdirSync(installed, { recursive: true });
+    writeFileSync(join(installed, "SKILL.md"), "---\nname: fix-npm-test\n---\n\nTheirs.\n");
+    seedCandidate(meta());
+
+    // when it is approved with no update asked for
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    // then what was there is exactly what is still there
+    expect(result.ok).toBe(true);
+    expect(result.updatedExisting).toBeUndefined();
+    expect(readFileSync(join(installed, "SKILL.md"), "utf8")).toContain("Theirs.");
+  });
+
+  it("installs under the name the reviewer chose when they answer with a different one", () => {
+    mkdirSync(join(soloSkillsDir(project), "fix-npm-test"), { recursive: true });
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project", undefined, { as: "fix-npm-snapshot" },
+    );
+
+    expect(result).toMatchObject({ ok: true, deliveredSlug: "fix-npm-snapshot" });
+    expect(result.renamedFrom).toBeUndefined();
+    // the frontmatter follows the directory, so the two skills do not shadow each other
+    expect(readFileSync(join(soloSkillsDir(project), "fix-npm-snapshot", "SKILL.md"), "utf8")).toContain(
+      "name: fix-npm-snapshot",
+    );
+  });
+
+  it("refuses a name that could not be a skill directory before anything is written", () => {
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", project, "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project", undefined, { as: "../escape" },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("cannot be a skill name");
+  });
+});
+
+describe("the team's own copy, and the reviewer's answer to it", () => {
+  let remote: string;
+
+  beforeEach(() => {
+    remote = bareTeamRepo();
+  });
+  afterEach(() => rmSync(remote, { recursive: true, force: true }));
+
+  function seedTeamSkill(): void {
+    const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
+    try {
+      execFileSync("git", ["clone", remote, join(seed, "repo")], { stdio: "ignore" });
+      const repo = join(seed, "repo");
+      mkdirSync(join(repo, "skills", "fix-npm-test"), { recursive: true });
+      writeFileSync(join(repo, "skills", "fix-npm-test", "SKILL.md"), "---\nname: fix-npm-test\n---\n\nTheirs.\n");
+      execFileSync("git", ["-C", repo, "add", "-A"]);
+      execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed skill"]);
+      execFileSync("git", ["-C", repo, "push", "origin", "main"]);
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+    }
+  }
+
+  it("carries the refusal out to the reviewer as a collision rather than a failure to explain", () => {
+    // given the team already has a skill by this name
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedTeamSkill();
+    seedCandidate(meta());
+
+    // when the reviewer shares it
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, () => "",
+    );
+
+    // then the collision travels through the delivery result, and the candidate is still
+    // pending: nothing was decided on the reviewer's behalf
+    expect(result.ok).toBe(false);
+    expect(result.collision).toEqual({ kind: "skill", name: "fix-npm-test" });
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+  });
+
+  it("sends it as an update once the reviewer asks, and says so in the line they read", () => {
+    // given the same collision, and a reviewer who answered it
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedTeamSkill();
+    seedCandidate(meta());
+
+    // when they approve again with --update
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, () => "https://example.com/mr/9",
+      undefined, undefined, { update: true },
+    );
+
+    // then it goes out under the contested name, and the reviewer is told it replaces theirs
+    expect(result).toMatchObject({ ok: true, mode: "team", deliveredSlug: "fix-npm-test", updatedExisting: true });
+    const printed = formatApproveResult("fix-npm-test", result);
+    expect(printed).toContain("as an update to the skill they already had");
+    expect(printed).toContain("replaces their copy");
+    const body = execFileSync(
+      "git",
+      ["-C", remote, "show", `${result.branch}:skills/fix-npm-test/SKILL.md`],
+      { encoding: "utf8" },
+    );
+    expect(body).toContain("Body.");
+  });
+
+  it("names the team's copy by what was written when the reviewer renamed it", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedTeamSkill();
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, () => "https://example.com/mr/9",
+      undefined, undefined, { as: "fix-npm-snapshot" },
+    );
+
+    expect(result.deliveredSlug).toBe("fix-npm-snapshot");
+    // the line the reviewer reads used to print the slug they typed, whatever was written
+    expect(formatApproveResult("fix-npm-test", result)).toContain('Shared "fix-npm-snapshot" with the team');
   });
 });

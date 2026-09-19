@@ -8,7 +8,7 @@ import type { CandidateStatus, SkillAudit } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 import { handbookHome } from "./session-state.js";
 import { publishTeamSelection } from "./publish.js";
-import type { TeamPublishOutcome } from "./publish.js";
+import type { PublishOptions, TeamAssets, TeamPublishOutcome } from "./publish.js";
 import { auditCommand, commandRefusalSummary, readLocalCommands } from "./commands.js";
 import type { CommandAudit, CommandEntry } from "./commands.js";
 import { runGit } from "./init.js";
@@ -35,7 +35,20 @@ import type { ForgeRunner } from "./forge.js";
 
 export type InventoryScope = "personal" | "project" | "user";
 
-export interface SkillItem {
+/**
+ * A name the team repository already carries.
+ *
+ * It is a third state, not a refusal: the thing can still travel, as an update to the
+ * team's copy rather than as a new one. Marked rather than filtered because a manager who
+ * cannot see it concludes the team does not have it - which is the belief this whole card
+ * exists to stop - and because the decision between "update theirs" and "leave it" is
+ * theirs to make on a screen, not ours to make in a sort.
+ */
+export interface OnTeam {
+  onTeam?: true;
+}
+
+export interface SkillItem extends OnTeam {
   kind: "skill";
   name: string;
   scope: InventoryScope;
@@ -46,7 +59,7 @@ export interface SkillItem {
   reason?: string;
 }
 
-export interface ServerItem {
+export interface ServerItem extends OnTeam {
   kind: "mcp";
   name: string;
   scope: InventoryScope;
@@ -60,7 +73,7 @@ export interface ServerItem {
   fullReason?: string;
 }
 
-export interface CommandItem {
+export interface CommandItem extends OnTeam {
   kind: "command";
   name: string;
   scope: InventoryScope;
@@ -200,8 +213,13 @@ function serverItem(entry: McpServerEntry, audit: McpAudit): ServerItem {
  * copy of the rules drifts, and the direction it drifts in is a screen that offers
  * something the sieve refuses.
  */
-export function buildInventory(paths: InventoryPaths = {}): Inventory {
+export function buildInventory(paths: InventoryPaths = {}, teamHas: TeamAssets | null = null): Inventory {
   const home = paths.home ?? handbookHome();
+  // Null when nobody asked, and null again when the repository could not be read: both
+  // mean "not known", and neither is allowed to read as "not there". An item is marked
+  // only on a positive match, so a missing index costs a label and never a refusal.
+  const onTeam = <T extends { name: string }>(item: T, names: string[] | undefined): T =>
+    names?.includes(item.name) ? { ...item, onTeam: true as const } : item;
   const byName = new Map<string, SkillItem>();
   for (const { dir, scope } of localSkillDirs(paths)) {
     let entries: string[];
@@ -218,14 +236,14 @@ export function buildInventory(paths: InventoryPaths = {}): Inventory {
       // ordinary file sitting beside the skills - .DS_Store is in the real directory this
       // was measured against - which is not a skill that failed, it is not a skill.
       if (!isDirectory(join(dir, entry))) continue;
-      byName.set(entry, readSkillDir(join(dir, entry), scope, home));
+      byName.set(entry, onTeam(readSkillDir(join(dir, entry), scope, home), teamHas?.skills));
     }
   }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
-    (entry) => serverItem(entry, auditServer(entry.config)),
+    (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers),
   );
   const commands = readLocalCommands(paths.userHome ?? homedir(), paths.cwd ?? process.cwd()).map((entry) =>
-    commandItem(entry, auditCommand(entry.file)),
+    onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands),
   );
   return { skills: [...byName.values()], servers, commands };
 }
@@ -252,6 +270,12 @@ function oneLine(text: string): string {
  * things. A skill lands in the review queue and stays on this machine; a server opens a
  * merge request. Reading "shared" over both would be wrong about one of them.
  */
+/** The third state, said where the refusals are said, so the two cannot be confused: one
+ * of these can still go, and what it changes is what happens when it arrives. */
+function onTeamNote(item: OnTeam): string {
+  return item.onTeam ? "  already on the team: picking it sends an update to their copy" : "";
+}
+
 export function formatInventory(inv: Inventory): string {
   if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
     return (
@@ -267,7 +291,8 @@ export function formatInventory(inv: Inventory): string {
       "",
     );
     inv.skills.forEach((skill, i) => {
-      lines.push(`  ${i + 1}. ${skill.name}  [${skill.scope}]${skill.shareable ? "" : `  not shareable: ${skill.reason}`}`);
+      const state = skill.shareable ? onTeamNote(skill) : `  not shareable: ${skill.reason}`;
+      lines.push(`  ${i + 1}. ${skill.name}  [${skill.scope}]${state}`);
       if (skill.shareable) lines.push(`     ${oneLine(skill.description) || "(no description)"}`);
     });
   }
@@ -284,7 +309,7 @@ export function formatInventory(inv: Inventory): string {
           ? `shareable (starts a process on every teammate's machine)${needs}`
           : `shareable${needs}`
         : `not shareable: ${server.reason}`;
-      lines.push(`  ${i + 1}. ${server.name}  [${server.scope}, ${server.transport}]  ${state}`);
+      lines.push(`  ${i + 1}. ${server.name}  [${server.scope}, ${server.transport}]  ${state}${onTeamNote(server)}`);
     });
   }
   if (inv.commands.length) {
@@ -294,9 +319,8 @@ export function formatInventory(inv: Inventory): string {
       "",
     );
     inv.commands.forEach((command, i) => {
-      lines.push(
-        `  ${i + 1}. /${command.name}  [${command.scope}]${command.shareable ? "" : `  not shareable: ${command.reason}`}`,
-      );
+      const state = command.shareable ? onTeamNote(command) : `  not shareable: ${command.reason}`;
+      lines.push(`  ${i + 1}. /${command.name}  [${command.scope}]${state}`);
       if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
     });
     // Said once, in the list, rather than left for the person who wonders later why
@@ -340,6 +364,7 @@ export function shareSelection(
   paths: InventoryPaths = {},
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  options: PublishOptions = {},
 ): MigrateResult {
   const home = paths.home ?? handbookHome();
   const result: MigrateResult = { queued: [], refused: [] };
@@ -375,7 +400,7 @@ export function shareSelection(
     for (const command of commands) result.refused.push({ name: command.name, kind: "command", reason });
     return result;
   }
-  const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge);
+  const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge, options);
   result.team = outcome;
   for (const refusal of outcome.refused ?? []) {
     result.refused.push({ name: refusal.name, kind: refusal.kind, reason: refusal.reason });
@@ -427,6 +452,14 @@ export function formatMigrateResult(result: MigrateResult, marketplaceName?: str
     lines.push(`Shared with the team (${servers.length + commands.length}) in one merge request:`);
     if (servers.length) lines.push(`  - MCP servers (${servers.length}): ${servers.join(", ")}`);
     if (commands.length) lines.push(`  - commands (${commands.length}): ${commands.join(", ")}`);
+    // Named separately from the list above, because "shared" and "replaced what the team
+    // was using" are not the same event and the manager is entitled to see which happened.
+    const updated = [...(shared.updated?.servers ?? []), ...(shared.updated?.commands ?? [])];
+    if (updated.length) {
+      lines.push(
+        `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} — the merge replaces theirs`,
+      );
+    }
     lines.push(
       `  - branch: ${shared.branch}`,
       // see formatMcpShareResult: a remote whose host manualPrUrl cannot build a link for

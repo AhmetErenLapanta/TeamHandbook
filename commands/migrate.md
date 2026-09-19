@@ -35,6 +35,12 @@ know which before they choose, not after:
      printed them. A dialog holds four questions, so a long inventory takes more than one
      pass; say how many are left after each.
    - Offer only what the list called shareable. A refusal is the point, not an obstacle.
+   - An entry marked **already on the team** is a third state, not a refusal: it can still
+     be picked, and picking it sends an update to the team's copy instead of a new file.
+     Say that where it is offered, because the user is choosing to overwrite something
+     other people already use. That mark is absent when the team repository could not be
+     read, so its absence never proves the team does not have it — the share itself makes
+     the real check and turns the selection back if it does.
    - Say once, before the first dialog, that they can answer in free text instead
      ("the three acme ones", "all of the servers, none of the skills") if they already
      know what they want. Twenty skills is six dialogs, and a person who knows their own
@@ -58,12 +64,21 @@ know which before they choose, not after:
    - already waiting in the review queue, or already decided there. The queued copy is
      left exactly as it is.
    - the team repository already declares a server, or already has a command, by that
-     name. Theirs is untouched; the rest of the selection still went. Sharing an update to
-     something the team already has is a different operation, and this command is not it.
+     name. Theirs is untouched; the rest of the selection still went. This one has a way
+     forward the others do not: ask whether to send it as an update to the team's copy,
+     and on a yes run the same command again with `--update` added. That replaces what the
+     team has, for every name in the selection the team already carries, so name those
+     before asking and never add the flag on your own initiative. Renaming theirs or yours
+     is the other answer.
 7. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern.
    Handle it exactly as `/handbook:mcp` does: propose one prefix that satisfies the
    pattern, confirm it with the user, and have them set `branchPrefix` under `team` in
    `~/.teamhandbook/config.json`. A prefix discovered by a successful retry is remembered.
+
+`--update` applies to the whole selection, because the selection is one merge request. The
+result says which names it actually replaced, one by one; relay that line as printed rather
+than summarising it, since "shared" and "replaced what the team was using" are not the same
+event for the people on the other end.
 
 The selected MCP servers and commands travel as ONE merge request, with one version bump,
 rather than one request each. That is deliberate: two requests opened before either is

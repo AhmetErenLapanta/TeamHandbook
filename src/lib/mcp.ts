@@ -271,10 +271,31 @@ export function refusalMessage(name: string, audit: McpAudit): string {
  * an `mcpServers` key to a file written as a bare map would turn that map's entries into
  * siblings of a wrapper - the team's working server silently stops being a declaration.
  */
+/** The map a .mcp.json keeps its servers in, under either shape mergeServersIntoMcpJson
+ * preserves. One definition, so a reader and the writer cannot disagree about which keys
+ * of a file are server names. */
+function serverMap(parsed: Record<string, unknown>): Record<string, unknown> {
+  return isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+}
+
+/** The servers a team's .mcp.json already declares. Best-effort by design: an unreadable
+ * or absent file means "nothing is known", never "nothing is there" - the caller uses this
+ * to label a screen, and the refusal that matters is made against the real file later. */
+export function declaredServerNames(existing: string | null): string[] {
+  if (!existing || !existing.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(existing);
+    return isPlainObject(parsed) ? Object.keys(serverMap(parsed)) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function mergeServersIntoMcpJson(
   existing: string | null,
   servers: McpServerEntry[],
-): { merged: string; collided: string[] } {
+  replaceExisting = false,
+): { merged: string; collided: string[]; replaced: string[] } {
   let target: Record<string, unknown> = {};
   let document: Record<string, unknown> | null = null;
   if (existing !== null && existing.trim()) {
@@ -295,16 +316,22 @@ export function mergeServersIntoMcpJson(
       throw new Error(".mcp.json in the team repository is not a JSON object.");
     }
     document = parsed;
-    target = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+    target = serverMap(parsed);
   }
   // The file is parsed once for the whole selection. Merging one server at a time would
   // re-read a document the previous merge had already rewritten, and the shape detection
   // above only holds against the file the team actually wrote.
   const collided: string[] = [];
+  const replaced: string[] = [];
   for (const server of servers) {
     if (Object.prototype.hasOwnProperty.call(target, server.name)) {
-      collided.push(server.name);
-      continue;
+      // The default. Replacing is possible, but only for a caller that was refused once
+      // and came back saying so: nothing infers consent from the fact that a name matched.
+      if (!replaceExisting) {
+        collided.push(server.name);
+        continue;
+      }
+      replaced.push(server.name);
     }
     if (document === null) {
       // A file we create uses the documented wrapper.
@@ -312,7 +339,7 @@ export function mergeServersIntoMcpJson(
     }
     target[server.name] = server.config;
   }
-  return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided };
+  return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided, replaced };
 }
 
 /** One server, the shape /handbook:mcp shares. A collision is its only outcome, so it throws. */

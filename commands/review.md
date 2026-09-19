@@ -76,7 +76,29 @@ user clear them in one pass.
      should have to weigh at once. If several in a batch were rejected, ask their
      follow-ups together, for the same reason the verdicts were asked together.
    - **Skip** → leave it pending and move on.
-7. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and
+7. **If the CLI says the team already has a skill by that name**, nothing was sent and
+   nothing in the team repository changed. Treat it as the next question rather than as a
+   failure, and ask it the way every other verdict here is asked — one AskUserQuestion,
+   three options:
+   - **Send it as an update to theirs** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to team --update`
+     The merge request then replaces the team's copy rather than adding a file, and its
+     body says so to whoever reviews it. Say the consequence BEFORE they pick: anything
+     the team's copy gained since it landed is gone once that request is merged.
+   - **Send it under a different name** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to team --as <new-name>`
+     Both skills then exist, and the one that goes out carries the new name in its own
+     frontmatter.
+   - **Leave the team's alone** → keep this one with `--to personal` or `--to project`, or
+     reject it.
+   Never choose for them and never re-run with `--update` on your own initiative: an
+   update overwrites work somebody else may have done to that skill, and the CLI refuses
+   to do it without being told twice. `--as` takes one name, so it belongs to one
+   candidate; do not put it on a batch.
+8. A skill kept for yourself or added to a project behaves the same way, with one
+   difference: rather than refusing, it installs under a suffixed name and the CLI says
+   which name it used and why. Relay that line as printed — the name it reports is the
+   name Claude will load, and it is not always the one in the queue. `--update` and
+   `--as` work there too, if the user would rather replace or rename.
+9. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and
    still pending.
 
 Queue STATE (candidate.json) is only ever written by the review CLI; the only file you may
