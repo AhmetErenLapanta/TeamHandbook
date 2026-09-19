@@ -732,7 +732,7 @@ describe("a name the destination already has", () => {
       team,
       undefined,
       () => "",
-      { update: true },
+      { update: ["gitlab", "explain"] },
     );
 
     // then both carry the publisher's version, and the request says which names it rewrites
@@ -744,6 +744,33 @@ describe("a name the destination already has", () => {
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
       "feat(mcp,commands): update gitlab, explain",
     );
+  });
+
+  it("replaces only the names the publisher consented to, not everything the selection collided with", () => {
+    // given two collisions in one selection, and consent given for exactly one of them
+    remote = occupiedTeamRepo();
+    const team = { repoUrl: remote, marketplaceName: "acme" };
+
+    // when the selection is sent again naming only that one
+    const result = publishTeamSelection(
+      { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
+      team,
+      undefined,
+      () => "",
+      { update: ["gitlab"] },
+    );
+
+    // then the consented one travels as an update and the other is STILL refused: one word
+    // cannot stand in for two answers, which is the same rule the batch guard enforces
+    expect(result.ok).toBe(true);
+    expect(result.updated).toEqual({ servers: ["gitlab"], commands: [] });
+    expect(result.commandNames).toBeUndefined();
+    expect(result.refused).toEqual([
+      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
+    ]);
+    expect(JSON.parse(gitIn(remote, ["show", `${result.branch}:.mcp.json`])).mcpServers.gitlab).toEqual(gitlab.config);
+    // the team's command is the team's command, on the branch as well as on main
+    expect(gitIn(remote, ["show", `${result.branch}:commands/explain.md`])).toContain("Theirs.");
   });
 
   it("tells the reviewer a request replaces what the team has, which the title alone does not", () => {

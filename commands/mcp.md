@@ -22,11 +22,22 @@ copy of the server stays exactly where it is.
    server carried over with a blanked-out credential fails to connect for every teammate.
    Tell the user to rewrite that value as `${VAR}` in their own config (the variable name
    travels, the value does not), then run step 3 again.
-5. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern.
+5. **If it refuses because the team already declares a server by that name**, theirs was
+   left exactly as it is and nothing was pushed. The CLI's message names `--update` as the
+   way to send yours as an update to theirs. **Do not run that on your own initiative.**
+   The user asked to share their server, which is not the same as asking to change the one
+   the team already uses, and after the merge every teammate gets your endpoint instead of
+   theirs. Ask with the multiple-choice question tool (AskUserQuestion), the same way
+   /handbook:review asks for a verdict, and say the consequence before they pick:
+   - **Send it as an update to theirs** → `node "${CLAUDE_PLUGIN_ROOT}/dist/mcp.js" <name> --update`
+     The merge replaces the team's definition of that server for everyone.
+   - **Leave theirs alone** → nothing more to do; their config is already untouched.
+   - **Rename yours** → they change the name in their own `~/.claude.json`, then step 3 again.
+6. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern.
    Handle it exactly as `/handbook:init` does: propose one prefix that satisfies the pattern,
    confirm it with the user, and have them set `branchPrefix` under `team` in
    `~/.teamhandbook/config.json`. A prefix discovered by a successful retry is remembered.
-6. Relay the CLI output verbatim. It says which environment variables each teammate must set,
+7. Relay the CLI output verbatim. It says which environment variables each teammate must set,
    whether the server starts a process on their machine, and that the user's local copy is
    still there to remove themselves.
 

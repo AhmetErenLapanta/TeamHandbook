@@ -116,8 +116,36 @@ export interface Collision {
  * it is the one the suffix used to pick silently on the publisher's behalf.
  */
 export interface PublishOptions {
-  update?: boolean;
+  /**
+   * `true` replaces whatever this request collides with; a list of names replaces only
+   * those. The list exists because one request can carry a selection: a publisher shown
+   * two refusals and consenting to one of them must not have the other overwritten by the
+   * same word. Consent is per name, so the flag is too.
+   */
+  update?: boolean | string[];
   as?: string;
+}
+
+/** Whether this request was told it may replace `name`. */
+export function mayUpdate(options: PublishOptions, name: string): boolean {
+  return options.update === true || (Array.isArray(options.update) && options.update.includes(name));
+}
+
+/**
+ * The one combination that cannot be consent.
+ *
+ * `--as` and `--update` are the two answers to a single refusal, and review.md offers them
+ * as alternatives. Together they stop being alternatives: `--update` lands on the name
+ * `--as` chose, not on the name the publisher was refused for, so it deletes a skill whose
+ * existence was never put in front of them. That is the same defect the batch guard closed,
+ * one axis over - there the extra names came from `--all`, here from `--as`.
+ */
+export function conflictingOptions(options: PublishOptions): string | null {
+  if (options.as === undefined || !options.update) return null;
+  return (
+    "--as and --update answer the same refusal in different ways: --as sends this under a free name, " +
+    "--update replaces the skill it collided with. Pick one."
+  );
 }
 
 export interface PublishOutcome {
@@ -320,12 +348,16 @@ function pushBranch(
  * message names both ways forward, because "rename yours" was never a route the publisher
  * had - there was no way to say what to rename it to.
  */
-function skillCollisionMessage(name: string): string {
-  return (
-    `the team repository already has a skill named "${name}" (skills/${name}/). ` +
-    "Nothing was written. Approve again with --update to send yours as an update to it, " +
-    "or with --as <name> to send it under a different name."
-  );
+function skillCollisionMessage(name: string, chosen: boolean): string {
+  const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
+  // A refusal has to name a route that WORKS. When the name came from --as, "--update" is
+  // not one: it is refused alongside --as, so offering it here would send the publisher
+  // into the dead end this message exists to prevent.
+  return chosen
+    ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update ` +
+        "to send this candidate as an update to the skill it actually collided with."
+    : `${taken} Approve again with --update to send yours as an update to it, ` +
+        "or with --as <name> to send it under a different name.";
 }
 
 export function publishCandidate(
@@ -354,6 +386,8 @@ export function publishCandidate(
   // The name the skill travels under: its own, or the one the publisher picked after being
   // told the first was taken. Checked here rather than at the copy, so a name that cannot
   // be a directory fails before a clone exists.
+  const conflict = conflictingOptions(options);
+  if (conflict) return { ok: false, error: conflict };
   const skillSlug = options.as ?? meta.slug;
   if (!isSafeSlug(skillSlug)) {
     return { ok: false, error: `"${skillSlug}" cannot be a skill name (lowercase letters, digits and dashes)` };
@@ -369,8 +403,12 @@ export function publishCandidate(
     const remoteBranches = listRemoteBranches(git, repoDir);
     const skillDir = `skills/${skillSlug}`;
     const occupied = existsSync(join(repoDir, skillDir));
-    if (occupied && !options.update) {
-      return { ok: false, collision: { kind: "skill", name: skillSlug }, error: skillCollisionMessage(skillSlug) };
+    if (occupied && !mayUpdate(options, skillSlug)) {
+      return {
+        ok: false,
+        collision: { kind: "skill", name: skillSlug },
+        error: skillCollisionMessage(skillSlug, options.as !== undefined),
+      };
     }
     // The BRANCH name is still made unique, and separately from the directory name, because
     // the two answer different questions. A previous approve may have pushed
@@ -937,7 +975,7 @@ export function publishTeamSelection(
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
           existsSync(target) ? readFileSync(target, "utf8") : null,
           subjects.map((s) => s.entry),
-          options.update,
+          (name) => mayUpdate(options, name),
         ));
       } catch (err) {
         // A team file we cannot read is not one server's problem, so no part of the
@@ -958,7 +996,7 @@ export function publishTeamSelection(
     const replacedCommands: string[] = [];
     for (const command of commands) {
       if (existsSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
-        if (!options.update) {
+        if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
             name: command.name,

@@ -125,7 +125,18 @@ function approveOne(home: string, slug: string, to?: DeliveryTarget, options: De
     options,
   );
   if (!result.ok) {
-    console.error(`error (${slug}): ${result.error}`);
+    // A collision is the product asking a question, not the product breaking, and the two
+    // read differently to whoever is relaying this. Both are failures for the exit code,
+    // because in both cases nothing was delivered and the candidate is still waiting.
+    console.error(
+      result.collision
+        ? `not delivered (${slug}): ${result.error}`
+        : `error (${slug}): ${result.error}`,
+    );
+    // v0.7.0 exited 0 here, so anything reading the exit code called a refusal a success.
+    // That was survivable while a refusal meant "nothing happened"; it is not now that a
+    // refusal is a decision point the user has to be brought back to.
+    process.exitCode = 1;
     return;
   }
   console.log(formatApproveResult(slug, result));
@@ -207,6 +218,10 @@ async function main(): Promise<void> {
   if (given("--to") && !to) usage();
   const as = valueOf("--as");
   if (given("--as") && (!as || !isSafeSlug(as))) usage();
+  // `--update` takes no value. Accepting `--update=true` as true would mean accepting
+  // `--update=false` as true as well, so the spelling is refused out loud instead: silently
+  // ignoring it is what made "overwrite it" read as "give it a suffix".
+  if (args.some((a) => a.startsWith("--update="))) usage();
   const update = args.includes("--update");
   const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;

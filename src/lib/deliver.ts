@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
-import { renameSkillMd, uniqueSlug } from "./distill.js";
+import { renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
-import { publishCandidate, runForge } from "./publish.js";
+import { conflictingOptions, mayUpdate, publishCandidate, runForge } from "./publish.js";
 import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
@@ -87,8 +87,6 @@ export interface DeliverResult {
   // reviewer's own spelling back at them. Somebody who fixes a rule and re-sends it was
   // told their correction had reached the team while the team still had the old one.
   deliveredSlug?: string;
-  // the name that was taken, when a suffix was used instead of it
-  renamedFrom?: string;
   // set when this delivery rewrote a skill that was already there, which only ever
   // happens because the reviewer asked for it a second time, knowing
   updatedExisting?: boolean;
@@ -116,6 +114,10 @@ export function approveAndDeliver(
   if (options.as !== undefined && !isSafeSlug(options.as)) {
     return { ok: false, error: `"${options.as}" cannot be a skill name (lowercase letters, digits and dashes)` };
   }
+  // Before the candidate is read, and before any destination is touched: this pair can
+  // delete a skill the reviewer was never shown.
+  const conflict = conflictingOptions(options);
+  if (conflict) return { ok: false, error: conflict };
   const dir = join(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
@@ -148,27 +150,33 @@ export function approveAndDeliver(
 /**
  * Write the skill into a local skills directory and report the name it landed under.
  *
- * Local delivery keeps the suffix rather than refusing the way the team path does, and the
- * difference is measured, not stylistic: the team path told the publisher a name that was
- * never written, while this one prints the target PATH, so `.../skills/foo-2` was already
- * on the screen. Refusing here would turn "keep it for yourself" into an operation that can
- * fail, which nothing asked for. What was missing is the sentence that says WHY the name
- * changed, and that is what deliveredSlug and renamedFrom now carry out to the CLI.
+ * A name already taken here is refused, exactly as the team path refuses it. The first
+ * version of this card suffixed instead, on the reasoning that the suffix was at least
+ * VISIBLE locally (the CLI prints the target path, so `.../skills/foo-2` was on screen).
+ * That reasoning was wrong in a way only running it shows: suffixing DELIVERS, so the
+ * candidate is `approved` by the time the message suggests `--update`, and `approved` is
+ * terminal - no path in queue.ts returns a candidate to `pending`. The product printed a
+ * command that answered with "already approved" and left the user holding the two
+ * disagreeing skills this whole card exists to prevent. Refusing costs an operation that
+ * can now fail; it buys a refusal the user can actually act on, with the candidate still
+ * waiting for them.
  */
 function installLocally(
   dir: string,
   meta: CandidateMeta,
   skillsDir: string,
   options: DeliveryOptions,
-): { slug: string; target: string; updatedExisting: boolean } | { error: string } {
-  const requested = options.as ?? meta.slug;
-  const occupied = existsSync(join(skillsDir, requested));
-  const updatedExisting = occupied && !!options.update;
-  const slug = updatedExisting ? requested : uniqueSlug(requested, (s) => existsSync(join(skillsDir, s)));
+): { slug: string; target: string; updatedExisting: boolean } | { error: string; collision?: Collision } {
+  const slug = options.as ?? meta.slug;
   const target = join(skillsDir, slug);
+  const occupied = existsSync(target);
+  const updatedExisting = occupied && mayUpdate(options, slug);
+  if (occupied && !updatedExisting) {
+    return { error: localCollisionMessage(slug, skillsDir, options.as !== undefined), collision: { kind: "skill", name: slug } };
+  }
   try {
     // read before creating the target: an unreadable candidate must not leave an
-    // empty skill dir behind (which would shift every future slug to -2)
+    // empty skill dir behind
     const skillMd = readFileSync(join(dir, "SKILL.md"), "utf8");
     // An update replaces what is there rather than merging into it, so a file the new
     // version dropped does not stay behind and keep being read.
@@ -182,16 +190,29 @@ function installLocally(
   return { slug, target, updatedExisting };
 }
 
+/**
+ * The local refusal, which has to name a route that works.
+ *
+ * It says the directory out loud because, unlike the team repository, this one is on the
+ * reviewer's own disk and they can look. And it warns before the choice rather than after
+ * it: a local `--update` is an immediate rmSync with no merge request in front of it and
+ * nothing to revert from.
+ */
+function localCollisionMessage(name: string, skillsDir: string, chosen: boolean): string {
+  const taken = `a skill named "${name}" is already installed at ${join(skillsDir, name)}. Nothing was written.`;
+  const warning =
+    "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
+  return chosen
+    ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to replace the skill this candidate collided with. ${warning}`
+    : `${taken} Approve again with --update to replace it, or with --as <name> to install this one under a different name. ${warning}`;
+}
+
 /** The fields every successful delivery reports about the name it used. */
 function namedAs(
-  meta: CandidateMeta,
   placed: { slug: string; updatedExisting: boolean },
-  options: DeliveryOptions,
-): Pick<DeliverResult, "deliveredSlug" | "renamedFrom" | "updatedExisting"> {
-  const requested = options.as ?? meta.slug;
+): Pick<DeliverResult, "deliveredSlug" | "updatedExisting"> {
   return {
     deliveredSlug: placed.slug,
-    ...(placed.slug === requested ? {} : { renamedFrom: requested }),
     ...(placed.updatedExisting ? { updatedExisting: true } : {}),
   };
 }
@@ -206,7 +227,9 @@ export function deliverPersonal(
   options: DeliveryOptions = {},
 ): DeliverResult {
   const placed = installLocally(dir, meta, skillsDir, options);
-  if ("error" in placed) return { ok: false, mode: "personal", meta, error: placed.error };
+  if ("error" in placed) {
+    return { ok: false, mode: "personal", meta, error: placed.error, ...(placed.collision ? { collision: placed.collision } : {}) };
+  }
   const updated: CandidateMeta = {
     ...meta,
     status: "approved",
@@ -220,7 +243,7 @@ export function deliverPersonal(
     mode: "personal",
     meta: updated,
     deliveredTo: placed.target,
-    ...namedAs(meta, placed, options),
+    ...namedAs(placed),
   };
 }
 
@@ -284,7 +307,9 @@ function deliverSolo(
   const installedProject = meta.cwd && existsSync(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject = installedProject !== fallbackCwd ? basename(installedProject) : undefined;
   const placed = installLocally(dir, meta, skillsDir, options);
-  if ("error" in placed) return { ok: false, mode: "solo", meta, error: placed.error };
+  if ("error" in placed) {
+    return { ok: false, mode: "solo", meta, error: placed.error, ...(placed.collision ? { collision: placed.collision } : {}) };
+  }
   const updated: CandidateMeta = {
     ...meta,
     status: "approved",
@@ -298,7 +323,7 @@ function deliverSolo(
     mode: "solo",
     meta: updated,
     deliveredTo: placed.target,
-    ...namedAs(meta, placed, options),
+    ...namedAs(placed),
     ...(warning ? { warning } : {}),
     ...(originProject ? { originProject } : {}),
   };
@@ -366,14 +391,6 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
       ? "Commit it there so the skill travels with that repo."
       : "Commit this directory so the skill travels with the repo.";
     lines.push(`Approved "${name}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
-  }
-  // The two sentences the reviewer could not previously get: the name they asked for was
-  // taken, and there is a second answer to that besides living with a suffix.
-  if (result.renamedFrom) {
-    lines.push(
-      `A skill named "${result.renamedFrom}" was already there, so this one is installed as "${name}". ` +
-        `Approve with --update to replace the one that is there instead, or with --as <name> to choose the name yourself.`,
-    );
   }
   if (result.updatedExisting) {
     lines.push(`This replaced the "${name}" that was already there.`);

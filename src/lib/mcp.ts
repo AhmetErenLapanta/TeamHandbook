@@ -294,7 +294,9 @@ export function declaredServerNames(existing: string | null): string[] {
 export function mergeServersIntoMcpJson(
   existing: string | null,
   servers: McpServerEntry[],
-  replaceExisting = false,
+  // Per name, never per request: a publisher shown two refusals and consenting to one of
+  // them must not have the other replaced by the same answer.
+  replaceExisting: (name: string) => boolean = () => false,
 ): { merged: string; collided: string[]; replaced: string[] } {
   let target: Record<string, unknown> = {};
   let document: Record<string, unknown> | null = null;
@@ -327,7 +329,7 @@ export function mergeServersIntoMcpJson(
     if (Object.prototype.hasOwnProperty.call(target, server.name)) {
       // The default. Replacing is possible, but only for a caller that was refused once
       // and came back saying so: nothing infers consent from the fact that a name matched.
-      if (!replaceExisting) {
+      if (!replaceExisting(server.name)) {
         collided.push(server.name);
         continue;
       }

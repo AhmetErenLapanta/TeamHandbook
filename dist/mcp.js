@@ -428,7 +428,7 @@ function refusalMessage(name, audit) {
 function serverMap(parsed) {
   return isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
 }
-function mergeServersIntoMcpJson(existing, servers, replaceExisting = false) {
+function mergeServersIntoMcpJson(existing, servers, replaceExisting = () => false) {
   let target = {};
   let document = null;
   if (existing !== null && existing.trim()) {
@@ -450,7 +450,7 @@ function mergeServersIntoMcpJson(existing, servers, replaceExisting = false) {
   const replaced = [];
   for (const server of servers) {
     if (Object.prototype.hasOwnProperty.call(target, server.name)) {
-      if (!replaceExisting) {
+      if (!replaceExisting(server.name)) {
         collided.push(server.name);
         continue;
       }
@@ -539,6 +539,9 @@ function commandRefusalMessage(name, audit) {
 }
 
 // src/lib/publish.ts
+function mayUpdate(options, name) {
+  return options.update === true || Array.isArray(options.update) && options.update.includes(name);
+}
 function bumpPluginVersion(repoDir) {
   const file = join6(repoDir, ".claude-plugin", "plugin.json");
   try {
@@ -849,7 +852,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
           existsSync2(target) ? readFileSync5(target, "utf8") : null,
           subjects.map((s) => s.entry),
-          options.update
+          (name) => mayUpdate(options, name)
         ));
       } catch (err) {
         return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
@@ -865,7 +868,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const replacedCommands = [];
     for (const command of commands) {
       if (existsSync2(join6(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
-        if (!options.update) {
+        if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
             name: command.name,

@@ -390,7 +390,10 @@ describe("shareSelection", () => {
     const result = shareSelection(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge);
 
     expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
-    expect(result.refused).toEqual([{ name: "linear", kind: "mcp", reason: expect.stringContaining("already declares") }]);
+    expect(result.refused).toEqual([
+      // collision: true is what tells the report this refusal has a route out of it
+      { name: "linear", kind: "mcp", reason: expect.stringContaining("already declares"), collision: true },
+    ]);
     const declared = JSON.parse(gitIn(remote, ["show", `${result.team!.branch}:.mcp.json`]));
     expect(declared.mcpServers.linear.url).toBe("https://mcp.linear.app/theirs");
   });
@@ -568,7 +571,7 @@ describe("shareSelection carries commands", () => {
 
     expect(result.team).toMatchObject({ ok: true, commandNames: ["fix-tests"] });
     expect(result.refused).toEqual([
-      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command") },
+      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
     ]);
     // the reason says what to do instead of leaving the user to guess why nothing happened
     expect(result.refused[0]!.reason).toContain("rename yours");
@@ -588,7 +591,7 @@ describe("shareSelection carries commands", () => {
     expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"] });
     expect(result.team!.commandNames).toBeUndefined();
     expect(result.refused).toEqual([
-      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command") },
+      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
     ]);
     const branch = result.team!.branch!;
     expect(Object.keys(JSON.parse(gitIn(remote, ["show", `${branch}:.mcp.json`])).mcpServers)).toEqual(["gitlab"]);

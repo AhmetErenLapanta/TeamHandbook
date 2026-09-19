@@ -490,7 +490,7 @@ function declaredServerNames(existing) {
     return [];
   }
 }
-function mergeServersIntoMcpJson(existing, servers, replaceExisting = false) {
+function mergeServersIntoMcpJson(existing, servers, replaceExisting = () => false) {
   let target = {};
   let document = null;
   if (existing !== null && existing.trim()) {
@@ -512,7 +512,7 @@ function mergeServersIntoMcpJson(existing, servers, replaceExisting = false) {
   const replaced = [];
   for (const server of servers) {
     if (Object.prototype.hasOwnProperty.call(target, server.name)) {
-      if (!replaceExisting) {
+      if (!replaceExisting(server.name)) {
         collided.push(server.name);
         continue;
       }
@@ -762,6 +762,9 @@ function commandRefusalMessage(name, audit) {
 }
 
 // src/lib/publish.ts
+function mayUpdate(options, name) {
+  return options.update === true || Array.isArray(options.update) && options.update.includes(name);
+}
 function bumpPluginVersion(repoDir) {
   const file = join9(repoDir, ".claude-plugin", "plugin.json");
   try {
@@ -1098,7 +1101,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
           existsSync3(target) ? readFileSync6(target, "utf8") : null,
           subjects.map((s) => s.entry),
-          options.update
+          (name) => mayUpdate(options, name)
         ));
       } catch (err) {
         return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
@@ -1114,7 +1117,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const replacedCommands = [];
     for (const command of commands) {
       if (existsSync3(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
-        if (!options.update) {
+        if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
             name: command.name,
@@ -1384,7 +1387,12 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
   const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge, options);
   result.team = outcome;
   for (const refusal of outcome.refused ?? []) {
-    result.refused.push({ name: refusal.name, kind: refusal.kind, reason: refusal.reason });
+    result.refused.push({
+      name: refusal.name,
+      kind: refusal.kind,
+      reason: refusal.reason,
+      ...refusal.collision ? { collision: true } : {}
+    });
   }
   if (!outcome.ok && outcome.error) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
@@ -1454,9 +1462,21 @@ function formatMigrateResult(result, marketplaceName) {
       );
     }
   }
-  if (result.refused.length) {
+  const collisions = result.refused.filter((r) => r.collision);
+  const faults = result.refused.filter((r) => !r.collision);
+  if (faults.length) {
     if (lines.length) lines.push("");
-    lines.push(`Not taken (${result.refused.length}):`, ...result.refused.map((r) => `  ${r.name} - ${r.reason}`));
+    lines.push(`Not taken (${faults.length}):`, ...faults.map((r) => `  ${r.name} - ${r.reason}`));
+  }
+  if (collisions.length) {
+    if (lines.length) lines.push("");
+    lines.push(
+      `The team already has these (${collisions.length}) - theirs is untouched:`,
+      ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
+      "",
+      "To send one of them as an update to the team's copy, name that one and only that one:",
+      ...collisions.map((r) => `  migrate.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`)
+    );
   }
   if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";
   return lines.join("\n");
@@ -1465,7 +1485,7 @@ function formatMigrateResult(result, marketplaceName) {
 // src/cli/migrate.ts
 function usage() {
   console.error(
-    "usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]... [--update]"
+    "usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]... [--update <name>]..."
   );
   process.exit(2);
 }
@@ -1476,6 +1496,17 @@ function resolve(available, wanted) {
 }
 var FLAGS = ["--skill", "--mcp", "--command"];
 var UPDATE = "--update";
+function parseUpdates(args, inv) {
+  const names = [];
+  const available = [...inv.servers.map((s) => s.name), ...inv.commands.map((c) => c.name)];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== UPDATE) continue;
+    const value = args[i + 1];
+    if (!value || value.startsWith("--")) usage();
+    names.push(resolve(available, value.replace(/^\//, "")));
+  }
+  return names;
+}
 function parseSelection(args, inv) {
   const selection = { skills: [], servers: [], commands: [] };
   for (let i = 0; i < args.length; i++) {
@@ -1494,9 +1525,7 @@ function main() {
   const args = process.argv.slice(2);
   const selected = args.some((a) => FLAGS.includes(a));
   const update = args.includes(UPDATE);
-  const [cmd = "list", ...rest] = args.filter(
-    (a, i) => !a.startsWith("--") && !(args[i - 1]?.startsWith("--") && args[i - 1] !== UPDATE)
-  );
+  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
   if (cmd === "list" && (selected || update)) usage();
   if (cmd === "list") {
@@ -1511,6 +1540,7 @@ function main() {
   }
   const inv = buildInventory();
   const selection = parseSelection(args, inv);
+  const updates = parseUpdates(args, inv);
   if (!selection.skills.length && !selection.servers.length && !selection.commands.length) {
     console.log("Nothing was selected, so nothing was queued and nothing was shared.");
     return;
@@ -1523,7 +1553,7 @@ function main() {
     return;
   }
   const team = loadTeamConfig();
-  const result = shareSelection(selection, team, {}, void 0, void 0, update ? { update } : {});
+  const result = shareSelection(selection, team, {}, void 0, void 0, updates.length ? { update: updates } : {});
   if (team && result.team?.learnedBranchPrefix) {
     saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
   }

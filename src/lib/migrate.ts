@@ -342,8 +342,10 @@ export interface MigrateResult {
   queued: string[];
   /** the request the selected servers and commands went out in, absent when neither was */
   team?: TeamPublishOutcome;
-  /** anything named that did not travel, with the reason the path that refused it gave */
-  refused: Array<{ name: string; kind: "skill" | "mcp" | "command"; reason: string }>;
+  /** anything named that did not travel, with the reason the path that refused it gave.
+   * `collision` marks the refusals that have a route out of them, so the report can group
+   * them and name that route per item instead of the reader matching on prose. */
+  refused: Array<{ name: string; kind: "skill" | "mcp" | "command"; reason: string; collision?: true }>;
 }
 
 /**
@@ -366,6 +368,7 @@ export function shareSelection(
   forge: ForgeRunner = runForge,
   options: PublishOptions = {},
 ): MigrateResult {
+
   const home = paths.home ?? handbookHome();
   const result: MigrateResult = { queued: [], refused: [] };
   const inv = buildInventory(paths);
@@ -403,7 +406,12 @@ export function shareSelection(
   const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge, options);
   result.team = outcome;
   for (const refusal of outcome.refused ?? []) {
-    result.refused.push({ name: refusal.name, kind: refusal.kind, reason: refusal.reason });
+    result.refused.push({
+      name: refusal.name,
+      kind: refusal.kind,
+      reason: refusal.reason,
+      ...(refusal.collision ? { collision: true as const } : {}),
+    });
   }
   // A whole-request failure (an unreadable team file, a rejected push, no git identity)
   // names no single item, so it would otherwise be reported about nothing at all. The ones
@@ -496,9 +504,26 @@ export function formatMigrateResult(result: MigrateResult, marketplaceName?: str
       );
     }
   }
-  if (result.refused.length) {
+  // Two kinds of refusal, kept apart. One is a fault the user has to fix in their own
+  // setup (a credential, an unreadable file); the other is a name the team already uses,
+  // which is a question with an answer. Reading them as one list makes the second look
+  // like the first, and the answer to it - naming that one item to --update - is the
+  // thing the reader is here for.
+  const collisions = result.refused.filter((r) => r.collision);
+  const faults = result.refused.filter((r) => !r.collision);
+  if (faults.length) {
     if (lines.length) lines.push("");
-    lines.push(`Not taken (${result.refused.length}):`, ...result.refused.map((r) => `  ${r.name} - ${r.reason}`));
+    lines.push(`Not taken (${faults.length}):`, ...faults.map((r) => `  ${r.name} - ${r.reason}`));
+  }
+  if (collisions.length) {
+    if (lines.length) lines.push("");
+    lines.push(
+      `The team already has these (${collisions.length}) - theirs is untouched:`,
+      ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
+      "",
+      "To send one of them as an update to the team's copy, name that one and only that one:",
+      ...collisions.map((r) => `  migrate.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`),
+    );
   }
   if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";
   return lines.join("\n");
