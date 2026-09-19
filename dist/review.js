@@ -1562,7 +1562,7 @@ async function main() {
   }
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
-  if (as && slugs.length > 1) usage();
+  if ((as || update) && slugs.length > 1) usage();
   const options = { ...update ? { update } : {}, ...as ? { as } : {} };
   for (const slug of slugs) {
     if (cmd === "approve") approveOne(home, slug, to, options);

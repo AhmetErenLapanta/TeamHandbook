@@ -256,9 +256,11 @@ async function main(): Promise<void> {
   // approve/reject accept one or more slugs, or --all for every pending candidate
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
-  // One new name cannot be the answer for several candidates, and the batch that would
-  // accept it quietly installs the last one over the ones before it.
-  if (as && slugs.length > 1) usage();
+  // Both flags are answers to a refusal about ONE name, so neither may be spread over a
+  // batch. A new name would install the last candidate over the ones before it, and
+  // `--all --update` would overwrite every colliding skill the team has on a single word -
+  // which is the consent model of this whole command turned inside out.
+  if ((as || update) && slugs.length > 1) usage();
   const options = { ...(update ? { update } : {}), ...(as ? { as } : {}) };
   for (const slug of slugs) {
     if (cmd === "approve") approveOne(home, slug, to, options);

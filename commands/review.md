@@ -91,8 +91,9 @@ user clear them in one pass.
      reject it.
    Never choose for them and never re-run with `--update` on your own initiative: an
    update overwrites work somebody else may have done to that skill, and the CLI refuses
-   to do it without being told twice. `--as` takes one name, so it belongs to one
-   candidate; do not put it on a batch.
+   to do it without being told twice. Both flags answer a refusal about ONE skill, so the
+   CLI takes them only with a single slug — never with `--all`, and never with several
+   names at once. Ask again for the next one.
 8. A skill kept for yourself or added to a project behaves the same way, with one
    difference: rather than refusing, it installs under a suffixed name and the CLI says
    which name it used and why. Relay that line as printed — the name it reports is the
