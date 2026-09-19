@@ -253,25 +253,41 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // {"mcpServers": {...}} wrapper or a bare server map, and the wrapper key is only
 // trusted when it is itself a plain object — otherwise a bare map with a stray
 // "mcpServers" field would be misread as the wrapper and its real server names lost.
-function declaredMcpServerNames(mcpFile: string): string[] | null {
+// Read and parse are reported separately: an unreadable file (a
+// permission error, a race with a concurrent writer) is not the same fault as invalid
+// JSON, and collapsing them into one message named the wrong cause.
+type DeclaredMcpServers = { names: string[] } | { error: "unreadable" | "invalid-json" };
+
+function declaredMcpServerNames(mcpFile: string): DeclaredMcpServers {
+  let raw: string;
+  try {
+    raw = readFileSync(mcpFile, "utf8");
+  } catch {
+    return { error: "unreadable" };
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(mcpFile, "utf8"));
+    parsed = JSON.parse(raw);
   } catch {
-    return null;
+    return { error: "invalid-json" };
   }
-  if (!isPlainObject(parsed)) return null;
+  if (!isPlainObject(parsed)) return { error: "invalid-json" };
   const map = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
-  return Object.keys(map);
+  return { names: Object.keys(map) };
 }
 
-type McpLineState = "connected" | "not-connected";
+// "connected"/"needs-auth"/"failed" mirror the three marks `claude mcp list` prints
+// (✔/!/✘). Kept distinct rather than collapsed into one "not-connected" state (see
+// below): needs-auth is the same "installed but not finished setting up" situation
+// `checkForge` already treats as warn, not a broken install, and severity here must
+// match that neighbor rather than invent a stricter rule for the same situation.
+type McpLineState = "connected" | "needs-auth" | "failed";
 
 // `claude mcp list` is a human-readable status line, not a contract: "N.N.NNN (Claude
 // Code) - ✔ Connected" today, something else tomorrow. Only a line this regex positively
-// matches — name, then a mark, then the status text after it — ever reports connected or
-// not-connected; anything else (a changed format, empty output, a thrown error) is
-// reported unknown by the caller. Never let a miss here read as "connected".
+// matches — name, then a mark, then the status text after it — ever reports a state;
+// anything else (a changed format, empty output, a thrown error) is reported unknown by
+// the caller. Never let a miss here read as "connected".
 const MCP_LIST_LINE = /^(.+?):\s.*[-–]\s*(✔|✘|!)\s*(.+)$/;
 
 function parseMcpListing(output: string): Map<string, { state: McpLineState; detail: string }> {
@@ -282,7 +298,8 @@ function parseMcpListing(output: string): Map<string, { state: McpLineState; det
     const match = MCP_LIST_LINE.exec(line);
     if (!match) continue;
     const [, name, mark, detail] = match;
-    byName.set(name!.trim(), { state: mark === "✔" ? "connected" : "not-connected", detail: detail!.trim() });
+    const state: McpLineState = mark === "✔" ? "connected" : mark === "!" ? "needs-auth" : "failed";
+    byName.set(name!.trim(), { state, detail: detail!.trim() });
   }
   return byName;
 }
@@ -291,8 +308,14 @@ function parseMcpListing(output: string): Map<string, { state: McpLineState; det
 // reports — not the other MCP servers this machine happens to have configured for
 // itself. Measured on a live install: `claude mcp list` prefixes a plugin-declared
 // server as `plugin:<pluginName>:<serverName>`, and TeamHandbook's own skeleton makes
-// the plugin name equal team.marketplaceName, so that is the primary key; a bare name is
-// accepted too in case a future CLI stops prefixing.
+// the plugin name equal team.marketplaceName, so that is the exact key.
+//
+// This used to fall back to a bare-name lookup ("in case a future CLI
+// stops prefixing"). That fallback let a personal server with the same name as a
+// never-installed team server (e.g. both called "notion") read as the team's server
+// being connected — a false "connected" for a server that was never even pulled onto
+// this machine. Matching on name alone cannot prove the line belongs to the team's
+// plugin, so there is no fallback: a miss is unknown, never connected.
 function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: string = marketplacesRoot()): DoctorCheck | null {
   const team = loadTeamConfig(home);
   if (!team) return null; // solo mode has no team-shared servers to verify
@@ -302,11 +325,13 @@ function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: strin
   if (!existsSync(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
-  const serverNames = declaredMcpServerNames(mcpFile);
-  if (serverNames === null) {
-    return warn("team MCP servers", `${mcpFile} is not a readable JSON object — cannot verify connection state`);
+  const declared = declaredMcpServerNames(mcpFile);
+  if ("error" in declared) {
+    return declared.error === "unreadable"
+      ? warn("team MCP servers", `cannot read ${mcpFile} — connection state unknown`)
+      : warn("team MCP servers", `${mcpFile} is not valid JSON — cannot verify connection state`);
   }
-  if (serverNames.length === 0) {
+  if (declared.names.length === 0) {
     return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
   }
 
@@ -326,18 +351,23 @@ function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: strin
     );
   }
 
-  const results: { name: string; state: McpLineState | "unknown"; detail: string }[] = serverNames.map((name) => {
-    const status = statuses.get(`plugin:${team.marketplaceName}:${name}`) ?? statuses.get(name);
+  const results: { name: string; state: McpLineState | "unknown"; detail: string }[] = declared.names.map((name) => {
+    const status = statuses.get(`plugin:${team.marketplaceName}:${name}`);
     if (!status) return { name, state: "unknown", detail: "not listed by `claude mcp list`" };
     return { name, state: status.state, detail: status.detail };
   });
   const summary = results.map((r) => `${r.name}: ${r.state === "connected" ? "connected" : r.detail}`).join("; ");
 
-  if (results.some((r) => r.state === "not-connected")) {
+  if (results.some((r) => r.state === "failed")) {
     return fail("team MCP servers", summary);
   }
   if (results.some((r) => r.state === "unknown")) {
     return warn("team MCP servers", `connection state unknown for at least one server — ${summary}`);
+  }
+  // needs-auth is treated like checkForge treats "installed but not authenticated": a
+  // setup step left unfinished, not a broken install, so it warns rather than fails.
+  if (results.some((r) => r.state === "needs-auth")) {
+    return warn("team MCP servers", summary);
   }
   return ok("team MCP servers", summary);
 }

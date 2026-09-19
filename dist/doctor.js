@@ -424,15 +424,21 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function declaredMcpServerNames(mcpFile) {
+  let raw;
+  try {
+    raw = readFileSync5(mcpFile, "utf8");
+  } catch {
+    return { error: "unreadable" };
+  }
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync5(mcpFile, "utf8"));
+    parsed = JSON.parse(raw);
   } catch {
-    return null;
+    return { error: "invalid-json" };
   }
-  if (!isPlainObject(parsed)) return null;
+  if (!isPlainObject(parsed)) return { error: "invalid-json" };
   const map = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
-  return Object.keys(map);
+  return { names: Object.keys(map) };
 }
 var MCP_LIST_LINE = /^(.+?):\s.*[-–]\s*(✔|✘|!)\s*(.+)$/;
 function parseMcpListing(output) {
@@ -443,7 +449,8 @@ function parseMcpListing(output) {
     const match = MCP_LIST_LINE.exec(line);
     if (!match) continue;
     const [, name, mark, detail] = match;
-    byName.set(name.trim(), { state: mark === "\u2714" ? "connected" : "not-connected", detail: detail.trim() });
+    const state = mark === "\u2714" ? "connected" : mark === "!" ? "needs-auth" : "failed";
+    byName.set(name.trim(), { state, detail: detail.trim() });
   }
   return byName;
 }
@@ -454,11 +461,11 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   if (!existsSync2(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
-  const serverNames = declaredMcpServerNames(mcpFile);
-  if (serverNames === null) {
-    return warn("team MCP servers", `${mcpFile} is not a readable JSON object \u2014 cannot verify connection state`);
+  const declared = declaredMcpServerNames(mcpFile);
+  if ("error" in declared) {
+    return declared.error === "unreadable" ? warn("team MCP servers", `cannot read ${mcpFile} \u2014 connection state unknown`) : warn("team MCP servers", `${mcpFile} is not valid JSON \u2014 cannot verify connection state`);
   }
-  if (serverNames.length === 0) {
+  if (declared.names.length === 0) {
     return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
   }
   let listing;
@@ -475,17 +482,20 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
       "`claude mcp list` returned nothing this check recognizes \u2014 connection state unknown (never assumed connected)"
     );
   }
-  const results = serverNames.map((name) => {
-    const status = statuses.get(`plugin:${team.marketplaceName}:${name}`) ?? statuses.get(name);
+  const results = declared.names.map((name) => {
+    const status = statuses.get(`plugin:${team.marketplaceName}:${name}`);
     if (!status) return { name, state: "unknown", detail: "not listed by `claude mcp list`" };
     return { name, state: status.state, detail: status.detail };
   });
   const summary = results.map((r) => `${r.name}: ${r.state === "connected" ? "connected" : r.detail}`).join("; ");
-  if (results.some((r) => r.state === "not-connected")) {
+  if (results.some((r) => r.state === "failed")) {
     return fail("team MCP servers", summary);
   }
   if (results.some((r) => r.state === "unknown")) {
     return warn("team MCP servers", `connection state unknown for at least one server \u2014 ${summary}`);
+  }
+  if (results.some((r) => r.state === "needs-auth")) {
+    return warn("team MCP servers", summary);
   }
   return ok("team MCP servers", summary);
 }
