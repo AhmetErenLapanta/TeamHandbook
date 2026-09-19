@@ -253,9 +253,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // {"mcpServers": {...}} wrapper or a bare server map, and the wrapper key is only
 // trusted when it is itself a plain object — otherwise a bare map with a stray
 // "mcpServers" field would be misread as the wrapper and its real server names lost.
-// Read and parse are reported separately: an unreadable file (a
-// permission error, a race with a concurrent writer) is not the same fault as invalid
-// JSON, and collapsing them into one message named the wrong cause.
+// Read and parse are reported separately: an unreadable file (a permission error, a
+// race with a concurrent writer) is not the same fault as invalid JSON, and collapsing
+// them into one message named the wrong cause.
 type DeclaredMcpServers = { names: string[] } | { error: "unreadable" | "invalid-json" };
 
 function declaredMcpServerNames(mcpFile: string): DeclaredMcpServers {
@@ -277,10 +277,10 @@ function declaredMcpServerNames(mcpFile: string): DeclaredMcpServers {
 }
 
 // "connected"/"needs-auth"/"failed" mirror the three marks `claude mcp list` prints
-// (✔/!/✘). Kept distinct rather than collapsed into one "not-connected" state (see
-// below): needs-auth is the same "installed but not finished setting up" situation
-// `checkForge` already treats as warn, not a broken install, and severity here must
-// match that neighbor rather than invent a stricter rule for the same situation.
+// (✔/!/✘). Kept distinct rather than collapsed into one "not-connected" state: a server
+// that is installed but not authenticated is the same "setup step left unfinished"
+// situation `checkForge` already treats as warn, not a broken install, and severity
+// here must match that neighbor rather than invent a stricter rule for the same state.
 type McpLineState = "connected" | "needs-auth" | "failed";
 
 // `claude mcp list` is a human-readable status line, not a contract: "N.N.NNN (Claude
@@ -310,12 +310,12 @@ function parseMcpListing(output: string): Map<string, { state: McpLineState; det
 // server as `plugin:<pluginName>:<serverName>`, and TeamHandbook's own skeleton makes
 // the plugin name equal team.marketplaceName, so that is the exact key.
 //
-// This used to fall back to a bare-name lookup ("in case a future CLI
-// stops prefixing"). That fallback let a personal server with the same name as a
+// There is deliberately no bare-name fallback here. One used to exist for a CLI that
+// might someday stop prefixing, but it let a personal server with the same name as a
 // never-installed team server (e.g. both called "notion") read as the team's server
 // being connected — a false "connected" for a server that was never even pulled onto
 // this machine. Matching on name alone cannot prove the line belongs to the team's
-// plugin, so there is no fallback: a miss is unknown, never connected.
+// plugin, so a miss is unknown, never connected.
 function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: string = marketplacesRoot()): DoctorCheck | null {
   const team = loadTeamConfig(home);
   if (!team) return null; // solo mode has no team-shared servers to verify

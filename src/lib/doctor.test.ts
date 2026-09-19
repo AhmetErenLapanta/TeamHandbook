@@ -193,15 +193,14 @@ describe("doctor team MCP server checks", () => {
     expect(byName(report, "team MCP servers").detail).toContain("connected");
   });
 
-  // Regression guard: a bare-name fallback used to exist here. It let a
-  // personal server that merely SHARES A NAME with a never-installed team server
-  // ("notion" is a realistic collision) be reported as the team's server connecting —
-  // sahte "connected" for a server that was never even pulled onto this machine.
-  // Re-confirmed myself against the pre-fix line (temporarily restoring
-  // `?? statuses.get(name)` and running just this test): red, with
-  // {"level":"ok","detail":"notion: connected"} — matching what the independent review
-  // had already shown. Matching must require the plugin:<marketplaceName>: prefix; a
-  // bare-name hit is unknown.
+  // Guards against a bare-name fallback in the matcher (removed after being found to
+  // let a personal server that merely SHARES A NAME with a never-installed team server
+  // — "notion" is a realistic collision — read as the team's server connecting: a
+  // false "connected" for a server that was never even pulled onto this machine).
+  // Confirmed against the old fallback line directly: temporarily restoring
+  // `?? statuses.get(name)` and running just this test produced
+  // {"level":"ok","detail":"notion: connected"}. Matching must require the exact
+  // plugin:<marketplaceName>: prefix; a bare-name hit is unknown.
   it("does not mistake an unrelated personal server for the team's never-installed one, even when the names collide", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     writeMcpJson("acme", JSON.stringify({ mcpServers: { notion: { url: "https://mcp.notion.com/mcp" } } }));
@@ -215,10 +214,10 @@ describe("doctor team MCP server checks", () => {
     expect(byName(report, "team MCP servers").detail).toContain("unknown");
   });
 
-  // Regression guard: this used to be `fail` + exit 1, inconsistent with
-  // checkForge treating the same "installed but not finished authenticating" situation
-  // as `warn`. Needs-authentication is a normal, temporary setup step, not a broken
-  // install, so it must warn like its neighbor rather than fail the whole doctor run.
+  // A server that is installed but not authenticated is a normal, temporary setup
+  // step, not a broken install, so this must warn — the same severity checkForge uses
+  // for the same class of situation ("installed but not finished authenticating") —
+  // rather than fail the whole doctor run.
   it("warns, naming the reason, when a shared server needs authentication — consistent with checkForge's severity for the same situation", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: { url: "https://billing.example.com/mcp" } } }));
@@ -320,8 +319,8 @@ describe("doctor team MCP server checks", () => {
   // as root — vitest reports it as "skipped", not "passed".
   const runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
 
-  // An unreadable file (permission denied) is a different fault than
-  // invalid JSON, and must be named as such rather than reported as "not valid JSON".
+  // An unreadable file (permission denied) is a different fault than invalid JSON, and
+  // must be named as such rather than reported as "not valid JSON".
   it.skipIf(runningAsRoot)("distinguishes an unreadable .mcp.json (e.g. permission denied) from invalid JSON", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {} } }));
