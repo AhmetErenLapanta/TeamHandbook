@@ -18,8 +18,10 @@ you hit — and offers each one as a personal, project, or team skill. See
 - `hooks/hooks.json`, `commands/*.md`, `.claude-plugin/` — the plugin manifest and
   wiring, discovered by Claude Code by convention.
 - `dist/` — esbuild bundles, committed (the plugin is installed by git clone).
-- `evals/` - the natural-language routing suite: 16 cases tagged `nl`/`control`/`fp`,
-  run via `claude plugin eval` (see `evals/README.md` for the required flags).
+- `evals/` - the natural-language routing suite: does a plain sentence reach the right
+  command? Cases sit under `tutma/` (the held-out set the headline number comes from),
+  `gelistirme/` (iteration) and `kontrol/` (must score 1.00). Run one with
+  `evals/run-suite.sh <suite>`; `evals/README.md` lists the suites and the flags each needs.
 
 ## Conventions
 
