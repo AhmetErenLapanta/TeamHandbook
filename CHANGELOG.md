@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.6.4] - 2026-09-19
+
+- **Four lines of documentation described a repository that does not exist.** The
+  contributing notes asked for branches off `main` and commit messages in Conventional
+  Commits form, and pointed at a spec file; this project has no `main` branch, writes
+  commit messages as a sentence about what broke, and the spec was never committed.
+  `CLAUDE.md` meanwhile said nothing about the eval suite, which is the only way anyone
+  can tell whether a change to a command description helped. Someone following the old
+  text would have opened a branch that does not exist and written a commit message the
+  repository does not use. All four lines now describe what is actually here.
+
 ## [0.6.3] - 2026-09-17
 
 - **The ruler could tell you where you stood and not whether you were getting better.**
