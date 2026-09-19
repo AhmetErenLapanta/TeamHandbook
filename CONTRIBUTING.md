@@ -42,10 +42,11 @@ the resulting lockfile.
 
 ## Pull requests
 
-- Branch off `main`, keep the diff focused, and make sure `npm run build`,
+- Branch off `master`, keep the diff focused, and make sure `npm run build`,
   `npm test`, and `npm run typecheck` all pass.
-- Use [Conventional Commits](https://www.conventionalcommits.org/)
-  (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
+- Write the commit message as one English sentence describing what was broken and
+  fixed, with no prefix and no body (for example: "Making join and init describe
+  what they actually do needed a patch to reach installed copies").
 - Describe the behavior change and, for anything touching capture/gate/secrets,
   the failure case your change prevents.
 
