@@ -182,6 +182,6 @@ unannounced. Send your team the install commands and let each person run them.
 
 ## Reporting a vulnerability
 
-Please open a GitHub issue for non-sensitive reports, or use GitHub's private
-vulnerability reporting for anything that should not be public. Include the version
-(`.claude-plugin/plugin.json`) and steps to reproduce.
+Open a GitHub issue. Anything you send arrives in public; this repository has no
+private reporting channel yet. Include the version (`.claude-plugin/plugin.json`) and
+steps to reproduce.
