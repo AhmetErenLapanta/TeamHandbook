@@ -171,14 +171,14 @@ is a one-time interactive sign-in they run themselves, for example
 the forge. Without it the commands below fail with a bare git error, because a plugin
 can never stop to ask for a password.
 
-## Consume skills (no TeamHandbook needed)
+## Consume the handbook (no TeamHandbook needed)
 
 \`\`\`
 /plugin marketplace add ${url}
 /plugin install ${name}@${name}
 \`\`\`
 
-## Produce skills (TeamHandbook engine required)
+## Produce for the handbook (TeamHandbook engine required)
 
 \`\`\`
 /handbook:join ${url}
