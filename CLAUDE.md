@@ -65,5 +65,5 @@ you hit — and offers each one as a personal, project, or team skill. See
 - Untrusted session text — stderr, commands, and the transcript slice (the
   conversation itself) — is fenced as data, never instructions, in every model prompt.
 - The transcript slice is redacted line-by-line before it enters the harvest prompt.
-- `gate.ts`'s recurrence threshold is legacy: no automatic path reaches it (K8). Don't
+- `gate.ts`'s recurrence threshold is legacy: no automatic path reaches it. Don't
   reintroduce a recurrence precondition without a deliberate decision.

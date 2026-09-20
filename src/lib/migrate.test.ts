@@ -88,9 +88,9 @@ const withCredential = {
   headers: { Authorization: "Bearer 8f2c41d9ab7e05631cd4a29f" },
 };
 
-// The other shape, and the one measurement showed both of its other nets miss: the
-// provider puts the secret in the endpoint itself. Nothing about this server is a literal
-// in headers or env, so only the URL scan turns it back.
+// The other shape, and the one the header/env nets both miss: the provider puts the
+// secret in the endpoint itself. Nothing about this server is a literal in headers or
+// env, so only the URL scan turns it back.
 const TOKEN_IN_URL = "638a99e4-b962-4002-9f1c-1a2b3c4d5e6f";
 const withTokenInUrl = { type: "http", url: `https://mcp.example.com/${TOKEN_IN_URL}/mcp` };
 
@@ -278,9 +278,9 @@ describe("shareSelection", () => {
 
     const result = shareSelection(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge);
 
-    // The defect this guards: two requests opened off the same base
-    // both write "1.0.1", git merges the identical line without a conflict, and the second
-    // server lands with no version of its own, so no teammate's copy refreshes for it.
+    // The defect this guards: two requests opened off the same base both write "1.0.1",
+    // git merges the identical line without a conflict, and the second server lands
+    // with no version of its own, so no teammate's copy refreshes for it.
     const branches = gitIn(remote, ["branch", "--list"]).trim().split("\n").map((b) => b.replace("*", "").trim());
     expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([result.team!.branch]);
     expect(result.team!.version).toBe("1.0.1");
@@ -513,7 +513,7 @@ describe("shareSelection carries commands", () => {
     expect(result.queued).toEqual(["deploy-runbook"]);
     expect(result.team).toMatchObject({ ok: true, serverNames: ["gitlab"], commandNames: ["explain", "fix-tests"] });
     const branch = result.team!.branch!;
-    // Within one run: a second request opened off the same clone would
+    // The same defect within one run: a second request opened off the same clone would
     // claim the same version and the change in it would reach nobody
     const branches = gitIn(remote, ["branch", "--list"]).trim().split("\n").map((b) => b.replace("*", "").trim());
     expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([branch]);

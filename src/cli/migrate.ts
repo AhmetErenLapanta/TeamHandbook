@@ -96,7 +96,7 @@ function main(): void {
   const inv = buildInventory();
   const selection = parseSelection(args, inv);
   const updates = parseUpdates(args, inv);
-  // The point of the card, in one branch: nothing is selected by default, so a share with
+  // The point, in one branch: nothing is selected by default, so a share with
   // no flags shares nothing rather than everything.
   if (!selection.skills.length && !selection.servers.length && !selection.commands.length) {
     console.log("Nothing was selected, so nothing was queued and nothing was shared.");

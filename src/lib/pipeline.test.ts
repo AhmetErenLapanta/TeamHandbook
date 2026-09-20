@@ -730,7 +730,7 @@ describe("runManualSignal", () => {
     expect(existsSync(candidatesDir(home))).toBe(false);
   });
 
-  // This is the gate distinction: the same low-scoring signal, told apart only
+  // This is the gate's core distinction: the same low-scoring signal, told apart only
   // by trigger, ends up queued for one and dropped for the other.
   describe("the same rejected candidate, explicit vs. model-initiated", () => {
     const lowScore = JSON.stringify({
@@ -762,14 +762,14 @@ describe("runManualSignal", () => {
     });
   });
 
-  // End-to-end proof of the exact scenario an independent audit
-  // measured as broken. Before the fix, step 2 of the flow below (the user
-  // answering the gate's own clarifying question, itself a fresh UserPromptSubmit)
-  // overwrote the pending explicit-ask flag to false, so trigger came out
-  // "manual-model" and a low-scoring candidate the user explicitly asked for was
-  // vetoed and lost. After the fix it stays "manual": the candidate is queued
-  // regardless of the gate's score, exactly like a single-turn explicit capture.
-  describe("The user answers the gate's own clarifying question", () => {
+  // End-to-end proof of the exact scenario an independent audit measured as broken.
+  // Before the fix, step 2 of the flow below (the user answering the gate's own
+  // clarifying question, itself a fresh UserPromptSubmit) overwrote the pending
+  // explicit-ask flag to false, so trigger came out "manual-model" and a low-scoring
+  // candidate the user explicitly asked for was vetoed and lost. After the fix it
+  // stays "manual": the candidate is queued regardless of the gate's score, exactly
+  // like a single-turn explicit capture.
+  describe("the user answers the gate's own clarifying question", () => {
     function promptInput(prompt: string): HookInput {
       return { session_id: "s1", cwd: "/repo", hook_event_name: "UserPromptSubmit", prompt };
     }
@@ -828,7 +828,7 @@ describe("runManualSignal", () => {
       expect(existsSync(candidatesDir(home))).toBe(true);
     });
 
-    // The second risk, closed together with the first: a failed run (claude
+    // The second risk closed together with the first: a failed run (claude
     // unreachable) must not spend the user's explicit ask, or their natural
     // retry gets misjudged as the model acting on its own.
     it("keeps the ask pending across a failed run, so a retry is still judged manual", async () => {

@@ -198,8 +198,8 @@ export function auditSkillDir(sourceDir: string): SkillAudit {
   const { files, skipped } = listSkillFiles(sourceDir);
   if (skipped.length > 0) {
     // A symlink cannot be screened for what it will resolve to at copy time, and
-    // dropping it quietly is the pruning this guard exists to stop. Neither is allowed, so the
-    // skill is refused with the entry named.
+    // dropping it quietly would ship an unscreened file under a trusted name. Neither
+    // is allowed, so the skill is refused with the entry named.
     return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
   }
   if (files.length === 0) return { shareable: false, reason: "no-files" };
