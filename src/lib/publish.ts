@@ -811,25 +811,26 @@ export function publishMcpServers(
  *
  * The team's copy may have been edited since it was shared, and replacing it unasked would
  * take that edit out of a merge request nobody opened for it - a change to the team's setup
- * made by somebody sharing their own. So the first answer is always a refusal. What changed
- * is that the refusal now names the route out of it: `--update` sends this as a rewrite of
- * theirs, which is still a merge request, still reviewed, and still nobody's silent
- * decision. Both messages say the same thing as the skill one, because a publisher who
- * learns the rule from one kind should not have to learn it again from the next.
+ * made by somebody sharing their own. So the first answer is always a refusal, and an
+ * update is a second, deliberate request.
+ *
+ * These two state the fact and stop there: they do NOT name the command that sends the
+ * update. They cannot, because they are read from two places whose grammar differs -
+ * /handbook:mcp acts on the one server it was given and takes a bare `--update`, while
+ * /handbook:migrate acts on a selection and takes `--update <name>`, refusing the bare
+ * form outright. A single sentence here would be wrong in one of those two, and a refusal
+ * that names a command which fails when you run it is the exact defect this card was
+ * opened for. So the caller appends the route in its own words, next to the refusal it
+ * prints: src/cli/mcp.ts for one server, formatMigrateResult for a selection.
  */
 function collisionMessage(name: string): string {
-  return (
-    `the team repository already declares an MCP server named "${name}". ` +
-    "It was left exactly as it is; run this again with --update to send yours as an update " +
-    "to it, or rename yours."
-  );
+  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
 }
 
 function commandCollisionMessage(name: string): string {
   return (
     `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). ` +
-    "It was left exactly as it is; run this again with --update to send yours as an update " +
-    "to it, or rename yours."
+    "It was left exactly as it is."
   );
 }
 

@@ -1013,10 +1013,10 @@ function finishMcpPrBody(lines, requiresEnv, hasServers, commandCount) {
   return lines.join("\n");
 }
 function collisionMessage(name) {
-  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is; run this again with --update to send yours as an update to it, or rename yours.`;
+  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
 }
 function commandCollisionMessage(name) {
-  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is; run this again with --update to send yours as an update to it, or rename yours.`;
+  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is.`;
 }
 function namesIn(dir, suffix) {
   try {

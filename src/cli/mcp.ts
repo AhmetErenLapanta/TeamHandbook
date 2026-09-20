@@ -62,7 +62,15 @@ function main(): void {
   }
   const result = publishMcpServer(entry, team, undefined, undefined, update ? { update } : {});
   if (!result.ok) {
-    console.error(`error: ${result.error}`);
+    // The library states that the name is taken; the way out of it is spelled here, in this
+    // command's own grammar. /handbook:migrate reads the same refusal and answers it with
+    // `--update <name>`, so a route named in the library would be wrong in one of the two.
+    const taken = result.refused?.some((r) => r.collision && r.name === entry.name);
+    console.error(
+      taken
+        ? `error: ${result.error} Run this again with --update to send yours as an update to theirs, or rename yours.`
+        : `error: ${result.error}`,
+    );
     process.exitCode = 1;
     return;
   }

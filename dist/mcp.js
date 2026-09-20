@@ -793,10 +793,10 @@ function publishMcpServer(entry, team, git = runGit, forge = runForge, options =
   return publishTeamSelection({ servers: [entry] }, team, git, forge, options);
 }
 function collisionMessage(name) {
-  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is; run this again with --update to send yours as an update to it, or rename yours.`;
+  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
 }
 function commandCollisionMessage(name) {
-  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is; run this again with --update to send yours as an update to it, or rename yours.`;
+  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is.`;
 }
 function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
   const entries = selection.servers ?? [];
@@ -1031,7 +1031,10 @@ function main() {
   }
   const result = publishMcpServer(entry, team, void 0, void 0, update ? { update } : {});
   if (!result.ok) {
-    console.error(`error: ${result.error}`);
+    const taken = result.refused?.some((r) => r.collision && r.name === entry.name);
+    console.error(
+      taken ? `error: ${result.error} Run this again with --update to send yours as an update to theirs, or rename yours.` : `error: ${result.error}`
+    );
     process.exitCode = 1;
     return;
   }

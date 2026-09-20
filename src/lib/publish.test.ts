@@ -705,17 +705,21 @@ describe("a name the destination already has", () => {
       () => "",
     );
 
-    // then all three are turned back, all three are marked as a collision rather than as
-    // some other refusal, and all three name the route out of it
+    // then all three are turned back, all three say the name is taken and that what was
+    // there is untouched, and all three are marked as a collision rather than as some
+    // other kind of refusal - which is what lets each caller offer the route out of it in
+    // the grammar its own flags actually use
     expect(skill.collision).toEqual({ kind: "skill", name: "fix-npm-test" });
     expect(selection.refused).toEqual([
-      { name: "gitlab", kind: "mcp", reason: expect.stringContaining("--update"), collision: true },
-      { name: "explain", kind: "command", reason: expect.stringContaining("--update"), collision: true },
+      { name: "gitlab", kind: "mcp", reason: expect.stringContaining("already declares"), collision: true },
+      { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
     ]);
     for (const answer of [skill.error!, ...selection.refused!.map((r) => r.reason)]) {
       expect(answer).toContain("already");
-      expect(answer).toContain("--update");
+      expect(answer).toMatch(/left exactly as it is|Nothing was written/);
     }
+    // the skill refusal has exactly one caller, so it can and does name the route itself
+    expect(skill.error).toContain("--update");
 
     // and nothing was pushed over anything
     expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");

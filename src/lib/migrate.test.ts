@@ -573,8 +573,11 @@ describe("shareSelection carries commands", () => {
     expect(result.refused).toEqual([
       { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
     ]);
-    // the reason says what to do instead of leaving the user to guess why nothing happened
-    expect(result.refused[0]!.reason).toContain("rename yours");
+    // the route out of it is named where the user reads it, in THIS command's grammar:
+    // --update takes a name here, so the printed command carries exactly the one name the
+    // user would be consenting to. The library cannot write this line - /handbook:mcp
+    // reads the same refusal and answers it with a bare --update.
+    expect(formatMigrateResult(result)).toContain("migrate.js share --command explain --update explain");
     const branch = result.team!.branch!;
     expect(gitIn(remote, ["show", `${branch}:commands/explain.md`])).toBe("The team's own explain.\n");
   });

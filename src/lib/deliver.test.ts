@@ -607,11 +607,12 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
 });
 
 describe("the route a refusal names has to work when it is walked", () => {
-  // B-1, round 2. The local path used to suffix and DELIVER, which set the candidate to
-  // `approved` — and `approved` is terminal (queue.ts has no path back to `pending`). So
-  // the very next line the CLI printed, "Approve with --update", answered with
-  // `candidate "fix-npm-test" is already approved` and the user was left holding the two
-  // disagreeing skills this card exists to prevent. Red before the fix, green after.
+  // The local path used to suffix and DELIVER, which set the candidate to `approved` — and
+  // `approved` is terminal (queue.ts has no path back to `pending`). So the very next line
+  // the CLI printed, "Approve with --update", answered with `candidate "fix-npm-test" is
+  // already approved`, and the user was left holding the two disagreeing skills this
+  // product exists to prevent. What this test holds down is that the advice a refusal
+  // prints can still be taken when you take it.
   it("lets the reviewer walk the refusal's own advice: refuse, then --update, on the same candidate", () => {
     // given a skill of that name already installed in the project
     const installed = join(soloSkillsDir(project), "fix-npm-test");
@@ -665,9 +666,9 @@ describe("the route a refusal names has to work when it is walked", () => {
 });
 
 describe("two answers to one refusal are not one answer twice", () => {
-  // B-2, round 2. `--update` lands on the name `--as` chose, not on the name the reviewer
-  // was refused for — so `approve foo --as bar --update` deleted a skill called `bar`
-  // whose existence was never put in front of them, and said so only afterwards.
+  // `--update` lands on the name `--as` chose, not on the name the reviewer was refused
+  // for — so `approve foo --as bar --update` used to delete a skill called `bar` whose
+  // existence was never put in front of them, and say so only afterwards.
   it("refuses --as together with --update instead of deleting a skill the reviewer was never shown", () => {
     // given an unrelated, hand-written skill the reviewer has never been warned about
     const bystander = join(soloSkillsDir(project), "bar");

@@ -368,7 +368,6 @@ export function shareSelection(
   forge: ForgeRunner = runForge,
   options: PublishOptions = {},
 ): MigrateResult {
-
   const home = paths.home ?? handbookHome();
   const result: MigrateResult = { queued: [], refused: [] };
   const inv = buildInventory(paths);
