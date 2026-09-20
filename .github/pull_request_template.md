@@ -1,4 +1,4 @@
-<!-- Conventional Commit title, e.g. fix: drop candidates whose fix was reverted -->
+<!-- Title = the commit message after squash-merge. Format: CONTRIBUTING.md#pull-requests -->
 
 **What & why**
 What this changes and the reason. For capture/gate/secret changes, name the
