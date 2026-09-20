@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.8.0] - 2026-09-20
+
+- **A team's shared MCP server could sit unconnected and `/handbook:doctor` said nothing.**
+  Merging a server into the team repository only gets it onto a teammate's machine; nothing
+  checked whether it actually connected there, so a broken server looked the same as a
+  working one until someone noticed a tool was missing mid-session. `doctor` now reads the
+  team's `.mcp.json` and cross-checks it against `claude mcp list`, one line per declared
+  server. When the connection state can't be read, it says unknown rather than guessing
+  connected, and it does not mistake an unrelated personal server for the team's
+  never-installed one just because the two happen to share a name.
+
 ## [0.7.2] - 2026-09-19
 
 - **Three commands still described a screen that had grown past them.** 0.7.0 added
