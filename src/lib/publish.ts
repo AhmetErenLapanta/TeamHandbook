@@ -1,6 +1,6 @@
 import { handbookWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
@@ -12,24 +12,38 @@ import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { GitRunner, TeamConfig } from "./init.js";
+import { isSafeSlug } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
-import { auditServer, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
+import { auditServer, declaredServerNames, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
 import { auditCommand, commandRefusalMessage } from "./commands.js";
 import type { CommandEntry } from "./commands.js";
 import { slugifySkillName } from "./distill.js";
 
-export function buildPrTitle(slug: string): string {
-  return `feat(skill): add ${slug}`;
+export function buildPrTitle(slug: string, update = false): string {
+  return `feat(skill): ${update ? "update" : "add"} ${slug}`;
 }
 
-export function buildPrBody(meta: CandidateMeta, grounded: GroundedCase | null): string {
+export function buildPrBody(meta: CandidateMeta, grounded: GroundedCase | null, update = false): string {
   const lines = [
     meta.description,
     "",
     `- scope: \`${meta.scope}\``,
     `- gate score: ${meta.gate ? `${meta.gate.total}/10` : "n/a"}`,
   ];
+  if (update) {
+    // A reviewer who reads this as an addition approves a new file; what is actually in
+    // the diff is somebody else's skill, rewritten. The two need different attention, so
+    // the body says which one this is rather than leaving it to the diff stat.
+    lines.push(
+      "",
+      "## This replaces the skill the team already has",
+      "",
+      "The publisher was told the team already had a skill by this name and chose to send",
+      "theirs as an update to it. Everything the team's copy said that this one does not say",
+      "is gone after the merge, including edits made in the team repository since it landed.",
+    );
+  }
   if (meta.gate) {
     const scores = Object.entries(meta.gate.scores)
       .map(([criterion, score]) => `${criterion} ${score}`)
@@ -86,10 +100,64 @@ function readGroundedCase(candidateDir: string): GroundedCase | null {
   return null;
 }
 
+/** Why a name the destination already has was not simply written over. */
+export interface Collision {
+  kind: "skill" | "mcp" | "command";
+  name: string;
+}
+
+/**
+ * What to do about a name the team repository already has.
+ *
+ * The default is to refuse, for every kind of thing that travels. `update` is the
+ * publisher's answer to that refusal and nothing else sets it: an overwrite is a change to
+ * what the team already uses, and the only person entitled to ask for it is the one who
+ * was shown the refusal. `as` is the other answer - send it under a different name - and
+ * it is the one the suffix used to pick silently on the publisher's behalf.
+ */
+export interface PublishOptions {
+  /**
+   * `true` replaces whatever this request collides with; a list of names replaces only
+   * those. The list exists because one request can carry a selection: a publisher shown
+   * two refusals and consenting to one of them must not have the other overwritten by the
+   * same word. Consent is per name, so the flag is too.
+   */
+  update?: boolean | string[];
+  as?: string;
+}
+
+/** Whether this request was told it may replace `name`. */
+export function mayUpdate(options: PublishOptions, name: string): boolean {
+  return options.update === true || (Array.isArray(options.update) && options.update.includes(name));
+}
+
+/**
+ * The one combination that cannot be consent.
+ *
+ * `--as` and `--update` are the two answers to a single refusal, and review.md offers them
+ * as alternatives. Together they stop being alternatives: `--update` lands on the name
+ * `--as` chose, not on the name the publisher was refused for, so it deletes a skill whose
+ * existence was never put in front of them. That is the same defect the batch guard closed,
+ * one axis over - there the extra names came from `--all`, here from `--as`.
+ */
+export function conflictingOptions(options: PublishOptions): string | null {
+  if (options.as === undefined || !options.update) return null;
+  return (
+    "--as and --update answer the same refusal in different ways: --as sends this under a free name, " +
+    "--update replaces the skill it collided with. Pick one."
+  );
+}
+
 export interface PublishOutcome {
   ok: boolean;
   branch?: string;
   skillDir?: string;
+  /** the name the skill was written under, which is not always the one asked for */
+  skillSlug?: string;
+  /** set when this request rewrites a skill the team already had */
+  updatedExisting?: boolean;
+  /** the team already has this name, and nothing was written */
+  collision?: Collision;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
   prUrl?: string;
@@ -270,12 +338,35 @@ function pushBranch(
   }
 }
 
+/**
+ * A skill the team already has is never written over silently.
+ *
+ * This used to be the one kind of thing that answered the question differently: a server
+ * and a command were both turned back by name, while a skill was quietly filed as
+ * `skills/<slug>-2` and the publisher was told their own spelling. They then believed the
+ * team had their correction, and the team had two skills disagreeing with each other. The
+ * message names both ways forward, because "rename yours" was never a route the publisher
+ * had - there was no way to say what to rename it to.
+ */
+function skillCollisionMessage(name: string, chosen: boolean): string {
+  const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
+  // A refusal has to name a route that WORKS. When the name came from --as, "--update" is
+  // not one: it is refused alongside --as, so offering it here would send the publisher
+  // into the dead end this message exists to prevent.
+  return chosen
+    ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update ` +
+        "to send this candidate as an update to the skill it actually collided with."
+    : `${taken} Approve again with --update to send yours as an update to it, ` +
+        "or with --as <name> to send it under a different name.";
+}
+
 export function publishCandidate(
   candidateDir: string,
   meta: CandidateMeta,
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  options: PublishOptions = {},
 ): PublishOutcome {
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
@@ -292,6 +383,15 @@ export function publishCandidate(
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
+  // The name the skill travels under: its own, or the one the publisher picked after being
+  // told the first was taken. Checked here rather than at the copy, so a name that cannot
+  // be a directory fails before a clone exists.
+  const conflict = conflictingOptions(options);
+  if (conflict) return { ok: false, error: conflict };
+  const skillSlug = options.as ?? meta.slug;
+  if (!isSafeSlug(skillSlug)) {
+    return { ok: false, error: `"${skillSlug}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, error: identity.error };
   const identityArgs = identity.args;
@@ -300,22 +400,33 @@ export function publishCandidate(
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
-    // A previous approve may have pushed handbook/<slug> whose PR is still open
-    // (or was abandoned): the skills/ dir check alone would reuse that branch name
-    // and the push would be rejected non-fast-forward, locking the slug forever.
-    // Suffix past remote branches too.
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const slug = uniqueSlug(
-      meta.slug,
-      (s) => existsSync(join(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`),
-    );
-    let branch = `${prefix}${slug}`;
+    const skillDir = `skills/${skillSlug}`;
+    const occupied = existsSync(join(repoDir, skillDir));
+    if (occupied && !mayUpdate(options, skillSlug)) {
+      return {
+        ok: false,
+        collision: { kind: "skill", name: skillSlug },
+        error: skillCollisionMessage(skillSlug, options.as !== undefined),
+      };
+    }
+    // The BRANCH name is still made unique, and separately from the directory name, because
+    // the two answer different questions. A previous approve may have pushed
+    // handbook/<slug> whose PR is still open (or was abandoned); reusing that name gets the
+    // push rejected non-fast-forward, and the slug is then locked forever. That is true of
+    // an update too - which is exactly a second branch for a name that already went out
+    // once - so the guard has to survive --update, and it does by living here instead of in
+    // the directory name it used to be welded to.
+    const branchSlug = uniqueSlug(skillSlug, (s) => remoteBranches.has(`${prefix}${s}`));
+    let branch = `${prefix}${branchSlug}`;
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
-    const skillDir = `skills/${slug}`;
-    const title = buildPrTitle(slug);
+    const title = buildPrTitle(skillSlug, occupied);
     try {
       git(["checkout", "-b", branch], repoDir);
+      // An update replaces the team's copy rather than merging into it: a file the new
+      // version dropped would otherwise survive in the team's tree and keep being read.
+      if (occupied) rmSync(join(repoDir, skillDir), { recursive: true, force: true });
       // Keep the SKILL.md name in sync with a suffixed slug so it doesn't shadow
       // the skill it collided with. Everything else the candidate carries goes with
       // it: a skill whose scripts and references were left behind is a skill the
@@ -323,12 +434,12 @@ export function publishCandidate(
       copySkillPayload(
         candidateDir,
         join(repoDir, skillDir),
-        slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug),
+        skillSlug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, skillSlug),
       );
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, team, slug, remoteBranches);
+      const pushed = pushBranch(git, repoDir, branch, team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
@@ -343,16 +454,17 @@ export function publishCandidate(
         ),
       };
     }
-    const body = buildPrBody(meta, readGroundedCase(candidateDir));
+    const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
     const learned = learnedBranchPrefix ? { learnedBranchPrefix } : {};
+    const named = { skillDir, skillSlug, ...(occupied ? { updatedExisting: true } : {}) };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
-      return { ok: true, branch, skillDir, prUrl: pr.url, ...(version ? { version } : {}), ...learned };
+      return { ok: true, branch, ...named, prUrl: pr.url, ...(version ? { version } : {}), ...learned };
     }
     return {
       ok: true,
       branch,
-      skillDir,
+      ...named,
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined,
       ...(version ? { version } : {}),
       ...(pr.error ? { prError: pr.error } : {}),
@@ -394,8 +506,11 @@ export interface TeamPublishOutcome {
   commandNames?: string[];
   // what the selection named that did not travel, each with the reason it did not. The
   // kind travels with the name: a caller reporting "explain" back to the user has to be
-  // able to say which of its three lists that name came from.
-  refused?: { name: string; kind: "mcp" | "command"; reason: string }[];
+  // able to say which of its three lists that name came from. `collision` marks the one
+  // refusal that has a way forward, so a caller can offer it without matching on prose.
+  refused?: { name: string; kind: "mcp" | "command"; reason: string; collision?: true }[];
+  // the names in this request that rewrite something the team already had
+  updated?: { servers: string[]; commands: string[] };
   branch?: string;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
@@ -419,6 +534,14 @@ export function buildMcpPrTitle(names: string[]): string {
   return buildSelectionPrTitle(names, []);
 }
 
+/** The names in one request that rewrite the team's copy rather than adding a new one. */
+export interface UpdatedNames {
+  servers: string[];
+  commands: string[];
+}
+
+const NOTHING_UPDATED: UpdatedNames = { servers: [], commands: [] };
+
 /**
  * One title for a request that may carry two kinds of thing.
  *
@@ -426,9 +549,26 @@ export function buildMcpPrTitle(names: string[]): string {
  * `feat(mcp)` and finds four slash commands in the diff learns not to trust the subject
  * line, and the subject line is the only part of a merge request everyone reads.
  */
-export function buildSelectionPrTitle(serverNames: string[], commandNames: string[]): string {
+export function buildSelectionPrTitle(
+  serverNames: string[],
+  commandNames: string[],
+  updated: UpdatedNames = NOTHING_UPDATED,
+): string {
   const scopes = [serverNames.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean);
-  return `feat(${scopes.join(",")}): add ${[...serverNames, ...commandNames].join(", ")}`;
+  // Kept per kind rather than as one list of names, because a server and a command are
+  // allowed to share a name and the verb in front of it would then be a coin toss.
+  const added = [
+    ...serverNames.filter((n) => !updated.servers.includes(n)),
+    ...commandNames.filter((n) => !updated.commands.includes(n)),
+  ];
+  const changed = [
+    ...serverNames.filter((n) => updated.servers.includes(n)),
+    ...commandNames.filter((n) => updated.commands.includes(n)),
+  ];
+  const parts = [];
+  if (added.length) parts.push(`add ${added.join(", ")}`);
+  if (changed.length) parts.push(`update ${changed.join(", ")}`);
+  return `feat(${scopes.join(",")}): ${parts.join("; ")}`;
 }
 
 /**
@@ -505,6 +645,7 @@ export function buildSelectionPrBody(
   subjects: McpShareSubject[],
   commands: CommandSubject[],
   marketplaceName: string,
+  updated: UpdatedNames = NOTHING_UPDATED,
 ): string {
   const single = subjects.length === 1 && !commands.length;
   const lines = selectionIntro(subjects.length, commands.length).map((line) =>
@@ -548,6 +689,27 @@ export function buildSelectionPrBody(
       "",
       `- command: \`/${marketplaceName}:${command.name}\``,
       `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``,
+    );
+  }
+  const changed = [
+    ...subjects.filter((s) => updated.servers.includes(s.entry.name)).map((s) => s.entry.name),
+    // Namespaced, like the bullet above and for the same reason: a bare `/<command>` is a
+    // name nobody can type once the plugin is installed. Two spellings of one command in
+    // one document leave the reviewer deciding which of them to believe.
+    ...commands.filter((c) => updated.commands.includes(c.name)).map((c) => `/${marketplaceName}:${c.name}`),
+  ];
+  if (changed.length) {
+    // Said in its own section rather than as a word in the title: approving an addition and
+    // approving a rewrite of what the team already runs are different decisions, and the
+    // second one is only visible in the diff to a reviewer who already knows to look.
+    lines.push(
+      "",
+      changed.length === 1 ? "## This one replaces what the team has" : "## Some of these replace what the team has",
+      "",
+      `${changed.map((n) => `\`${n}\``).join(", ")} ${changed.length === 1 ? "is" : "are"} already in this repository, and`,
+      "the publisher was told so before asking for this. What is in the diff is the version on",
+      "their machine, whole: anything the team's copy gained since it landed is gone after the",
+      "merge, so read the removed lines as carefully as the added ones.",
     );
   }
   if (commands.length) {
@@ -644,8 +806,9 @@ export function publishMcpServer(
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  options: PublishOptions = {},
 ): TeamPublishOutcome {
-  return publishTeamSelection({ servers: [entry] }, team, git, forge);
+  return publishTeamSelection({ servers: [entry] }, team, git, forge, options);
 }
 
 /** Servers only, the shape /handbook:migrate shared before commands could travel. */
@@ -654,29 +817,87 @@ export function publishMcpServers(
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  options: PublishOptions = {},
 ): TeamPublishOutcome {
-  return publishTeamSelection({ servers: entries }, team, git, forge);
-}
-
-function collisionMessage(name: string): string {
-  return (
-    `the team repository already declares an MCP server named "${name}". ` +
-    "Rename yours, or edit the team's .mcp.json directly."
-  );
+  return publishTeamSelection({ servers: entries }, team, git, forge, options);
 }
 
 /**
- * A command the team already has is never written over. The team's copy may have been
- * edited since it was shared, and replacing it here would take that edit out of a merge
- * request nobody opened for it - which is a change to the team's setup made by somebody
- * sharing their own. Updating an existing one is a different operation, with a different
- * question for the reviewer, and it is not this one.
+ * Nothing the team already has is written over by a request that did not ask to.
+ *
+ * The team's copy may have been edited since it was shared, and replacing it unasked would
+ * take that edit out of a merge request nobody opened for it - a change to the team's setup
+ * made by somebody sharing their own. So the first answer is always a refusal, and an
+ * update is a second, deliberate request.
+ *
+ * These two state the fact and stop there: they do NOT name the command that sends the
+ * update. They cannot, because they are read from two places whose grammar differs -
+ * /handbook:mcp acts on the one server it was given and takes a bare `--update`, while
+ * /handbook:migrate acts on a selection and takes `--update <name>`, refusing the bare
+ * form outright. A single sentence here would be wrong in one of those two, and a refusal
+ * that names a command which fails when you run it is the exact defect this card was
+ * opened for. So the caller appends the route in its own words, next to the refusal it
+ * prints: src/cli/mcp.ts for one server, formatMigrateResult for a selection.
  */
+function collisionMessage(name: string): string {
+  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
+}
+
 function commandCollisionMessage(name: string): string {
   return (
     `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). ` +
-    "It was left exactly as it is; rename yours, or change theirs in the team repository."
+    "It was left exactly as it is."
   );
+}
+
+/** What the team repository already carries, by kind. */
+export interface TeamAssets {
+  skills: string[];
+  servers: string[];
+  commands: string[];
+}
+
+function namesIn(dir: string, suffix?: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => (suffix ? entry.isFile() && entry.name.endsWith(suffix) : entry.isDirectory()))
+      .map((entry) => (suffix ? entry.name.slice(0, -suffix.length) : entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Everything the team already has, read once so a screen can say so before anyone picks.
+ *
+ * Advisory, and only advisory. The answer that decides anything is taken at publish time
+ * inside the clone that is about to write; this one can go stale between the screen and the
+ * choice, and it is null altogether when the repository is unreachable. So it may add a
+ * label and may not withhold one thing or overwrite another. migrate.ts already draws this
+ * line for the credential screen - "The screen is advisory; the refusal lives where it
+ * lived before" - and the direction it must not drift in is a screen that decides.
+ */
+export function teamAssets(team: TeamConfig, git: GitRunner = runGit): TeamAssets | null {
+  try {
+    assertSafeGitUrl(team.repoUrl);
+  } catch {
+    return null;
+  }
+  const workdir = handbookWorkdir("handbook-index-");
+  const repoDir = join(workdir, "repo");
+  try {
+    if (cloneTeamRepo(git, team.repoUrl, repoDir, workdir)) return null;
+    const mcpFile = join(repoDir, TEAM_MCP_FILE);
+    return {
+      skills: namesIn(join(repoDir, "skills")),
+      servers: declaredServerNames(existsSync(mcpFile) ? readFileSync(mcpFile, "utf8") : null),
+      commands: namesIn(join(repoDir, TEAM_COMMANDS_DIR), ".md"),
+    };
+  } catch {
+    return null;
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
 }
 
 export interface TeamSelection {
@@ -706,6 +927,7 @@ export function publishTeamSelection(
   team: TeamConfig,
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  options: PublishOptions = {},
 ): TeamPublishOutcome {
   const entries = selection.servers ?? [];
   const commandEntries = selection.commands ?? [];
@@ -764,11 +986,13 @@ export function publishTeamSelection(
     const target = join(repoDir, TEAM_MCP_FILE);
     let merged = "";
     let collided: string[] = [];
+    let replacedServers: string[] = [];
     if (subjects.length) {
       try {
-        ({ merged, collided } = mergeServersIntoMcpJson(
+        ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
           existsSync(target) ? readFileSync(target, "utf8") : null,
           subjects.map((s) => s.entry),
+          (name) => mayUpdate(options, name),
         ));
       } catch (err) {
         // A team file we cannot read is not one server's problem, so no part of the
@@ -782,18 +1006,31 @@ export function publishTeamSelection(
     const collisions: string[] = [];
     for (const name of collided) {
       collisions.push(collisionMessage(name));
-      refused.push({ name, kind: "mcp", reason: collisionMessage(name) });
+      refused.push({ name, kind: "mcp", reason: collisionMessage(name), collision: true });
     }
     const going = subjects.filter((s) => !collided.includes(s.entry.name));
     const goingCommands: CommandSubject[] = [];
+    const replacedCommands: string[] = [];
     for (const command of commands) {
       if (existsSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
-        collisions.push(commandCollisionMessage(command.name));
-        refused.push({ name: command.name, kind: "command", reason: commandCollisionMessage(command.name) });
-        continue;
+        if (!mayUpdate(options, command.name)) {
+          collisions.push(commandCollisionMessage(command.name));
+          refused.push({
+            name: command.name,
+            kind: "command",
+            reason: commandCollisionMessage(command.name),
+            collision: true,
+          });
+          continue;
+        }
+        replacedCommands.push(command.name);
       }
       goingCommands.push(command);
     }
+    const updated: UpdatedNames = {
+      servers: replacedServers.filter((n) => going.some((s) => s.entry.name === n)),
+      commands: replacedCommands,
+    };
     if (!going.length && !goingCommands.length) {
       return { ok: false, ...single, refused, error: collisions[0] ?? refused[0]?.reason ?? "nothing was left to share" };
     }
@@ -807,7 +1044,7 @@ export function publishTeamSelection(
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
-    const title = buildSelectionPrTitle(names, commandNames);
+    const title = buildSelectionPrTitle(names, commandNames, updated);
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);
@@ -843,7 +1080,7 @@ export function publishTeamSelection(
       team.repoUrl,
       branch,
       title,
-      buildSelectionPrBody(going, goingCommands, team.marketplaceName),
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated),
       repoDir,
       forge,
     );
@@ -852,6 +1089,7 @@ export function publishTeamSelection(
       ...single,
       ...(names.length ? { serverNames: names } : {}),
       ...(commandNames.length ? { commandNames } : {}),
+      ...(updated.servers.length || updated.commands.length ? { updated } : {}),
       ...(refused.length ? { refused } : {}),
       branch,
       requiresEnv,
@@ -875,8 +1113,11 @@ export function publishTeamSelection(
  * the manager can make.
  */
 export function formatMcpShareResult(outcome: TeamPublishOutcome, marketplaceName: string): string {
+  const updated = outcome.updated?.servers.includes(outcome.serverName ?? "") ?? false;
   const lines = [
-    `Shared "${outcome.serverName}" with the team.`,
+    updated
+      ? `Sent "${outcome.serverName}" to the team as an update to the one they already have.`
+      : `Shared "${outcome.serverName}" with the team.`,
     "",
     `- branch: ${outcome.branch}`,
     // manualPrUrl returns null for a remote whose host it does not know how to build a

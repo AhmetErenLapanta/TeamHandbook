@@ -425,7 +425,10 @@ function refusalMessage(name, audit) {
   }
   return `"${name}" is not a server this command can share (${audit.detail ?? "unsupported shape"}).`;
 }
-function mergeServersIntoMcpJson(existing, servers) {
+function serverMap(parsed) {
+  return isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+}
+function mergeServersIntoMcpJson(existing, servers, replaceExisting = () => false) {
   let target = {};
   let document = null;
   if (existing !== null && existing.trim()) {
@@ -441,20 +444,24 @@ function mergeServersIntoMcpJson(existing, servers) {
       throw new Error(".mcp.json in the team repository is not a JSON object.");
     }
     document = parsed;
-    target = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+    target = serverMap(parsed);
   }
   const collided = [];
+  const replaced = [];
   for (const server of servers) {
     if (Object.prototype.hasOwnProperty.call(target, server.name)) {
-      collided.push(server.name);
-      continue;
+      if (!replaceExisting(server.name)) {
+        collided.push(server.name);
+        continue;
+      }
+      replaced.push(server.name);
     }
     if (document === null) {
       document = { mcpServers: target };
     }
     target[server.name] = server.config;
   }
-  return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided };
+  return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided, replaced };
 }
 function refusalSummary(audit) {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
@@ -481,12 +488,8 @@ function formatServerList(entries) {
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6 } from "node:path";
-
-// src/lib/commands.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
-import { basename, join as join5 } from "node:path";
 
 // src/lib/queue.ts
 function isSafeSlug(slug) {
@@ -494,6 +497,8 @@ function isSafeSlug(slug) {
 }
 
 // src/lib/commands.ts
+import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
+import { basename, join as join5 } from "node:path";
 function commandDescription(content) {
   const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
   const described = frontmatter?.[1]?.match(/^description:\s*(.+)$/m)?.[1]?.trim();
@@ -534,6 +539,9 @@ function commandRefusalMessage(name, audit) {
 }
 
 // src/lib/publish.ts
+function mayUpdate(options, name) {
+  return options.update === true || Array.isArray(options.update) && options.update.includes(name);
+}
 function bumpPluginVersion(repoDir) {
   const file = join6(repoDir, ".claude-plugin", "plugin.json");
   try {
@@ -617,9 +625,21 @@ function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
 }
 var TEAM_MCP_FILE = ".mcp.json";
 var TEAM_COMMANDS_DIR = "commands";
-function buildSelectionPrTitle(serverNames, commandNames) {
+var NOTHING_UPDATED = { servers: [], commands: [] };
+function buildSelectionPrTitle(serverNames, commandNames, updated = NOTHING_UPDATED) {
   const scopes = [serverNames.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean);
-  return `feat(${scopes.join(",")}): add ${[...serverNames, ...commandNames].join(", ")}`;
+  const added = [
+    ...serverNames.filter((n) => !updated.servers.includes(n)),
+    ...commandNames.filter((n) => !updated.commands.includes(n))
+  ];
+  const changed = [
+    ...serverNames.filter((n) => updated.servers.includes(n)),
+    ...commandNames.filter((n) => updated.commands.includes(n))
+  ];
+  const parts = [];
+  if (added.length) parts.push(`add ${added.join(", ")}`);
+  if (changed.length) parts.push(`update ${changed.join(", ")}`);
+  return `feat(${scopes.join(",")}): ${parts.join("; ")}`;
 }
 function selectionIntro(servers, commands) {
   if (!servers) {
@@ -646,7 +666,7 @@ function selectionIntro(servers, commands) {
     "and can type the commands: nobody installs, configures or copies anything."
   ];
 }
-function buildSelectionPrBody(subjects, commands, marketplaceName) {
+function buildSelectionPrBody(subjects, commands, marketplaceName, updated = NOTHING_UPDATED) {
   const single = subjects.length === 1 && !commands.length;
   const lines = selectionIntro(subjects.length, commands.length).map(
     (line) => line.replace("SERVER_NAME", subjects[0]?.entry.name ?? "")
@@ -686,6 +706,24 @@ function buildSelectionPrBody(subjects, commands, marketplaceName) {
       "",
       `- command: \`/${marketplaceName}:${command.name}\``,
       `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``
+    );
+  }
+  const changed = [
+    ...subjects.filter((s) => updated.servers.includes(s.entry.name)).map((s) => s.entry.name),
+    // Namespaced, like the bullet above and for the same reason: a bare `/<command>` is a
+    // name nobody can type once the plugin is installed. Two spellings of one command in
+    // one document leave the reviewer deciding which of them to believe.
+    ...commands.filter((c) => updated.commands.includes(c.name)).map((c) => `/${marketplaceName}:${c.name}`)
+  ];
+  if (changed.length) {
+    lines.push(
+      "",
+      changed.length === 1 ? "## This one replaces what the team has" : "## Some of these replace what the team has",
+      "",
+      `${changed.map((n) => `\`${n}\``).join(", ")} ${changed.length === 1 ? "is" : "are"} already in this repository, and`,
+      "the publisher was told so before asking for this. What is in the diff is the version on",
+      "their machine, whole: anything the team's copy gained since it landed is gone after the",
+      "merge, so read the removed lines as carefully as the added ones."
     );
   }
   if (commands.length) {
@@ -758,16 +796,16 @@ function finishMcpPrBody(lines, requiresEnv, hasServers, commandCount) {
   );
   return lines.join("\n");
 }
-function publishMcpServer(entry, team, git = runGit, forge = runForge) {
-  return publishTeamSelection({ servers: [entry] }, team, git, forge);
+function publishMcpServer(entry, team, git = runGit, forge = runForge, options = {}) {
+  return publishTeamSelection({ servers: [entry] }, team, git, forge, options);
 }
 function collisionMessage(name) {
-  return `the team repository already declares an MCP server named "${name}". Rename yours, or edit the team's .mcp.json directly.`;
+  return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
 }
 function commandCollisionMessage(name) {
-  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is; rename yours, or change theirs in the team repository.`;
+  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is.`;
 }
-function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
+function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
   const entries = selection.servers ?? [];
   const commandEntries = selection.commands ?? [];
   const single = entries.length === 1 && !commandEntries.length ? { serverName: entries[0].name } : {};
@@ -815,11 +853,13 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
     const target = join6(repoDir, TEAM_MCP_FILE);
     let merged = "";
     let collided = [];
+    let replacedServers = [];
     if (subjects.length) {
       try {
-        ({ merged, collided } = mergeServersIntoMcpJson(
+        ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
           existsSync2(target) ? readFileSync5(target, "utf8") : null,
-          subjects.map((s) => s.entry)
+          subjects.map((s) => s.entry),
+          (name) => mayUpdate(options, name)
         ));
       } catch (err) {
         return { ok: false, ...single, refused, error: String(err instanceof Error ? err.message : err) };
@@ -828,18 +868,31 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
     const collisions = [];
     for (const name of collided) {
       collisions.push(collisionMessage(name));
-      refused.push({ name, kind: "mcp", reason: collisionMessage(name) });
+      refused.push({ name, kind: "mcp", reason: collisionMessage(name), collision: true });
     }
     const going = subjects.filter((s) => !collided.includes(s.entry.name));
     const goingCommands = [];
+    const replacedCommands = [];
     for (const command of commands) {
       if (existsSync2(join6(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
-        collisions.push(commandCollisionMessage(command.name));
-        refused.push({ name: command.name, kind: "command", reason: commandCollisionMessage(command.name) });
-        continue;
+        if (!mayUpdate(options, command.name)) {
+          collisions.push(commandCollisionMessage(command.name));
+          refused.push({
+            name: command.name,
+            kind: "command",
+            reason: commandCollisionMessage(command.name),
+            collision: true
+          });
+          continue;
+        }
+        replacedCommands.push(command.name);
       }
       goingCommands.push(command);
     }
+    const updated = {
+      servers: replacedServers.filter((n) => going.some((s) => s.entry.name === n)),
+      commands: replacedCommands
+    };
     if (!going.length && !goingCommands.length) {
       return { ok: false, ...single, refused, error: collisions[0] ?? refused[0]?.reason ?? "nothing was left to share" };
     }
@@ -853,7 +906,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix;
     let version = null;
-    const title = buildSelectionPrTitle(names, commandNames);
+    const title = buildSelectionPrTitle(names, commandNames, updated);
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync2(target, merged);
@@ -888,7 +941,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
       team.repoUrl,
       branch,
       title,
-      buildSelectionPrBody(going, goingCommands, team.marketplaceName),
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated),
       repoDir,
       forge
     );
@@ -897,6 +950,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
       ...single,
       ...names.length ? { serverNames: names } : {},
       ...commandNames.length ? { commandNames } : {},
+      ...updated.servers.length || updated.commands.length ? { updated } : {},
       ...refused.length ? { refused } : {},
       branch,
       requiresEnv,
@@ -911,8 +965,9 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge) {
   }
 }
 function formatMcpShareResult(outcome, marketplaceName) {
+  const updated = outcome.updated?.servers.includes(outcome.serverName ?? "") ?? false;
   const lines = [
-    `Shared "${outcome.serverName}" with the team.`,
+    updated ? `Sent "${outcome.serverName}" to the team as an update to the one they already have.` : `Shared "${outcome.serverName}" with the team.`,
     "",
     `- branch: ${outcome.branch}`,
     // manualPrUrl returns null for a remote whose host it does not know how to build a
@@ -941,7 +996,7 @@ function formatMcpShareResult(outcome, marketplaceName) {
 
 // src/cli/mcp.ts
 function usage() {
-  console.error("usage: mcp.js [<server-name>]");
+  console.error("usage: mcp.js [<server-name>] [--update]");
   process.exit(2);
 }
 function find(servers, wanted) {
@@ -953,10 +1008,13 @@ function find(servers, wanted) {
 }
 function main() {
   const args = process.argv.slice(2);
-  if (args.length > 1 || args[0]?.startsWith("-")) usage();
+  const update = args.includes("--update");
+  const names = args.filter((a) => a !== "--update");
+  if (names.length > 1 || names[0]?.startsWith("-")) usage();
   const servers = readLocalServers();
-  const wanted = args[0];
+  const wanted = names[0];
   if (!wanted) {
+    if (update) usage();
     console.log(formatServerList(servers));
     if (!loadTeamConfig()) {
       console.log(
@@ -984,9 +1042,12 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  const result = publishMcpServer(entry, team);
+  const result = publishMcpServer(entry, team, void 0, void 0, update ? { update } : {});
   if (!result.ok) {
-    console.error(`error: ${result.error}`);
+    const taken = result.refused?.some((r) => r.collision && r.name === entry.name);
+    console.error(
+      taken ? `error: ${result.error} Run this again with --update to send yours as an update to theirs, or rename yours.` : `error: ${result.error}`
+    );
     process.exitCode = 1;
     return;
   }

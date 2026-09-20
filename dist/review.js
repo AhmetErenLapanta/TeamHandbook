@@ -3,7 +3,7 @@ import { readFileSync as readFileSync9 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
 
@@ -442,7 +442,7 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readdirSync as readdirSync4, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/queue.ts
@@ -638,16 +638,26 @@ function formatCandidateList(metas, now = Date.now(), label = "Pending") {
 }
 
 // src/lib/publish.ts
-function buildPrTitle(slug) {
-  return `feat(skill): add ${slug}`;
+function buildPrTitle(slug, update = false) {
+  return `feat(skill): ${update ? "update" : "add"} ${slug}`;
 }
-function buildPrBody(meta, grounded) {
+function buildPrBody(meta, grounded, update = false) {
   const lines = [
     meta.description,
     "",
     `- scope: \`${meta.scope}\``,
     `- gate score: ${meta.gate ? `${meta.gate.total}/10` : "n/a"}`
   ];
+  if (update) {
+    lines.push(
+      "",
+      "## This replaces the skill the team already has",
+      "",
+      "The publisher was told the team already had a skill by this name and chose to send",
+      "theirs as an update to it. Everything the team's copy said that this one does not say",
+      "is gone after the merge, including edits made in the team repository since it landed."
+    );
+  }
   if (meta.gate) {
     const scores = Object.entries(meta.gate.scores).map(([criterion, score]) => `${criterion} ${score}`).join(", ");
     if (scores) lines.push(`- criteria: ${scores}`);
@@ -693,6 +703,13 @@ function readGroundedCase(candidateDir) {
   } catch {
   }
   return null;
+}
+function mayUpdate(options, name) {
+  return options.update === true || Array.isArray(options.update) && options.update.includes(name);
+}
+function conflictingOptions(options) {
+  if (options.as === void 0 || !options.update) return null;
+  return "--as and --update answer the same refusal in different ways: --as sends this under a free name, --update replaces the skill it collided with. Pick one.";
 }
 function bumpPluginVersion(repoDir) {
   const file = join7(repoDir, ".claude-plugin", "plugin.json");
@@ -775,7 +792,11 @@ function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
     return { branch: retry.branch, learnedBranchPrefix: retry.prefix };
   }
 }
-function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge) {
+function skillCollisionMessage(name, chosen) {
+  const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
+  return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
+}
+function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge, options = {}) {
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
   try {
@@ -789,6 +810,12 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
   }
+  const conflict = conflictingOptions(options);
+  if (conflict) return { ok: false, error: conflict };
+  const skillSlug = options.as ?? meta.slug;
+  if (!isSafeSlug(skillSlug)) {
+    return { ok: false, error: `"${skillSlug}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, error: identity.error };
   const identityArgs = identity.args;
@@ -798,26 +825,32 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const slug = uniqueSlug(
-      meta.slug,
-      (s) => existsSync3(join7(repoDir, "skills", s)) || remoteBranches.has(`${prefix}${s}`)
-    );
-    let branch = `${prefix}${slug}`;
+    const skillDir = `skills/${skillSlug}`;
+    const occupied = existsSync3(join7(repoDir, skillDir));
+    if (occupied && !mayUpdate(options, skillSlug)) {
+      return {
+        ok: false,
+        collision: { kind: "skill", name: skillSlug },
+        error: skillCollisionMessage(skillSlug, options.as !== void 0)
+      };
+    }
+    const branchSlug = uniqueSlug(skillSlug, (s) => remoteBranches.has(`${prefix}${s}`));
+    let branch = `${prefix}${branchSlug}`;
     let learnedBranchPrefix;
     let version = null;
-    const skillDir = `skills/${slug}`;
-    const title = buildPrTitle(slug);
+    const title = buildPrTitle(skillSlug, occupied);
     try {
       git(["checkout", "-b", branch], repoDir);
+      if (occupied) rmSync3(join7(repoDir, skillDir), { recursive: true, force: true });
       copySkillPayload(
         candidateDir,
         join7(repoDir, skillDir),
-        slug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, slug)
+        skillSlug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, skillSlug)
       );
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, team, slug, remoteBranches);
+      const pushed = pushBranch(git, repoDir, branch, team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
@@ -831,16 +864,17 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
         )
       };
     }
-    const body = buildPrBody(meta, readGroundedCase(candidateDir));
+    const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
     const learned = learnedBranchPrefix ? { learnedBranchPrefix } : {};
+    const named = { skillDir, skillSlug, ...occupied ? { updatedExisting: true } : {} };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
-      return { ok: true, branch, skillDir, prUrl: pr.url, ...version ? { version } : {}, ...learned };
+      return { ok: true, branch, ...named, prUrl: pr.url, ...version ? { version } : {}, ...learned };
     }
     return {
       ok: true,
       branch,
-      skillDir,
+      ...named,
       manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0,
       ...version ? { version } : {},
       ...pr.error ? { prError: pr.error } : {},
@@ -869,8 +903,13 @@ function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
   if (origin === fallbackCwd) return "this project's .claude/skills";
   return `${basename2(origin)}'s .claude/skills (where it was captured, not this project)`;
 }
-function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir()) {
+function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
+  if (options.as !== void 0 && !isSafeSlug(options.as)) {
+    return { ok: false, error: `"${options.as}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
+  const conflict = conflictingOptions(options);
+  if (conflict) return { ok: false, error: conflict };
   const dir = join8(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
@@ -886,37 +925,75 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
         error: "no team configured \u2014 run /handbook:init or /handbook:join first, or approve with --to personal"
       };
     }
-    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge);
+    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
     if (delivered.learnedBranchPrefix) {
       saveTeamConfig({ ...team, branchPrefix: delivered.learnedBranchPrefix }, home);
     }
     return delivered;
   }
-  if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir);
-  return deliverSolo(dir, meta, fallbackCwd, decidedAt);
+  if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
+  return deliverSolo(dir, meta, fallbackCwd, decidedAt, options);
 }
-function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir()) {
-  const slug = uniqueSlug(meta.slug, (s) => existsSync4(join8(skillsDir, s)));
+function installLocally(dir, meta, skillsDir, options) {
+  const slug = options.as ?? meta.slug;
   const target = join8(skillsDir, slug);
+  const occupied = existsSync4(target);
+  const updatedExisting = occupied && mayUpdate(options, slug);
+  if (occupied && !updatedExisting) {
+    return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
+  }
   try {
     const skillMd = readFileSync5(join8(dir, "SKILL.md"), "utf8");
+    if (updatedExisting) rmSync4(target, { recursive: true, force: true });
     copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
-    return { ok: false, mode: "personal", meta, error: `delivery failed: ${String(err)}` };
+    return { error: `delivery failed: ${String(err)}` };
+  }
+  return { slug, target, updatedExisting };
+}
+function localCollisionMessage(name, skillsDir, chosen) {
+  const taken = `a skill named "${name}" is already installed at ${join8(skillsDir, name)}. Nothing was written.`;
+  const warning = "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
+  return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to replace the skill this candidate collided with. ${warning}` : `${taken} Approve again with --update to replace it, or with --as <name> to install this one under a different name. ${warning}`;
+}
+function namedAs(placed) {
+  return {
+    deliveredSlug: placed.slug,
+    ...placed.updatedExisting ? { updatedExisting: true } : {}
+  };
+}
+function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir(), options = {}) {
+  const placed = installLocally(dir, meta, skillsDir, options);
+  if ("error" in placed) {
+    return { ok: false, mode: "personal", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
   }
   const updated = {
     ...meta,
     status: "approved",
     decidedAt,
-    deliveredTo: target,
+    deliveredTo: placed.target,
     deliveredMode: "personal"
   };
   writeCandidateMeta(dir, updated);
-  return { ok: true, mode: "personal", meta: updated, deliveredTo: target };
+  return {
+    ok: true,
+    mode: "personal",
+    meta: updated,
+    deliveredTo: placed.target,
+    ...namedAs(placed)
+  };
 }
-function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
-  const published = publishCandidate(dir, meta, team, git, forge);
-  if (!published.ok) return { ok: false, mode: "team", meta, error: published.error };
+function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
+  const published = publishCandidate(dir, meta, team, git, forge, options);
+  if (!published.ok) {
+    return {
+      ok: false,
+      mode: "team",
+      meta,
+      error: published.error,
+      ...published.collision ? { collision: published.collision } : {}
+    };
+  }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
   const updated = { ...meta, status: "approved", decidedAt, deliveredTo, deliveredMode: "team" };
   writeCandidateMeta(dir, updated);
@@ -925,6 +1002,8 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
     mode: "team",
     meta: updated,
     deliveredTo,
+    ...published.skillSlug ? { deliveredSlug: published.skillSlug } : {},
+    ...published.updatedExisting ? { updatedExisting: true } : {},
     branch: published.branch,
     prUrl: published.prUrl,
     ...published.version ? { version: published.version } : {},
@@ -933,26 +1012,22 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge) {
     ...published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {}
   };
 }
-function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
+function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
   const originGone = !!meta.cwd && !existsSync4(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})` : void 0;
   const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
-  const slug = uniqueSlug(meta.slug, (s) => existsSync4(join8(skillsDir, s)));
-  const target = join8(skillsDir, slug);
-  try {
-    const skillMd = readFileSync5(join8(dir, "SKILL.md"), "utf8");
-    copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
-  } catch (err) {
-    return { ok: false, mode: "solo", meta, error: `delivery failed: ${String(err)}` };
+  const placed = installLocally(dir, meta, skillsDir, options);
+  if ("error" in placed) {
+    return { ok: false, mode: "solo", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
   }
   const updated = {
     ...meta,
     status: "approved",
     decidedAt,
-    deliveredTo: target,
+    deliveredTo: placed.target,
     deliveredMode: "solo"
   };
   writeCandidateMeta(dir, updated);
@@ -960,10 +1035,54 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt) {
     ok: true,
     mode: "solo",
     meta: updated,
-    deliveredTo: target,
+    deliveredTo: placed.target,
+    ...namedAs(placed),
     ...warning ? { warning } : {},
     ...originProject2 ? { originProject: originProject2 } : {}
   };
+}
+function formatApproveResult(slug, result) {
+  const name = result.deliveredSlug ?? slug;
+  const lines = [];
+  if (result.mode === "team") {
+    const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
+    const what = result.updatedExisting ? `Sent "${name}" to the team as an update to the skill they already had` : `Shared "${name}" with the team`;
+    if (result.prUrl) {
+      lines.push(`${what}: ${result.prUrl}`);
+      lines.push(`Merge that request and every teammate gets it at their next session.${bump}`);
+    } else {
+      lines.push(`${what} on branch ${result.branch}.${bump}`);
+      if (result.prError) {
+        lines.push(
+          `It could not open the request for you (${result.prError}) \u2014 install and sign in to gh or glab and it will next time.`
+        );
+      }
+      if (result.manualUrl) lines.push(`Open it here, then merge: ${result.manualUrl}`);
+    }
+    if (result.updatedExisting) {
+      lines.push("The merge replaces their copy, so review the removed lines too, not only the added ones.");
+    }
+    if (result.learnedBranchPrefix) {
+      lines.push(
+        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered \u2014 later skills use it straight away.`
+      );
+    }
+    return lines.join("\n");
+  }
+  if (result.mode === "personal") {
+    lines.push(
+      `Kept "${name}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`
+    );
+  } else {
+    if (result.warning) lines.push(`Note: ${result.warning}`);
+    const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
+    const commit = result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
+    lines.push(`Approved "${name}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
+  }
+  if (result.updatedExisting) {
+    lines.push(`This replaced the "${name}" that was already there.`);
+  }
+  return lines.join("\n");
 }
 
 // src/lib/sweep.ts
@@ -1219,13 +1338,13 @@ function formatSweepReport(report, dryRun) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 import { join as join10 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync4(join10(home, "pending"));
+    entries = readdirSync5(join10(home, "pending"));
   } catch {
     return 0;
   }
@@ -1275,7 +1394,7 @@ function lastPipelineRun(home = handbookHome()) {
 // src/cli/review.ts
 function usage() {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team]"
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>]"
   );
   process.exit(2);
 }
@@ -1340,37 +1459,27 @@ function showCandidate(home, slug) {
     console.log("(this candidate has no grounded case)");
   }
 }
-function approveOne(home, slug, to) {
-  const result = approveAndDeliver(home, slug, void 0, void 0, void 0, void 0, void 0, to);
+function approveOne(home, slug, to, options = {}) {
+  const result = approveAndDeliver(
+    home,
+    slug,
+    void 0,
+    void 0,
+    void 0,
+    void 0,
+    void 0,
+    to,
+    void 0,
+    options
+  );
   if (!result.ok) {
-    console.error(`error (${slug}): ${result.error}`);
+    console.error(
+      result.collision ? `not delivered (${slug}): ${result.error}` : `error (${slug}): ${result.error}`
+    );
+    process.exitCode = 1;
     return;
   }
-  if (result.mode === "team") {
-    const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
-    if (result.prUrl) {
-      console.log(`Shared "${slug}" with the team: ${result.prUrl}`);
-      console.log(`Merge that request and every teammate gets it at their next session.${bump}`);
-    } else {
-      console.log(`Shared "${slug}" with the team on branch ${result.branch}.${bump}`);
-      if (result.prError) console.log(`It could not open the request for you (${result.prError}) \u2014 install and sign in to gh or glab and it will next time.`);
-      if (result.manualUrl) console.log(`Open it here, then merge: ${result.manualUrl}`);
-    }
-    if (result.learnedBranchPrefix) {
-      console.log(
-        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered \u2014 later skills use it straight away.`
-      );
-    }
-  } else if (result.mode === "personal") {
-    console.log(
-      `Kept "${slug}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`
-    );
-  } else {
-    if (result.warning) console.log(`Note: ${result.warning}`);
-    const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
-    const commit = result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
-    console.log(`Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
-  }
+  console.log(formatApproveResult(slug, result));
 }
 function rejectOne(home, slug, never) {
   const result = decideCandidate(home, slug, "rejected", void 0, { mute: never });
@@ -1416,12 +1525,24 @@ async function main() {
   const all = args.includes("--all");
   const archived = args.includes("--archived");
   const dryRun = args.includes("--dry-run");
-  const inlineTo = args.find((a) => a.startsWith("--to="));
-  const toIndex = args.indexOf("--to");
-  const toRaw = inlineTo ? inlineTo.slice("--to=".length) : toIndex !== -1 ? args[toIndex + 1] : void 0;
+  const consumed = /* @__PURE__ */ new Set();
+  const valueOf = (flag) => {
+    const inline = args.find((a) => a.startsWith(`${flag}=`));
+    if (inline) return inline.slice(flag.length + 1);
+    const at = args.indexOf(flag);
+    if (at === -1) return void 0;
+    consumed.add(at + 1);
+    return args[at + 1];
+  };
+  const given = (flag) => args.some((a) => a === flag || a.startsWith(`${flag}=`));
+  const toRaw = valueOf("--to");
   const to = toRaw === "personal" || toRaw === "project" || toRaw === "team" ? toRaw : void 0;
-  if ((toIndex !== -1 || inlineTo) && !to) usage();
-  const positional = args.filter((a, i) => !a.startsWith("--") && (toIndex === -1 || i !== toIndex + 1));
+  if (given("--to") && !to) usage();
+  const as = valueOf("--as");
+  if (given("--as") && (!as || !isSafeSlug(as))) usage();
+  if (args.some((a) => a.startsWith("--update="))) usage();
+  const update = args.includes("--update");
+  const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
   if (cmd === "sweep") {
@@ -1465,8 +1586,10 @@ async function main() {
   }
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
+  if ((as || update) && slugs.length > 1) usage();
+  const options = { ...update ? { update } : {}, ...as ? { as } : {} };
   for (const slug of slugs) {
-    if (cmd === "approve") approveOne(home, slug, to);
+    if (cmd === "approve") approveOne(home, slug, to, options);
     else rejectOne(home, slug, never);
   }
 }

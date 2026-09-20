@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { approveAndDeliver, projectTargetLabel } from "../lib/deliver.js";
-import type { DeliveryTarget } from "../lib/deliver.js";
+import { approveAndDeliver, formatApproveResult, projectTargetLabel } from "../lib/deliver.js";
+import type { DeliveryOptions, DeliveryTarget } from "../lib/deliver.js";
 import {
   decideCandidate,
   formatCandidateList,
@@ -23,7 +23,7 @@ import { candidatesDir } from "../lib/skill-index.js";
 function usage(): never {
   console.error(
     "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
-      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team]",
+      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>]",
   );
   process.exit(2);
 }
@@ -111,50 +111,35 @@ function showCandidate(home: string, slug: string): void {
   }
 }
 
-function approveOne(home: string, slug: string, to?: DeliveryTarget): void {
-  const result = approveAndDeliver(home, slug, undefined, undefined, undefined, undefined, undefined, to);
+function approveOne(home: string, slug: string, to?: DeliveryTarget, options: DeliveryOptions = {}): void {
+  const result = approveAndDeliver(
+    home,
+    slug,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    to,
+    undefined,
+    options,
+  );
   if (!result.ok) {
-    console.error(`error (${slug}): ${result.error}`);
+    // A collision is the product asking a question, not the product breaking, and the two
+    // read differently to whoever is relaying this. Both are failures for the exit code,
+    // because in both cases nothing was delivered and the candidate is still waiting.
+    console.error(
+      result.collision
+        ? `not delivered (${slug}): ${result.error}`
+        : `error (${slug}): ${result.error}`,
+    );
+    // v0.7.0 exited 0 here, so anything reading the exit code called a refusal a success.
+    // That was survivable while a refusal meant "nothing happened"; it is not now that a
+    // refusal is a decision point the user has to be brought back to.
+    process.exitCode = 1;
     return;
   }
-  if (result.mode === "team") {
-    // What the reader needs is not "it worked" but what is now true and what is left for
-    // them: a request exists, it carries the version teammates update to, and nothing
-    // reaches anyone until a human merges it.
-    const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
-    if (result.prUrl) {
-      console.log(`Shared "${slug}" with the team: ${result.prUrl}`);
-      console.log(`Merge that request and every teammate gets it at their next session.${bump}`);
-    } else {
-      console.log(`Shared "${slug}" with the team on branch ${result.branch}.${bump}`);
-      if (result.prError) console.log(`It could not open the request for you (${result.prError}) — install and sign in to gh or glab and it will next time.`);
-      if (result.manualUrl) console.log(`Open it here, then merge: ${result.manualUrl}`);
-    }
-    // The branch is not named what it would normally be named. Say so once, rather than
-    // letting the reader find a different name than the one they expected in the forge.
-    if (result.learnedBranchPrefix) {
-      console.log(
-        `Your project refuses the default branch name, so this went out as ${result.branch}. ` +
-          "That prefix is remembered — later skills use it straight away.",
-      );
-    }
-  } else if (result.mode === "personal") {
-    console.log(
-      `Kept "${slug}" for you at ${result.deliveredTo}. ` +
-        `Claude will load it in every project from your next session.`,
-    );
-  } else {
-    if (result.warning) console.log(`Note: ${result.warning}`);
-    const loads = result.originProject
-      ? `Claude will load it in ${result.originProject} (where it was captured) next session`
-      : "Claude will load it next session";
-    // "this directory" is only the right repo to commit when the skill landed here; when
-    // it landed in the project it was captured in, that is the repo the skill travels with.
-    const commit = result.originProject
-      ? "Commit it there so the skill travels with that repo."
-      : "Commit this directory so the skill travels with the repo.";
-    console.log(`Approved "${slug}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
-  }
+  console.log(formatApproveResult(slug, result));
 }
 
 function rejectOne(home: string, slug: string, never: boolean): void {
@@ -214,14 +199,31 @@ async function main(): Promise<void> {
   const dryRun = args.includes("--dry-run");
   // Accept both `--to personal` and `--to=personal`. Silently ignoring the `=`
   // spelling would fall back to the candidate's suggested target — which is often
-  // "team" — so "keep this to myself" could publish to the team instead.
-  const inlineTo = args.find((a) => a.startsWith("--to="));
-  const toIndex = args.indexOf("--to");
-  const toRaw = inlineTo ? inlineTo.slice("--to=".length) : toIndex !== -1 ? args[toIndex + 1] : undefined;
+  // "team" — so "keep this to myself" could publish to the team instead. Written once
+  // for every flag that takes a value, because --as arrived with the same trap and the
+  // index bookkeeping below is what stops its value being read as a slug.
+  const consumed = new Set<number>();
+  const valueOf = (flag: string): string | undefined => {
+    const inline = args.find((a) => a.startsWith(`${flag}=`));
+    if (inline) return inline.slice(flag.length + 1);
+    const at = args.indexOf(flag);
+    if (at === -1) return undefined;
+    consumed.add(at + 1);
+    return args[at + 1];
+  };
+  const given = (flag: string): boolean => args.some((a) => a === flag || a.startsWith(`${flag}=`));
+  const toRaw = valueOf("--to");
   const to =
     toRaw === "personal" || toRaw === "project" || toRaw === "team" ? (toRaw as DeliveryTarget) : undefined;
-  if ((toIndex !== -1 || inlineTo) && !to) usage();
-  const positional = args.filter((a, i) => !a.startsWith("--") && (toIndex === -1 || i !== toIndex + 1));
+  if (given("--to") && !to) usage();
+  const as = valueOf("--as");
+  if (given("--as") && (!as || !isSafeSlug(as))) usage();
+  // `--update` takes no value. Accepting `--update=true` as true would mean accepting
+  // `--update=false` as true as well, so the spelling is refused out loud instead: silently
+  // ignoring it is what made "overwrite it" read as "give it a suffix".
+  if (args.some((a) => a.startsWith("--update="))) usage();
+  const update = args.includes("--update");
+  const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
   if (cmd === "sweep") {
@@ -269,8 +271,14 @@ async function main(): Promise<void> {
   // approve/reject accept one or more slugs, or --all for every pending candidate
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
+  // Both flags are answers to a refusal about ONE name, so neither may be spread over a
+  // batch. A new name would install the last candidate over the ones before it, and
+  // `--all --update` would overwrite every colliding skill the team has on a single word -
+  // which is the consent model of this whole command turned inside out.
+  if ((as || update) && slugs.length > 1) usage();
+  const options = { ...(update ? { update } : {}), ...(as ? { as } : {}) };
   for (const slug of slugs) {
-    if (cmd === "approve") approveOne(home, slug, to);
+    if (cmd === "approve") approveOne(home, slug, to, options);
     else rejectOne(home, slug, never);
   }
 }
