@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.9.3] - 2026-09-20
+
+- **Measurement-only change, nothing an installed copy does is different.** Eight of the
+  eval suite's graders checked whether a phrasing reached one specific command; a planned
+  merge of three commands into one will make that check pass more often on its own,
+  independent of whether the phrasing actually improved, so a comparable score had to be
+  taken before that merge lands. The graders now check whether a phrasing reaches the
+  shared flow those three commands are part of, not one exact name. Case count and
+  prompts are unchanged.
+
 ## [0.9.2] - 2026-09-20
 
 - **The PR template asked for a commit style this repository has never used.** It wanted
