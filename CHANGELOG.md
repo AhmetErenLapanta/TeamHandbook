@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.8.1] - 2026-09-20
+
+- **The notice that tells a teammate what's new named a command they couldn't type.**
+  0.7.0 let a team send its own slash commands, but the SessionStart script `/handbook:init`
+  writes into a new team repository never learned about that third kind: it still counted
+  only skills and MCP servers, so a merged command arrived without a word about it. Where it
+  did name one, in the merge request body a shared command travels in, it printed the bare
+  command name, and a bare `/name` is not how a plugin command is actually called. Both now
+  count and print commands the same way skills and servers already were, namespaced as
+  `/<plugin>:<name>`, the form that is actually callable. This only reaches repositories
+  `/handbook:init` sets up from here on; a team repository already scaffolded keeps the
+  script it was given.
+
 ## [0.8.0] - 2026-09-20
 
 - **A team's shared MCP server could sit unconnected and `/handbook:doctor` said nothing.**
