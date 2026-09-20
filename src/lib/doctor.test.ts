@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doctorExitCode, formatDoctor, runDoctor } from "./doctor.js";
@@ -137,6 +137,204 @@ describe("runDoctor", () => {
     expect(byName(bad, "team repo").level).toBe("fail");
     expect(byName(bad, "team repo").detail).toContain("publickey");
     expect(doctorExitCode(bad)).toBe(1);
+  });
+});
+
+describe("doctor team MCP server checks", () => {
+  let marketRoot: string;
+  beforeEach(() => {
+    marketRoot = mkdtempSync(join(tmpdir(), "handbook-doctor-market-"));
+  });
+  afterEach(() => {
+    rmSync(marketRoot, { recursive: true, force: true });
+  });
+
+  function writeMcpJson(marketplaceName: string, content: string): void {
+    const dir = join(marketRoot, marketplaceName);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".mcp.json"), content);
+  }
+
+  it("is absent in solo mode (no team configured)", () => {
+    const report = runDoctor(home, happyRunner, marketRoot);
+    expect(report.checks.find((c) => c.name === "team MCP servers")).toBeUndefined();
+  });
+
+  it("given the team has not shared a server yet, when checked, then it is green rather than a warning", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    // init.ts only creates .mcp.json once the team shares its first server — a fresh
+    // team install has no such file, and that must not be reported as a fault.
+    const report = runDoctor(home, happyRunner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("ok");
+    expect(byName(report, "team MCP servers").detail).toContain("has not shared");
+  });
+
+  it("treats a declared-but-empty mcpServers map the same as no file (measured on a real install: thedotmack/.mcp.json ships as {\"mcpServers\": {}})", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: {} }));
+    const report = runDoctor(home, happyRunner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("ok");
+    expect(byName(report, "team MCP servers").detail).toContain("no servers");
+  });
+
+  it("reports a plugin-declared server as connected, matching the plugin:<name>:<server> prefix a real install uses", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "slack" }, home);
+    writeMcpJson("slack", JSON.stringify({ mcpServers: { slack: { url: "https://mcp.slack.com/mcp" } } }));
+    // Verbatim line from `claude mcp list` captured on a live, real install (2026-09-19,
+    // Claude Code CLI) — not a synthetic fixture.
+    const runner: CommandRunner = (cmd, args) => {
+      if (cmd === "claude" && args[0] === "mcp") {
+        return "Checking MCP server health…\n\nplugin:slack:slack: https://mcp.slack.com/mcp (HTTP) - ✔ Connected\n";
+      }
+      throw new Error(`unexpected command ${cmd} ${args.join(" ")}`);
+    };
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("ok");
+    expect(byName(report, "team MCP servers").detail).toContain("connected");
+  });
+
+  // Guards against a bare-name fallback in the matcher (removed after being found to
+  // let a personal server that merely SHARES A NAME with a never-installed team server
+  // — "notion" is a realistic collision — read as the team's server connecting: a
+  // false "connected" for a server that was never even pulled onto this machine).
+  // Confirmed against the old fallback line directly: temporarily restoring
+  // `?? statuses.get(name)` and running just this test produced
+  // {"level":"ok","detail":"notion: connected"}. Matching must require the exact
+  // plugin:<marketplaceName>: prefix; a bare-name hit is unknown.
+  it("does not mistake an unrelated personal server for the team's never-installed one, even when the names collide", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { notion: { url: "https://mcp.notion.com/mcp" } } }));
+    // No "plugin:acme:notion" line — the team's copy was never installed on this
+    // machine — but the user's own, entirely unrelated "notion" server IS connected.
+    const runner: CommandRunner = (cmd, args) =>
+      cmd === "claude" && args[0] === "mcp" ? "notion: https://mcp.notion.com/mcp - ✔ Connected\n" : "";
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).not.toBe("ok");
+    expect(byName(report, "team MCP servers").detail).not.toContain("connected");
+    expect(byName(report, "team MCP servers").detail).toContain("unknown");
+  });
+
+  // A server that is installed but not authenticated is a normal, temporary setup
+  // step, not a broken install, so this must warn — the same severity checkForge uses
+  // for the same class of situation ("installed but not finished authenticating") —
+  // rather than fail the whole doctor run.
+  it("warns, naming the reason, when a shared server needs authentication — consistent with checkForge's severity for the same situation", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: { url: "https://billing.example.com/mcp" } } }));
+    // The status text itself ("Needs authentication") is verbatim from a real
+    // `claude mcp list` run; the plugin:acme:billing prefix is constructed for this
+    // test since no real team-shared server was in that state to capture. Based on
+    // happyRunner so every OTHER check stays healthy and only the MCP check's own
+    // severity is under test.
+    const runner: CommandRunner = (cmd, args) => {
+      if (cmd === "claude" && args[0] === "mcp") return "plugin:acme:billing: https://billing.example.com/mcp - ! Needs authentication\n";
+      return happyRunner(cmd, args, 0);
+    };
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+    expect(byName(report, "team MCP servers").detail).toContain("Needs authentication");
+    expect(doctorExitCode(report)).toBe(0);
+  });
+
+  it("fails and names the reason for a server that failed to connect", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: { url: "https://billing.example.com/mcp" } } }));
+    const runner: CommandRunner = (cmd, args) =>
+      cmd === "claude" && args[0] === "mcp" ? "plugin:acme:billing: https://billing.example.com/mcp - ✘ Failed to connect\n" : "";
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("fail");
+    expect(byName(report, "team MCP servers").detail).toContain("Failed to connect");
+  });
+
+  it("never reports a server as connected when `claude mcp list` throws", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {} } }));
+    const runner: CommandRunner = (cmd, args) => {
+      if (cmd === "claude" && args[0] === "mcp") throw new Error("spawn claude ENOENT");
+      return "";
+    };
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+    expect(byName(report, "team MCP servers").detail).toContain("unknown");
+  });
+
+  it("never reports a server as connected when `claude mcp list` returns nothing", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {} } }));
+    const runner: CommandRunner = (cmd, args) => (cmd === "claude" && args[0] === "mcp" ? "" : "");
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+    expect(byName(report, "team MCP servers").detail).toContain("unknown");
+  });
+
+  it("never reports a server as connected when `claude mcp list` returns an unrecognized format", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {} } }));
+    // Synthetic — this is what a genuinely reformatted CLI output would look like, not
+    // captured from a real run. The point being proven is that a non-matching payload
+    // never collapses to "connected".
+    const runner: CommandRunner = (cmd, args) =>
+      cmd === "claude" && args[0] === "mcp" ? '{"servers":[{"name":"billing","status":"up"}]}' : "";
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+    expect(byName(report, "team MCP servers").detail).toContain("unknown");
+  });
+
+  it("warns unknown for a declared server absent from an otherwise-parseable listing", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {}, other: {} } }));
+    const runner: CommandRunner = (cmd, args) =>
+      cmd === "claude" && args[0] === "mcp" ? "plugin:acme:other: https://other.example.com/mcp - ✔ Connected\n" : "";
+    const report = runDoctor(home, runner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+    expect(byName(report, "team MCP servers").detail).toContain("unknown");
+  });
+
+  it("reads a bare server map correctly even when one entry happens to be named mcpServers", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    // A bare map (no wrapper) whose own server is literally called "mcpServers" must not
+    // be misread as the {"mcpServers": {...}} wrapper — mcp.ts's reader guards this with
+    // a plain-object check, and this check must match it exactly.
+    writeMcpJson("acme", JSON.stringify({ mcpServers: "not-a-server-map", billing: { url: "https://billing.example.com/mcp" } }));
+    const runner: CommandRunner = (cmd, args) =>
+      cmd === "claude" && args[0] === "mcp" ? "plugin:acme:billing: https://billing.example.com/mcp - ✔ Connected\n" : "";
+    const report = runDoctor(home, runner, marketRoot);
+    // "billing" is read correctly; the pathological "mcpServers" key is itself a bare
+    // entry with no matching listing line, so it is correctly unknown rather than
+    // silently dropped or mistaken for the wrapper.
+    expect(byName(report, "team MCP servers").detail).toContain("billing: connected");
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+  });
+
+  it("warns on invalid JSON in .mcp.json rather than guessing", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", "{not json");
+    const report = runDoctor(home, happyRunner, marketRoot);
+    expect(byName(report, "team MCP servers").level).toBe("warn");
+    expect(byName(report, "team MCP servers").detail).toContain("not valid JSON");
+  });
+
+  // Root ignores the permission bit entirely, so chmod 0o000 would not reproduce the
+  // fault below. Skipped visibly (not a silently-passing no-op assertion) when running
+  // as root — vitest reports it as "skipped", not "passed".
+  const runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
+
+  // An unreadable file (permission denied) is a different fault than invalid JSON, and
+  // must be named as such rather than reported as "not valid JSON".
+  it.skipIf(runningAsRoot)("distinguishes an unreadable .mcp.json (e.g. permission denied) from invalid JSON", () => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
+    writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {} } }));
+    const mcpFile = join(marketRoot, "acme", ".mcp.json");
+    chmodSync(mcpFile, 0o000);
+    try {
+      const report = runDoctor(home, happyRunner, marketRoot);
+      const detail = byName(report, "team MCP servers").detail;
+      expect(byName(report, "team MCP servers").level).toBe("warn");
+      expect(detail).toContain("cannot read");
+      expect(detail).not.toContain("not valid JSON");
+    } finally {
+      chmodSync(mcpFile, 0o644);
+    }
   });
 });
 
