@@ -5,7 +5,8 @@ writing a command or skill description, which is the whole reason it exists: a
 description written against a sentence stops measuring routing and starts measuring
 string matching, and that has already happened once, to `team-mcp-settings`.
 
-Product owns these sentences and keeps the sources sealed outside this repository.
+Product owns these sentences and keeps the source list outside this repository, so that
+writing a description cannot start from the list the number is measured against.
 
 | | routing sentences | must route nowhere | tag |
 |---|---|---|---|
@@ -64,8 +65,9 @@ set or nowhere, not here.
 Twelve of the twenty cases carry a `prior.jsonl`, because their sentence leans on
 something it does not itself supply. Two kinds, and they are not equally solid:
 
-- **A conversational antecedent.** "Arkadaşlar bir adres attı" needs the address. The
-  prior turns are the conversation it refers to, which is what actually happened.
+- **A conversational antecedent.** `t-address-posted-tr` needs the address its sentence
+  points at. The prior turns are the conversation it refers to, which is what actually
+  happened.
 - **Product or filesystem state**, such as a configured MCP server or a skill on disk.
   The harness cannot pre-seed that: `add_dirs` grants reads without putting anything in
   the working directory, and `scaffold_script` runs outside the sandbox. So the state is
@@ -78,8 +80,8 @@ something it does not itself supply. Two kinds, and they are not equally solid:
   plugin's SessionStart notice prints that command name into every run. Same caution, in
   weaker form, for `t-nothing-reaching-en`, which targets `doctor`.
 - **`t-this-order-tr` and `t-way-we-did-en` are ahead of the product.** They ask for a
-  team rule rather than a personal note, which is the framing a later change will carry. A low
-  score beforehand is that change's baseline, not a defect.
+  team rule rather than a personal note, and no command description offers that yet. A
+  low score from these two is the baseline for that work, not a defect in what exists.
 - **`t-what-reached-team-tr` and `fp-deploy-status-en` are a deliberate pair.** Both ask
   for status, one about the plugin and one about CI. A description that cannot separate
   them misses both.
