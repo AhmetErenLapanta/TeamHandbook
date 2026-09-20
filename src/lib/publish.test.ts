@@ -826,9 +826,12 @@ describe("buildMcpPrBody / formatMcpShareResult", () => {
     const body = buildSelectionPrBody(
       [{ entry: stdio, audit: auditServer(stdio.config) }],
       [{ name: "explain", content: "Explain it.\n" }],
+      "acme-handbook",
     );
 
-    expect(body).toContain("- command: `/explain`");
+    // a bare `/explain` would not resolve once the plugin is installed - Claude Code
+    // namespaces every installed plugin's commands as /<plugin>:<command>
+    expect(body).toContain("- command: `/acme-handbook:explain`");
     expect(body).toContain("- file: `commands/explain.md`");
     // a merged command is read by Claude as instructions on a teammate's machine, which
     // is a consent fact the reviewer cannot get from the title
@@ -841,7 +844,7 @@ describe("buildMcpPrBody / formatMcpShareResult", () => {
   });
 
   it("given a request of commands alone, when it is written, then it claims nothing about servers it does not carry", () => {
-    const body = buildSelectionPrBody([], [{ name: "explain", content: "Explain it.\n" }]);
+    const body = buildSelectionPrBody([], [{ name: "explain", content: "Explain it.\n" }], "acme-handbook");
 
     expect(body).toContain("Adds one slash command to this plugin");
     expect(body).not.toContain("`headers`");

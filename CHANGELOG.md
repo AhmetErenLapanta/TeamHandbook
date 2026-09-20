@@ -4,6 +4,51 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.8.1] - 2026-09-20
+
+- **The notice that tells a teammate what's new named a command they couldn't type.**
+  0.7.0 let a team send its own slash commands, but the SessionStart script `/handbook:init`
+  writes into a new team repository never learned about that third kind: it still counted
+  only skills and MCP servers, so a merged command arrived without a word about it. Where it
+  did name one, in the merge request body a shared command travels in, it printed the bare
+  command name, and a bare `/name` is not how a plugin command is actually called. Both now
+  count and print commands the same way skills and servers already were, namespaced as
+  `/<plugin>:<name>`, the form that is actually callable. This only reaches repositories
+  `/handbook:init` sets up from here on; a team repository already scaffolded keeps the
+  script it was given.
+
+## [0.8.0] - 2026-09-20
+
+- **A team's shared MCP server could sit unconnected and `/handbook:doctor` said nothing.**
+  Merging a server into the team repository only gets it onto a teammate's machine; nothing
+  checked whether it actually connected there, so a broken server looked the same as a
+  working one until someone noticed a tool was missing mid-session. `doctor` now reads the
+  team's `.mcp.json` and cross-checks it against `claude mcp list`, one line per declared
+  server. When the connection state can't be read, it says unknown rather than guessing
+  connected, and it does not mistake an unrelated personal server for the team's
+  never-installed one just because the two happen to share a name.
+
+## [0.7.2] - 2026-09-19
+
+- **Three commands still described a screen that had grown past them.** 0.7.0 added
+  slash commands as a third kind `/handbook:migrate` could send, alongside skills and MCP
+  servers, but the routing description on `/handbook:migrate`, `/handbook:mcp`, and
+  `/handbook:share-skill` kept saying the screen held only two. A sentence about sharing a
+  command would route nowhere, or to the wrong command. All three now say commands travel
+  too.
+
+## [0.7.1] - 2026-09-19
+
+- **The instructions an agent needs before touching this repository were not written
+  down.** `CLAUDE.md` described the layout and left the rest to be inferred: which
+  functions take the handbook root as a parameter so a test can hand them a temporary
+  directory, why comments here carry the reason rather than a restatement, and which
+  files deliberately keep non-English text because translating them deletes what they
+  measure. It now says those, and it says where to look before changing a description, a
+  security promise, or anything under `dist/`. An `AGENTS.md` points at the same file for
+  tools that look for that name; it holds no instructions of its own, because two copies
+  of a rule means one of them is wrong later.
+
 ## [0.7.0] - 2026-09-19
 
 - **The slash commands a team types every day could not be sent to the team.** A team

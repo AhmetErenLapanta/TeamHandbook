@@ -585,7 +585,9 @@ export function buildMcpPrBody(entry: McpServerEntry, audit: McpAudit): string {
 }
 
 export function buildMcpServersPrBody(subjects: McpShareSubject[]): string {
-  return buildSelectionPrBody(subjects, []);
+  // No commands ever travel through this path, so the marketplace name that would
+  // namespace them is never read.
+  return buildSelectionPrBody(subjects, [], "");
 }
 
 /** A command that cleared the audit, with the text that cleared it. */
@@ -632,10 +634,17 @@ function selectionIntro(servers: number, commands: number): string[] {
  * endpoint or the exact command, and every variable the teammate must supply are stated in
  * full. A command means Claude reads a teammate's file as its instructions when they type
  * a word. Neither is reviewable by reading the title, so neither is summarised away.
+ *
+ * `marketplaceName` is the plugin every merged command is typed under: Claude Code
+ * namespaces an installed plugin's commands as `/<plugin>:<command>`, the same form
+ * migrate.ts's own post-share message promises the sharer ("the commands are typed as
+ * /<marketplaceName>:<name>"). A bare `/<command>` here would tell the reviewer a name
+ * that does not resolve once the plugin is installed.
  */
 export function buildSelectionPrBody(
   subjects: McpShareSubject[],
   commands: CommandSubject[],
+  marketplaceName: string,
   updated: UpdatedNames = NOTHING_UPDATED,
 ): string {
   const single = subjects.length === 1 && !commands.length;
@@ -676,11 +685,18 @@ export function buildSelectionPrBody(
     );
   }
   for (const command of commands) {
-    lines.push("", `- command: \`/${command.name}\``, `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``);
+    lines.push(
+      "",
+      `- command: \`/${marketplaceName}:${command.name}\``,
+      `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``,
+    );
   }
   const changed = [
     ...subjects.filter((s) => updated.servers.includes(s.entry.name)).map((s) => s.entry.name),
-    ...commands.filter((c) => updated.commands.includes(c.name)).map((c) => c.name),
+    // Namespaced, like the bullet above and for the same reason: a bare `/<command>` is a
+    // name nobody can type once the plugin is installed. Two spellings of one command in
+    // one document leave the reviewer deciding which of them to believe.
+    ...commands.filter((c) => updated.commands.includes(c.name)).map((c) => `/${marketplaceName}:${c.name}`),
   ];
   if (changed.length) {
     // Said in its own section rather than as a word in the title: approving an addition and
@@ -1060,8 +1076,14 @@ export function publishTeamSelection(
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const body = buildSelectionPrBody(going, goingCommands, updated);
-    const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
+    const pr = openPr(
+      team.repoUrl,
+      branch,
+      title,
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated),
+      repoDir,
+      forge,
+    );
     return {
       ok: true,
       ...single,

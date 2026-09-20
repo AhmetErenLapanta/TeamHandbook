@@ -666,7 +666,7 @@ function selectionIntro(servers, commands) {
     "and can type the commands: nobody installs, configures or copies anything."
   ];
 }
-function buildSelectionPrBody(subjects, commands, updated = NOTHING_UPDATED) {
+function buildSelectionPrBody(subjects, commands, marketplaceName, updated = NOTHING_UPDATED) {
   const single = subjects.length === 1 && !commands.length;
   const lines = selectionIntro(subjects.length, commands.length).map(
     (line) => line.replace("SERVER_NAME", subjects[0]?.entry.name ?? "")
@@ -702,11 +702,18 @@ function buildSelectionPrBody(subjects, commands, updated = NOTHING_UPDATED) {
     );
   }
   for (const command of commands) {
-    lines.push("", `- command: \`/${command.name}\``, `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``);
+    lines.push(
+      "",
+      `- command: \`/${marketplaceName}:${command.name}\``,
+      `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``
+    );
   }
   const changed = [
     ...subjects.filter((s) => updated.servers.includes(s.entry.name)).map((s) => s.entry.name),
-    ...commands.filter((c) => updated.commands.includes(c.name)).map((c) => c.name)
+    // Namespaced, like the bullet above and for the same reason: a bare `/<command>` is a
+    // name nobody can type once the plugin is installed. Two spellings of one command in
+    // one document leave the reviewer deciding which of them to believe.
+    ...commands.filter((c) => updated.commands.includes(c.name)).map((c) => `/${marketplaceName}:${c.name}`)
   ];
   if (changed.length) {
     lines.push(
@@ -930,8 +937,14 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const body = buildSelectionPrBody(going, goingCommands, updated);
-    const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
+    const pr = openPr(
+      team.repoUrl,
+      branch,
+      title,
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated),
+      repoDir,
+      forge
+    );
     return {
       ok: true,
       ...single,

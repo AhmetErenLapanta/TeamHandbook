@@ -1,7 +1,7 @@
 // src/lib/doctor.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -53,6 +53,10 @@ function readCounters(home = handbookHome()) {
   }
   return base;
 }
+
+// src/lib/init.ts
+import { homedir as homedir2 } from "node:os";
+import { dirname, join as join4 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync3 } from "node:fs";
@@ -155,6 +159,9 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+function marketplacesRoot() {
+  return join4(homedir2(), ".claude", "plugins", "marketplaces");
+}
 
 // src/lib/harvest.ts
 var defaultHarvestConfig = {
@@ -191,28 +198,28 @@ function loadHarvestConfig(home = handbookHome()) {
 
 // src/lib/status.ts
 import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname, join as join5 } from "node:path";
+import { dirname as dirname2, join as join6 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/notify.ts
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/pipeline.ts
-import { basename, join as join4 } from "node:path";
+import { basename, join as join5 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join4(home, "pipeline.log");
+  return join5(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
 // src/lib/status.ts
 function pluginVersion() {
-  const here = dirname(fileURLToPath(import.meta.url));
+  const here = dirname2(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(
-        readFileSync4(join5(here, up, ".claude-plugin", "plugin.json"), "utf8")
+        readFileSync4(join6(here, up, ".claude-plugin", "plugin.json"), "utf8")
       );
       if (typeof parsed?.version === "string") return parsed.version;
     } catch {
@@ -316,7 +323,7 @@ function checkGitIdentity(home, run) {
   }
 }
 function checkHomeWritable(home) {
-  const probe = join6(home, `.doctor-probe-${process.pid}`);
+  const probe = join7(home, `.doctor-probe-${process.pid}`);
   try {
     mkdirSync3(home, { recursive: true });
     writeFileSync2(probe, "ok");
@@ -327,7 +334,7 @@ function checkHomeWritable(home) {
   }
 }
 function checkConfig(home) {
-  const file = join6(home, "config.json");
+  const file = join7(home, "config.json");
   if (!existsSync2(file)) return ok("config", "no config.json (defaults apply)");
   try {
     const parsed = JSON.parse(readFileSync5(file, "utf8"));
@@ -362,10 +369,10 @@ function remoteDistributionState(url, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", url, dir], 25e3);
-    const version = JSON.parse(readFileSync5(join6(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync5(join7(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync3(join6(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync3(join7(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     return typeof version === "string" ? { version, skillCount } : null;
@@ -413,6 +420,85 @@ function checkForge(home, run) {
     );
   }
 }
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function declaredMcpServerNames(mcpFile) {
+  let raw;
+  try {
+    raw = readFileSync5(mcpFile, "utf8");
+  } catch {
+    return { error: "unreadable" };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { error: "invalid-json" };
+  }
+  if (!isPlainObject(parsed)) return { error: "invalid-json" };
+  const map = isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+  return { names: Object.keys(map) };
+}
+var MCP_LIST_LINE = /^(.+?):\s.*[-–]\s*(✔|✘|!)\s*(.+)$/;
+function parseMcpListing(output) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = MCP_LIST_LINE.exec(line);
+    if (!match) continue;
+    const [, name, mark, detail] = match;
+    const state = mark === "\u2714" ? "connected" : mark === "!" ? "needs-auth" : "failed";
+    byName.set(name.trim(), { state, detail: detail.trim() });
+  }
+  return byName;
+}
+function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  if (!team) return null;
+  const mcpFile = join7(marketRoot, team.marketplaceName, ".mcp.json");
+  if (!existsSync2(mcpFile)) {
+    return ok("team MCP servers", "the team has not shared an MCP server yet");
+  }
+  const declared = declaredMcpServerNames(mcpFile);
+  if ("error" in declared) {
+    return declared.error === "unreadable" ? warn("team MCP servers", `cannot read ${mcpFile} \u2014 connection state unknown`) : warn("team MCP servers", `${mcpFile} is not valid JSON \u2014 cannot verify connection state`);
+  }
+  if (declared.names.length === 0) {
+    return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
+  }
+  let listing;
+  try {
+    listing = run("claude", ["mcp", "list"], 2e4);
+  } catch (err) {
+    const message = String(err instanceof Error ? err.message : err).split("\n")[0];
+    return warn("team MCP servers", `\`claude mcp list\` failed \u2014 connection state unknown: ${message}`);
+  }
+  const statuses = parseMcpListing(listing);
+  if (statuses.size === 0) {
+    return warn(
+      "team MCP servers",
+      "`claude mcp list` returned nothing this check recognizes \u2014 connection state unknown (never assumed connected)"
+    );
+  }
+  const results = declared.names.map((name) => {
+    const status = statuses.get(`plugin:${team.marketplaceName}:${name}`);
+    if (!status) return { name, state: "unknown", detail: "not listed by `claude mcp list`" };
+    return { name, state: status.state, detail: status.detail };
+  });
+  const summary = results.map((r) => `${r.name}: ${r.state === "connected" ? "connected" : r.detail}`).join("; ");
+  if (results.some((r) => r.state === "failed")) {
+    return fail("team MCP servers", summary);
+  }
+  if (results.some((r) => r.state === "unknown")) {
+    return warn("team MCP servers", `connection state unknown for at least one server \u2014 ${summary}`);
+  }
+  if (results.some((r) => r.state === "needs-auth")) {
+    return warn("team MCP servers", summary);
+  }
+  return ok("team MCP servers", summary);
+}
 function checkLastRun(home) {
   const last = lastPipelineRun(home);
   if (!last) return ok("gate pipeline", "no runs yet (nothing recurred or was captured manually)");
@@ -421,7 +507,7 @@ function checkLastRun(home) {
     const why = reason ? ` \u2014 ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${join6(home, "pipeline.log")})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${join7(home, "pipeline.log")})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -431,10 +517,10 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures \u2014 recoverable in ${join6(home, "abandoned.jsonl")} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures \u2014 recoverable in ${join7(home, "abandoned.jsonl")} once claude works again`
   );
 }
-function runDoctor(home = handbookHome(), run = runCommand) {
+function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot()) {
   const checks = [
     checkNode(),
     checkClaudeCli(run, home),
@@ -447,6 +533,8 @@ function runDoctor(home = handbookHome(), run = runCommand) {
   if (identity) checks.push(identity);
   const forge = checkForge(home, run);
   if (forge) checks.push(forge);
+  const mcpServers = checkTeamMcpServers(home, run, marketRoot);
+  if (mcpServers) checks.push(mcpServers);
   checks.push(checkLastRun(home));
   const abandoned = checkAbandoned(home);
   if (abandoned) checks.push(abandoned);
