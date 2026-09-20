@@ -835,8 +835,8 @@ export function publishMcpServers(
  * /handbook:mcp acts on the one server it was given and takes a bare `--update`, while
  * /handbook:migrate acts on a selection and takes `--update <name>`, refusing the bare
  * form outright. A single sentence here would be wrong in one of those two, and a refusal
- * that names a command which fails when you run it is the exact defect this card was
- * opened for. So the caller appends the route in its own words, next to the refusal it
+ * that names a command which fails when you run it is the exact defect this function
+ * exists to avoid. So the caller appends the route in its own words, next to the refusal it
  * prints: src/cli/mcp.ts for one server, formatMigrateResult for a selection.
  */
 function collisionMessage(name: string): string {

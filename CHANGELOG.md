@@ -486,7 +486,7 @@ error-hunter and became a session-harvesting, personal-first learning layer.
 - **Weekly digest**: once every 7 days, what the week produced.
 - **New privacy surface**: the harvest reads Claude Code's session transcript. Disable
   with `{"harvest": {"enabled": false}}` or `{"gate": {"auto": false}}`. See SECURITY.md.
-- **Removed**: recurrence-promotion (K8). Recurrence is now one of five score inputs,
+- **Removed**: recurrence-promotion. Recurrence is now one of five score inputs,
   not a precondition. `/handbook:learn` keeps its 7/10 advisory score.
 - **New command**: `/handbook:leave` clears the team binding.
 
