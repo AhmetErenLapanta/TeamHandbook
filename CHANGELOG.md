@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.7.2] - 2026-09-19
+
+- **Three commands still described a screen that had grown past them.** 0.7.0 added
+  slash commands as a third kind `/handbook:migrate` could send, alongside skills and MCP
+  servers, but the routing description on `/handbook:migrate`, `/handbook:mcp`, and
+  `/handbook:share-skill` kept saying the screen held only two. A sentence about sharing a
+  command would route nowhere, or to the wrong command. All three now say commands travel
+  too.
+
+## [0.7.1] - 2026-09-19
+
+- **The instructions an agent needs before touching this repository were not written
+  down.** `CLAUDE.md` described the layout and left the rest to be inferred: which
+  functions take the handbook root as a parameter so a test can hand them a temporary
+  directory, why comments here carry the reason rather than a restatement, and which
+  files deliberately keep non-English text because translating them deletes what they
+  measure. It now says those, and it says where to look before changing a description, a
+  security promise, or anything under `dist/`. An `AGENTS.md` points at the same file for
+  tools that look for that name; it holds no instructions of its own, because two copies
+  of a rule means one of them is wrong later.
+
 ## [0.7.0] - 2026-09-19
 
 - **The slash commands a team types every day could not be sent to the team.** A team
