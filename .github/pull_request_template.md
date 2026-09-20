@@ -1,4 +1,4 @@
-<!-- Title = the commit message after squash-merge. Format: CONTRIBUTING.md#pull-requests -->
+<!-- Title follows the commit message format: CONTRIBUTING.md#pull-requests -->
 
 **What & why**
 What this changes and the reason. For capture/gate/secret changes, name the
