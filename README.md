@@ -1,7 +1,8 @@
 # TeamHandbook
 
 **Your team's Claude Code setup, in one git repository.** One person creates it, everyone
-else connects once, and every skill and MCP server the team approves shows up on its own.
+else connects once, and every skill, MCP server, or slash command the team approves shows
+up on its own.
 
 [What your team gets](#what-your-team-gets) · [Install](#install) ·
 [Who approves what](#nothing-ships-until-you-say-so) ·
@@ -11,8 +12,8 @@ else connects once, and every skill and MCP server the team approves shows up on
 
 TeamHandbook is a Claude Code plugin that makes one git repository your team's shared
 setup: the skills everybody should have loaded, the MCP servers everybody needs
-configured. That repository is a Claude Code plugin marketplace, so Claude Code itself
-does the delivering.
+configured, the slash commands everybody should share. That repository is a Claude Code
+plugin marketplace, so Claude Code itself does the delivering.
 
 You explain a rule to Claude. Your teammates explain theirs, in their own sessions.
 Everybody learns something today, and nobody else finds out. What one of you learns
@@ -28,7 +29,7 @@ repository gets filled without anyone having to remember to fill it.
 
 ## What your team gets
 
-Three things can go from your machine to the handbook, and each one travels as a merge
+Four things can go from your machine to the handbook, and each one travels as a merge
 request that raises the repository's plugin version. That version is Claude Code's signal
 that the plugin moved, which is what makes every teammate's copy refresh.
 
@@ -37,11 +38,12 @@ that the plugin moved, which is what makes every teammate's copy refresh.
 | A skill the harvest proposed | `/handbook:review` | `skills/<name>/`, with the evidence it came from, plus a version bump |
 | A skill you wrote yourself | `/handbook:share-skill` | the same, through the same review |
 | An MCP server already configured on this machine | `/handbook:mcp` | an entry in the repo's `.mcp.json`, plus a version bump |
+| A slash command already installed on this machine | `/handbook:migrate` | `commands/<name>.md`, plus a version bump |
 
-Nothing else is automated, and the repository is an ordinary plugin repo: commands,
-agents and hooks can be committed to it by hand and reach everyone the same way, as long
-as the version is raised in the same commit. `/handbook:init --with-ci` scaffolds a job
-that does that on merge, for teams who work that way.
+Nothing else is automated, and the repository is an ordinary plugin repo: agents and
+hooks can be committed to it by hand and reach everyone the same way, as long as the
+version is raised in the same commit. `/handbook:init --with-ci` scaffolds a job that
+does that on merge, for teams who work that way.
 
 If your team drops TeamHandbook tomorrow, the repository and its distribution keep
 working: there is no lock-in.
@@ -167,10 +169,10 @@ with the two `/plugin` commands above. Whoever set the repository up cannot do i
 you and cannot write to your `~/.claude`; what they can do is merge things into a
 repository you chose to subscribe to.
 
-That subscription is standing, not item by item. A merged skill or MCP server raises the
-repository's plugin version, Claude Code refreshes on that, and it is there at your next
-session. The team plugin prints what landed ("2 new skill(s) and 1 new MCP server(s)
-since your last session"), so a server never gets wired up in silence.
+That subscription is standing, not item by item. A merged skill, MCP server, or slash
+command raises the repository's plugin version, Claude Code refreshes on that, and it is
+there at your next session. The team plugin prints what landed ("2 new skill(s) and 1
+new MCP server(s) since your last session"), so a server never gets wired up in silence.
 
 If you would rather see each change before it reaches you, do not subscribe: the skills
 are plain directories you can read in the repo and copy. `/plugin marketplace remove
@@ -230,7 +232,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
 | `/handbook:mcp [name]` | List your MCP servers; share one with the team so nobody sets it up by hand. |
 | `/handbook:share-skill` | Put a skill you wrote by hand into the review queue. |
-| `/handbook:migrate` | List every skill and MCP server on this machine; pick which ones the team gets. |
+| `/handbook:migrate` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
 | `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |
 | `/handbook:learn` | Capture something on demand instead of waiting for the session to end. |
 | `/handbook:status` | Queue, ledger, how often your skills actually fired, config. |

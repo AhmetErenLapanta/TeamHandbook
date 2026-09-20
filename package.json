@@ -1,7 +1,7 @@
 {
   "name": "teamhandbook",
   "version": "0.7.2",
-  "description": "The team handbook that writes itself \u2014 the corrections you give Claude, captured once and shared with your team as reviewed skills.",
+  "description": "Manage your team's Claude Code setup from one git repository: approve a skill, an MCP server, or a slash command once, and every teammate's copy picks it up.",
   "type": "module",
   "private": true,
   "license": "Apache-2.0",

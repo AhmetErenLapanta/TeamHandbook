@@ -158,9 +158,9 @@ version-bump:
 function readmeFor(name: string, url: string): string {
   return `# ${name}
 
-Your team's skill base: approved skills distilled by TeamHandbook from real coding
-sessions (error→fix moments and task procedures). This repository is a Claude Code
-plugin marketplace; every merge reaches all subscribed teammates automatically.
+Your team's shared setup: skills, MCP servers, and slash commands your team has
+approved through TeamHandbook. This repository is a Claude Code plugin marketplace;
+every merge reaches all subscribed teammates automatically.
 
 ## Access
 
@@ -280,7 +280,7 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
             {
               name,
               source: "./",
-              description: "Approved team skills distilled from real coding sessions by TeamHandbook.",
+              description: "Skills, MCP servers, and slash commands your team has approved through TeamHandbook.",
             },
           ],
         },
@@ -291,7 +291,7 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
       JSON.stringify(
         {
           name,
-          description: "Approved team skills distilled from real coding sessions by TeamHandbook.",
+          description: "Skills, MCP servers, and slash commands your team has approved through TeamHandbook.",
           version: "0.1.0",
         },
         null,

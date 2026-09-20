@@ -535,7 +535,7 @@ describe("initTeamRepo", () => {
       initTeamRepo(remote, "acme-skills", home, undefined, undefined, noForge);
 
       const readme = execFileSync("git", ["-C", remote, "show", "handbook/scaffold:README.md"], { encoding: "utf8" });
-      expect(readme).toContain("Your team's skill base");
+      expect(readme).toContain("Your team's shared setup");
     } finally {
       rmSync(remote, { recursive: true, force: true });
     }
