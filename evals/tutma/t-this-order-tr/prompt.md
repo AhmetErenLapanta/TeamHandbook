@@ -1,8 +1,8 @@
 ---
 description: >-
     Context that the sentence leans on but does not itself supply. Deliberately aimed at
-    the reframing a later change will carry: not "make this permanent" but "everyone should do it
-    this way". A low score here beforehand is its baseline, not a fault.
+    a reframing no command description offers yet: not "make this permanent" but
+    "everyone should do it this way". A low score here is that work's baseline, not a fault.
 expected_outcome: >-
     /handbook:learn. A procedure just completed, to be made the team's way of working.
 tags: [nl-tutma]
