@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.9.0] - 2026-09-20
+
+- **A second skill or server sent under a name the team already had just got a number
+  stapled to it.** `foo` collided with the team's `foo` and `foo-2` went out instead,
+  silently, for a skill, an MCP server, or a command alike — the sender never chose that
+  name and the team never approved it. That path is gone: a collision is refused outright,
+  named, and left exactly as it was. Refusing on its own would be a dead end, so two real
+  ways forward replace the silent copy. `--update` sends yours as a replacement for
+  theirs; `--as <name>` sends yours under a name that doesn't collide. They answer the
+  same refusal in opposite directions and can't both apply, so asking for both is refused
+  too. Approving several candidates at once with `--update` is refused outright — one flag
+  overwriting more than one of the team's skills or servers in a single, unreviewed
+  motion is the kind of mistake there's no undoing.
+
 ## [0.8.1] - 2026-09-20
 
 - **The notice that tells a teammate what's new named a command they couldn't type.**
