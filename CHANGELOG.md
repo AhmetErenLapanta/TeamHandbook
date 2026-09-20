@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.9.1] - 2026-09-20
+
+- **The product introduced itself as two different products.** `package.json` still
+  called this "the team handbook that writes itself," the original one-skill-at-a-time
+  pitch, while `plugin.json` and `marketplace.json` already said skills, MCP servers, and
+  slash commands together — the same repository describing itself differently depending
+  on which manifest you read. All three now carry the one sentence. The README a new team
+  repository is scaffolded with had the same split at a smaller scale: its two section
+  headings still said "skills" where the paragraph beneath them already meant all three
+  kinds, so they now say "the handbook."
+
 ## [0.9.0] - 2026-09-20
 
 - **A second skill or server sent under a name the team already had just got a number

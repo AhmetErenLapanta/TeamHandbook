@@ -1,6 +1,6 @@
 {
   "name": "teamhandbook",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Manage your team's Claude Code setup from one git repository: approve a skill, an MCP server, or a slash command once, and every teammate's copy picks it up.",
   "type": "module",
   "private": true,
