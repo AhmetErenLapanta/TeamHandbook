@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.9.5] - 2026-09-21
+
+- **No functional change; nothing an installed copy does is different.** A handful of
+  source comments and test fixtures carried references that meant nothing to a reader
+  outside the project. Those are gone; the reasoning the comments existed to preserve
+  stayed. Example text that used to name a real forge convention now uses one fictional,
+  consistent scheme throughout instead.
+
 ## [0.9.4] - 2026-09-20
 
 - **Measurement-only change, nothing an installed copy does is different.** A few files in
