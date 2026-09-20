@@ -88,9 +88,9 @@ const withCredential = {
   headers: { Authorization: "Bearer 8f2c41d9ab7e05631cd4a29f" },
 };
 
-// The other shape, and the one the header/env nets both miss: the provider puts the
-// secret in the endpoint itself. Nothing about this server is a literal in headers or
-// env, so only the URL scan turns it back.
+// The other shape, and the one measurement showed the header/env nets both miss: the
+// provider puts the secret in the endpoint itself. Nothing about this server is a
+// literal in headers or env, so only the URL scan turns it back.
 const TOKEN_IN_URL = "638a99e4-b962-4002-9f1c-1a2b3c4d5e6f";
 const withTokenInUrl = { type: "http", url: `https://mcp.example.com/${TOKEN_IN_URL}/mcp` };
 

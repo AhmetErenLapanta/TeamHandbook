@@ -30,8 +30,8 @@ exactly what the rule is.
    the project requires. Do not hand the user a flag to work out. Read the pattern, propose
    ONE prefix that satisfies it, and ask them to confirm or correct it with a
    multiple-choice question — for a pattern like
-   `((^(PROJ|OPS|ENG|SEC)-\d+(-[a-z0-9]+)*)|dev|master|prod|hotfix(.*))$` a working prefix is
-   `PROJ-1-`, and the repo's existing branches or recent commit messages usually show which
+   `((^(TEAM|OPS|ENG|SEC)-\d+(-[a-z0-9]+)*)|dev|master|prod|hotfix(.*))$` a working prefix is
+   `TEAM-1-`, and the repo's existing branches or recent commit messages usually show which
    key the team really uses. Then re-run with `--branch-prefix "<their answer>"`.
 5. **If it then fails because the forge refuses the commit MESSAGE**, do the same with
    `--commit-prefix "<prefix>"`. Both are remembered, so every skill shared later uses them
