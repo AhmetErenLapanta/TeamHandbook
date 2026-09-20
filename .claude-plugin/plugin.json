@@ -1,6 +1,6 @@
 {
   "name": "handbook",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Manage your team's Claude Code setup from one git repository: approve a skill, an MCP server, or a slash command once, and every teammate's copy picks it up.",
   "author": {
     "name": "Ahmet Eren Lapanta"

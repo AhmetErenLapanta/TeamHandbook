@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.9.4] - 2026-09-20
+
+- **Measurement-only change, nothing an installed copy does is different.** A few files in
+  the eval suite's documentation and case descriptions carried internal references that
+  meant nothing to a reader outside the project, including one case's user-facing text
+  quoted somewhere it didn't belong. Those are gone; what each case measures and the exact
+  text sent for evaluation are unchanged, confirmed byte-for-byte against the prior run.
+
 ## [0.9.3] - 2026-09-20
 
 - **Measurement-only change, nothing an installed copy does is different.** Eight of the
