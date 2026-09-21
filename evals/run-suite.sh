@@ -10,6 +10,8 @@
 # Usage: evals/run-suite.sh <tag> [extra claude args...]
 #   tag: nl-tutma (headline) | zor (its hard routing subset) | nl-gelistirme | fp-tutma |
 #        fp-zor | fp-gelistirme | kontrol | itirazli
+# A case tagged `retired` is selected by none of these on purpose: it is kept as a record
+# and never scored.
 #
 # A hard routing case carries both nl-tutma and zor, so the headline covers it and `zor`
 # reports it on its own. That split is not cosmetic: the easy cases are the regression

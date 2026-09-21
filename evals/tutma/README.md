@@ -32,8 +32,8 @@ Folding that into the headline would make a number move when a definition change
 One sentence was retired rather than scored. `t-setting-up-squad-en` repeated two entries
 of `init`'s trigger list clause for clause, so it would have stayed green through a routing
 regression, which is the one job the held-out half has. Its directory is still here, tagged
-out of every package, because the record of a case that had to go is worth more than a
-clean directory listing. That leaves `init` with one sentence instead of two.
+`retired`, which no package selects, because the record of a case that had to go is worth
+more than a clean directory listing. That leaves `init` with one sentence instead of two.
 
 ## Adding a hard case
 
