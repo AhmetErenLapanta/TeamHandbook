@@ -726,6 +726,9 @@ describe("formatShareResult", () => {
     // writes to the client's config, so after the merge the same server answers to two
     // names and only the sharer can decide to tidy that up
     expect(text).toContain("never writes to ~/.claude.json");
+    // the one line that explains why a merge reaches anybody at all: a shared server whose
+    // plugin version did not move is merged and then fetched by nobody
+    expect(text).toContain("plugin version raised to 1.0.1");
   });
 
   it("given nothing was selected, when the result is reported, then it says so plainly", () => {
