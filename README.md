@@ -211,9 +211,10 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 <img src="docs/handbook-loop.svg" alt="What is already set up on your machine - a skill, an MCP server, or a slash command - travels to the team repository as a merge request, which somebody on the team reviews and merges. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
 
-- **One merge request, whatever the mix.** A selection of servers and commands travels as
-  a single request, because each one raises the version and two requests opened before
-  either is merged claim the same number. One clone, one bump, one request.
+- **One merge request for a whole selection.** The servers and commands you pick travel
+  together, because each one raises the version and two requests opened before either is
+  merged claim the same number. One clone, one bump, one request. A skill is the
+  exception: it waits for a `/handbook:review` verdict and then goes on its own.
 - **The version bump is the delivery.** Nothing pushes to your teammates. The raised
   version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
   moved, and refreshing on it is something each copy does for itself.
