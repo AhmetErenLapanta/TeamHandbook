@@ -5,8 +5,9 @@
   <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine can
     go to the team repository, but not by the same route. A skill goes to /handbook:review first:
     your verdict decides, and keeping it for yourself or for one project stops it there, on this
-    machine. The servers and commands you pick go straight out. Whatever does go out travels as a
-    merge request that somebody on the team reviews and merges. That repository is a Claude Code
+    machine. The servers and commands you pick go straight out, together in a single merge request;
+    a skill that is approved for the team travels in a request of its own. Either way somebody on
+    the team reviews it and merges it. That repository is a Claude Code
     plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal
     that the plugin moved. Every teammate's next session refreshes on that version and reports what
     landed, with nothing installed or configured by hand.</desc>
@@ -73,14 +74,22 @@
   <text x="52" y="177" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">/handbook:review</text>
   <text x="52" y="194" font-size="11.5" fill="#77797d">your verdict, and it can stop here</text>
 
-  <!-- three legs meet: the skill's only after the gate, the other two directly -->
+  <!-- The bracket is three routes reaching one destination, NOT one request carrying all three,
+       and the label states the count for that reason. Servers and commands are the pair
+       publishTeamSelection deliberately collects into a SINGLE request: each item raises the
+       plugin version, and two requests opened before either is merged both claim the same
+       number, so the second one lands with no version of its own and nobody's copy refreshes
+       for it. A skill cannot join that batch - TeamSelection carries servers and commands only,
+       and publishCandidate opens a skill's own request, after the verdict drawn above. Drawing
+       or labelling these as one request would promise a skill and a server leaving together,
+       which no code path does. -->
   <path d="M166 204 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
   <path d="M440 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
   <path d="M714 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
   <path d="M166 220 H714" fill="none" stroke="#818790" stroke-width="1.5"/>
   <path d="M440 220 V264" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
-  <text x="462" y="240" font-size="12.5" font-weight="600" fill="#77797d">What goes out travels as a merge request.</text>
-  <text x="462" y="256" font-size="11.5" fill="#77797d">Somebody on the team reviews it and merges it.</text>
+  <text x="462" y="240" font-size="12.5" font-weight="600" fill="#77797d">Servers and commands travel together in one request.</text>
+  <text x="462" y="256" font-size="11.5" fill="#77797d">A skill travels in its own. Somebody on the team reviews and merges it.</text>
 
   <!-- ── the team repository ─────────────────────────────────────────────── -->
 
