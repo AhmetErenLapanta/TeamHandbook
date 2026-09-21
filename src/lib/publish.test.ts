@@ -9,10 +9,8 @@ import {
   buildPrBody,
   buildPrTitle,
   buildSelectionPrBody,
-  formatMcpShareResult,
   manualPrUrl,
   publishCandidate,
-  publishMcpServer,
   publishTeamSelection,
   retryBranchAfterNameRejection,
 } from "./publish.js";
@@ -576,7 +574,7 @@ describe("publishCandidate — a forge that polices branch names", () => {
   });
 });
 
-describe("publishMcpServer", () => {
+describe("publishTeamSelection with a single server", () => {
   const gitlab: McpServerEntry = {
     name: "gitlab",
     scope: "user",
@@ -590,7 +588,7 @@ describe("publishMcpServer", () => {
       ".mcp.json": JSON.stringify({ mcpServers: { linear: { type: "sse", url: "https://mcp.linear.app/sse" } } }, null, 2) + "\n",
     });
 
-    const result = publishMcpServer(gitlab, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/3");
+    const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/3");
 
     expect(result).toMatchObject({ ok: true, branch: "handbook/mcp-gitlab", version: "0.1.1" });
     const declared = JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.mcp.json"]));
@@ -607,7 +605,7 @@ describe("publishMcpServer", () => {
   it("given a team repo with no .mcp.json at all, when a server is shared, then the file is created in the shape Claude Code loads", () => {
     remote = teamRepo([], { ".claude-plugin/plugin.json": pluginJson });
 
-    const result = publishMcpServer(gitlab, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/4");
+    const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/4");
 
     expect(result.ok).toBe(true);
     expect(JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.mcp.json"]))).toEqual({
@@ -618,8 +616,8 @@ describe("publishMcpServer", () => {
   it("given a forge that polices names, when a server is shared, then the branch and the commit both carry the team's prefix", () => {
     remote = teamRepo([], { ".claude-plugin/plugin.json": pluginJson });
 
-    const result = publishMcpServer(
-      gitlab,
+    const result = publishTeamSelection(
+      { servers: [gitlab] },
       { repoUrl: remote, marketplaceName: "acme", branchPrefix: "TEAM-1-", commitPrefix: "TEAM-1" },
       undefined,
       () => "https://example.com/mr/5",
@@ -636,11 +634,15 @@ describe("publishMcpServer", () => {
       return "";
     };
 
-    const result = publishMcpServer(
+    const result = publishTeamSelection(
       {
-        name: "acme-api",
-        scope: "user",
-        config: { type: "http", url: "https://api.acme.com/mcp", headers: { Authorization: "Bearer 8f2c41d9ab7e05631cd4a29f" } },
+        servers: [
+          {
+            name: "acme-api",
+            scope: "user",
+            config: { type: "http", url: "https://api.acme.com/mcp", headers: { Authorization: "Bearer 8f2c41d9ab7e05631cd4a29f" } },
+          },
+        ],
       },
       { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "acme" },
       recordingGit,
@@ -660,7 +662,7 @@ describe("publishMcpServer", () => {
       ".mcp.json": JSON.stringify({ mcpServers: { gitlab: { type: "http", url: "https://gitlab.acme.com/api/v4/mcp" } } }) + "\n",
     });
 
-    const result = publishMcpServer(gitlab, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/7");
+    const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/7");
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("already declares");
@@ -795,7 +797,7 @@ describe("a name the destination already has", () => {
   });
 });
 
-describe("buildMcpPrBody / formatMcpShareResult", () => {
+describe("buildMcpPrBody / buildSelectionPrBody", () => {
   const stdio: McpServerEntry = {
     name: "playwright",
     scope: "project",
@@ -850,17 +852,6 @@ describe("buildMcpPrBody / formatMcpShareResult", () => {
     expect(body).not.toContain("`headers`");
     expect(body).not.toContain("endpoint");
     expect(body).toContain("narrower claim");
-  });
-
-  it("given the request is open, when the result is reported, then the local server is named as still present", () => {
-    const text = formatMcpShareResult(
-      { ok: true, serverName: "gitlab", branch: "handbook/mcp-gitlab", prUrl: "https://example.com/mr/3", version: "0.1.1" },
-      "acme",
-    );
-
-    expect(text).toContain("plugin:acme:gitlab");
-    expect(text).toContain("never writes to ~/.claude.json");
-    expect(text).toContain("0.1.1");
   });
 });
 

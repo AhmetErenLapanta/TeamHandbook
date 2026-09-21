@@ -1,3 +1,6 @@
+// src/cli/share.ts
+import { resolve as toAbsolutePath } from "node:path";
+
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
@@ -350,7 +353,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
   return `pushing the scaffold to ${branch} on ${url} failed: ${detail}`;
 }
 
-// src/lib/migrate.ts
+// src/lib/share.ts
 import { existsSync as existsSync4, readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { basename as basename3, join as join10 } from "node:path";
@@ -1214,7 +1217,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
   }
 }
 
-// src/lib/migrate.ts
+// src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
     { dir: join10(paths.userHome ?? homedir4(), ".claude", "skills"), scope: "personal" },
@@ -1378,6 +1381,11 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     if (intake.ok) result.queued.push(intake.slug);
     else result.refused.push({ name, kind: "skill", reason: intake.error });
   }
+  for (const dir of selection.skillPaths ?? []) {
+    const intake = intakeSkill(dir, home);
+    if (intake.ok) result.queued.push(intake.slug);
+    else result.refused.push({ name: basename3(dir), kind: "skill", reason: intake.error });
+  }
   const entries = [];
   for (const name of selection.servers) {
     const server = inv.servers.find((s) => s.name === name);
@@ -1420,7 +1428,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
   }
   return result;
 }
-function formatMigrateResult(result, marketplaceName) {
+function formatShareResult(result, marketplaceName) {
   const lines = [];
   if (result.queued.length) {
     lines.push(
@@ -1446,8 +1454,9 @@ function formatMigrateResult(result, marketplaceName) {
     }
     lines.push(
       `  - branch: ${shared.branch}`,
-      // see formatMcpShareResult: a remote whose host manualPrUrl cannot build a link for
-      // still got the branch, and "undefined" is not a link
+      // manualPrUrl returns null for a remote whose host it does not know how to build a
+      // "new merge request" link for. The branch is pushed either way, and printing
+      // "undefined" at someone is worse than telling them the link is theirs to find.
       shared.prUrl ? `  - merge request: ${shared.prUrl}` : shared.manualUrl ? `  - open the merge request: ${shared.manualUrl}` : "  - the branch is pushed; open the merge request in your forge"
     );
     if (shared.prError) lines.push(`    (the forge CLI could not open it: ${shared.prError})`);
@@ -1488,17 +1497,17 @@ function formatMigrateResult(result, marketplaceName) {
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
       "To send one of them as an update to the team's copy, name that one and only that one:",
-      ...collisions.map((r) => `  migrate.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`)
+      ...collisions.map((r) => `  share.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`)
     );
   }
   if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";
   return lines.join("\n");
 }
 
-// src/cli/migrate.ts
+// src/cli/share.ts
 function usage() {
   console.error(
-    "usage: migrate.js [list]\n       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]... [--update <name>]..."
+    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]..."
   );
   process.exit(2);
 }
@@ -1508,6 +1517,7 @@ function resolve(available, wanted) {
   return loose.length === 1 ? loose[0] : wanted;
 }
 var FLAGS = ["--skill", "--mcp", "--command"];
+var SKILL_PATH = "--skill-path";
 var UPDATE = "--update";
 function parseUpdates(args, inv) {
   const names = [];
@@ -1521,13 +1531,14 @@ function parseUpdates(args, inv) {
   return names;
 }
 function parseSelection(args, inv) {
-  const selection = { skills: [], servers: [], commands: [] };
+  const selection = { skills: [], servers: [], commands: [], skillPaths: [] };
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     const value = args[i + 1];
-    if (!FLAGS.includes(flag)) continue;
+    if (!FLAGS.includes(flag) && flag !== SKILL_PATH) continue;
     if (!value || value.startsWith("--")) usage();
-    if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
+    if (flag === SKILL_PATH) selection.skillPaths.push(toAbsolutePath(value));
+    else if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
     else if (flag === "--mcp") selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
     else selection.commands.push(resolve(inv.commands.map((c) => c.name), value.replace(/^\//, "")));
     i++;
@@ -1536,7 +1547,7 @@ function parseSelection(args, inv) {
 }
 function main() {
   const args = process.argv.slice(2);
-  const selected = args.some((a) => FLAGS.includes(a));
+  const selected = args.some((a) => FLAGS.includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
@@ -1554,7 +1565,7 @@ function main() {
   const inv = buildInventory();
   const selection = parseSelection(args, inv);
   const updates = parseUpdates(args, inv);
-  if (!selection.skills.length && !selection.servers.length && !selection.commands.length) {
+  if (!selection.skills.length && !selection.skillPaths.length && !selection.servers.length && !selection.commands.length) {
     console.log("Nothing was selected, so nothing was queued and nothing was shared.");
     return;
   }
@@ -1570,7 +1581,7 @@ function main() {
   if (team && result.team?.learnedBranchPrefix) {
     saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
   }
-  console.log(formatMigrateResult(result, team?.marketplaceName));
+  console.log(formatShareResult(result, team?.marketplaceName));
   if (result.refused.length) process.exitCode = 1;
 }
 main();

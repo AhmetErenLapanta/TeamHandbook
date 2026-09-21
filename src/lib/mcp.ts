@@ -344,7 +344,7 @@ export function mergeServersIntoMcpJson(
   return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided, replaced };
 }
 
-/** One server, the shape /handbook:mcp shares. A collision is its only outcome, so it throws. */
+/** One server at a time. A collision is its only outcome, so it throws. */
 export function mergeServerIntoMcpJson(
   existing: string | null,
   name: string,

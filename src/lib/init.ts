@@ -288,7 +288,7 @@ try {
   if (parts.length) {
     // A plugin's own commands are typed as /<plugin-name>:<command-name>, not bare
     // /<command-name> - Claude Code namespaces every installed plugin's commands this
-    // way, and this repo's own README (and migrate.ts's post-share message) never shows
+    // way, and this repo's own README (and share.ts's post-share message) never shows
     // a bare form. Printing the bare name here would hand the teammate a command that
     // does not resolve, defeating the point of announcing it at all.
     const named = freshSkills

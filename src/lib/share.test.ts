@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildInventory, formatInventory, formatMigrateResult, shareSelection } from "./migrate.js";
-import type { InventoryPaths, Selection } from "./migrate.js";
+import { buildInventory, formatInventory, formatShareResult, shareSelection } from "./share.js";
+import type { InventoryPaths, Selection } from "./share.js";
 import { listCandidates } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 import type { GitRunner } from "./init.js";
@@ -21,7 +21,7 @@ function paths(): InventoryPaths {
 }
 
 function select(overrides: Partial<Selection> = {}): Selection {
-  return { skills: [], servers: [], commands: [], ...overrides };
+  return { skills: [], servers: [], commands: [], skillPaths: [], ...overrides };
 }
 
 function gitIn(cwd: string, args: string[]): string {
@@ -267,6 +267,77 @@ describe("shareSelection", () => {
     const branch = result.team!.branch!;
     const declared = JSON.parse(gitIn(remote, ["show", `${branch}:.mcp.json`]));
     expect(Object.keys(declared.mcpServers).sort()).toEqual(["gitlab", "linear"]);
+  });
+
+  it("given one screen sent a skill and a server, when the result is reported, then one is named as still here and the other as gone", () => {
+    remote = teamRepo();
+    writeSkill(userHome, "deploy-runbook");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+
+    const result = shareSelection(
+      select({ skills: ["deploy-runbook"], servers: ["gitlab"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+    );
+    const text = formatShareResult(result, "acme");
+
+    // One screen, two destinations, and the manager is told which is which. Nothing is
+    // delivered without a verdict in /handbook:review, so a single "shared 2 things" line
+    // would report the skill as delivered when it is still sitting here waiting for one.
+    expect(text).toContain("Queued for review (1) - nothing has left this machine yet:");
+    expect(text).toContain("Shared with the team (1) in one merge request:");
+    expect(text).toContain("/handbook:review");
+    // and the two sentences are true of the disk, not just of each other
+    expect(listCandidates(home, "pending").map((c) => c.slug)).toEqual(["deploy-runbook"]);
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["ls-tree", "-r", "--name-only", branch])).not.toContain("skills/deploy-runbook");
+    expect(JSON.parse(gitIn(remote, ["show", `${branch}:.mcp.json`])).mcpServers.gitlab).toBeTruthy();
+  });
+
+  it("given a skill directory the screen cannot list, when it is named by path, then it is queued like any other", () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "handbook-elsewhere-"));
+    try {
+      writeSkill(elsewhere, "release-drill");
+
+      const result = shareSelection(
+        select({ skillPaths: [join(elsewhere, ".claude", "skills", "release-drill")] }),
+        null,
+        paths(),
+      );
+
+      // the inventory reads the two directories Claude Code loads from, and this is in
+      // neither, so the screen could not have offered it: the path is the only way in
+      expect(buildInventory(paths()).skills.map((s) => s.name)).not.toContain("release-drill");
+      expect(result.queued).toEqual(["release-drill"]);
+      expect(listCandidates(home, "pending").map((c) => c.slug)).toEqual(["release-drill"]);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("given a skill named by path hides a credential, when the selection runs, then the path route refuses it too", () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "handbook-elsewhere-"));
+    try {
+      writeSkill(elsewhere, "release-drill", { "scripts/seed.sh": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n" });
+
+      const result = shareSelection(
+        select({ skillPaths: [join(elsewhere, ".claude", "skills", "release-drill")] }),
+        null,
+        paths(),
+      );
+
+      // naming a directory instead of picking a row is not a way around the audit: the
+      // screen is advisory and intakeSkill is the boundary, on both routes in
+      expect(result.queued).toEqual([]);
+      expect(result.refused).toEqual([
+        { name: "release-drill", kind: "skill", reason: expect.stringContaining("scripts/seed.sh") },
+      ]);
+      expect(existsSync(join(candidatesDir(home), "release-drill"))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it("given two servers were selected, when they are shared, then ONE request claims ONE version rather than two claiming the same one", () => {
@@ -573,11 +644,10 @@ describe("shareSelection carries commands", () => {
     expect(result.refused).toEqual([
       { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
     ]);
-    // the route out of it is named where the user reads it, in THIS command's grammar:
+    // the route out of it is named where the user reads it, in the CLI's own grammar:
     // --update takes a name here, so the printed command carries exactly the one name the
-    // user would be consenting to. The library cannot write this line - /handbook:mcp
-    // reads the same refusal and answers it with a bare --update.
-    expect(formatMigrateResult(result)).toContain("migrate.js share --command explain --update explain");
+    // user would be consenting to, and not the rest of the selection.
+    expect(formatShareResult(result)).toContain("share.js share --command explain --update explain");
     const branch = result.team!.branch!;
     expect(gitIn(remote, ["show", `${branch}:commands/explain.md`])).toBe("The team's own explain.\n");
   });
@@ -632,9 +702,9 @@ describe("shareSelection carries commands", () => {
   });
 });
 
-describe("formatMigrateResult", () => {
+describe("formatShareResult", () => {
   it("given both halves ran, when the result is reported, then queued and shared are two groups rather than one total", () => {
-    const text = formatMigrateResult(
+    const text = formatShareResult(
       {
         queued: ["deploy-runbook", "repo-conventions"],
         team: { ok: true, serverNames: ["gitlab"], branch: "handbook/mcp-gitlab", prUrl: "https://example.com/mr/1", version: "1.0.1" },
@@ -652,16 +722,20 @@ describe("formatMigrateResult", () => {
     expect(text).toContain("  - MCP servers (1): gitlab");
     expect(text).toContain("/handbook:review");
     expect(text).toContain("plugin:acme:<name>");
+    // the sharer keeps their own copy and has to remove it themselves: this tool never
+    // writes to the client's config, so after the merge the same server answers to two
+    // names and only the sharer can decide to tidy that up
+    expect(text).toContain("never writes to ~/.claude.json");
   });
 
   it("given nothing was selected, when the result is reported, then it says so plainly", () => {
-    expect(formatMigrateResult({ queued: [], refused: [] })).toBe(
+    expect(formatShareResult({ queued: [], refused: [] })).toBe(
       "Nothing was selected, so nothing was queued and nothing was shared.",
     );
   });
 
   it("given some of the selection was refused, when the result is reported, then each refusal keeps its reason", () => {
-    const text = formatMigrateResult({
+    const text = formatShareResult({
       queued: ["deploy-runbook"],
       refused: [{ name: "incident-drill", kind: "skill", reason: "it holds a credential" }],
     });

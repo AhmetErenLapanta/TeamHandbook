@@ -1,22 +1,23 @@
+import { resolve as toAbsolutePath } from "node:path";
 import { configIsBroken } from "../lib/config.js";
 import { loadTeamConfig, saveTeamConfig } from "../lib/init.js";
-import { buildInventory, formatInventory, formatMigrateResult, shareSelection } from "../lib/migrate.js";
-import type { Inventory, Selection } from "../lib/migrate.js";
+import { buildInventory, formatInventory, formatShareResult, shareSelection } from "../lib/share.js";
+import type { Inventory, Selection } from "../lib/share.js";
 import { teamAssets } from "../lib/publish.js";
 
 function usage(): never {
   console.error(
-    "usage: migrate.js [list]\n" +
-      "       migrate.js share [--skill <name>]... [--mcp <name>]... [--command <name>]... [--update <name>]...",
+    "usage: share.js [list]\n" +
+      "       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... " +
+      "[--command <name>]... [--update <name>]...",
   );
   process.exit(2);
 }
 
 /**
  * Names are typed back from a list this command just printed, and "GitLab" reads as
- * "gitlab" to everyone but a string comparison. Same allowance /handbook:mcp already
- * makes, for the same reason; an ambiguous match is left unresolved so the run reports it
- * rather than picking one.
+ * "gitlab" to everyone but a string comparison. An ambiguous match is left unresolved so
+ * the run reports it rather than picking one.
  */
 function resolve(available: string[], wanted: string): string {
   if (available.includes(wanted)) return wanted;
@@ -25,6 +26,16 @@ function resolve(available: string[], wanted: string): string {
 }
 
 const FLAGS = ["--skill", "--mcp", "--command"] as const;
+
+/**
+ * The one selection that is not a name off the screen.
+ *
+ * The screen lists the two directories Claude Code loads skills from, so a skill authored
+ * anywhere else has no entry to pick. The single-skill command this replaced took a path
+ * and only a path, so dropping it would have taken a working route away from anyone
+ * scripting against it; it is kept, and unlike before it is in the usage line.
+ */
+const SKILL_PATH = "--skill-path";
 
 /**
  * Sending an update to what the team already has, rather than being turned back for it.
@@ -53,13 +64,16 @@ function parseUpdates(args: string[], inv: Inventory): string[] {
 }
 
 function parseSelection(args: string[], inv: Inventory): Selection {
-  const selection: Selection = { skills: [], servers: [], commands: [] };
+  const selection: Selection = { skills: [], servers: [], commands: [], skillPaths: [] };
   for (let i = 0; i < args.length; i++) {
-    const flag = args[i] as (typeof FLAGS)[number];
+    const flag = args[i] as (typeof FLAGS)[number] | typeof SKILL_PATH;
     const value = args[i + 1];
-    if (!FLAGS.includes(flag)) continue;
+    if (!FLAGS.includes(flag as (typeof FLAGS)[number]) && flag !== SKILL_PATH) continue;
     if (!value || value.startsWith("--")) usage();
-    if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
+    // Made absolute here rather than in the library, so a relative path means what it
+    // means to the shell that typed it.
+    if (flag === SKILL_PATH) selection.skillPaths!.push(toAbsolutePath(value));
+    else if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
     else if (flag === "--mcp") selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
     // A command is listed and typed as /explain, so a leading slash is taken off rather
     // than turned into a name nothing on this machine answers to.
@@ -71,7 +85,7 @@ function parseSelection(args: string[], inv: Inventory): Selection {
 
 function main(): void {
   const args = process.argv.slice(2);
-  const selected = args.some((a) => (FLAGS as readonly string[]).includes(a));
+  const selected = args.some((a) => (FLAGS as readonly string[]).includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
   if (rest.length || (cmd !== "list" && cmd !== "share")) usage();
@@ -98,7 +112,7 @@ function main(): void {
   const updates = parseUpdates(args, inv);
   // The point, in one branch: nothing is selected by default, so a share with
   // no flags shares nothing rather than everything.
-  if (!selection.skills.length && !selection.servers.length && !selection.commands.length) {
+  if (!selection.skills.length && !selection.skillPaths!.length && !selection.servers.length && !selection.commands.length) {
     console.log("Nothing was selected, so nothing was queued and nothing was shared.");
     return;
   }
@@ -117,7 +131,7 @@ function main(): void {
   if (team && result.team?.learnedBranchPrefix) {
     saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
   }
-  console.log(formatMigrateResult(result, team?.marketplaceName));
+  console.log(formatShareResult(result, team?.marketplaceName));
   // A refusal is not a crash: some of the selection may have travelled. The exit code says
   // "not everything you asked for happened", and the text above says which part.
   if (result.refused.length) process.exitCode = 1;

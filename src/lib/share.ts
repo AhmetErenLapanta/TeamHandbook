@@ -16,14 +16,18 @@ import type { GitRunner, TeamConfig } from "./init.js";
 import { runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 
-// Taking a whole local setup to the team, rather than one thing at a time.
+// Taking the setup already on this machine to the team.
 //
-// /handbook:share-skill moves one skill and /handbook:mcp moves one server, and both were
-// measured to be right about the thing they do. What neither of them can do is the thing a
-// manager actually arrives with: twenty-two skills and two servers already installed, of
-// which four should go to the team. Doing that one command at a time is a chore nobody
-// finishes, and the evidence is that nobody did - zero skills reached a real team
-// repository in the month before this existed.
+// This used to be three commands. One moved a single skill, one moved a single server,
+// and this one moved a selection of both; each was right about the thing it did. Two
+// things were measured against that split. A manager arrives with twenty-two skills and
+// two servers installed, of which four should go to the team, and doing that one command
+// at a time is a chore nobody finishes - zero skills reached a real team repository in
+// the month before a selection existed. And routing failed twice: a plain sentence about
+// sharing had three commands to choose between and picked the wrong one, which no
+// rewriting of the three descriptions fixed. So there is one door, and it always opens
+// on the selection screen. Naming a single item costs one more step; that price was paid
+// deliberately.
 //
 // This module reads that setup and runs the selection. It opens no new route out of the
 // machine: a selected skill goes through intakeSkill, a selected server or command through
@@ -93,6 +97,17 @@ export interface Selection {
   skills: string[];
   servers: string[];
   commands: string[];
+  /**
+   * Skill directories named by absolute path instead of picked off the screen.
+   *
+   * The inventory lists the two directories Claude Code loads skills from, so a skill
+   * being written somewhere else - in the repository it belongs to, before it is
+   * installed - cannot appear on the screen at all. The single-skill command this
+   * replaced took any path on disk and never said so in its own instructions; the
+   * capability is kept and now written down, rather than dropped because nobody had
+   * documented it.
+   */
+  skillPaths?: string[];
 }
 
 /**
@@ -337,7 +352,7 @@ export function formatInventory(inv: Inventory): string {
   return lines.join("\n");
 }
 
-export interface MigrateResult {
+export interface ShareResult {
   /** skills now waiting in the review queue */
   queued: string[];
   /** the request the selected servers and commands went out in, absent when neither was */
@@ -367,9 +382,9 @@ export function shareSelection(
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
   options: PublishOptions = {},
-): MigrateResult {
+): ShareResult {
   const home = paths.home ?? handbookHome();
-  const result: MigrateResult = { queued: [], refused: [] };
+  const result: ShareResult = { queued: [], refused: [] };
   const inv = buildInventory(paths);
   for (const name of selection.skills) {
     const skill = inv.skills.find((s) => s.name === name);
@@ -380,6 +395,14 @@ export function shareSelection(
     const intake = intakeSkill(skill.dir, home);
     if (intake.ok) result.queued.push(intake.slug!);
     else result.refused.push({ name, kind: "skill", reason: intake.error! });
+  }
+  // Named by path, so there is no inventory entry to look up and nothing to check the
+  // name against. intakeSkill is still the only way in: it audits the directory and
+  // refuses a credential exactly as it does for a skill picked off the screen.
+  for (const dir of selection.skillPaths ?? []) {
+    const intake = intakeSkill(dir, home);
+    if (intake.ok) result.queued.push(intake.slug!);
+    else result.refused.push({ name: basename(dir), kind: "skill", reason: intake.error! });
   }
   const entries: McpServerEntry[] = [];
   for (const name of selection.servers) {
@@ -438,7 +461,7 @@ export function shareSelection(
  * already read. A single "shared 7 things" line would leave the manager believing they
  * had sent five skills they have not sent.
  */
-export function formatMigrateResult(result: MigrateResult, marketplaceName?: string): string {
+export function formatShareResult(result: ShareResult, marketplaceName?: string): string {
   const lines: string[] = [];
   if (result.queued.length) {
     lines.push(
@@ -469,8 +492,9 @@ export function formatMigrateResult(result: MigrateResult, marketplaceName?: str
     }
     lines.push(
       `  - branch: ${shared.branch}`,
-      // see formatMcpShareResult: a remote whose host manualPrUrl cannot build a link for
-      // still got the branch, and "undefined" is not a link
+      // manualPrUrl returns null for a remote whose host it does not know how to build a
+      // "new merge request" link for. The branch is pushed either way, and printing
+      // "undefined" at someone is worse than telling them the link is theirs to find.
       shared.prUrl
         ? `  - merge request: ${shared.prUrl}`
         : shared.manualUrl
@@ -521,7 +545,7 @@ export function formatMigrateResult(result: MigrateResult, marketplaceName?: str
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
       "To send one of them as an update to the team's copy, name that one and only that one:",
-      ...collisions.map((r) => `  migrate.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`),
+      ...collisions.map((r) => `  share.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`),
     );
   }
   if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";

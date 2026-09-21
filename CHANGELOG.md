@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+- **Three commands shared what was already on your machine, and a plain sentence reached
+  the wrong one of them.** `/handbook:share-skill` took one skill, `/handbook:mcp` took
+  one server, and `/handbook:migrate` took a selection of skills, servers and commands.
+  Routing was measured against that split twice; both times the answer tried was better
+  descriptions, and both times it was withdrawn. The three are now one command,
+  `/handbook:share`, which always opens the selection screen. Naming a single server
+  therefore costs one step more than it did, which is the price of having one door
+  instead of three. The screen itself, the credential screen behind it, the collision
+  check, the single merge request and the per-name `--update` are the ones
+  `/handbook:migrate` already carried.
+- **One command still does not mean one destination, and still says so.** A skill you
+  pick is copied into the review queue and stays on this machine; a server or a command
+  you pick goes out in a merge request other people can read. The result names those two
+  groups separately, because "shared" and "waiting for your verdict" are not the same
+  thing to the people on the other end.
+- **A skill directory the list cannot show can still be shared.** The single-skill
+  command accepted any path on disk and never mentioned it in its own instructions, so
+  the capability was real and undocumented. `/handbook:share` takes `--skill-path <dir>`
+  for a skill that is written but not installed, screens it exactly as it screens a
+  listed one, and this time the usage line says it exists.
+
 ## [0.9.5] - 2026-09-21
 
 - **No functional change; nothing an installed copy does is different.** A handful of

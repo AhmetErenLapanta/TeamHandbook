@@ -36,9 +36,9 @@ that the plugin moved, which is what makes every teammate's copy refresh.
 | What you share | Command | What lands in the repo |
 |---|---|---|
 | A skill the harvest proposed | `/handbook:review` | `skills/<name>/`, with the evidence it came from, plus a version bump |
-| A skill you wrote yourself | `/handbook:share-skill` | the same, through the same review |
-| An MCP server already configured on this machine | `/handbook:mcp` | an entry in the repo's `.mcp.json`, plus a version bump |
-| A slash command already installed on this machine | `/handbook:migrate` | `commands/<name>.md`, plus a version bump |
+| A skill you wrote yourself | `/handbook:share` | the same, through the same review |
+| An MCP server already configured on this machine | `/handbook:share` | an entry in the repo's `.mcp.json`, plus a version bump |
+| A slash command already installed on this machine | `/handbook:share` | `commands/<name>.md`, plus a version bump |
 
 Nothing else is automated, and the repository is an ordinary plugin repo: agents and
 hooks can be committed to it by hand and reach everyone the same way, as long as the
@@ -231,9 +231,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 | `/handbook:review` | Keep, scope, share, edit, or reject each skill. **The only way anything ships.** |
 | `/handbook:init` | Scaffold the team handbook repo and print the message your team needs. |
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
-| `/handbook:mcp [name]` | List your MCP servers; share one with the team so nobody sets it up by hand. |
-| `/handbook:share-skill` | Put a skill you wrote by hand into the review queue. |
-| `/handbook:migrate` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
+| `/handbook:share` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
 | `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |
 | `/handbook:learn` | Capture something on demand instead of waiting for the session to end. |
 | `/handbook:status` | Queue, ledger, how often your skills actually fired, config. |

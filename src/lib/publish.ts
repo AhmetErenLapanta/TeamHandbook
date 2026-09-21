@@ -475,7 +475,6 @@ export function publishCandidate(
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // Sharing the rest of a setup with the team: MCP servers and slash commands.
 //
@@ -637,7 +636,7 @@ function selectionIntro(servers: number, commands: number): string[] {
  *
  * `marketplaceName` is the plugin every merged command is typed under: Claude Code
  * namespaces an installed plugin's commands as `/<plugin>:<command>`, the same form
- * migrate.ts's own post-share message promises the sharer ("the commands are typed as
+ * share.ts's own post-share message promises the sharer ("the commands are typed as
  * /<marketplaceName>:<name>"). A bare `/<command>` here would tell the reviewer a name
  * that does not resolve once the plugin is installed.
  */
@@ -800,28 +799,6 @@ function finishMcpPrBody(
   return lines.join("\n");
 }
 
-/** One server, the shape /handbook:mcp shares. */
-export function publishMcpServer(
-  entry: McpServerEntry,
-  team: TeamConfig,
-  git: GitRunner = runGit,
-  forge: ForgeRunner = runForge,
-  options: PublishOptions = {},
-): TeamPublishOutcome {
-  return publishTeamSelection({ servers: [entry] }, team, git, forge, options);
-}
-
-/** Servers only, the shape /handbook:migrate shared before commands could travel. */
-export function publishMcpServers(
-  entries: McpServerEntry[],
-  team: TeamConfig,
-  git: GitRunner = runGit,
-  forge: ForgeRunner = runForge,
-  options: PublishOptions = {},
-): TeamPublishOutcome {
-  return publishTeamSelection({ servers: entries }, team, git, forge, options);
-}
-
 /**
  * Nothing the team already has is written over by a request that did not ask to.
  *
@@ -831,13 +808,11 @@ export function publishMcpServers(
  * update is a second, deliberate request.
  *
  * These two state the fact and stop there: they do NOT name the command that sends the
- * update. They cannot, because they are read from two places whose grammar differs -
- * /handbook:mcp acts on the one server it was given and takes a bare `--update`, while
- * /handbook:migrate acts on a selection and takes `--update <name>`, refusing the bare
- * form outright. A single sentence here would be wrong in one of those two, and a refusal
- * that names a command which fails when you run it is the exact defect this function
- * exists to avoid. So the caller appends the route in its own words, next to the refusal it
- * prints: src/cli/mcp.ts for one server, formatMigrateResult for a selection.
+ * update. The route is a CLI grammar this library does not own - `--update` takes the one
+ * name being consented to, and it is the caller that knows how the selection it was handed
+ * is written back. A refusal that names a command which fails when you run it is the exact
+ * defect this function exists to avoid, so the caller appends the route in its own words,
+ * next to the refusal it prints: see formatShareResult.
  */
 function collisionMessage(name: string): string {
   return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
@@ -873,7 +848,7 @@ function namesIn(dir: string, suffix?: string): string[] {
  * Advisory, and only advisory. The answer that decides anything is taken at publish time
  * inside the clone that is about to write; this one can go stale between the screen and the
  * choice, and it is null altogether when the repository is unreachable. So it may add a
- * label and may not withhold one thing or overwrite another. migrate.ts already draws this
+ * label and may not withhold one thing or overwrite another. share.ts already draws this
  * line for the credential screen - "The screen is advisory; the refusal lives where it
  * lived before" - and the direction it must not drift in is a screen that decides.
  */
@@ -1104,47 +1079,3 @@ export function publishTeamSelection(
   }
 }
 
-/**
- * What the manager is told after the request is open.
- *
- * Two of these lines exist because the command deliberately does NOT act: the local copy
- * of the server stays where it is (this tool never writes ~/.claude.json), so after the
- * merge the same server is reachable under two names and the tidy-up is a decision only
- * the manager can make.
- */
-export function formatMcpShareResult(outcome: TeamPublishOutcome, marketplaceName: string): string {
-  const updated = outcome.updated?.servers.includes(outcome.serverName ?? "") ?? false;
-  const lines = [
-    updated
-      ? `Sent "${outcome.serverName}" to the team as an update to the one they already have.`
-      : `Shared "${outcome.serverName}" with the team.`,
-    "",
-    `- branch: ${outcome.branch}`,
-    // manualPrUrl returns null for a remote whose host it does not know how to build a
-    // "new merge request" link for, and printing "undefined" at someone is worse than
-    // telling them the branch is there and the link is theirs to find.
-    outcome.prUrl
-      ? `- merge request: ${outcome.prUrl}`
-      : outcome.manualUrl
-        ? `- open the merge request: ${outcome.manualUrl}`
-        : "- the branch is pushed; open the merge request in your forge",
-  ];
-  if (outcome.prError) lines.push(`  (the forge CLI could not open it: ${outcome.prError})`);
-  if (outcome.version) lines.push(`- plugin version raised to ${outcome.version}, which is what makes teammates fetch it`);
-  if (outcome.requiresEnv?.length) {
-    lines.push(
-      `- each teammate must set ${outcome.requiresEnv.join(", ")} in their own environment, ` +
-        "or the server will not start for them",
-    );
-  }
-  if (outcome.startsProcess) {
-    lines.push("- this server starts a process on every teammate's machine; the merge request says which");
-  }
-  lines.push(
-    "",
-    `After the merge it appears as plugin:${marketplaceName}:${outcome.serverName}. Your own copy is`,
-    "untouched, so you will see both: this command never writes to ~/.claude.json. Remove the",
-    `local "${outcome.serverName}" yourself (claude mcp remove) once the team's one is connected.`,
-  );
-  return lines.join("\n");
-}

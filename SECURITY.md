@@ -29,15 +29,17 @@ This document states exactly what it reads, what it writes, and where data goes.
   read and harvested after the fact. Each session is salvaged at most once.
 - Your local git config and credentials — only when *you* approve a candidate and it
   opens a pull request, using your own identity.
-- **Your installed skills, read-only, and only when you run `/handbook:migrate`:** the
+- **Your installed skills, read-only, and only when you run `/handbook:share`:** the
   directory names, `SKILL.md` frontmatter and file contents under `~/.claude/skills` and
   this project's `.claude/skills`, so the list can say which of them could travel. Nothing
   there is modified, moved or deleted, and the contents are read in order to screen them:
   a skill carrying a credential in any of its files is refused rather than queued. The same
   command reads the review queue under `~/.teamhandbook/` to avoid offering you a skill you
-  have already decided about.
-- **`~/.claude.json`, read-only, and only when you run `/handbook:mcp` or
-  `/handbook:migrate`:** the MCP servers Claude Code has configured for your user and for
+  have already decided about. If you hand it a skill directory by path (`--skill-path`,
+  for a skill you are writing somewhere the client does not load from) it reads that
+  directory too, and only that one: it is screened and queued exactly like a listed skill.
+- **`~/.claude.json`, read-only, and only when you run `/handbook:share`:** the MCP
+  servers Claude Code has configured for your user and for
   the current project, so they can be offered to your team. TeamHandbook never writes to
   this file: it belongs to the running client, and sharing a server does not remove your
   own. A server definition holding a literal value in `headers` or `env` is refused rather
@@ -134,10 +136,10 @@ Two things, and only these:
      never harvested and costs no model call at all.
 2. **On your approval:** `/handbook:review` → approve installs the skill locally or
    opens a PR to the team repo you configured (your git credentials, your chosen
-   repo). `/handbook:mcp <name>` does the same for one MCP server you name, adding its
-   definition to the team plugin in a PR you can read before merging. `/handbook:migrate`
-   does it for as many servers as you pick, in a single PR, and for the skills you pick it
-   only fills the review queue - they still leave by route 2 above, one verdict at a time.
+   repo). `/handbook:share` does the same for as many MCP servers and slash commands as
+   you pick, adding their definitions to the team plugin in a single PR you can read
+   before merging, and for the skills you pick it only fills the review queue - they still
+   leave by route 2 above, one verdict at a time.
    Nothing is shared with your team before this.
 
 ## Removing your data
