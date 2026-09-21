@@ -47,7 +47,7 @@ know which before they choose, not after:
      read, so its absence never proves the team does not have it — the share itself makes
      the real check and turns the selection back if it does.
    - Say once, before the first dialog, that they can answer in free text instead
-     ("the three acme ones", "all of the servers, none of the skills") if they already
+     ("the three gitlab ones", "all of the servers, none of the skills") if they already
      know what they want. Twenty skills is six dialogs, and a person who knows their own
      setup should not have to click through them.
 4. Share what they picked, naming each one:

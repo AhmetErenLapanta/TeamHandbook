@@ -108,7 +108,8 @@ function reclaimStaleClaims(dir: string): void {
  * stale claims first, so both shapes count.
  *
  * A FRESH claim is not work owed. Its runner is alive and sitting in its model call,
- * and waking a second runner beside it is the duplicate harvest this guard prevents.
+ * and waking a second runner beside it is the duplicate harvest the pipeline hardens
+ * against when two runs overlap.
  *
  * A STALE claim is the only kind of work nothing else will ever notice. Its runner was
  * killed mid-harvest, and reclaimStaleClaims - which runs INSIDE the drain - is what

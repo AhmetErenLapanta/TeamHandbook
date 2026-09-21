@@ -122,7 +122,7 @@ describe("currentSessionId", () => {
   });
 });
 
-// This is the case this test exists to prove: the same CLI invocation, told
+// This is the exact case that must not regress: the same CLI invocation, told
 // apart only by whether the session has an open, unconsumed explicit ask.
 describe("peekExplicitLearnInvocation / finalizeExplicitLearnInvocation (telling the user's own /handbook:learn from the model's)", () => {
   let home: string;
@@ -167,7 +167,7 @@ describe("peekExplicitLearnInvocation / finalizeExplicitLearnInvocation (telling
     expect(loadSessionState("s1", home).explicitLearnPending).toBe(true);
   });
 
-  // The "stale true" half: a pending ask must not outlive the CLI
+  // The "stale true" half of the same defect: a pending ask must not outlive the CLI
   // run that decides on it, or a later, unrelated model-initiated capture in the
   // same session would wrongly inherit the user's earlier explicit ask.
   it("finalize clears the pending flag, so a later peek in the same session sees it consumed", () => {

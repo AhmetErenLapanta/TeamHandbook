@@ -151,13 +151,13 @@ export function approveAndDeliver(
  * Write the skill into a local skills directory and report the name it landed under.
  *
  * A name already taken here is refused, exactly as the team path refuses it. The first
- * version of this card suffixed instead, on the reasoning that the suffix was at least
+ * version of this function suffixed instead, on the reasoning that the suffix was at least
  * VISIBLE locally (the CLI prints the target path, so `.../skills/foo-2` was on screen).
  * That reasoning was wrong in a way only running it shows: suffixing DELIVERS, so the
  * candidate is `approved` by the time the message suggests `--update`, and `approved` is
  * terminal - no path in queue.ts returns a candidate to `pending`. The product printed a
  * command that answered with "already approved" and left the user holding the two
- * disagreeing skills this whole card exists to prevent. Refusing costs an operation that
+ * disagreeing skills this refusal exists to prevent. Refusing costs an operation that
  * can now fail; it buys a refusal the user can actually act on, with the candidate still
  * waiting for them.
  */

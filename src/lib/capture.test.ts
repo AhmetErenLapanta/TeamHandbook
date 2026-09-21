@@ -319,7 +319,7 @@ describe("captureLearnInvocation (telling the user's own /handbook:learn from th
     expect(captureLearnInvocation({ prompt: "/handbook:learn" }, home)).toBe(false);
   });
 
-  // The audit's exact repro. learn.md step 2 can ask the user a
+  // An independent audit's exact repro: learn.md step 2 can ask the user a
   // clarifying question when nothing in the session matches yet, and that
   // exchange can take more than one round trip. Every answer is a new
   // UserPromptSubmit, in prose, that must not be mistaken for the user having

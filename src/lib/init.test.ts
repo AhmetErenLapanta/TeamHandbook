@@ -401,7 +401,7 @@ describe("summarizeGitStderr", () => {
 });
 
 describe("pushFailureReason — a branch name the forge forbids", () => {
-  // verbatim from a real GitLab group: the branch NAME was the problem, and the
+  // modeled on a real GitLab group's rejection: the branch NAME was the problem, and the
   // previous message blamed protection and told the user to ask for Maintainer
   const gitlab = new Error(
     "remote: GitLab: Branch name 'handbook/scaffold' does not follow the pattern '((^(TEAM|OPS|ENG|SEC)-\\d+(-[a-z0-9]+)*)|dev|master|prod|hotfix(.*))$'\n ! [remote rejected] HEAD -> handbook/scaffold (pre-receive hook declined)",

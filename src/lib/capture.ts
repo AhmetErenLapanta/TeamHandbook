@@ -97,7 +97,7 @@ const LEARN_SLASH_COMMAND = /^\/handbook:learn(\s|$)/;
 // is anchored and terminated, specifically so it does NOT match a pasted absolute
 // path ("/tmp/repo/x/..."), a regex literal, or a diff line - any of those would
 // otherwise silently kill a still-live ask, which is exactly the lost-case class
-// this card exists to close.
+// this guard exists to close.
 const ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
 
 /**
@@ -145,7 +145,7 @@ const ANY_SLASH_COMMAND = /^\/[a-zA-Z][a-zA-Z0-9:_-]*(\s|$)/;
  *     user to accept or reject at /handbook:review - never that a real request is
  *     silently destroyed. The opposite mistake (treating a live explicit ask as
  *     the model's own) throws the user's capture away with no recovery, which
- *     both learn.ts's own fail-open default and this card treat as strictly
+ *     both learn.ts's own fail-open default and this function treat as strictly
  *     worse.
  */
 export function captureLearnInvocation(input: HookInput, home: string = handbookHome()): boolean {

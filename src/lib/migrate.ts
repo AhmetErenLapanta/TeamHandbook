@@ -40,8 +40,8 @@ export type InventoryScope = "personal" | "project" | "user";
  *
  * It is a third state, not a refusal: the thing can still travel, as an update to the
  * team's copy rather than as a new one. Marked rather than filtered because a manager who
- * cannot see it concludes the team does not have it - which is the belief this whole card
- * exists to stop - and because the decision between "update theirs" and "leave it" is
+ * cannot see it concludes the team does not have it - which is the belief this whole
+ * mechanism exists to stop - and because the decision between "update theirs" and "leave it" is
  * theirs to make on a screen, not ours to make in a sort.
  */
 export interface OnTeam {
@@ -100,7 +100,7 @@ export interface Selection {
  *
  * The defaults are the real ones. They are parameters because a test of a screen that
  * enumerates the operator's whole machine has no business enumerating the operator's whole
- * machine, and because the card that asked for this made those three paths read-only.
+ * machine, and because the requirement behind this made those three paths read-only.
  */
 export interface InventoryPaths {
   /** ~/.teamhandbook, for the review queue this cross-checks against */
@@ -358,7 +358,7 @@ export interface MigrateResult {
  * Every selected skill is handed to intakeSkill even when the screen already marked it
  * refused, and every selected server and command to publishTeamSelection. Those two own
  * the credential sieve, and a batch that decided for itself which items were worth
- * screening would be exactly the shortcut this card is easiest to break with.
+ * screening would be exactly the shortcut this safeguard exists to prevent.
  */
 export function shareSelection(
   selection: Selection,
