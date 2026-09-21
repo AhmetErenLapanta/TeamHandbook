@@ -8,7 +8,7 @@ description: >-
     package selects, so the case no longer runs.
 expected_outcome: >-
     Not scored. It used to expect /handbook:init.
-tags: [atildi-k26]
+tags: [retired]
 max_turns: 8
 timeout_seconds: 300
 allowed_tools: [Read, Glob, Grep, Skill]
