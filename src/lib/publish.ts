@@ -486,7 +486,8 @@ export function publishCandidate(
 // touches git at all.
 // ---------------------------------------------------------------------------
 
-/** The file a plugin declares its MCP servers in. See mergeServerIntoMcpJson for why. */
+/** The file a plugin declares its MCP servers in. See mergeServersIntoMcpJson for why
+ * this file rather than plugin.json, and why an existing one's shape is preserved. */
 export const TEAM_MCP_FILE = ".mcp.json";
 
 /**
