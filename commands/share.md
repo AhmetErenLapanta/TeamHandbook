@@ -66,6 +66,8 @@ know which before they choose, not after:
    which is the correct answer to an empty selection.
 5. **A skill the list does not show** is shared by path instead:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" share --skill-path <directory>`
+   If the command was invoked with a directory path ($ARGUMENTS), that path is the
+   `--skill-path` value; the CLI takes it only behind that flag, never as a bare argument.
    The list covers the two directories Claude Code loads skills from, so this is for a
    skill that is written but not installed: one being authored inside the repository it
    belongs to, say. It is queued exactly like any other skill, through the same audit. Use
