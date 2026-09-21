@@ -7,7 +7,7 @@ description: >-
     conversational stand-in, not real state. A hand-written skill on disk, established
     in the prior turns.
 expected_outcome: >-
-    /handbook:share-skill. The user wrote it by hand, which is the discriminator against
+    /handbook:share. The user wrote it by hand, which is the discriminator against
     review, and it is not a session capture.
 tags: [nl-tutma]
 max_turns: 8
