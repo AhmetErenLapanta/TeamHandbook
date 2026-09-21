@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.9.6] - 2026-09-21
+
+- **The Code of Conduct pointed anyone reporting harassment at a private channel this
+  repository has never turned on.** Its Enforcement section named "GitHub's private
+  contact channels" — the same gap SECURITY.md carried until v0.9.2, left standing here.
+  Someone reporting abuse who trusted that sentence and opened a public issue thinking it
+  was private would have exposed themselves while trying to protect themselves. It now
+  says what's actually open, a public GitHub issue, and says so in the same breath as its
+  limit: nothing filed there is private.
+
 ## [0.9.5] - 2026-09-21
 
 - **No functional change; nothing an installed copy does is different.** A handful of
