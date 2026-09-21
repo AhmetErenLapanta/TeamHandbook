@@ -209,7 +209,7 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ## How it works
 
-<img src="docs/handbook-loop.svg" alt="What is already set up on your machine - a skill, an MCP server, or a slash command - travels to the team repository as one merge request, which somebody on the team reviews and merges. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-loop.svg" alt="What is already set up on your machine - a skill, an MCP server, or a slash command - travels to the team repository as a merge request, which somebody on the team reviews and merges. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
 
 - **One merge request, whatever the mix.** A selection of servers and commands travels as
   a single request, because each one raises the version and two requests opened before
