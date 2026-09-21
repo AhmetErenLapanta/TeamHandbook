@@ -1,91 +1,114 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 460" width="880" height="460"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 530" width="880" height="530"
      role="img" aria-labelledby="t d"
      font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
   <title id="t">How the team handbook reaches everyone</title>
-  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine
-    travels to the team repository as a merge request. Somebody on the team reviews and merges it.
-    That repository is a Claude Code plugin marketplace, and the same merge raises the plugin
-    version, which is Claude Code's signal that the plugin moved. Every teammate's next session
-    refreshes on that version and reports what landed, with nothing installed or configured by
-    hand.</desc>
+  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine can
+    go to the team repository, but not by the same route. A skill goes to /handbook:review first:
+    your verdict decides, and keeping it for yourself or for one project stops it there, on this
+    machine. The servers and commands you pick go straight out. Whatever does go out travels as a
+    merge request that somebody on the team reviews and merges. That repository is a Claude Code
+    plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal
+    that the plugin moved. Every teammate's next session refreshes on that version and reports what
+    landed, with nothing installed or configured by hand.</desc>
 
   <!-- No <style> element and no prefers-color-scheme query here, deliberately. GitHub's page theme
        is chosen in the site's own settings, while an SVG loaded through <img> resolves
        prefers-color-scheme against the browser instead, so the two disagree for anyone reading a
-       dark page on a light-preference machine: that combination is what made the previous revision
-       look like a light-theme image pasted onto a dark page. Every colour below is therefore one
-       neutral palette that carries its own contrast on both backgrounds, with no theme query to get
-       out of step. Measured: the grey at 4.30:1 on #ffffff and 4.40:1 on #0d1117, the accent at
-       3.75:1 and 5.05:1. 4.30 is the best a single colour can do across both backgrounds, so text
-       stays at 11px and above to sit inside the large-text threshold. Fills are translucent rather
-       than opaque so the host page shows through instead of a white card. -->
+       dark page on a light-preference machine: that combination is what made an earlier revision
+       look like a light-theme image pasted onto a dark page. One neutral palette, no theme query,
+       so there is nothing to get out of step.
+
+       Contrast is measured against the backdrop the text actually sits on - the card fill
+       composited over the page - not against the bare page, which flatters it by about 0.2.
+       #77797d measures 4.16:1 on the light card and 4.10:1 on the dark one (4.36 and 4.34 for the
+       few labels that sit directly on the page). That is near the best a single colour can do
+       across both backgrounds, and it is BELOW the 4.5:1 AA threshold for normal-size text.
+       WCAG's large-text exemption begins at 18px, or 14px bold, and nothing here qualifies for it,
+       so this is a measured shortfall rather than a pass. Two earlier mistakes are worth not
+       repeating: the card fill was .12, which pulls both backdrops toward mid-grey and cost about
+       0.35 of that ratio, and every secondary label carried fill-opacity=".85", where the same
+       colour measures 2.95:1 and 3.18:1. Neither is here now; hierarchy is size and weight only.
+
+       #818790 draws every rule and arrowhead: 3.46:1 and 4.94:1, clearing the 3:1 that WCAG 1.4.11
+       asks of a meaningful graphic. The accent #2f81f7 is a stroke and never text, measured at
+       3.58:1 and 4.77:1 on the same basis. -->
 
   <defs>
     <marker id="ar" markerWidth="9" markerHeight="9" refX="8.5" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0.5 L8.5 4.5 L0 8.5 Z" fill="#787c82"/>
+      <path d="M0 0.5 L8.5 4.5 L0 8.5 Z" fill="#818790"/>
     </marker>
   </defs>
 
   <!-- ── what is already on your machine ─────────────────────────────────── -->
 
-  <text x="32" y="26" font-size="13" font-weight="600" fill="#787c82">Already set up on your machine</text>
+  <text x="32" y="26" font-size="13" font-weight="600" fill="#77797d">Already set up on your machine</text>
 
-  <rect x="32" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".12" stroke="#8b949e" stroke-opacity=".5"/>
-  <text x="52" y="65" font-size="14.5" font-weight="600" fill="#787c82">A skill</text>
-  <text x="52" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">~/.claude/skills</text>
-  <text x="52" y="107" font-size="11.5" fill="#787c82" fill-opacity=".85">written by you, or proposed</text>
-  <text x="52" y="121" font-size="11.5" fill="#787c82" fill-opacity=".85">from a session and approved</text>
+  <rect x="32" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="65" font-size="14.5" font-weight="600" fill="#77797d">A skill</text>
+  <text x="52" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude/skills</text>
+  <text x="52" y="107" font-size="11.5" fill="#77797d">written by you, or proposed</text>
+  <text x="52" y="121" font-size="11.5" fill="#77797d">from a finished session</text>
 
-  <rect x="306" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".12" stroke="#8b949e" stroke-opacity=".5"/>
-  <text x="326" y="65" font-size="14.5" font-weight="600" fill="#787c82">An MCP server</text>
-  <text x="326" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">~/.claude.json</text>
-  <text x="326" y="107" font-size="11.5" fill="#787c82" fill-opacity=".85">the one you already have</text>
-  <text x="326" y="121" font-size="11.5" fill="#787c82" fill-opacity=".85">connected and working</text>
+  <rect x="306" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="326" y="65" font-size="14.5" font-weight="600" fill="#77797d">An MCP server</text>
+  <text x="326" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude.json</text>
+  <text x="326" y="107" font-size="11.5" fill="#77797d">the one you already have</text>
+  <text x="326" y="121" font-size="11.5" fill="#77797d">connected and working</text>
 
-  <rect x="580" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".12" stroke="#8b949e" stroke-opacity=".5"/>
-  <text x="600" y="65" font-size="14.5" font-weight="600" fill="#787c82">A slash command</text>
-  <text x="600" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">~/.claude/commands</text>
-  <text x="600" y="107" font-size="11.5" fill="#787c82" fill-opacity=".85">the one you already type</text>
-  <text x="600" y="121" font-size="11.5" fill="#787c82" fill-opacity=".85">in your own sessions</text>
+  <rect x="580" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="600" y="65" font-size="14.5" font-weight="600" fill="#77797d">A slash command</text>
+  <text x="600" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude/commands</text>
+  <text x="600" y="107" font-size="11.5" fill="#77797d">the one you already type</text>
+  <text x="600" y="121" font-size="11.5" fill="#77797d">in your own sessions</text>
 
-  <!-- The bracket is three routes arriving at one destination, NOT one request carrying all
-       three, and the label says "each one" for that reason. A skill travels on its own through
-       publishCandidate once it has a review verdict; servers and commands are the pair
-       publishTeamSelection batches into a single request. Drawing them as one request would
-       promise a skill and a server leaving together, which no code path does. -->
-  <path d="M166 126 V146 H714 V126" fill="none" stroke="#787c82" stroke-width="1.5" stroke-opacity=".8"/>
-  <path d="M440 126 V146" fill="none" stroke="#787c82" stroke-width="1.5" stroke-opacity=".8"/>
-  <path d="M440 146 V190" fill="none" stroke="#787c82" stroke-width="1.5" marker-end="url(#ar)"/>
-  <text x="462" y="166" font-size="12.5" font-weight="600" fill="#787c82">Each one travels as a merge request.</text>
-  <text x="462" y="182" font-size="11.5" fill="#787c82" fill-opacity=".85">Somebody on the team reviews it and merges it.</text>
+  <!-- The gate sits on the skill leg ALONE, and it is drawn rather than implied because it is the
+       product's stated invariant: nothing reaches the team without a verdict here. In the code a
+       picked skill reaches intakeSkill, which only copies it into the local queue and makes no git
+       or forge call at all; publishCandidate, the one function that opens a skill's merge request,
+       is reached from the review verdict and from nowhere else. A verdict of personal or project
+       ends the journey on this machine, which is why the box says it can stop here. Servers and
+       commands genuinely skip this step, so their legs genuinely bypass the box. -->
+  <path d="M166 126 V150" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="32" y="154" width="268" height="50" rx="10" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
+  <text x="52" y="177" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">/handbook:review</text>
+  <text x="52" y="194" font-size="11.5" fill="#77797d">your verdict, and it can stop here</text>
+
+  <!-- three legs meet: the skill's only after the gate, the other two directly -->
+  <path d="M166 204 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M440 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M714 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M166 220 H714" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M440 220 V264" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="462" y="240" font-size="12.5" font-weight="600" fill="#77797d">What goes out travels as a merge request.</text>
+  <text x="462" y="256" font-size="11.5" fill="#77797d">Somebody on the team reviews it and merges it.</text>
 
   <!-- ── the team repository ─────────────────────────────────────────────── -->
 
-  <rect x="32" y="196" width="816" height="122" rx="10" fill="#8b949e" fill-opacity=".12" stroke="#8b949e" stroke-opacity=".5"/>
-  <text x="52" y="221" font-size="13.5" font-weight="600" fill="#787c82">The team repository, which is a Claude Code plugin marketplace</text>
+  <rect x="32" y="270" width="816" height="122" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="295" font-size="13.5" font-weight="600" fill="#77797d">The team repository, which is a Claude Code plugin marketplace</text>
 
-  <text x="52" y="248" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">skills/&lt;name&gt;/</text>
-  <text x="52" y="265" font-size="11" fill="#787c82" fill-opacity=".85">with the evidence it came from</text>
+  <text x="52" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">skills/&lt;name&gt;/</text>
+  <text x="52" y="339" font-size="11" fill="#77797d">with the evidence it came from</text>
 
-  <text x="326" y="248" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">.mcp.json</text>
-  <text x="326" y="265" font-size="11" fill="#787c82" fill-opacity=".85">merged in, existing entries kept</text>
+  <text x="326" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.mcp.json</text>
+  <text x="326" y="339" font-size="11" fill="#77797d">merged in, existing entries kept</text>
 
-  <text x="600" y="248" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">commands/&lt;name&gt;.md</text>
-  <text x="600" y="265" font-size="11" fill="#787c82" fill-opacity=".85">found there by convention</text>
+  <text x="600" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">commands/&lt;name&gt;.md</text>
+  <text x="600" y="339" font-size="11" fill="#77797d">found there by convention</text>
 
-  <rect x="52" y="278" width="776" height="26" rx="8" fill="none" stroke="#2f81f7" stroke-opacity=".55" stroke-dasharray="5 4"/>
-  <text x="68" y="295" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#2f81f7">.claude-plugin/plugin.json</text>
-  <text x="276" y="295" font-size="12" font-weight="600" fill="#2f81f7">the same merge raises the version</text>
+  <rect x="52" y="352" width="776" height="26" rx="8" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
+  <text x="68" y="369" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.claude-plugin/plugin.json</text>
+  <text x="276" y="369" font-size="12" font-weight="600" fill="#77797d">the same merge raises the version</text>
 
   <!-- the version bump is the whole delivery mechanism -->
-  <path d="M440 318 V362" fill="none" stroke="#787c82" stroke-width="1.5" marker-end="url(#ar)"/>
-  <text x="462" y="338" font-size="12.5" font-weight="600" fill="#787c82">That version is Claude Code's signal to refresh.</text>
-  <text x="462" y="354" font-size="11.5" fill="#787c82" fill-opacity=".85">No CI, no access token, nobody needing push rights.</text>
+  <path d="M440 392 V436" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="462" y="412" font-size="12.5" font-weight="600" fill="#77797d">That version is Claude Code's signal to refresh.</text>
+  <text x="462" y="428" font-size="11.5" fill="#77797d">No CI, no access token, nobody needing push rights.</text>
 
   <!-- ── the arriving side ───────────────────────────────────────────────── -->
 
-  <rect x="32" y="368" width="816" height="82" rx="10" fill="#8b949e" fill-opacity=".12" stroke="#8b949e" stroke-opacity=".5"/>
-  <text x="52" y="393" font-size="13.5" font-weight="600" fill="#787c82">Every teammate's next session picks it up on its own</text>
-  <text x="52" y="416" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#787c82">team-handbook: 2 new skill(s) and 1 new command(s) since your last session: ...</text>
-  <text x="52" y="438" font-size="11.5" fill="#787c82" fill-opacity=".85">They subscribed once. Nothing is installed by hand, and nothing is deleted if the team drops the plugin.</text>
+  <rect x="32" y="442" width="816" height="82" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="467" font-size="13.5" font-weight="600" fill="#77797d">Every teammate's next session picks it up on its own</text>
+  <text x="52" y="490" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">team-handbook: 2 new skill(s) and 1 new command(s) since your last session: ...</text>
+  <text x="52" y="512" font-size="11.5" fill="#77797d">They subscribed once. Nothing is installed by hand, and nothing is deleted if the team drops the plugin.</text>
 </svg>
