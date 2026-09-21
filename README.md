@@ -209,7 +209,27 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ## How it works
 
-<img src="docs/handbook-loop.svg" alt="A coding session produces evidence and a redacted transcript slice; one harvest call through your own claude CLI proposes up to three skills scored on five criteria, with anything under 4/10 dropped before you see it; the next session asks whether each one goes to the team handbook, into the project it came from, or no further than your own machine." width="880">
+<img src="docs/handbook-loop.svg" alt="What is already set up on your machine - a skill, an MCP server, or a slash command - travels to the team repository as one merge request, which somebody on the team reviews and merges. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
+
+- **One merge request, whatever the mix.** A selection of servers and commands travels as
+  a single request, because each one raises the version and two requests opened before
+  either is merged claim the same number. One clone, one bump, one request.
+- **The version bump is the delivery.** Nothing pushes to your teammates. The raised
+  version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
+  moved, and refreshing on it is something each copy does for itself.
+- **Nothing is installed by hand on the other end.** A merged server lands in the repo's
+  `.mcp.json` and a merged command in `commands/`, both of which Claude Code reads by
+  convention, so a teammate configures nothing.
+- **Receiving is a standing subscription, not a push.** Nobody can write to your
+  `~/.claude`; you subscribe yourself with `/plugin`, and the team plugin's own hook says
+  what arrived instead of letting it land in silence.
+
+### Where the skills come from
+
+The servers and commands you share are already on your machine. Skills are the one thing
+that has to be noticed first, and noticing never happens on its own, so that inlet is
+automatic: TeamHandbook reads each finished session and proposes what it found. This is
+the `/handbook:learn` and `/handbook:review` path, not the loop above.
 
 - **Capture is a hook, not a tool call.** The model won't remember to save a skill at
   the worst moment - a failing build, a frustrated developer. Hooks fire every time.
