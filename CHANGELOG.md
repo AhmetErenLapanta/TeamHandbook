@@ -27,6 +27,13 @@ All notable changes to this project are documented here. The format follows
   for a skill that is written but not installed, screens it exactly as it screens a
   listed one, and this time the usage line says it exists.
 
+## [0.9.7] - 2026-09-21
+
+- **No functional change; nothing an installed copy does is different.** Five notes in
+  the eval suite explained why a case measures what it does in words only someone already
+  close to the project could follow. They're rewritten for a reader with no other context:
+  what a case's score can and can't be taken as evidence of, and why, stated plainly.
+
 ## [0.9.6] - 2026-09-21
 
 - **The Code of Conduct pointed anyone reporting harassment at a private channel this

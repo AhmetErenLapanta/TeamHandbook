@@ -1,6 +1,6 @@
 ---
 description: >-
-    Mandated by the measurement brief. A real collision: review says "Review what
+    A real collision: review says "Review what
     TeamHandbook learned" while status carries the word "queue" in its own
     description, so both readings are defensible from the descriptions alone.
 expected_outcome: >-

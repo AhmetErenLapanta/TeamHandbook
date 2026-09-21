@@ -31,8 +31,9 @@ to add them.
 
 The held-out half holds twenty-five routing sentences and six false-positive probes, all
 written by Product against the team-facing framing, and none of them seen by any
-description in this repo. One more was retired after the gate's leak check was fixed, and
-one is held out of the headline while its expected answer is in dispute;
+description in this repo. One more was retired because its sentence repeated a command's
+own trigger list, and one is held out of the headline while its expected answer is in
+dispute;
 `tutma/README.md` says which and why.
 
 ## The ceiling, and why there is a hard subset
