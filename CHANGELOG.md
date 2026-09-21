@@ -9,13 +9,13 @@ All notable changes to this project are documented here. The format follows
 - **Three commands shared what was already on your machine, and a plain sentence reached
   the wrong one of them.** `/handbook:share-skill` took one skill, `/handbook:mcp` took
   one server, and `/handbook:migrate` took a selection of skills, servers and commands.
-  Routing was measured against that split twice; both times the answer tried was better
-  descriptions, and both times it was withdrawn. The three are now one command,
-  `/handbook:share`, which always opens the selection screen. Naming a single server
-  therefore costs one step more than it did, which is the price of having one door
-  instead of three. The screen itself, the credential screen behind it, the collision
-  check, the single merge request and the per-name `--update` are the ones
-  `/handbook:migrate` already carried.
+  Which of the three a plain sentence should reach was not something the wording of any
+  one description could settle, because the ambiguity was the split itself. The three
+  are now one command, `/handbook:share`, which always opens the selection screen.
+  Naming a single server therefore costs one step more than it did, which is the price
+  of having one door instead of three. The screen itself, the credential screen behind
+  it, the collision check, the single merge request and the per-name `--update` are the
+  ones `/handbook:migrate` already carried.
 - **One command still does not mean one destination, and still says so.** A skill you
   pick is copied into the review queue and stays on this machine; a server or a command
   you pick goes out in a merge request other people can read. The result names those two
@@ -26,6 +26,16 @@ All notable changes to this project are documented here. The format follows
   the capability was real and undocumented. `/handbook:share` takes `--skill-path <dir>`
   for a skill that is written but not installed, screens it exactly as it screens a
   listed one, and this time the usage line says it exists.
+
+## [0.9.6] - 2026-09-21
+
+- **The Code of Conduct pointed anyone reporting harassment at a private channel this
+  repository has never turned on.** Its Enforcement section named "GitHub's private
+  contact channels" — the same gap SECURITY.md carried until v0.9.2, left standing here.
+  Someone reporting abuse who trusted that sentence and opened a public issue thinking it
+  was private would have exposed themselves while trying to protect themselves. It now
+  says what's actually open, a public GitHub issue, and says so in the same breath as its
+  limit: nothing filed there is private.
 
 ## [0.9.5] - 2026-09-21
 

@@ -33,10 +33,10 @@ Examples of unacceptable behavior include:
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer through a GitHub issue or, for sensitive
-matters, GitHub's private contact channels. All complaints will be reviewed and
-investigated promptly and fairly.
+Report an instance of abusive, harassing, or otherwise unacceptable behavior by
+opening a GitHub issue on this repository. Anything filed this way is public;
+this repository has no private reporting channel configured today. All
+complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 
