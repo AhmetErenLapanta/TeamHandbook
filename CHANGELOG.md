@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-21
 
 - **Three commands shared what was already on your machine, and a plain sentence reached
   the wrong one of them.** `/handbook:share-skill` took one skill, `/handbook:mcp` took
@@ -26,6 +26,8 @@ All notable changes to this project are documented here. The format follows
   the capability was real and undocumented. `/handbook:share` takes `--skill-path <dir>`
   for a skill that is written but not installed, screens it exactly as it screens a
   listed one, and this time the usage line says it exists.
+- Measurement-only: one held-out eval case's tag now names why it's excluded from every
+  package instead of pointing at an internal record; no case count or scored input changed.
 
 ## [0.9.7] - 2026-09-21
 
