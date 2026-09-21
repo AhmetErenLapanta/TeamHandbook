@@ -10,9 +10,9 @@ and the copies the user already uses keep working untouched.
 
 This is the only command for sharing something that already exists here, and it always
 opens the selection screen, including when the user names a single server or a single
-skill. Naming one thing therefore costs one extra step, and that price is deliberate:
-three separate commands for this were measured twice, and a plain sentence about sharing
-reached the wrong one of them often enough that the split, not the wording, was the fault.
+skill. Naming one thing therefore costs one extra step, and that price is deliberate: a
+plain sentence about sharing reached the wrong one of three commands often enough that
+the split, not the wording of any one of them, was the fault.
 
 Three kinds of thing can travel, and two different things happen to them. The user has to
 know which before they choose, not after:

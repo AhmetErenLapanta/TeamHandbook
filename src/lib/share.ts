@@ -20,14 +20,14 @@ import type { ForgeRunner } from "./forge.js";
 //
 // This used to be three commands. One moved a single skill, one moved a single server,
 // and this one moved a selection of both; each was right about the thing it did. Two
-// things were measured against that split. A manager arrives with twenty-two skills and
+// measurements stand against that split. A manager arrives with twenty-two skills and
 // two servers installed, of which four should go to the team, and doing that one command
 // at a time is a chore nobody finishes - zero skills reached a real team repository in
-// the month before a selection existed. And routing failed twice: a plain sentence about
-// sharing had three commands to choose between and picked the wrong one, which no
-// rewriting of the three descriptions fixed. So there is one door, and it always opens
-// on the selection screen. Naming a single item costs one more step; that price was paid
-// deliberately.
+// the month before a selection existed. And a plain sentence about sharing had three
+// commands to choose between and reached the wrong one, which the wording of no single
+// description could settle, because the ambiguity was the split. So there is one door,
+// and it always opens on the selection screen. Naming a single item costs one more step;
+// that price was paid deliberately.
 //
 // This module reads that setup and runs the selection. It opens no new route out of the
 // machine: a selected skill goes through intakeSkill, a selected server or command through
@@ -103,9 +103,8 @@ export interface Selection {
    * The inventory lists the two directories Claude Code loads skills from, so a skill
    * being written somewhere else - in the repository it belongs to, before it is
    * installed - cannot appear on the screen at all. The single-skill command this
-   * replaced took any path on disk and never said so in its own instructions; the
-   * capability is kept and now written down, rather than dropped because nobody had
-   * documented it.
+   * replaced took any path on disk without saying so in its own instructions; the
+   * capability is kept, and this time the usage line carries it.
    */
   skillPaths?: string[];
 }
