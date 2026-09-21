@@ -344,22 +344,6 @@ export function mergeServersIntoMcpJson(
   return { merged: JSON.stringify(document ?? { mcpServers: {} }, null, 2) + "\n", collided, replaced };
 }
 
-/** One server at a time. A collision is its only outcome, so it throws. */
-export function mergeServerIntoMcpJson(
-  existing: string | null,
-  name: string,
-  config: Record<string, unknown>,
-): string {
-  const { merged, collided } = mergeServersIntoMcpJson(existing, [{ name, scope: "user", config }]);
-  if (collided.length) {
-    throw new Error(
-      `the team repository already declares an MCP server named "${name}". ` +
-        "Rename yours, or edit the team's .mcp.json directly.",
-    );
-  }
-  return merged;
-}
-
 /** The short form for a list, where refusalMessage's three sentences of advice do not fit. */
 export function refusalSummary(audit: McpAudit): string {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;

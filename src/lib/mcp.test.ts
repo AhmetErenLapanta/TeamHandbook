@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { auditServer, formatServerList, mergeServerIntoMcpJson, readLocalServers, refusalMessage } from "./mcp.js";
+import { auditServer, formatServerList, mergeServersIntoMcpJson, readLocalServers, refusalMessage } from "./mcp.js";
 import { detectSecret } from "./secrets.js";
 
 let dir: string;
@@ -150,20 +150,21 @@ describe("readLocalServers", () => {
   });
 });
 
-describe("mergeServerIntoMcpJson", () => {
+describe("mergeServersIntoMcpJson", () => {
   const gitlab = { type: "http", url: "https://gitlab.com/api/v4/mcp" };
+  const one = (config: Record<string, unknown> = gitlab) => [{ name: "gitlab", scope: "user" as const, config }];
 
   it("given no file in the team repository yet, when a server is added, then it is created in the documented shape", () => {
-    const text = mergeServerIntoMcpJson(null, "gitlab", gitlab);
+    const { merged } = mergeServersIntoMcpJson(null, one());
 
-    expect(JSON.parse(text)).toEqual({ mcpServers: { gitlab } });
-    expect(text.endsWith("\n")).toBe(true);
+    expect(JSON.parse(merged)).toEqual({ mcpServers: { gitlab } });
+    expect(merged.endsWith("\n")).toBe(true);
   });
 
   it("given a file that already wraps its servers, when a server is added, then the existing one is untouched", () => {
     const existing = JSON.stringify({ mcpServers: { linear: { type: "sse", url: "https://mcp.linear.app/sse" } } }, null, 2);
 
-    const parsed = JSON.parse(mergeServerIntoMcpJson(existing, "gitlab", gitlab));
+    const parsed = JSON.parse(mergeServersIntoMcpJson(existing, one()).merged);
 
     expect(parsed.mcpServers.linear).toEqual({ type: "sse", url: "https://mcp.linear.app/sse" });
     expect(parsed.mcpServers.gitlab).toEqual(gitlab);
@@ -172,7 +173,7 @@ describe("mergeServerIntoMcpJson", () => {
   it("given a file written as a bare server map, when a server is added, then its shape is preserved rather than normalised", () => {
     const existing = JSON.stringify({ terraform: { command: "terraform-mcp" } }, null, 2);
 
-    const parsed = JSON.parse(mergeServerIntoMcpJson(existing, "gitlab", gitlab));
+    const parsed = JSON.parse(mergeServersIntoMcpJson(existing, one()).merged);
 
     // wrapping this file would demote `terraform` from a declaration to a stray key and
     // the team's working server would quietly stop loading
@@ -181,14 +182,37 @@ describe("mergeServerIntoMcpJson", () => {
     expect(parsed.gitlab).toEqual(gitlab);
   });
 
-  it("given the team already declares that name, when a server is added, then it refuses instead of overwriting theirs", () => {
+  it("given the team already declares that name, when a server is added, then it collides instead of overwriting theirs", () => {
+    const theirs = { type: "http", url: "https://gitlab.example.com/api/v4/mcp" };
+    const existing = JSON.stringify({ mcpServers: { gitlab: theirs } });
+
+    const { merged, collided, replaced } = mergeServersIntoMcpJson(existing, one());
+
+    // the default answer to a matching name is a refusal, and the refusal has to leave
+    // their definition byte-for-byte where it was: consent to replace is a second request
+    expect(collided).toEqual(["gitlab"]);
+    expect(replaced).toEqual([]);
+    expect(JSON.parse(merged).mcpServers.gitlab).toEqual(theirs);
+  });
+
+  it("given the publisher consented to that one name, when it is merged, then theirs is replaced and the swap is reported", () => {
     const existing = JSON.stringify({ mcpServers: { gitlab: { type: "http", url: "https://gitlab.example.com/api/v4/mcp" } } });
 
-    expect(() => mergeServerIntoMcpJson(existing, "gitlab", gitlab)).toThrow(/already declares/);
+    const { merged, collided, replaced } = mergeServersIntoMcpJson(existing, one(), (name) => name === "gitlab");
+
+    expect(collided).toEqual([]);
+    expect(replaced).toEqual(["gitlab"]);
+    expect(JSON.parse(merged).mcpServers.gitlab).toEqual(gitlab);
   });
 
   it("given a team file that is not valid JSON, when a server is added, then nothing is overwritten", () => {
-    expect(() => mergeServerIntoMcpJson('{"mcpServers": ', "gitlab", gitlab)).toThrow(/not valid JSON/);
+    // a property of the repository, not of any one server: no selection survives it, so it
+    // throws rather than joining the per-server collisions
+    expect(() => mergeServersIntoMcpJson('{"mcpServers": ', one())).toThrow(/not valid JSON/);
+  });
+
+  it("given a team file that is not a JSON object, when a server is added, then nothing is overwritten", () => {
+    expect(() => mergeServersIntoMcpJson("[]", one())).toThrow(/not a JSON object/);
   });
 });
 
