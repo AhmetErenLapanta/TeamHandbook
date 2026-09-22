@@ -132,24 +132,14 @@ correctly: they are not, yet.
 
 ## Nothing ships until you say so
 
+<img src="docs/handbook-approve-arrive.svg" alt="One skill, on two machines. On the left, /handbook:review on the machine that captured it, as the engine underneath prints it: a pending candidate called no-db-mocks, marked a correction, scored 8 out of 10 across recurrence, unfindability, generality, durability and cost of error, suggested for the team, and noted as something this developer has told Claude in 3 sessions. Below it the skill itself, then the grounded case it came from: the developer's own sentence, never mock the DB here, use the testcontainer fixture; the command that failed, npm run test:integration, and the error it gave; the command that resolved it and the file edited for the fix. The verdict is the last block: shared with the team as a pull request, whose link is printed, and the line under it says somebody has to merge that request before every teammate gets it at their next session, and that the same request raises the handbook to v0.1.1, which is what makes their copies refresh. On the right, a teammate's next session, which opens with one line from the team plugin saying one new skill has arrived since their last session, and the same skill file, whole, now on their machine." width="880">
+
 Two decisions hide behind that sentence, and each one belongs to the person it affects.
 
 ### What leaves your machine
 
 `/handbook:review` shows each candidate with the evidence that produced it - your own
-words, the failing command, the fix:
-
-```
-candidate: no-db-mocks-in-integration-tests  [correction]  [scope: team]  [status: pending]
-score:     8/10  (recurrence 1, unfindability 2, generality 2, durability 2, costOfError 1)
-repeated:  you have told Claude this in 3 sessions
-
-── grounded case ──
-you said:  "we never mock the DB in integration tests here - use the testcontainer fixture"
-expect:    Integration tests start a testcontainer instead of a mock.
-```
-
-Then it asks where the skill goes and you pick an answer:
+words, the failing command, the fix - and then asks where the skill goes:
 
 - **Share with the team** - a merge request to the handbook repo: everyone, every project
 - **Add to the project it came from** - that project's `.claude/skills`, named in the

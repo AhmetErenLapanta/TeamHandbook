@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 474" width="880" height="474"
+     role="img" aria-labelledby="t d"
+     font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace"
+     font-size="11">
+  <title id="t">One review screen, and the same skill on a teammate&#x27;s machine</title>
+  <desc id="d">One skill, on two machines. On the left, /handbook:review on the machine that captured it, as the engine underneath prints it: a pending candidate called no-db-mocks, marked a correction, scored 8 out of 10 across recurrence, unfindability, generality, durability and cost of error, suggested for the team, and noted as something this developer has told Claude in 3 sessions. Below it the skill itself, then the grounded case it came from: the developer&#x27;s own sentence, never mock the DB here, use the testcontainer fixture; the command that failed, npm run test:integration, and the error it gave; the command that resolved it and the file edited for the fix. The verdict is the last block: shared with the team as a pull request, whose link is printed, and the line under it says somebody has to merge that request before every teammate gets it at their next session, and that the same request raises the handbook to v0.1.1, which is what makes their copies refresh. On the right, a teammate&#x27;s next session, which opens with one line from the team plugin saying one new skill has arrived since their last session, and the same skill file, whole, now on their machine.</desc>
+
+  <!-- Presentation attributes, no <style> element, for the reason the loop diagram beside
+       this one records: an SVG loaded through <img> is a document of its own, and the less of
+       it leans on the renderer's CSS handling the fewer ways it has to arrive wrong. There is
+       no prefers-color-scheme query here either, and this file needs none: a terminal is dark
+       chrome on a light page and on a dark one, so the framed text keeps one fixed palette and
+       only the pane's own edge has to survive both page backgrounds.
+
+       Contrast, measured (WCAG, sRGB), against the two backdrops that actually occur - the
+       GitHub light page #ffffff and the dark page #0d1117:
+
+         pane edge #5f6975 is 3.39:1 on the dark page and 5.58:1 on the light one. That edge is
+         what makes the frame a window, so it is held to 1.4.11's 3:1 on BOTH. The pane fill
+         #1e242d is 1.21:1 against the dark page: the fill does not separate the frame there,
+         and is not asked to. The edge does.
+
+       Text, measured against the pane fill it sits on:
+
+         #c9d1d9  10.11:1   output
+         #a5d6ff  10.15:1   the developer's quoted sentence
+         #7ee787  10.16:1   what each machine reports happened
+         #79c0ff   8.02:1   the skill's name and the request's link
+         #9aa4b0   6.18:1   pane title
+         #8b949e   5.07:1   field labels, the frontmatter fences, the grounded-case rule
+
+       The last line is why there is no dimmer fourth grey. On a pane this dark AA's 4.5:1 is
+       reached at about #818b98, so "quieter than a label" and "passes AA" cannot both hold;
+       the rules take the label colour and position carries the hierarchy instead. Nothing here
+       is large text - 11px and 11.5px - so the 3:1 large-text exemption never applies. -->
+
+  <g>
+    <rect x="8" y="8" width="631" height="458" rx="8" fill="#1e242d" stroke="#5f6975"/>
+    <text x="22" y="27" font-size="11.5" font-weight="600" fill="#9aa4b0">alice  ·  /handbook:review  -&gt;  review.js show, then approve --to team</text>
+    <line x1="8" y1="38" x2="639" y2="38" stroke="#5f6975"/>
+    <text x="22" y="63" xml:space="preserve"><tspan fill="#8b949e">candidate: </tspan><tspan fill="#79c0ff">no-db-mocks</tspan><tspan fill="#8b949e">  [correction]  [scope: team]  [status: pending]</tspan></text>
+    <text x="22" y="79" xml:space="preserve"><tspan fill="#8b949e">score:     </tspan><tspan fill="#c9d1d9">8/10  (recurrence 1, unfindability 2, generality 2, durability 2, costOfError 1)</tspan></text>
+    <text x="22" y="95" xml:space="preserve"><tspan fill="#8b949e">project:   </tspan><tspan fill="#c9d1d9">api&#x27;s .claude/skills (where it was captured, not this project)</tspan></text>
+    <text x="22" y="111" xml:space="preserve"><tspan fill="#8b949e">suggested: </tspan><tspan fill="#c9d1d9">share with the team (PR)</tspan></text>
+    <text x="22" y="127" xml:space="preserve"><tspan fill="#8b949e">repeated:  </tspan><tspan fill="#c9d1d9">you have told Claude this in 3 sessions</tspan></text>
+    <text x="22" y="159" xml:space="preserve"><tspan fill="#8b949e">---</tspan></text>
+    <text x="22" y="175" xml:space="preserve"><tspan fill="#8b949e">name: </tspan><tspan fill="#79c0ff">no-db-mocks</tspan></text>
+    <text x="22" y="191" xml:space="preserve"><tspan fill="#8b949e">description: </tspan><tspan fill="#c9d1d9">Integration tests use the container fixture, never a mock.</tspan></text>
+    <text x="22" y="207" xml:space="preserve"><tspan fill="#8b949e">---</tspan></text>
+    <text x="22" y="239" xml:space="preserve"><tspan fill="#c9d1d9">Use the shared testcontainer fixture. A mocked repository passes against a schema</tspan></text>
+    <text x="22" y="255" xml:space="preserve"><tspan fill="#c9d1d9">nobody migrated, so it stays green while the query it stands in for is broken.</tspan></text>
+    <text x="22" y="287" xml:space="preserve"><tspan fill="#8b949e">── grounded case ──</tspan></text>
+    <text x="22" y="303" xml:space="preserve"><tspan fill="#8b949e">you said:  </tspan><tspan fill="#a5d6ff">&quot;never mock the DB here - use the testcontainer fixture&quot;</tspan></text>
+    <text x="22" y="319" xml:space="preserve"><tspan fill="#8b949e">failed:    </tspan><tspan fill="#c9d1d9">npm run test:integration</tspan></text>
+    <text x="22" y="335" xml:space="preserve"><tspan fill="#8b949e">error:     </tspan><tspan fill="#c9d1d9">could not connect to the database: connection refused</tspan></text>
+    <text x="22" y="351" xml:space="preserve"><tspan fill="#8b949e">resolved:  </tspan><tspan fill="#c9d1d9">npm run test:integration -- --testcontainer</tspan></text>
+    <text x="22" y="367" xml:space="preserve"><tspan fill="#8b949e">edits:     </tspan><tspan fill="#c9d1d9">tests/support/db.ts</tspan></text>
+    <text x="22" y="383" xml:space="preserve"><tspan fill="#8b949e">expect:    </tspan><tspan fill="#c9d1d9">Integration tests start a testcontainer instead of a mock.</tspan></text>
+    <text x="22" y="415" xml:space="preserve"><tspan fill="#7ee787">Shared &quot;no-db-mocks&quot; with the team: </tspan><tspan fill="#79c0ff">https://github.com/acme/team-handbook/pull/7</tspan></text>
+    <text x="22" y="431" xml:space="preserve"><tspan fill="#7ee787">Merge that request and every teammate gets it at their next session. It also raises the</tspan></text>
+    <text x="22" y="447" xml:space="preserve"><tspan fill="#7ee787">handbook to v0.1.1, which is what makes teammates&#x27; copies refresh.</tspan></text>
+  </g>
+
+  <g>
+    <rect x="670" y="56" width="202" height="362" rx="8" fill="#1e242d" stroke="#5f6975"/>
+    <text x="684" y="75" font-size="11.5" font-weight="600" fill="#9aa4b0">bob  ·  next session</text>
+    <line x1="670" y1="86" x2="872" y2="86" stroke="#5f6975"/>
+    <text x="684" y="111" xml:space="preserve"><tspan fill="#7ee787">acme: 1 new skill(s) since</tspan></text>
+    <text x="684" y="127" xml:space="preserve"><tspan fill="#7ee787">your last session:</tspan></text>
+    <text x="684" y="143" xml:space="preserve"><tspan fill="#7ee787">no-db-mocks.</tspan></text>
+    <text x="684" y="175" xml:space="preserve"><tspan fill="#8b949e">---</tspan></text>
+    <text x="684" y="191" xml:space="preserve"><tspan fill="#8b949e">name: </tspan><tspan fill="#79c0ff">no-db-mocks</tspan></text>
+    <text x="684" y="207" xml:space="preserve"><tspan fill="#8b949e">description: </tspan><tspan fill="#c9d1d9">Integration</tspan></text>
+    <text x="684" y="223" xml:space="preserve"><tspan fill="#c9d1d9">tests use the container</tspan></text>
+    <text x="684" y="239" xml:space="preserve"><tspan fill="#c9d1d9">fixture, never a mock.</tspan></text>
+    <text x="684" y="255" xml:space="preserve"><tspan fill="#8b949e">---</tspan></text>
+    <text x="684" y="287" xml:space="preserve"><tspan fill="#c9d1d9">Use the shared</tspan></text>
+    <text x="684" y="303" xml:space="preserve"><tspan fill="#c9d1d9">testcontainer fixture. A</tspan></text>
+    <text x="684" y="319" xml:space="preserve"><tspan fill="#c9d1d9">mocked repository passes</tspan></text>
+    <text x="684" y="335" xml:space="preserve"><tspan fill="#c9d1d9">against a schema</tspan></text>
+    <text x="684" y="351" xml:space="preserve"><tspan fill="#c9d1d9">nobody migrated, so it</tspan></text>
+    <text x="684" y="367" xml:space="preserve"><tspan fill="#c9d1d9">stays green while the</tspan></text>
+    <text x="684" y="383" xml:space="preserve"><tspan fill="#c9d1d9">query it stands in for is</tspan></text>
+    <text x="684" y="399" xml:space="preserve"><tspan fill="#c9d1d9">broken.</tspan></text>
+  </g>
+</svg>
