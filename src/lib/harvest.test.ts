@@ -99,7 +99,7 @@ describe("parseHarvestResponse", () => {
   });
   it("given prose after the array containing a bracket, when parsed, then the array is still read", () => {
     const raw =
-      '```json\n[]\n```\n\nNothing new here — see [the earlier note] for why.';
+      '```json\n[]\n```\n\nNothing new here - see [the earlier note] for why.';
 
     expect(parseHarvestResponse(raw, grounding)).toEqual([]);
   });
@@ -763,7 +763,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
     });
     const item = rawItem({
       name: "no-db-mocks",
-      description: "Use when writing database tests — use testcontainers instead of mocks.",
+      description: "Use when writing database tests - use testcontainers instead of mocks.",
       quote: "we never mock the database, use testcontainers",
     });
 
@@ -773,7 +773,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
       withReply(JSON.stringify([item])),
     );
     await harvestSession(
-      teach("don't mock the database — use testcontainers instead", "s2"),
+      teach("don't mock the database - use testcontainers instead", "s2"),
       home,
       withReply("[]"),
     );
@@ -805,7 +805,7 @@ describe("harvestSession (end to end with a fake runner)", () => {
       withReply(JSON.stringify([unrelated])),
     );
     const repeat = await harvestSession(
-      teach("don't mock the database — use testcontainers instead", "s2"),
+      teach("don't mock the database - use testcontainers instead", "s2"),
       home,
       withReply("[]"),
     );
@@ -834,7 +834,7 @@ describe("suggestedTarget routing (regression: a project lesson must never defau
       { runner: async () => reply, remoteUrl: () => null, listSkills: () => [], skillDirs: () => [] },
     );
     const meta = readCandidateMeta(join(candidatesDir(home), "tests-live-under-test-dir"))!;
-    // scope collapses to "team" for the frontmatter (no remote to name) — but the
+    // scope collapses to "team" for the frontmatter (no remote to name) - but the
     // ROUTING must still follow the model's judgment, or a one-repo rule gets
     // published to the whole team by a bare `approve`.
     expect(meta.suggestedTarget).toBe("project");

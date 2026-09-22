@@ -14,7 +14,7 @@ context.
 Offer only when ALL of these hold:
 
 - The task is **complete and verified** (tests/build passed, or the user confirmed).
-- It took **multiple meaningful steps in a deliberate order** — the kind of thing a
+- It took **multiple meaningful steps in a deliberate order** - the kind of thing a
   teammate would do differently (or slower, or wrong) without guidance.
 - The knowledge is **not trivially rediscoverable** from the code, README, or a
   quick search: project conventions, cross-file wiring, easy-to-miss requirements.
@@ -30,11 +30,11 @@ do not offer again.
 One short sentence, after the task is done, e.g.:
 
 > This looked like a repeatable procedure (X steps, touches the usual Y conventions)
-> — want me to capture it as a skill candidate with /handbook:learn? You'll choose at
+> - want me to capture it as a skill candidate with /handbook:learn? You'll choose at
 > review whether to keep it for yourself, put it in this repo, or share it with the team.
 
 If the user agrees, follow the `/handbook:learn` command's procedure mode: gather
 the goal, the ordered meaningful steps actually taken, how success was verified,
-and the files touched — strictly from this session, inventing nothing — and submit
+and the files touched - strictly from this session, inventing nothing - and submit
 them. The candidate is scored (a low score travels with it as advice at review, never
 as a veto); relay the CLI's message verbatim.

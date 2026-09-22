@@ -162,7 +162,7 @@ describe("doctor team MCP server checks", () => {
 
   it("given the team has not shared a server yet, when checked, then it is green rather than a warning", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
-    // init.ts only creates .mcp.json once the team shares its first server — a fresh
+    // init.ts only creates .mcp.json once the team shares its first server - a fresh
     // team install has no such file, and that must not be reported as a fault.
     const report = runDoctor(home, happyRunner, marketRoot);
     expect(byName(report, "team MCP servers").level).toBe("ok");
@@ -181,7 +181,7 @@ describe("doctor team MCP server checks", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "slack" }, home);
     writeMcpJson("slack", JSON.stringify({ mcpServers: { slack: { url: "https://mcp.slack.com/mcp" } } }));
     // Verbatim line from `claude mcp list` captured on a live, real install (2026-09-19,
-    // Claude Code CLI) — not a synthetic fixture.
+    // Claude Code CLI) - not a synthetic fixture.
     const runner: CommandRunner = (cmd, args) => {
       if (cmd === "claude" && args[0] === "mcp") {
         return "Checking MCP server health…\n\nplugin:slack:slack: https://mcp.slack.com/mcp (HTTP) - ✔ Connected\n";
@@ -195,7 +195,7 @@ describe("doctor team MCP server checks", () => {
 
   // Guards against a bare-name fallback in the matcher (removed after being found to
   // let a personal server that merely SHARES A NAME with a never-installed team server
-  // — "notion" is a realistic collision — read as the team's server connecting: a
+  // - "notion" is a realistic collision - read as the team's server connecting: a
   // false "connected" for a server that was never even pulled onto this machine).
   // Confirmed against the old fallback line directly: temporarily restoring
   // `?? statuses.get(name)` and running just this test produced
@@ -204,8 +204,8 @@ describe("doctor team MCP server checks", () => {
   it("does not mistake an unrelated personal server for the team's never-installed one, even when the names collide", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     writeMcpJson("acme", JSON.stringify({ mcpServers: { notion: { url: "https://mcp.notion.com/mcp" } } }));
-    // No "plugin:acme:notion" line — the team's copy was never installed on this
-    // machine — but the user's own, entirely unrelated "notion" server IS connected.
+    // No "plugin:acme:notion" line - the team's copy was never installed on this
+    // machine - but the user's own, entirely unrelated "notion" server IS connected.
     const runner: CommandRunner = (cmd, args) =>
       cmd === "claude" && args[0] === "mcp" ? "notion: https://mcp.notion.com/mcp - ✔ Connected\n" : "";
     const report = runDoctor(home, runner, marketRoot);
@@ -215,10 +215,10 @@ describe("doctor team MCP server checks", () => {
   });
 
   // A server that is installed but not authenticated is a normal, temporary setup
-  // step, not a broken install, so this must warn — the same severity checkForge uses
-  // for the same class of situation ("installed but not finished authenticating") —
+  // step, not a broken install, so this must warn - the same severity checkForge uses
+  // for the same class of situation ("installed but not finished authenticating") -
   // rather than fail the whole doctor run.
-  it("warns, naming the reason, when a shared server needs authentication — consistent with checkForge's severity for the same situation", () => {
+  it("warns, naming the reason, when a shared server needs authentication - consistent with checkForge's severity for the same situation", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: { url: "https://billing.example.com/mcp" } } }));
     // The status text itself ("Needs authentication") is verbatim from a real
@@ -270,7 +270,7 @@ describe("doctor team MCP server checks", () => {
   it("never reports a server as connected when `claude mcp list` returns an unrecognized format", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     writeMcpJson("acme", JSON.stringify({ mcpServers: { billing: {} } }));
-    // Synthetic — this is what a genuinely reformatted CLI output would look like, not
+    // Synthetic - this is what a genuinely reformatted CLI output would look like, not
     // captured from a real run. The point being proven is that a non-matching payload
     // never collapses to "connected".
     const runner: CommandRunner = (cmd, args) =>
@@ -293,7 +293,7 @@ describe("doctor team MCP server checks", () => {
   it("reads a bare server map correctly even when one entry happens to be named mcpServers", () => {
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "acme" }, home);
     // A bare map (no wrapper) whose own server is literally called "mcpServers" must not
-    // be misread as the {"mcpServers": {...}} wrapper — mcp.ts's reader guards this with
+    // be misread as the {"mcpServers": {...}} wrapper - mcp.ts's reader guards this with
     // a plain-object check, and this check must match it exactly.
     writeMcpJson("acme", JSON.stringify({ mcpServers: "not-a-server-map", billing: { url: "https://billing.example.com/mcp" } }));
     const runner: CommandRunner = (cmd, args) =>
@@ -316,7 +316,7 @@ describe("doctor team MCP server checks", () => {
 
   // Root ignores the permission bit entirely, so chmod 0o000 would not reproduce the
   // fault below. Skipped visibly (not a silently-passing no-op assertion) when running
-  // as root — vitest reports it as "skipped", not "passed".
+  // as root - vitest reports it as "skipped", not "passed".
   const runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
 
   // An unreadable file (permission denied) is a different fault than invalid JSON, and

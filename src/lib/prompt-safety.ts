@@ -1,4 +1,4 @@
-// Captured session text — stderr, commands, and the conversation transcript — is
+// Captured session text - stderr, commands, and the conversation transcript - is
 // attacker-influenceable (a malicious dependency can print anything to stderr; a
 // repo file the assistant echoes can say anything). When that text is fed to a
 // model it must be framed as DATA, never instructions, or a crafted "SYSTEM NOTE:
@@ -17,7 +17,7 @@ export const UNTRUSTED_CLOSE = "<<<END_UNTRUSTED_SESSION_DATA>>>";
 
 const SENTINEL_RE = /<<<\/?[A-Z_]*UNTRUSTED[A-Z_]*>>>/gi;
 
-/** Remove sentinel-shaped text until nothing new appears — a single pass can be
+/** Remove sentinel-shaped text until nothing new appears - a single pass can be
  * defeated by a payload whose halves rejoin into a sentinel. */
 export function stripSentinels(value: string): string {
   let out = value;
@@ -32,7 +32,7 @@ export function stripSentinels(value: string): string {
 // Every terminator the MODEL will read as a line break, not just \n: a lone CR or a
 // unicode LINE/PARAGRAPH SEPARATOR would otherwise start an unindented line inside a
 // value and forge a field label. (transcript.ts's role-label defense already treats
-// these as line starts via /m — the two must agree on what "a line" is.)
+// these as line starts via /m - the two must agree on what "a line" is.)
 const LINE_TERMINATORS = /\r\n|[\n\r\u2028\u2029]/;
 
 function indent(value: string): string {

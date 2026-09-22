@@ -270,7 +270,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -1449,7 +1449,7 @@ function formatShareResult(result, marketplaceName) {
     const updated = [...shared.updated?.servers ?? [], ...shared.updated?.commands ?? []];
     if (updated.length) {
       lines.push(
-        `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} \u2014 the merge replaces theirs`
+        `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} - the merge replaces theirs`
       );
     }
     lines.push(

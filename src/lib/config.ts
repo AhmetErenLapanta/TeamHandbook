@@ -9,7 +9,7 @@ export function configFile(home: string = handbookHome()): string {
 /**
  * Read and parse ~/.teamhandbook/config.json, returning {} if it's absent or
  * malformed. Each section loader (harvest, gate, distill, team, notify) applies its
- * own typed validation and defaults on top — this only removes the repeated
+ * own typed validation and defaults on top - this only removes the repeated
  * read-and-parse plumbing.
  */
 export function readConfigFile(home: string = handbookHome()): Record<string, unknown> {
@@ -25,7 +25,7 @@ export function readConfigFile(home: string = handbookHome()): Record<string, un
  * Is the config file PRESENT but unreadable/unparseable? A missing file is the
  * normal first-run state and means "defaults"; a broken one means the user wrote
  * something and we cannot tell what. That distinction matters for exactly two
- * settings — the privacy kill switches — which must fail CLOSED: a trailing comma
+ * settings - the privacy kill switches - which must fail CLOSED: a trailing comma
  * in a hand-edited file must never turn `{"harvest": {"enabled": false}}` back into
  * "send my whole session to the model". Everything else keeps defaulting, so one
  * typo cannot brick the plugin.

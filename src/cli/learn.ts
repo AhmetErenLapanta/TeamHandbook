@@ -46,7 +46,7 @@ async function main(): Promise<number> {
       return 0;
     case "error":
       console.error(
-        `error: ${outcome.message}${/doctor/.test(outcome.message) ? "" : " — run /handbook:doctor to diagnose"}`,
+        `error: ${outcome.message}${/doctor/.test(outcome.message) ? "" : " - run /handbook:doctor to diagnose"}`,
       );
       return 1;
     case "written": {
@@ -63,7 +63,7 @@ async function main(): Promise<number> {
       if (advice.length > 0) {
         console.log(
           `Candidate "${outcome.slug}" written (scope: ${outcome.scope}). The gate ${advice.join(" and ")}. ` +
-            `It is queued anyway because you asked for it — the publish decision is yours in /handbook:review.`,
+            `It is queued anyway because you asked for it - the publish decision is yours in /handbook:review.`,
         );
       } else {
         console.log(

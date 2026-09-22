@@ -46,7 +46,7 @@ export interface Signal {
 /**
  * A signal whose untrusted fields contain a secret must never reach disk with its
  * content. Reduce it to a fingerprint-only tombstone (so recurrence
- * counting — which reads only `fingerprint` — still works) and demote it to weak
+ * counting - which reads only `fingerprint` - still works) and demote it to weak
  * so it can never be promoted. Returns the sanitized list plus how many were
  * redacted, so the caller can bump the counter exactly once per secret.
  */
@@ -181,8 +181,8 @@ export function flushSessionEnd(
 
 /**
  * Evidence for the harvest: this session's resolved pairs as recorded in the
- * ledger. Stop flushes pairs turn by turn, so at session end the ledger — not the
- * session file — holds the full set.
+ * ledger. Stop flushes pairs turn by turn, so at session end the ledger - not the
+ * session file - holds the full set.
  */
 export function ledgerPairsForSession(
   sessionId: string,

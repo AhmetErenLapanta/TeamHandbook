@@ -74,7 +74,7 @@ export interface DeliverResult {
   // set when solo delivery could not use the origin project and fell back to cwd
   warning?: string;
   // set when solo delivery landed in a DIFFERENT project than the current one (the
-  // skill was captured elsewhere) — so the "loads next session" claim can name where
+  // skill was captured elsewhere) - so the "loads next session" claim can name where
   originProject?: string;
   // why a team PR could not be auto-opened (the branch is pushed; link is manual)
   prError?: string;
@@ -132,7 +132,7 @@ export function approveAndDeliver(
       return {
         ok: false,
         meta,
-        error: "no team configured — run /handbook:init or /handbook:join first, or approve with --to personal",
+        error: "no team configured - run /handbook:init or /handbook:join first, or approve with --to personal",
       };
     }
     const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
@@ -218,7 +218,7 @@ function namedAs(
 }
 
 /** Install into the user-level skills dir: available in every project, only for
- * this user. No origin-project logic — personal skills follow the person. */
+ * this user. No origin-project logic - personal skills follow the person. */
 export function deliverPersonal(
   dir: string,
   meta: CandidateMeta,
@@ -302,7 +302,7 @@ function deliverSolo(
       ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})`
       : undefined;
   // The skill installs into the project where it was captured. If that is not the
-  // project the reviewer is in right now, name it — otherwise "loads next session"
+  // project the reviewer is in right now, name it - otherwise "loads next session"
   // is false for the session they will actually open.
   const installedProject = meta.cwd && existsSync(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject = installedProject !== fallbackCwd ? basename(installedProject) : undefined;
@@ -358,7 +358,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
       lines.push(`${what} on branch ${result.branch}.${bump}`);
       if (result.prError) {
         lines.push(
-          `It could not open the request for you (${result.prError}) — install and sign in to gh or glab and it will next time.`,
+          `It could not open the request for you (${result.prError}) - install and sign in to gh or glab and it will next time.`,
         );
       }
       if (result.manualUrl) lines.push(`Open it here, then merge: ${result.manualUrl}`);
@@ -371,7 +371,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     if (result.learnedBranchPrefix) {
       lines.push(
         `Your project refuses the default branch name, so this went out as ${result.branch}. ` +
-          "That prefix is remembered — later skills use it straight away.",
+          "That prefix is remembered - later skills use it straight away.",
       );
     }
     return lines.join("\n");

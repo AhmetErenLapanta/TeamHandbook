@@ -168,10 +168,10 @@ function credentialAdvice(url, creds) {
     return "This is an SSH URL, so it needs a key this forge recognises: `ssh-keygen -t ed25519`, then add ~/.ssh/id_ed25519.pub to your account's SSH keys.";
   }
   if (!creds.ghInstalled) {
-    return "Install the GitHub CLI and sign in once: `brew install gh` then `gh auth login`. Run both in your own terminal, not here \u2014 the login is interactive.";
+    return "Install the GitHub CLI and sign in once: `brew install gh` then `gh auth login`. Run both in your own terminal, not here - the login is interactive.";
   }
   if (!creds.ghAuthenticated) {
-    return "The GitHub CLI is installed but not signed in. Run `gh auth login` in your own terminal \u2014 the login is interactive, so it cannot happen from inside a session.";
+    return "The GitHub CLI is installed but not signed in. Run `gh auth login` in your own terminal - the login is interactive, so it cannot happen from inside a session.";
   }
   return "The GitHub CLI is signed in, so the account it is signed in as is probably not the one with access. Check with `gh auth status`, and ask whoever set the handbook up to add that account.";
 }
@@ -180,10 +180,10 @@ function cloneFailureReason(url, err, creds = probeCredentials()) {
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "";
   if (text.includes("could not read username") || text.includes("terminal prompts disabled") || text.includes("authentication failed")) {
-    return `cannot sign in to ${url} \u2014 this machine has no git credentials for it. A team handbook is normally a private repo, so this is the usual first step, not a fault. ` + credentialAdvice(url, creds) + " You also need to have been given access to the repository itself; the two are separate.";
+    return `cannot sign in to ${url} - this machine has no git credentials for it. A team handbook is normally a private repo, so this is the usual first step, not a fault. ` + credentialAdvice(url, creds) + " You also need to have been given access to the repository itself; the two are separate.";
   }
   if (text.includes("permission denied (publickey)") || text.includes("host key verification")) {
-    return `SSH refused by ${url} \u2014 the key this machine offers is not registered on that host, or no key is loaded. Add your public key to the forge account, or use the HTTPS URL with credentials.`;
+    return `SSH refused by ${url} - the key this machine offers is not registered on that host, or no key is loaded. Add your public key to the forge account, or use the HTTPS URL with credentials.`;
   }
   if (text.includes("repository not found") || text.includes("not found") || text.includes("does not exist")) {
     return `${url} is not there, or your account cannot see it. A private repo answers exactly the same way as a typo, so check the URL first, then whether you have been given access.`;
@@ -213,7 +213,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -273,7 +273,7 @@ var gitlabCi = (bump) => `# Bumps the plugin version on every merge to the defau
 version-bump:
   image: node:20
   rules:
-    # only run when the CI token exists \u2014 otherwise skip (don't fail the pipeline)
+    # only run when the CI token exists - otherwise skip (don't fail the pipeline)
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
@@ -582,7 +582,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   if (!identity) {
     return {
       ok: false,
-      error: 'git user.name/user.email is not set \u2014 the scaffold commit would have an author your forge is likely to reject. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then re-run.'
+      error: 'git user.name/user.email is not set - the scaffold commit would have an author your forge is likely to reject. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then re-run.'
     };
   }
   const workdir = handbookWorkdir("handbook-init-");
@@ -610,7 +610,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   if (existsSync2(join3(repoDir, ".claude-plugin", "marketplace.json"))) {
     return {
       ok: false,
-      error: `${url} is already a handbook \u2014 run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
+      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
     };
   }
   const { skipped } = writeSkeletonPreserving(
@@ -679,7 +679,7 @@ function formatInitSuccess(result) {
       `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""}, straight to ${result.branch} (the repo was empty)`
     ] : [
       `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""} to branch ${result.branch}`,
-      result.prUrl ? `  request:     ${result.prUrl}` : `  request:     open it here \u2014 ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
+      result.prUrl ? `  request:     ${result.prUrl}` : `  request:     open it here - ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
       ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
       `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`
     ],
@@ -687,7 +687,7 @@ function formatInitSuccess(result) {
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...result.skipped?.length ? [
       `  left alone: ${result.skipped.join(", ")} (already had content)`,
-      "               the handbook README explains how teammates join \u2014 if yours was kept,",
+      "               the handbook README explains how teammates join - if yours was kept,",
       "               copy that section across from skills/README.md or this output."
     ] : [],
     `  config:      team repo saved to ${join3(result.home ?? "", "config.json")}`,

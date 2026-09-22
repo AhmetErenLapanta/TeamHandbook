@@ -37,10 +37,10 @@ function credentialAdvice(url: string, creds: CredentialState): string {
     );
   }
   if (!creds.ghInstalled) {
-    return "Install the GitHub CLI and sign in once: `brew install gh` then `gh auth login`. Run both in your own terminal, not here — the login is interactive.";
+    return "Install the GitHub CLI and sign in once: `brew install gh` then `gh auth login`. Run both in your own terminal, not here - the login is interactive.";
   }
   if (!creds.ghAuthenticated) {
-    return "The GitHub CLI is installed but not signed in. Run `gh auth login` in your own terminal — the login is interactive, so it cannot happen from inside a session.";
+    return "The GitHub CLI is installed but not signed in. Run `gh auth login` in your own terminal - the login is interactive, so it cannot happen from inside a session.";
   }
   return (
     "The GitHub CLI is signed in, so the account it is signed in as is probably not the one " +
@@ -58,7 +58,7 @@ export function cloneFailureReason(
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "";
   if (text.includes("could not read username") || text.includes("terminal prompts disabled") || text.includes("authentication failed")) {
     return (
-      `cannot sign in to ${url} — this machine has no git credentials for it. A team handbook ` +
+      `cannot sign in to ${url} - this machine has no git credentials for it. A team handbook ` +
       "is normally a private repo, so this is the usual first step, not a fault. " +
       credentialAdvice(url, creds) +
       " You also need to have been given access to the repository itself; the two are separate."
@@ -66,7 +66,7 @@ export function cloneFailureReason(
   }
   if (text.includes("permission denied (publickey)") || text.includes("host key verification")) {
     return (
-      `SSH refused by ${url} — the key this machine offers is not registered on that host, or ` +
+      `SSH refused by ${url} - the key this machine offers is not registered on that host, or ` +
       "no key is loaded. Add your public key to the forge account, or use the HTTPS URL with credentials."
     );
   }

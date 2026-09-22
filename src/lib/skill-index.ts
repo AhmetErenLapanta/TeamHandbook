@@ -79,7 +79,7 @@ export function parseSkillFrontmatter(md: string): SkillSummary | null {
  * Only a PENDING candidate blocks a new proposal. A decided one does not: an
  * approved candidate is represented by the skill it installed (which is listed from
  * the real skill dirs), so counting the archived copy too would mean a skill you
- * deleted could never be learned again — and a rejected one is meant to be
+ * deleted could never be learned again - and a rejected one is meant to be
  * re-proposable unless you muted it with `reject --never`.
  */
 function isDecidedCandidate(dir: string, entry: string): boolean {
@@ -87,7 +87,7 @@ function isDecidedCandidate(dir: string, entry: string): boolean {
     const meta = JSON.parse(readFileSync(join(dir, entry, "candidate.json"), "utf8"));
     return meta?.status === "rejected" || meta?.status === "approved";
   } catch {
-    return false; // not a candidate dir (a plain skill), or unreadable — count it
+    return false; // not a candidate dir (a plain skill), or unreadable - count it
   }
 }
 

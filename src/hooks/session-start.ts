@@ -15,7 +15,7 @@ import { loadHarvestConfig } from "../lib/harvest.js";
 
 /**
  * Salvage sessions that ended without SessionEnd firing (rage-quit, crash): flush
- * their evidence and harvest them — otherwise a whole session's lessons would
+ * their evidence and harvest them - otherwise a whole session's lessons would
  * evaporate unprocessed.
  *
  * A stale mtime cannot distinguish a crashed session from a live-but-idle one, so
@@ -33,8 +33,8 @@ function salvageOrphans(currentSessionId?: string): void {
     if (state.harvestedAt) continue; // already salvaged once
     flushResolvedPairs(id); // evidence into the ledger, session file untouched
     // Only stamp a session we ACTUALLY harvest. Stamping first would mark an idle
-    // orphan that has no substance yet, and SessionEnd — which now skips a stamped
-    // session — would then drop that session's real work, silently and forever.
+    // orphan that has no substance yet, and SessionEnd - which now skips a stamped
+    // session - would then drop that session's real work, silently and forever.
     if (!sessionHasSubstance(state)) continue;
     const pairs = ledgerPairsForSession(id);
     const counts = ledgerFingerprintCounts();

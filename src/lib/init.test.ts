@@ -400,7 +400,7 @@ describe("summarizeGitStderr", () => {
   });
 });
 
-describe("pushFailureReason — a branch name the forge forbids", () => {
+describe("pushFailureReason - a branch name the forge forbids", () => {
   // modeled on a real GitLab group's rejection: the branch NAME was the problem, and the
   // previous message blamed protection and told the user to ask for Maintainer
   const gitlab = new Error(
@@ -428,7 +428,7 @@ describe("pushFailureReason — a branch name the forge forbids", () => {
   });
 });
 
-describe("pushFailureReason — the other rules a forge enforces", () => {
+describe("pushFailureReason - the other rules a forge enforces", () => {
   const url = "git@gitlab.com:acme/handbook.git";
 
   it("given the commit message is refused, when reported, then it points at the commit prefix", () => {
@@ -458,7 +458,7 @@ describe("pushFailureReason — the other rules a forge enforces", () => {
   });
 });
 
-describe("skeletonFiles — CI is no longer part of the default scaffold", () => {
+describe("skeletonFiles - CI is no longer part of the default scaffold", () => {
   it("given a plain init, when scaffolded, then the bump script is not shipped either", () => {
     const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com");
 
@@ -492,7 +492,7 @@ describe("skeletonFiles — CI is no longer part of the default scaffold", () =>
   });
 });
 
-describe("skeletonFiles — the CI has to survive the same rules the developer does", () => {
+describe("skeletonFiles - the CI has to survive the same rules the developer does", () => {
   it("given a commit prefix, when scaffolded, then the version-bump job uses it too", () => {
     const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "TEAM-1 ", true);
 

@@ -10,4 +10,4 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/doctor.js"
 
 Relay the full output verbatim. Then, for every ✘ problem (and ⚠ warning worth acting
 on), add one short sentence on how to fix it, based on the check's own detail text.
-If everything is healthy, say so in one line — no elaboration needed.
+If everything is healthy, say so in one line - no elaboration needed.

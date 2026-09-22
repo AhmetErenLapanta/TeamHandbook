@@ -33,7 +33,7 @@ export const defaultScoreConfig: ScoreConfig = {
 /**
  * Whether the automatic pipeline runs. Default true. When false, the detector
  * still captures to the local ledger but NO candidate content is ever sent to
- * claude -p automatically — for privacy-sensitive users (NDA/client work).
+ * claude -p automatically - for privacy-sensitive users (NDA/client work).
  * Candidates then come only from the explicit /handbook:learn.
  */
 export function gateAutoEnabled(home: string = handbookHome()): boolean {
@@ -93,7 +93,7 @@ export function buildScorePrompt(
       });
   return [
     "You are the promotion gate of TeamHandbook, a tool that turns real coding-session",
-    "learnings — error→fix moments and completed task procedures — into reusable team",
+    "learnings - error→fix moments and completed task procedures - into reusable team",
     "skills. Decide whether this candidate deserves to become a skill by scoring five",
     "criteria, each from 0 (no) to 2 (clearly yes):",
     "",
@@ -210,7 +210,7 @@ export function claudeErrorReason(err: unknown): string {
     stderr?: string;
     message?: string;
   };
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) — run /handbook:doctor";
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
   // Nothing usable on stderr: report what the PROCESS did, never the model's own
