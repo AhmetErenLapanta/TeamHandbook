@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.5] - 2026-09-22
+
+- **The README now shows the product actually running.** A two-sided terminal capture:
+  one person approving a skill, the teammate who receives it a session later. A CI badge
+  sits alongside it.
+- **Critical and high security advisories in the development dependency chain are
+  closed.** This doesn't reach anyone's installed copy — those dependencies never ship
+  there — but it affected anyone cloning the repository to work on it. Three moderate
+  advisories remain open; they weren't closed by this change.
+
 ## [0.10.4] - 2026-09-22
 
 - **A pull request could reach `master` with no automated check, and a stale `dist/`
