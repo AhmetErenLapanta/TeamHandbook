@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.3] - 2026-09-22
+
+- **The README made a first-time visitor read four paragraphs before reaching the
+  picture of what the product does.** The diagram now comes first. Two badges were
+  added alongside it, license and the Node version this plugin actually requires -
+  both true today, nothing else claimed.
+
 ## [0.10.2] - 2026-09-22
 
 - **No functional change; nothing an installed copy does is different.** A handful of
