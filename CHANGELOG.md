@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.11.0] - 2026-09-22
+
+- **A team repository set up by an older version can now be brought up to date in
+  place.** `/handbook:init --upgrade` reads that repository without changing anything,
+  shows which scaffold files are missing or differ along with the diff, and sends only
+  the files you pick. The team's own skills, commands and settings are never offered and
+  never written. Until now the only way past an outdated scaffold was to leave the
+  repository and set a new one up from scratch.
+- **Two README claims now carry their own scale, and the marketplace manifest describes
+  itself.** The setup walkthrough says what `init` actually asks of you, and the model
+  comparison no longer reads as a rate that the evidence behind it cannot support.
+
 ## [0.10.8] - 2026-09-22
 
 - **A mistake that would break a fresh install is now caught before it reaches the
