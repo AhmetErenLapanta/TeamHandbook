@@ -28,11 +28,12 @@ version rather than a range, because it produces the `dist/` bundles committed h
 there is no lockfile to hold it steady: a floating version lets two contributors build
 different bytes from the same source, and the diff noise lands in an unrelated pull
 request. `vite` is not a direct dependency, it arrives under the test runner, and an
-`overrides` entry holds it below the newest major the runner would otherwise resolve,
-which keeps the upgrade small and keeps the toolchain installable on the Node versions
-this package claims to support. Do not lower that range: the older `vite` lines carry a
-published advisory. The field is npm's own, so pnpm (`pnpm.overrides`) and yarn
-(`resolutions`) do not read it and will resolve `vite` themselves.
+`overrides` entry holds it to the oldest line that both satisfies the runner and is
+clear of a published advisory, which keeps the upgrade small and keeps the dev
+toolchain's own Node requirement from climbing further than the upgrade needs. Do not
+lower that range: the `vite` lines below it carry a published advisory. The field is
+npm's own, so pnpm (`pnpm.overrides`) and yarn (`resolutions`) do not read it and will
+resolve `vite` themselves.
 
 ## Ground rules
 
