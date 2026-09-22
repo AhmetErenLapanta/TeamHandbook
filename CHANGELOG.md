@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.1] - 2026-09-22
+
+- **The README's main diagram now shows what actually happens to each of the three
+  things you can share.** It draws the review a skill goes through, and shows a skill
+  never leaving for the team without your verdict on it; a server or a command travels
+  straight out, together in one merge request, while an approved skill travels in a
+  request of its own. Reading the picture alone now answers the question it used to
+  leave open.
+
 ## [0.10.0] - 2026-09-21
 
 - **Three commands shared what was already on your machine, and a plain sentence reached
