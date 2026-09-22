@@ -10,7 +10,7 @@ up on its own.
 [Who approves what](#nothing-ships-until-you-say-so) ·
 [Why you might not want this](#why-you-might-not-want-this)
 
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-one-to-team.svg" alt="One thing, approved once, on five machines. On the left, one member of the team holding the thing they approved, drawn as a small card. An arrow labelled approves carries it into a single repository in the middle, where the same card sits. From there four arrows fan out to four teammates on the right, and each of them has that same card at their next session, with nothing to install." width="880">
 
 ## What this is
 
@@ -199,6 +199,8 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ## How it works
 
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
+
 - **One merge request for a whole selection.** The servers and commands you pick travel
   together, because each one raises the version and two requests opened before either is
   merged claim the same number. One clone, one bump, one request. A skill is the
@@ -218,7 +220,7 @@ thing: it drops the contribution target and leaves the subscription alone.
 The servers and commands you share are already on your machine. Skills are the one thing
 that has to be noticed first, and noticing never happens on its own, so that inlet is
 automatic: TeamHandbook reads each finished session and proposes what it found. This is
-the `/handbook:learn` and `/handbook:review` path, not the loop in the diagram at the top.
+the `/handbook:learn` and `/handbook:review` path, not the loop in the diagram above.
 
 - **Capture is a hook, not a tool call.** The model won't remember to save a skill at
   the worst moment - a failing build, a frustrated developer. Hooks fire every time.
