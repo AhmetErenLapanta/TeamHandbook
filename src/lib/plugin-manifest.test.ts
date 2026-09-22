@@ -97,6 +97,7 @@ describe(".claude-plugin manifests", () => {
     // `/plugin install <name>@<marketplace>` resolve to nothing.
     expect(sources.length).toBeGreaterThan(0);
     for (const { name, dir } of sources) {
+      expect(existsSync(dir), `plugin source does not exist: ${dir}`).toBe(true);
       expect(statSync(dir).isDirectory(), `plugin source is not a directory: ${dir}`).toBe(true);
       const manifest = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
       expect(manifest.name).toBe(name);
