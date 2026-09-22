@@ -23,6 +23,18 @@ a lockfile it recognizes (`package-lock.json`, `npm-shrinkwrap.json`, `bun.lock`
 installed copy: about 58 MB per version. Use `npm install` locally and do not commit
 the resulting lockfile.
 
+**Two of the dev dependency versions are deliberate.** `esbuild` is pinned to an exact
+version rather than a range, because it produces the `dist/` bundles committed here and
+there is no lockfile to hold it steady: a floating version lets two contributors build
+different bytes from the same source, and the diff noise lands in an unrelated pull
+request. `vite` is not a direct dependency, it arrives under the test runner, and an
+`overrides` entry holds it to the oldest line that both satisfies the runner and is
+clear of a published advisory, which keeps the upgrade small and keeps the dev
+toolchain's own Node requirement from climbing further than the upgrade needs. Do not
+lower that range: the `vite` lines below it carry a published advisory. The field is
+npm's own, so pnpm (`pnpm.overrides`) and yarn (`resolutions`) do not read it and will
+resolve `vite` themselves.
+
 ## Ground rules
 
 - **Fail closed at trust boundaries.** An unparseable model reply, or any chance
