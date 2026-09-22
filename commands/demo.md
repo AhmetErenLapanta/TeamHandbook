@@ -8,10 +8,11 @@ prepare it and hand the user their next two steps. Do not do the work yourself h
 Why the split, if the user asks: the harvest reads the conversation a session produced.
 A session spent talking about TeamHandbook is a session about TeamHandbook, and a model
 reading it back concludes, correctly, that it was watching a staged exercise rather than
-someone working. Measured on a real transcript: the demo that narrated itself produced a
-skill in 1 run out of 3, while the same work done in an ordinary session produced it 3
-out of 3. So the demo hands the work to a clean session. That is also the honest thing
-to show, since it is what the product actually does all day.
+someone working. On the exact transcript this demo produces, run three times each way:
+the version that narrated itself produced a skill in 1 run out of 3, the version that
+hands off to a clean session produced it 3 out of 3. So the demo hands the work to a
+clean session. That is also the honest thing to show, since it is what the product
+actually does all day.
 
 ## Step 1, here: build the scratch project
 
