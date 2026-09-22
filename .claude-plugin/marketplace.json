@@ -1,5 +1,6 @@
 {
   "name": "teamhandbook",
+  "description": "Source for the TeamHandbook plugin: it harvests what your sessions teach and keeps it on this machine, or sends it to a team skills repository you set up or joined.",
   "owner": {
     "name": "Ahmet Eren Lapanta"
   },
