@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.7] - 2026-09-22
+
+- **What the product prints is now something you can pass on as it stands.** A path
+  under your home directory is shown as `~/...`, so a screenshot of a pending candidate,
+  a status line or a setup message no longer carries the account name of the machine it
+  ran on. Where files are read and written is unchanged; only the printed line is
+  shorter.
+- **A malformed record in the review queue no longer takes the whole delivery down.**
+  When a candidate's stored working directory is not a path, the command says so and
+  goes on delivering instead of stopping with an error.
+
 ## [0.10.6] - 2026-09-22
 
 - **The development toolchain is now pinned, and the `dist/` freshness check also
