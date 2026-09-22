@@ -126,13 +126,13 @@ export interface StatusReport {
   ledger: LedgerStats;
   queue: { pending: number; approved: number; rejected: number; archived: number };
   redactionBlocked: number;
-  // cumulative value scoreboard — the user's ready-made "was it worth it" line
+  // cumulative value scoreboard - the user's ready-made "was it worth it" line
   sinceInstall: { approved: number; teamShared: number; pairsCaptured: number; secretsBlocked: number };
   detector: { postToolUse: number; bashFailuresCaptured: number; pairsResolved: number };
   lastRun: (PipelineSummary & { ts: string }) | null;
   pipeline: PipelineAggregate;
   scoringNow: number;
-  // captured pairs given up on after repeated gate failures — never silent
+  // captured pairs given up on after repeated gate failures - never silent
   abandoned: number;
   // the only honest evidence a kept skill did anything: how often it actually fired
   usage: {
@@ -160,7 +160,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   const counters = readCounters(home);
   const approved = candidates.filter((c) => c.status === "approved");
   const known = handbookSkills(home);
-  // delivery mode is persisted at approval time — inferring it from the
+  // delivery mode is persisted at approval time - inferring it from the
   // deliveredTo string misclassifies local-path team repos and Windows paths
   const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
   return {
@@ -208,13 +208,13 @@ function formatLastRejection(lastRun: (PipelineSummary & { ts: string }) | null)
   const why = reject.duplicateOf
     ? `duplicate of "${reject.duplicateOf}"`
     : reject.rationale ?? "no rationale recorded";
-  return [`Last rejection:  ${score} — ${why}`];
+  return [`Last rejection:  ${score} - ${why}`];
 }
 
 function formatLastError(lastRun: (PipelineSummary & { ts: string }) | null): string[] {
   const errored = lastRun?.outcomes?.filter((o) => o.outcome === "error").at(-1);
   if (!errored) return [];
-  return [`Last error:      ${errored.error ?? "(no reason recorded)"} — run /handbook:doctor`];
+  return [`Last error:      ${errored.error ?? "(no reason recorded)"} - run /handbook:doctor`];
 }
 
 export function formatStatus(report: StatusReport): string {
@@ -231,20 +231,20 @@ export function formatStatus(report: StatusReport): string {
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error→fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun
-      ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} — ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written`
+      ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} - ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written`
       : "Last harvest:    never",
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
-    `Harvest runs:    ${report.pipeline.runs} run(s) in log — ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    `Harvest runs:    ${report.pipeline.runs} run(s) in log - ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
     ...(report.usage.known > 0
       ? [
           report.usage.totalUses > 0
             ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` +
               (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} ×${report.usage.topSkill.count})` : "")
-            : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet — they load by description, so this fills in as the situations come up`,
+            : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`,
         ]
       : []),
-    ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) — run /handbook:doctor`] : []),
+    ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) - run /handbook:doctor`] : []),
     ...(report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : []),
     "",
     config.harvestEnabled
@@ -258,7 +258,7 @@ export function formatStatus(report: StatusReport): string {
     // reachable even if the one-time welcome scrolled past unseen.
     lines.push(
       "",
-      "No skills yet — normal early on: TeamHandbook harvests a session after it ends, so finish a real " +
+      "No skills yet - normal early on: TeamHandbook harvests a session after it ends, so finish a real " +
         "session and check back. /handbook:demo walks the whole loop in two minutes, /handbook:learn " +
         "captures something right now, and /handbook:doctor confirms TeamHandbook can reach your claude CLI.",
     );

@@ -4,7 +4,7 @@ import { signalSecret } from "./secrets.js";
 import { incrementRedactionBlocked } from "./counters.js";
 
 // The rule sieve for the MANUAL path (/handbook:learn). The user asked for this
-// capture explicitly, so the detector's noise rules never applied here — only the
+// capture explicitly, so the detector's noise rules never applied here - only the
 // two vetoes a human shouldn't have to make: a secret, and a case too large to
 // distill. (The automatic path has its own sieves in harvest.ts.)
 

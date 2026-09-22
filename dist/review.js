@@ -139,7 +139,7 @@ function failureStderr(raw) {
 }
 function claudeErrorReason(err) {
   const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
   if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
@@ -331,7 +331,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -679,7 +679,7 @@ function buildPrBody(meta, grounded, update = false) {
       "## Grounded case",
       "",
       "This skill was distilled from a real completed task. The case below ships with it as",
-      "the evidence to review it against \u2014 nothing re-runs it automatically.",
+      "the evidence to review it against - nothing re-runs it automatically.",
       "",
       `- goal: ${grounded.task.goal}`,
       ...grounded.task.steps.map((s, i) => `- step ${i + 1}: ${s}`),
@@ -693,7 +693,7 @@ function buildPrBody(meta, grounded, update = false) {
       "## Grounded case",
       "",
       "This skill was distilled from a real error-to-fix session. The case below ships with",
-      "it as the evidence to review it against \u2014 nothing re-runs it automatically.",
+      "it as the evidence to review it against - nothing re-runs it automatically.",
       "",
       `- failed command: \`${grounded.command}\``,
       `- error (normalized): \`${grounded.error}\``,
@@ -933,7 +933,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
       return {
         ok: false,
         meta,
-        error: "no team configured \u2014 run /handbook:init or /handbook:join first, or approve with --to personal"
+        error: "no team configured - run /handbook:init or /handbook:join first, or approve with --to personal"
       };
     }
     const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
@@ -1066,7 +1066,7 @@ function formatApproveResult(slug, result) {
       lines.push(`${what} on branch ${result.branch}.${bump}`);
       if (result.prError) {
         lines.push(
-          `It could not open the request for you (${result.prError}) \u2014 install and sign in to gh or glab and it will next time.`
+          `It could not open the request for you (${result.prError}) - install and sign in to gh or glab and it will next time.`
         );
       }
       if (result.manualUrl) lines.push(`Open it here, then merge: ${result.manualUrl}`);
@@ -1076,7 +1076,7 @@ function formatApproveResult(slug, result) {
     }
     if (result.learnedBranchPrefix) {
       lines.push(
-        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered \u2014 later skills use it straight away.`
+        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered - later skills use it straight away.`
       );
     }
     return lines.join("\n");
@@ -1115,7 +1115,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -1124,7 +1124,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
@@ -1427,7 +1427,7 @@ function showCandidate(home, slug) {
   console.log(`location:  ${displayPath(dir)}`);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
-    const dissent = gate.total < threshold ? `  \u2014 below the ${threshold}/10 bar` : "";
+    const dissent = gate.total < threshold ? `  - below the ${threshold}/10 bar` : "";
     console.log(`score:     ${gate.total}/10  (${scores})${dissent}`);
     if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
   } else {
@@ -1464,7 +1464,7 @@ function showCandidate(home, slug) {
         console.log(`edits:     ${grounded.edits.join(", ")}`);
       }
     } else if (!grounded.quote) {
-      console.log("(no command/error recorded \u2014 this skill came from the conversation)");
+      console.log("(no command/error recorded - this skill came from the conversation)");
     }
     if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
   } catch {
@@ -1500,7 +1500,7 @@ function rejectOne(home, slug, never) {
     return;
   }
   if (never && result.muted) {
-    console.log(`Rejected "${slug}" and muted its fingerprint \u2014 this learning will not be suggested again.`);
+    console.log(`Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`);
   } else if (never) {
     console.log(`Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`);
   } else {
@@ -1575,14 +1575,14 @@ async function main() {
     if (pending.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
-        console.log(`(${scoring} session(s) are still being harvested in the background \u2014 try again in a minute.)`);
+        console.log(`(${scoring} session(s) are still being harvested in the background - try again in a minute.)`);
       } else {
         const reject = lastPipelineRun(home)?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
         if (reject) {
           const score = reject.total !== void 0 ? `${reject.total}/10` : "n/a";
           const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "below the bar";
           console.log(
-            `(The most recent capture was scored but didn't clear the gate: ${score} \u2014 ${why}. Nothing is waiting for you.)`
+            `(The most recent capture was scored but didn't clear the gate: ${score} - ${why}. Nothing is waiting for you.)`
           );
         }
       }

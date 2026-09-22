@@ -36,7 +36,7 @@ export function normalizeRemoteUrl(raw: string): string | null {
   if (!s) return null;
   // A remote URL never contains control characters. An embedded newline is either a
   // corrupted remote or an attempt to smuggle a scalar break into the SKILL.md
-  // frontmatter derived from this scope — reject it (falls back to "team" scope).
+  // frontmatter derived from this scope - reject it (falls back to "team" scope).
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f\x7f]/.test(s)) return null;
   const hadProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
@@ -72,12 +72,12 @@ export function gitRemoteUrl(cwd: string): string | null {
  *
  * Asking the session cwd for a remote assumes Claude Code was opened inside the
  * repo. Plenty of developers open it one level up, on the directory that holds
- * every checkout — there is no remote there, a project-specific lesson silently
+ * every checkout - there is no remote there, a project-specific lesson silently
  * collapses to `scope: team`, and it ships without the "only in this repository"
  * guard. The edits know better: they are absolute paths into the real checkout.
  *
  * Ambiguity is not guessed. Edits spanning two repositories, or none, return null
- * and the caller keeps the old behaviour — a wrong repository name in the guard is
+ * and the caller keeps the old behaviour - a wrong repository name in the guard is
  * worse than no guard, because it reads as verified.
  */
 export function remoteUrlForEdits(
@@ -127,19 +127,19 @@ export function buildDistillPrompt(signal: Signal, occurrences: number): string 
       });
   const bodyRule = signal.task
     ? [
-        "- body: the SKILL.md markdown body WITHOUT frontmatter — a step-by-step procedure",
+        "- body: the SKILL.md markdown body WITHOUT frontmatter - a step-by-step procedure",
         "  another developer (or agent) can follow to do this kind of task: when to use it,",
         "  the ordered steps, and how to verify success; generalize beyond this one task but",
         "  do not invent steps not supported by the case",
       ]
     : [
-        "- body: the SKILL.md markdown body WITHOUT frontmatter — cover the symptom (how the",
+        "- body: the SKILL.md markdown body WITHOUT frontmatter - cover the symptom (how the",
         "  error presents), the root cause, and the fix procedure step by step; generalize beyond",
         "  this one occurrence but do not invent facts not supported by the case",
       ];
   return [
-    "You are the distiller of TeamHandbook, a tool that turns real coding-session learnings —",
-    "error→fix moments and completed task procedures — into reusable team skills. This",
+    "You are the distiller of TeamHandbook, a tool that turns real coding-session learnings -",
+    "error→fix moments and completed task procedures - into reusable team skills. This",
     "candidate already passed the promotion gate. Write a spec-compliant Agent Skill from",
     "it, in English.",
     "",
@@ -218,10 +218,10 @@ export function assembleSkillMd(draft: DistilledDraft, scope: string, from: Skil
   // and fire in every repo, so bake the boundary into the text the model reads:
   // the description (which is always in context) and the top of the body.
   const scoped = scope !== "team";
-  const guard = scoped ? ` Applies ONLY in the ${scope} repository — do not use it elsewhere.` : "";
+  const guard = scoped ? ` Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
   const description = draft.description + guard;
   const body = scoped
-    ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project — ignore this skill in any other repo.\n\n${draft.body}`
+    ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project - ignore this skill in any other repo.\n\n${draft.body}`
     : draft.body;
   return [
     "---",
@@ -234,8 +234,8 @@ export function assembleSkillMd(draft: DistilledDraft, scope: string, from: Skil
     "",
     "## Grounded case",
     "",
-    `This skill was distilled from a real ${origin}. The case that produced it — and the`,
-    "behavior that would show it still holds — is in [grounded-case.json](grounded-case.json).",
+    `This skill was distilled from a real ${origin}. The case that produced it - and the`,
+    "behavior that would show it still holds - is in [grounded-case.json](grounded-case.json).",
     "Nothing re-runs it automatically: it is there so a human or an agent can check this",
     "skill against its evidence when it is edited, challenged, or suspected of being stale.",
     "",

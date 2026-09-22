@@ -1,23 +1,23 @@
-# CLAUDE.md — working in this repo
+# CLAUDE.md - working in this repo
 
 TeamHandbook is a Claude Code plugin (TypeScript/Node) that harvests durable lessons from
-real coding sessions — the corrections you gave, the procedures you completed, the traps
-you hit — and offers each one as a personal, project, or team skill. See
+real coding sessions - the corrections you gave, the procedures you completed, the traps
+you hit - and offers each one as a personal, project, or team skill. See
 [README.md](README.md) for the product story.
 
 ## Layout
 
-- `src/hooks/` — hook entrypoints (`post-tool-use`, `user-prompt-submit`, `stop`,
+- `src/hooks/` - hook entrypoints (`post-tool-use`, `user-prompt-submit`, `stop`,
   `session-end`, `session-start`). Thin; they read stdin, call a lib function, exit 0.
-- `src/cli/` — command entrypoints backing `commands/*.md`.
-- `src/lib/` — the engine: `capture`/`corrections`/`session-state`/`signals`
+- `src/cli/` - command entrypoints backing `commands/*.md`.
+- `src/lib/` - the engine: `capture`/`corrections`/`session-state`/`signals`
   (deterministic evidence), `transcript`/`harvest` (the session harvest: slice, redact,
   ONE `claude -p`, sieve), `secrets`/`prompt-safety` (trust boundaries),
   `gate`/`score`/`distill` (the `/handbook:learn` path only),
   `queue`/`deliver`/`publish`/`init`/`join` (review + routing), plus small utilities.
-- `hooks/hooks.json`, `commands/*.md`, `.claude-plugin/` — the plugin manifest and
+- `hooks/hooks.json`, `commands/*.md`, `.claude-plugin/` - the plugin manifest and
   wiring, discovered by Claude Code by convention.
-- `dist/` — esbuild bundles, committed (the plugin is installed by git clone).
+- `dist/` - esbuild bundles, committed (the plugin is installed by git clone).
 - `evals/` - the natural-language routing suite: does a plain sentence reach the right
   command? Cases sit under `tutma/` (the held-out set the headline number comes from),
   `gelistirme/` (iteration) and `kontrol/` (must score 1.00). Run one with
@@ -25,7 +25,7 @@ you hit — and offers each one as a personal, project, or team skill. See
 
 ## Conventions
 
-- After editing anything under `src/hooks/` or `src/cli/`, run `npm run build` —
+- After editing anything under `src/hooks/` or `src/cli/`, run `npm run build` -
   the plugin runs `dist/`, not `src/`.
 - Tests are vitest, colocated as `*.test.ts`. Cover `lib/` services; the thin
   hook/CLI entrypoints are exercised by the lib tests they call.
@@ -60,10 +60,10 @@ you hit — and offers each one as a personal, project, or team skill. See
 ## Non-negotiable invariants (don't regress these)
 
 - Nothing is delivered without explicit user approval via `/handbook:review`.
-- Secrets are redacted at the persistence boundary — no captured secret reaches
+- Secrets are redacted at the persistence boundary - no captured secret reaches
   `signals.jsonl`, the pending queue, a candidate, or a PR.
-- Untrusted session text — stderr, commands, and the transcript slice (the
-  conversation itself) — is fenced as data, never instructions, in every model prompt.
+- Untrusted session text - stderr, commands, and the transcript slice (the
+  conversation itself) - is fenced as data, never instructions, in every model prompt.
 - The transcript slice is redacted line-by-line before it enters the harvest prompt.
 - `gate.ts`'s recurrence threshold is legacy: no automatic path reaches it. Don't
   reintroduce a recurrence precondition without a deliberate decision.

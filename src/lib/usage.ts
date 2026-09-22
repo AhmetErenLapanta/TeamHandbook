@@ -9,7 +9,7 @@ import { listExistingSkills } from "./skill-index.js";
 // Claude Code invokes an installed skill through a `Skill` tool call, which reaches
 // the PostToolUse hook as { tool_name: "Skill", tool_input: { skill: "<slug>" } }
 // (verified empirically against a real session). That is the only honest evidence
-// this product can offer that a kept skill did anything at all — everything else it
+// this product can offer that a kept skill did anything at all - everything else it
 // counts is a decision the user made themselves.
 //
 // Local only, and content-free: a slug the user already has on disk, plus a count.
@@ -67,10 +67,10 @@ export interface UsageSummary {
 /** The skills TeamHandbook is entitled to report on. Two sources, because the two kinds
  * of user have nothing in common:
  *
- * - what this machine approved and delivered — keyed by the DELIVERED directory, not
+ * - what this machine approved and delivered - keyed by the DELIVERED directory, not
  *   the candidate slug, since delivery renames on collision and the rename is what
  *   Claude Code fires;
- * - what arrived from the team marketplace — a teammate who only consumes shared
+ * - what arrived from the team marketplace - a teammate who only consumes shared
  *   skills approves nothing locally, and is exactly who the team feature exists for.
  *
  * Skills from elsewhere (other plugins, hand-written ones) are deliberately excluded:

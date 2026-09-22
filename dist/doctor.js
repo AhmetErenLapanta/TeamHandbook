@@ -188,7 +188,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -197,7 +197,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
@@ -275,7 +275,7 @@ function fail(name, detail) {
 }
 function checkNode() {
   const major = Number(process.versions.node.split(".")[0]);
-  return major >= 18 ? ok("node", `${process.version} (\u2265 18 required)`) : fail("node", `${process.version} \u2014 TeamHandbook needs Node \u2265 18`);
+  return major >= 18 ? ok("node", `${process.version} (\u2265 18 required)`) : fail("node", `${process.version} - TeamHandbook needs Node \u2265 18`);
 }
 var PROBE_TIMEOUT_MS = 6e4;
 function checkClaudeCli(run, home) {
@@ -285,7 +285,7 @@ function checkClaudeCli(run, home) {
     if (err?.code === "ENOENT") {
       return fail(
         "claude CLI",
-        "not found on PATH \u2014 the gate and distiller need it; install Claude Code CLI or fix PATH"
+        "not found on PATH - the gate and distiller need it; install Claude Code CLI or fix PATH"
       );
     }
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
@@ -305,17 +305,17 @@ function checkClaudeCli(run, home) {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
       if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
-        return fail("claude CLI", "installed but NOT logged in \u2014 run `claude` and /login; the gate cannot score until then");
+        return fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then");
       }
       if (err?.code === "ETIMEDOUT" || lower.includes("etimedout")) {
         return warn(
           "claude CLI",
-          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s \u2014 usually a cold start; re-run this check`
+          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s - usually a cold start; re-run this check`
         );
       }
       return fail(
         "claude CLI",
-        `logged in, but \`claude -p --model ${model}\` failed \u2014 is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
+        `logged in, but \`claude -p --model ${model}\` failed - is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
       );
     }
   }
@@ -328,9 +328,9 @@ function checkGitIdentity(home, run) {
   if (!loadTeamConfig(home)) return null;
   try {
     const email = run("git", ["config", "user.email"], 5e3);
-    return email ? ok("git identity", `user.email = ${email}`) : fail("git identity", "git user.email is empty \u2014 team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
+    return email ? ok("git identity", `user.email = ${email}`) : fail("git identity", "git user.email is empty - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
   } catch {
-    return fail("git identity", "git user.email is not set \u2014 team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
+    return fail("git identity", "git user.email is not set - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
   }
 }
 function checkHomeWritable(home) {
@@ -352,14 +352,14 @@ function checkConfig(home) {
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
-        "config.json is not a JSON object \u2014 automatic harvesting is OFF until it is (the privacy switches fail closed); every other setting falls back to its default"
+        "config.json is not a JSON object - automatic harvesting is OFF until it is (the privacy switches fail closed); every other setting falls back to its default"
       );
     }
     return ok("config", "config.json valid");
   } catch {
     return fail(
       "config",
-      "config.json is not valid JSON \u2014 automatic harvesting is OFF until it parses (the privacy switches fail closed); every other setting falls back to its default"
+      "config.json is not valid JSON - automatic harvesting is OFF until it parses (the privacy switches fail closed); every other setting falls back to its default"
     );
   }
 }
@@ -368,12 +368,12 @@ function checkHooks(home) {
   if (counters.postToolUse === 0) {
     return warn(
       "hooks",
-      "no hook events recorded yet \u2014 run any command in a Claude Code session and re-check; if this stays 0 the hooks are not firing (was the plugin installed and the session restarted?)"
+      "no hook events recorded yet - run any command in a Claude Code session and re-check; if this stays 0 the hooks are not firing (was the plugin installed and the session restarted?)"
     );
   }
   return ok(
     "hooks",
-    `firing \u2014 ${counters.postToolUse} tool calls seen, ${counters.bashFailuresCaptured} failures captured, ${counters.pairsResolved} pairs resolved`
+    `firing - ${counters.postToolUse} tool calls seen, ${counters.bashFailuresCaptured} failures captured, ${counters.pairsResolved} pairs resolved`
   );
 }
 function remoteDistributionState(url, run) {
@@ -395,18 +395,18 @@ function remoteDistributionState(url, run) {
 }
 function checkTeamRepo(home, run) {
   const team = loadTeamConfig(home);
-  if (!team) return ok("team repo", "not configured (solo mode \u2014 that's fine)");
+  if (!team) return ok("team repo", "not configured (solo mode - that's fine)");
   try {
     run("git", ["ls-remote", "--heads", "--", team.repoUrl], 2e4);
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err).split("\n").slice(-2).join(" | ");
-    return fail("team repo", `${team.repoUrl} NOT reachable \u2014 approvals cannot publish (${message})`);
+    return fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`);
   }
   const dist = remoteDistributionState(team.repoUrl, run);
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
     return warn(
       "team repo",
-      `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 \u2014 the version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN variable / Actions write permission)`
+      `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 - the version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN variable / Actions write permission)`
     );
   }
   return ok("team repo", `${team.repoUrl} reachable`);
@@ -417,17 +417,17 @@ function checkForge(home, run) {
   const tool = (hostFromUrl(team.repoUrl) ?? "").includes("github") ? "gh" : "glab";
   try {
     run(tool, ["auth", "status"], 1e4);
-    return ok("forge CLI", `${tool} authenticated \u2014 approvals can auto-open PRs`);
+    return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
   } catch (err) {
     if (err?.code === "ENOENT") {
       return warn(
         "forge CLI",
-        `${tool} not installed \u2014 approvals still push a branch and print a manual PR link; install ${tool} to auto-open PRs`
+        `${tool} not installed - approvals still push a branch and print a manual PR link; install ${tool} to auto-open PRs`
       );
     }
     return warn(
       "forge CLI",
-      `${tool} installed but not authenticated \u2014 run \`${tool} auth login\` (approvals still print a manual link)`
+      `${tool} installed but not authenticated - run \`${tool} auth login\` (approvals still print a manual link)`
     );
   }
 }
@@ -474,7 +474,7 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   }
   const declared = declaredMcpServerNames(mcpFile);
   if ("error" in declared) {
-    return declared.error === "unreadable" ? warn("team MCP servers", `cannot read ${displayPath(mcpFile)} \u2014 connection state unknown`) : warn("team MCP servers", `${displayPath(mcpFile)} is not valid JSON \u2014 cannot verify connection state`);
+    return declared.error === "unreadable" ? warn("team MCP servers", `cannot read ${displayPath(mcpFile)} - connection state unknown`) : warn("team MCP servers", `${displayPath(mcpFile)} is not valid JSON - cannot verify connection state`);
   }
   if (declared.names.length === 0) {
     return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
@@ -484,13 +484,13 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
     listing = run("claude", ["mcp", "list"], 2e4);
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
-    return warn("team MCP servers", `\`claude mcp list\` failed \u2014 connection state unknown: ${message}`);
+    return warn("team MCP servers", `\`claude mcp list\` failed - connection state unknown: ${message}`);
   }
   const statuses = parseMcpListing(listing);
   if (statuses.size === 0) {
     return warn(
       "team MCP servers",
-      "`claude mcp list` returned nothing this check recognizes \u2014 connection state unknown (never assumed connected)"
+      "`claude mcp list` returned nothing this check recognizes - connection state unknown (never assumed connected)"
     );
   }
   const results = declared.names.map((name) => {
@@ -503,7 +503,7 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
     return fail("team MCP servers", summary);
   }
   if (results.some((r) => r.state === "unknown")) {
-    return warn("team MCP servers", `connection state unknown for at least one server \u2014 ${summary}`);
+    return warn("team MCP servers", `connection state unknown for at least one server - ${summary}`);
   }
   if (results.some((r) => r.state === "needs-auth")) {
     return warn("team MCP servers", summary);
@@ -515,7 +515,7 @@ function checkLastRun(home) {
   if (!last) return ok("gate pipeline", "no runs yet (nothing recurred or was captured manually)");
   if (last.errored > 0) {
     const reason = last.outcomes?.filter((o) => o.outcome === "error").at(-1)?.error;
-    const why = reason ? ` \u2014 ${reason}` : "";
+    const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
       `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join7(home, "pipeline.log"))})`
@@ -528,7 +528,7 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures \u2014 recoverable in ${displayPath(join7(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join7(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot()) {

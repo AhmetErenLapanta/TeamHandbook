@@ -64,7 +64,7 @@ describe("sameTeaching", () => {
     expect(
       sameTeaching(
         matchTokens("never mock the database"),
-        matchTokens("don't mock the database — use testcontainers instead"),
+        matchTokens("don't mock the database - use testcontainers instead"),
       ),
     ).toBe(true);
   });
@@ -92,13 +92,13 @@ describe("sameTeaching", () => {
 // The table the matcher was designed against, run against the real implementation
 // rather than a prototype. Every "no" here is a pair that shares its scaffolding and
 // differs in what it is actually about; every "yes" is one lesson said twice.
-describe("sameTeaching — the measured table", () => {
+describe("sameTeaching - the measured table", () => {
   it.each([
-    [true, "never mock the database", "don't mock the database — use testcontainers instead"],
+    [true, "never mock the database", "don't mock the database - use testcontainers instead"],
     [
       true,
       "we never use mocks for the database in this repo, use testcontainers",
-      "don't mock the database — use testcontainers",
+      "don't mock the database - use testcontainers",
     ],
     [
       true,
@@ -147,7 +147,7 @@ describe("recordAndMatchTeachings", () => {
     );
 
     const echoes = recordAndMatchTeachings(
-      ["don't mock the database — use testcontainers"],
+      ["don't mock the database - use testcontainers"],
       home,
       "2026-08-09T00:00:00.000Z",
     );
@@ -225,7 +225,7 @@ describe("recordAndMatchTeachings", () => {
     );
 
     const echoes = recordAndMatchTeachings(
-      ["don't mock the database — use testcontainers"],
+      ["don't mock the database - use testcontainers"],
       home,
       "2026-08-09T00:00:00.000Z",
     );
@@ -265,12 +265,12 @@ describe("recordAndMatchTeachings", () => {
 
 describe("the real case this was built for", () => {
   // Verbatim from two live claude sessions: the same rule, welded to different errands.
-  // Nothing extracts the rule sentence any more — that took an English pattern to find —
+  // Nothing extracts the rule sentence any more - that took an English pattern to find -
   // so the errand rides along and the weighting has to see past it on its own.
   const first =
-    "In this repo we never mock the database in tests — always use testcontainers. Now append a comment line '// db: testcontainers only' to src/api.ts.";
+    "In this repo we never mock the database in tests - always use testcontainers. Now append a comment line '// db: testcontainers only' to src/api.ts.";
   const second =
-    "Reminder: don't mock the database — use testcontainers instead. Now append '// no mocks' to src/api.ts.";
+    "Reminder: don't mock the database - use testcontainers instead. Now append '// no mocks' to src/api.ts.";
 
   const taught = (prompt: string) => noteCorrection([], prompt)!.map((n) => n.text);
 
@@ -287,7 +287,7 @@ describe("the real case this was built for", () => {
     recordAndMatchTeachings(taught(second), home, "2026-08-09T00:00:00.000Z");
 
     const echoes = recordAndMatchTeachings(
-      taught("One more time: no database mocks in this repo — always testcontainers."),
+      taught("One more time: no database mocks in this repo - always testcontainers."),
       home,
       "2026-08-11T00:00:00.000Z",
     );
@@ -298,11 +298,11 @@ describe("the real case this was built for", () => {
 });
 
 describe("sameTeaching against a skill description", () => {
-  const teaching = matchTokens("Again: we never mock the database here — testcontainers only.");
+  const teaching = matchTokens("Again: we never mock the database here - testcontainers only.");
 
   it("given a skill description that says more than the teaching, when compared, then it still matches", () => {
     const description = matchTokens(
-      "Use when writing database tests — write real PostgreSQL tests using testcontainers instead of mocks.",
+      "Use when writing database tests - write real PostgreSQL tests using testcontainers instead of mocks.",
     );
 
     expect(sameTeaching(description, teaching)).toBe(true);

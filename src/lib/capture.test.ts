@@ -182,7 +182,7 @@ describe("secret redaction at the session boundary", () => {
     if (existsSync(file)) expect(readFileSync(file, "utf8")).not.toContain(SECRET);
   }
 
-  it("drops a secret-bearing failing command entirely — nothing on disk, counter bumped", () => {
+  it("drops a secret-bearing failing command entirely - nothing on disk, counter bumped", () => {
     const input = bashFailure({
       tool_input: { command: `curl -H 'Authorization: Bearer ${SECRET}' https://x` },
       error: "Exit code 1\n401 unauthorized",
@@ -206,7 +206,7 @@ describe("secret redaction at the session boundary", () => {
       captureBashFailure(bashFailure({ tool_input: { command: "npm test" }, error: "Exit code 1\n2 failing" }), home),
     ).toBe(true);
     captureFileEdit(fileEdit(), home);
-    // the green re-run must still close the pair — the tombstone regression returned 0 here
+    // the green re-run must still close the pair - the tombstone regression returned 0 here
     expect(captureBashSuccess(bashSuccess(), home)).toBe(1);
     const pair = loadSessionState("s1", home).resolvedPairs[0]!;
     expect(pair.family).toBe("npm test");
@@ -253,7 +253,7 @@ describe("harvest evidence: transcriptPath + meaningfulToolCalls", () => {
       transcript_path: "/tmp/t.jsonl",
     });
     recordActivity(build, home);
-    recordActivity(build, home); // same family again — still a meaningful call
+    recordActivity(build, home); // same family again - still a meaningful call
     recordActivity(bashSuccess({ tool_input: { command: "ls" } }), home); // generic → not counted
     const state = loadSessionState("s1", home);
     expect(state.meaningfulToolCalls).toBe(2);

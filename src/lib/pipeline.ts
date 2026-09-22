@@ -54,7 +54,7 @@ export function enqueueHarvestJob(job: HarvestJob, home: string = handbookHome()
 }
 
 // A runner that crashed between claim and delete leaves a *.claimed-<pid> file no
-// drain would ever pick up again — that job would be silently lost. Reclaim claims
+// drain would ever pick up again - that job would be silently lost. Reclaim claims
 // older than this back into the queue.
 const STALE_CLAIM_MS = 10 * 60 * 1000;
 
@@ -186,7 +186,7 @@ export function drainHarvestJobs(home: string = handbookHome()): ClaimedJob[] {
     const claimed = `${file}.claimed-${process.pid}`;
     try {
       renameSync(file, claimed);
-      // rename PRESERVES mtime, so staleness would be measured from enqueue time —
+      // rename PRESERVES mtime, so staleness would be measured from enqueue time -
       // a job that waited 10 min in the queue would be reclaimable the instant it is
       // claimed, handing the same session to two runners. Stamp the claim instead.
       const claimedAt = new Date();
@@ -274,7 +274,7 @@ export interface PipelineSummary {
   rejected: number;
   errored: number;
   written: string[];
-  // Why each item was written/dropped — without this a user whose candidates keep
+  // Why each item was written/dropped - without this a user whose candidates keep
   // vanishing has no way to see the scores or reasons.
   outcomes?: GateOutcomeLog[];
   trigger?: "manual";
@@ -481,7 +481,7 @@ export async function runHarvestJob(
     },
     outcomes: [
       ...(summary.dropped ?? []).map((d) => ({
-        // an item dropped FOR containing a secret must not have its name logged —
+        // an item dropped FOR containing a secret must not have its name logged -
         // the name is model output derived from the same text
         fingerprint: d.reason === "secret" ? "(redacted)" : d.name,
         outcome: "sieved" as const,
@@ -568,7 +568,7 @@ export async function runManualSignal(
     return outcome;
   };
   // On a secret, store nothing at all (not even a ledger tombstone beyond the
-  // counter) and tell the user honestly — matches learn.ts's message.
+  // counter) and tell the user honestly - matches learn.ts's message.
   const secret = signalSecret(signal);
   if (secret) {
     incrementRedactionBlocked(home, 1);
@@ -594,7 +594,7 @@ export async function runManualSignal(
   summary.scored = 1;
   // A scoring failure only aborts when the model itself is unreachable (distill
   // would fail the same way). An unparseable score reply still lets the user's
-  // explicit capture proceed — with gate: null attached.
+  // explicit capture proceed - with gate: null attached.
   if (verdict.outcome === "error" && !(verdict.error ?? "").includes("unparseable")) {
     summary.errored = 1;
     return finish({ stage: "error", message: verdict.error ?? "gate scoring failed" });

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.6] - 2026-09-22
+
+- **The development toolchain is now pinned, and the `dist/` freshness check also
+  catches the bundle a deleted entry point leaves behind.** For a contributor: an
+  unrelated change no longer breaks from a shifting dependency tree, and a stale bundle
+  can't quietly merge alongside it.
+- Spelling consistency: em dashes in source comments and documentation are now a plain
+  dash. No behavior change.
+
+## [0.10.5] - 2026-09-22
+
+- **The README now shows the product actually running.** A two-sided terminal capture:
+  one person approving a skill, the teammate who receives it a session later. A CI badge
+  sits alongside it.
+- **Critical and high security advisories in the development dependency chain are
+  closed.** This doesn't reach anyone's installed copy - those dependencies never ship
+  there - but it affected anyone cloning the repository to work on it. Three moderate
+  advisories remain open; they weren't closed by this change.
+
 ## [0.10.4] - 2026-09-22
 
 - **A pull request could reach `master` with no automated check, and a stale `dist/`
@@ -71,7 +90,7 @@ All notable changes to this project are documented here. The format follows
 
 - **The Code of Conduct pointed anyone reporting harassment at a private channel this
   repository has never turned on.** Its Enforcement section named "GitHub's private
-  contact channels" — the same gap SECURITY.md carried until v0.9.2, left standing here.
+  contact channels" - the same gap SECURITY.md carried until v0.9.2, left standing here.
   Someone reporting abuse who trusted that sentence and opened a public issue thinking it
   was private would have exposed themselves while trying to protect themselves. It now
   says what's actually open, a public GitHub issue, and says so in the same breath as its
@@ -114,7 +133,7 @@ All notable changes to this project are documented here. The format follows
   GitHub's private vulnerability reporting alongside the public issue tracker, but that
   setting has never been enabled on this repository, so anyone who read the policy and
   chose it would have reported a vulnerability into thin air. It now says what's actually
-  open — a public GitHub issue — and says so in the same breath as its limit: nothing sent
+  open - a public GitHub issue - and says so in the same breath as its limit: nothing sent
   there is private.
 
 ## [0.9.1] - 2026-09-20
@@ -122,7 +141,7 @@ All notable changes to this project are documented here. The format follows
 - **The product introduced itself as two different products.** `package.json` still
   called this "the team handbook that writes itself," the original one-skill-at-a-time
   pitch, while `plugin.json` and `marketplace.json` already said skills, MCP servers, and
-  slash commands together — the same repository describing itself differently depending
+  slash commands together - the same repository describing itself differently depending
   on which manifest you read. All three now carry the one sentence. The README a new team
   repository is scaffolded with had the same split at a smaller scale: its two section
   headings still said "skills" where the paragraph beneath them already meant all three
@@ -132,13 +151,13 @@ All notable changes to this project are documented here. The format follows
 
 - **A second skill or server sent under a name the team already had just got a number
   stapled to it.** `foo` collided with the team's `foo` and `foo-2` went out instead,
-  silently, for a skill, an MCP server, or a command alike — the sender never chose that
+  silently, for a skill, an MCP server, or a command alike - the sender never chose that
   name and the team never approved it. That path is gone: a collision is refused outright,
   named, and left exactly as it was. Refusing on its own would be a dead end, so two real
   ways forward replace the silent copy. `--update` sends yours as a replacement for
   theirs; `--as <name>` sends yours under a name that doesn't collide. They answer the
   same refusal in opposite directions and can't both apply, so asking for both is refused
-  too. Approving several candidates at once with `--update` is refused outright — one flag
+  too. Approving several candidates at once with `--update` is refused outright - one flag
   overwriting more than one of the team's skills or servers in a single, unreviewed
   motion is the kind of mistake there's no undoing.
 
@@ -473,7 +492,7 @@ None of them were visible from the test suite.
 
 - **`/handbook:init` adopts a repository that already exists**, on the branch that repo
   actually uses. It used to build a history locally and push it, which requires an empty
-  remote and assumed the branch was called `main` — while teams get their repo from
+  remote and assumed the branch was called `main` - while teams get their repo from
   organisation tooling, which leaves a README in it, and plenty of them still default to
   `master`. A file that already has content is never overwritten, and is named in the
   output so the join instructions are not silently lost.
@@ -487,8 +506,8 @@ None of them were visible from the test suite.
   Every skill shared with the team would have been rejected identically. `init` now runs
   plainly, and only when the forge refuses does it read the pattern out of the refusal,
   propose a prefix, and ask. Both prefixes are remembered.
-- **A refused push says which rule refused it** — branch name with the pattern quoted,
-  commit message, commit author, protected branch — and when the rule is one nobody
+- **A refused push says which rule refused it** - branch name with the pattern quoted,
+  commit message, commit author, protected branch - and when the rule is one nobody
   anticipated, the forge's own words survive instead of being replaced by a guess. The
   first version of this said "that branch is protected, ask for Maintainer" to someone
   whose access was fine.
@@ -582,14 +601,14 @@ error-hunter and became a session-harvesting, personal-first learning layer.
 
 - **Harvest**: after every substantive session, ONE `claude -p` call over a redacted,
   fenced slice of the session transcript (40 000 chars, 60% reserved for the user's own
-  messages) plus deterministic evidence extracts up to 3 durable lessons — `correction`
+  messages) plus deterministic evidence extracts up to 3 durable lessons - `correction`
   (an explicit teaching, quoting the user's words as the receipt), `procedure`,
   `discovery`, `error-fix`. Scored 0–2 on five criteria with a 4/10 floor and a
   top-3-per-session cap. A trivial session is never harvested and costs nothing.
 - **Teachings are flagged as you type them**: a `UserPromptSubmit` hook classifies
   "we never do X here" / "always run Y first" locally so a mid-session correction can't
   be lost to transcript slicing. Secret-bearing prompts are dropped, never stored.
-- **Three delivery targets**: `/handbook:review approve --to personal|project|team` —
+- **Three delivery targets**: `/handbook:review approve --to personal|project|team` -
   `~/.claude/skills` (every project), the repo's `.claude/skills` (travels with the
   code), or a PR to the team skill repo. The session-start notice asks the question
   directly: keep it, share it, or skip.
@@ -603,7 +622,7 @@ error-hunter and became a session-harvesting, personal-first learning layer.
   not a precondition. `/handbook:learn` keeps its 7/10 advisory score.
 - **New command**: `/handbook:leave` clears the team binding.
 
-## [0.1.0] — unreleased
+## [0.1.0] - unreleased
 
 Initial release.
 
@@ -619,7 +638,7 @@ Initial release.
 - **Review & deliver**: candidates queue locally; `/handbook:review` lists,
   shows, edits-then-approves, rejects, or skips them; solo mode writes to the
   project's `.claude/skills/`, team mode opens a PR. Manual captures are always
-  queued — a low gate score rides along as advice, and the publish decision stays
+  queued - a low gate score rides along as advice, and the publish decision stays
   with the user. A plain reject does not suppress recurrence; `reject --never`
   mutes the fingerprint permanently, and rejected candidates are excluded from
   the gate's dedup.
@@ -631,7 +650,7 @@ Initial release.
   procedure (goal + ordered steps + verification) as a candidate; the gate judges
   it with a manual-trigger calibration, the distiller produces a step-by-step
   skill, and the grounded case records the original task. Repeated-work detection
-  records each session's work shape and nudges — once per shape — when similar
+  records each session's work shape and nudges - once per shape - when similar
   work keeps recurring.
 - **Visibility**: a one-time welcome on the first session, a since-last-session
   activity heartbeat (only when something was captured and nothing stronger is

@@ -1,7 +1,7 @@
 import { detectSecret } from "./secrets.js";
 
-// A user prompt that TEACHES — "we never use X here", "always run Y first", "burada
-// db'yi asla mocklamayız" — is the highest-value lesson in a session: a human, stating
+// A user prompt that TEACHES - "we never use X here", "always run Y first", "burada
+// db'yi asla mocklamayız" - is the highest-value lesson in a session: a human, stating
 // a rule, in their own words. This file used to try to spot them as they were typed,
 // with a list of English phrases. That worked in English and nowhere else: probed
 // against a real session, eighteen Turkish prompts produced zero flags, so the half of
@@ -22,14 +22,14 @@ const MAX_CHARS = 600;
 /**
  * Not the developer's own prose: slash commands, pasted XML/HTML, and the bracketed
  * notices the harness itself injects ("[Request interrupted by user]"). The last one is
- * not hypothetical — across the transcripts on one machine it was the single most
+ * not hypothetical - across the transcripts on one machine it was the single most
  * repeated "prompt" of all, by a factor of thirteen.
  */
 function isDeveloperProse(text: string): boolean {
   return !text.startsWith("/") && !text.startsWith("<") && !text.startsWith("[");
 }
 
-/** Could this prompt carry a lesson? A question of shape only — no language is read. */
+/** Could this prompt carry a lesson? A question of shape only - no language is read. */
 export function couldTeach(prompt: string): boolean {
   const text = prompt.trim();
   return text.length >= MIN_CHARS && text.length <= MAX_CHARS && isDeveloperProse(text);
@@ -42,7 +42,7 @@ export interface CorrectionNote {
 
 // Every candidate prompt in a session, not a hand-picked few, so the record of what
 // was said is the model's to interpret. Bounded because a session state file is not an
-// archive of the conversation — the transcript already is one.
+// archive of the conversation - the transcript already is one.
 export const MAX_CORRECTIONS = 40;
 const MAX_TEXT_CHARS = 400;
 

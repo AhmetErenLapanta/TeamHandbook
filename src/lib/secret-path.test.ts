@@ -54,7 +54,7 @@ describe("secret redaction on the flush + harvest-job path", () => {
     saveSessionState(state, home);
 
     flushResolvedPairs("s1", home, "2026-08-08T00:03:00Z");
-    // the session-end hook builds the job from the (sanitized) ledger — redacted
+    // the session-end hook builds the job from the (sanitized) ledger - redacted
     // rows are excluded from harvest evidence entirely
     const pairs = ledgerPairsForSession("s1", home);
     enqueueHarvestJob(
