@@ -1,136 +1,123 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 524" width="880" height="524"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 530" width="880" height="530"
      role="img" aria-labelledby="t d"
      font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
-  <title id="t">The TeamHandbook loop</title>
-  <desc id="d">A coding session produces evidence and a redacted transcript slice. One harvest call
-    extracts up to three lessons, each scored out of ten; anything under the floor of 4 is dropped before
-    you see it. At the next session start you choose: keep it personally, keep it in the project, or share
-    it with the team as a pull request. Every skill carries its receipt, and the next session starts with
-    it already loaded.</desc>
+  <title id="t">How the team handbook reaches everyone</title>
+  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine can
+    go to the team repository, but not by the same route. A skill goes to /handbook:review first:
+    your verdict decides, and keeping it for yourself or for one project stops it there, on this
+    machine. The servers and commands you pick go straight out, together in a single merge request;
+    a skill that is approved for the team travels in a request of its own. Either way somebody on
+    the team reviews it and merges it. That repository is a Claude Code
+    plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal
+    that the plugin moved. Every teammate's next session refreshes on that version and reports what
+    landed, with nothing installed or configured by hand.</desc>
 
-  <style>
-    svg {
-      --fg: #1f2328;
-      --muted: #59636e;
-      --line: #d1d9e0;
-      --card: #ffffff;
-      --accent: #0969da;
-      --accent-soft: #ddf4ff;
-    }
-    @media (prefers-color-scheme: dark) {
-      svg {
-        --fg: #e6edf3;
-        --muted: #9198a1;
-        --line: #3d444d;
-        --card: #151b23;
-        --accent: #4493f8;
-        --accent-soft: #121d2f;
-      }
-    }
-    .card  { fill: var(--card); stroke: var(--line); fill-opacity: 1; stroke-opacity: 1; }
-    .chip  { fill: var(--accent-soft); stroke: var(--accent); fill-opacity: 1; stroke-opacity: .45; }
-    .h     { fill: var(--fg); }
-    .m     { fill: var(--muted); }
-    .a     { fill: var(--accent); }
-    .ln    { stroke: var(--line); }
-    .al    { stroke: var(--accent); }
-    .ah    { fill: var(--muted); }
-    .aha   { fill: var(--accent); }
-    .mono  { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; }
-  </style>
+  <!-- No <style> element and no prefers-color-scheme query here, deliberately. GitHub's page theme
+       is chosen in the site's own settings, while an SVG loaded through <img> resolves
+       prefers-color-scheme against the browser instead, so the two disagree for anyone reading a
+       dark page on a light-preference machine: that combination is what made an earlier revision
+       look like a light-theme image pasted onto a dark page. One neutral palette, no theme query,
+       so there is nothing to get out of step.
+
+       Contrast is measured against the backdrop the text actually sits on - the card fill
+       composited over the page - not against the bare page, which flatters it by about 0.2.
+       #77797d measures 4.16:1 on the light card and 4.10:1 on the dark one (4.36 and 4.34 for the
+       few labels that sit directly on the page). That is near the best a single colour can do
+       across both backgrounds, and it is BELOW the 4.5:1 AA threshold for normal-size text.
+       WCAG's large-text exemption begins at 18px, or 14px bold, and nothing here qualifies for it,
+       so this is a measured shortfall rather than a pass. Two earlier mistakes are worth not
+       repeating: the card fill was .12, which pulls both backdrops toward mid-grey and cost about
+       0.35 of that ratio, and every secondary label carried fill-opacity=".85", where the same
+       colour measures 2.95:1 and 3.18:1. Neither is here now; hierarchy is size and weight only.
+
+       #818790 draws every rule and arrowhead: 3.46:1 and 4.94:1, clearing the 3:1 that WCAG 1.4.11
+       asks of a meaningful graphic. The accent #2f81f7 is a stroke and never text, measured at
+       3.58:1 and 4.77:1 on the same basis. -->
 
   <defs>
-    <marker id="ar" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0 L8 4 L0 8 Z" class="ah" fill="#79818b"/>
-    </marker>
-    <marker id="ara" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0 L8 4 L0 8 Z" class="aha" fill="#3b82f6"/>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="8.5" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0.5 L8.5 4.5 L0 8.5 Z" fill="#818790"/>
     </marker>
   </defs>
 
-  <!-- ── band 1: capture ─────────────────────────────────────────────────── -->
+  <!-- ── what is already on your machine ─────────────────────────────────── -->
 
-  <rect class="card" x="60"  y="52" width="240" height="86" rx="10" fill="#8b949e" fill-opacity=".10" stroke="#8b949e" stroke-opacity=".55"/>
-  <text class="h" x="80" y="82"  font-size="14" font-weight="600" fill="#6e7681">Your session</text>
-  <text class="m" x="80" y="103" font-size="11.5" fill="#79818b">commands, edits, errors — and the</text>
-  <text class="m" x="80" y="119" font-size="11.5" fill="#79818b">rules you state out loud</text>
+  <text x="32" y="26" font-size="13" font-weight="600" fill="#77797d">Already set up on your machine</text>
 
-  <rect class="card" x="335" y="52" width="240" height="86" rx="10" fill="#8b949e" fill-opacity=".10" stroke="#8b949e" stroke-opacity=".55"/>
-  <text class="h" x="355" y="82"  font-size="14" font-weight="600" fill="#6e7681">Evidence + transcript</text>
-  <text class="m" x="355" y="103" font-size="11.5" fill="#79818b">error→fix pairs, teachings flagged</text>
-  <text class="m" x="355" y="119" font-size="11.5" fill="#79818b">verbatim, secrets redacted</text>
+  <rect x="32" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="65" font-size="14.5" font-weight="600" fill="#77797d">A skill</text>
+  <text x="52" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude/skills</text>
+  <text x="52" y="107" font-size="11.5" fill="#77797d">written by you, or proposed</text>
+  <text x="52" y="121" font-size="11.5" fill="#77797d">from a finished session</text>
 
-  <rect class="chip" x="610" y="52" width="240" height="86" rx="10" fill="#3b82f6" fill-opacity=".08" stroke="#3b82f6" stroke-opacity=".45"/>
-  <text class="h" x="630" y="82"  font-size="14" font-weight="600" fill="#6e7681">One harvest call</text>
-  <text class="m" x="630" y="103" font-size="11.5" fill="#79818b">your own claude CLI, once per</text>
-  <text class="m" x="630" y="119" font-size="11.5" fill="#79818b">session. Not a step sooner.</text>
+  <rect x="306" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="326" y="65" font-size="14.5" font-weight="600" fill="#77797d">An MCP server</text>
+  <text x="326" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude.json</text>
+  <text x="326" y="107" font-size="11.5" fill="#77797d">the one you already have</text>
+  <text x="326" y="121" font-size="11.5" fill="#77797d">connected and working</text>
 
-  <path class="ln" d="M306 95 H329"  fill="none" stroke="#79818b" stroke-width="1.5" marker-end="url(#ar)"/>
-  <path class="ln" d="M581 95 H604"  fill="none" stroke="#79818b" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="580" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="600" y="65" font-size="14.5" font-weight="600" fill="#77797d">A slash command</text>
+  <text x="600" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude/commands</text>
+  <text x="600" y="107" font-size="11.5" fill="#77797d">the one you already type</text>
+  <text x="600" y="121" font-size="11.5" fill="#77797d">in your own sessions</text>
 
-  <!-- harvest → the scored lessons -->
-  <path class="al" d="M730 138 V156 H455 V168" fill="none" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ara)"/>
+  <!-- The gate sits on the skill leg ALONE, and it is drawn rather than implied because it is the
+       product's stated invariant: nothing reaches the team without a verdict here. In the code a
+       picked skill reaches intakeSkill, which only copies it into the local queue and makes no git
+       or forge call at all; publishCandidate, the one function that opens a skill's merge request,
+       is reached from the review verdict and from nowhere else. A verdict of personal or project
+       ends the journey on this machine, which is why the box says it can stop here. Servers and
+       commands genuinely skip this step, so their legs genuinely bypass the box. -->
+  <path d="M166 126 V150" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="32" y="154" width="268" height="50" rx="10" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
+  <text x="52" y="177" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">/handbook:review</text>
+  <text x="52" y="194" font-size="11.5" fill="#77797d">your verdict, and it can stop here</text>
 
-  <!-- ── band 2: the scored lessons and the floor ────────────────────────── -->
+  <!-- The bracket is three routes reaching one destination, NOT one request carrying all three,
+       and the label states the count for that reason. Servers and commands are the pair
+       publishTeamSelection deliberately collects into a SINGLE request: each item raises the
+       plugin version, and two requests opened before either is merged both claim the same
+       number, so the second one lands with no version of its own and nobody's copy refreshes
+       for it. A skill cannot join that batch - TeamSelection carries servers and commands only,
+       and publishCandidate opens a skill's own request, after the verdict drawn above. Drawing
+       or labelling these as one request would promise a skill and a server leaving together,
+       which no code path does. -->
+  <path d="M166 204 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M440 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M714 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M166 220 H714" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M440 220 V264" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="462" y="240" font-size="12.5" font-weight="600" fill="#77797d">Servers and commands travel together in one request.</text>
+  <text x="462" y="256" font-size="11.5" fill="#77797d">A skill travels in its own. Somebody on the team reviews and merges it.</text>
 
-  <rect class="card" x="60" y="176" width="790" height="132" rx="10" fill="#8b949e" fill-opacity=".10" stroke="#8b949e" stroke-opacity=".55"/>
-  <text class="h" x="78" y="199" font-size="13" font-weight="600" fill="#6e7681">Up to 3 lessons, scored on 5 criteria</text>
+  <!-- ── the team repository ─────────────────────────────────────────────── -->
 
-  <g>
-    <rect class="chip" x="78" y="210" width="236" height="48" rx="8" fill="#3b82f6" fill-opacity=".08" stroke="#3b82f6" stroke-opacity=".45"/>
-    <text class="a" x="92" y="232" font-size="12" font-weight="600" fill="#3b82f6">correction</text>
-    <text class="m" x="92" y="248" font-size="10.5" fill="#79818b">quotes your own words</text>
-    <rect class="al" x="244" y="216" width="56" height="20" rx="10" fill="none" stroke="#3b82f6" stroke-opacity=".55"/>
-    <text class="a" x="272" y="230" font-size="11" font-weight="600" text-anchor="middle" fill="#3b82f6">9/10</text>
-  </g>
-  <g>
-    <rect class="chip" x="334" y="210" width="236" height="48" rx="8" fill="#3b82f6" fill-opacity=".08" stroke="#3b82f6" stroke-opacity=".45"/>
-    <text class="a" x="348" y="232" font-size="12" font-weight="600" fill="#3b82f6">procedure</text>
-    <text class="m" x="348" y="248" font-size="10.5" fill="#79818b">the steps that actually worked</text>
-    <rect class="al" x="500" y="216" width="56" height="20" rx="10" fill="none" stroke="#3b82f6" stroke-opacity=".55"/>
-    <text class="a" x="528" y="230" font-size="11" font-weight="600" text-anchor="middle" fill="#3b82f6">7/10</text>
-  </g>
-  <g>
-    <rect class="chip" x="590" y="210" width="236" height="48" rx="8" fill="#3b82f6" fill-opacity=".08" stroke="#3b82f6" stroke-opacity=".45"/>
-    <text class="a" x="604" y="232" font-size="12" font-weight="600" fill="#3b82f6">discovery</text>
-    <text class="m" x="604" y="248" font-size="10.5" fill="#79818b">the trap this repo sets</text>
-    <rect class="al" x="756" y="216" width="56" height="20" rx="10" fill="none" stroke="#3b82f6" stroke-opacity=".55"/>
-    <text class="a" x="784" y="230" font-size="11" font-weight="600" text-anchor="middle" fill="#3b82f6">5/10</text>
-  </g>
+  <rect x="32" y="270" width="816" height="122" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="295" font-size="13.5" font-weight="600" fill="#77797d">The team repository, which is a Claude Code plugin marketplace</text>
 
-  <path class="al" d="M78 275 H762" fill="none" stroke="#3b82f6" stroke-opacity=".5" stroke-width="1" stroke-dasharray="5 4"/>
-  <text class="a" x="832" y="279" font-size="10.5" font-weight="600" text-anchor="end" fill="#3b82f6">floor 4/10</text>
-  <text class="m" x="78" y="296" font-size="10.5" fill="#79818b">× error-fix 3/10 — under the floor, dropped before you ever see it</text>
+  <text x="52" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">skills/&lt;name&gt;/</text>
+  <text x="52" y="339" font-size="11" fill="#77797d">with the evidence it came from</text>
 
-  <!-- ── band 3: activation — you decide ─────────────────────────────────── -->
+  <text x="326" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.mcp.json</text>
+  <text x="326" y="339" font-size="11" fill="#77797d">merged in, existing entries kept</text>
 
-  <path class="ln" d="M455 308 V334" fill="none" stroke="#79818b" stroke-width="1.5"/>
-  <text class="h" x="470" y="326" font-size="11.5" font-weight="600" fill="#6e7681">next session asks: keep, share, or skip</text>
-  <path class="ln" d="M180 334 H730" fill="none" stroke="#79818b" stroke-width="1.5"/>
-  <path class="ln" d="M180 334 V342" fill="none" stroke="#79818b" stroke-width="1.5" marker-end="url(#ar)"/>
-  <path class="ln" d="M455 334 V342" fill="none" stroke="#79818b" stroke-width="1.5" marker-end="url(#ar)"/>
-  <path class="ln" d="M730 334 V342" fill="none" stroke="#79818b" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="600" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">commands/&lt;name&gt;.md</text>
+  <text x="600" y="339" font-size="11" fill="#77797d">found there by convention</text>
 
-  <rect class="card" x="60"  y="350" width="240" height="76" rx="10" fill="#8b949e" fill-opacity=".10" stroke="#8b949e" stroke-opacity=".55"/>
-  <text class="h" x="80" y="375" font-size="13" font-weight="600" fill="#6e7681">Keep — personal</text>
-  <text class="a mono" x="80" y="393" font-size="11" fill="#3b82f6">~/.claude/skills</text>
-  <text class="m" x="80" y="410" font-size="10.5" fill="#79818b">loads in every project</text>
+  <rect x="52" y="352" width="776" height="26" rx="8" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
+  <text x="68" y="369" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.claude-plugin/plugin.json</text>
+  <text x="276" y="369" font-size="12" font-weight="600" fill="#77797d">the same merge raises the version</text>
 
-  <rect class="card" x="335" y="350" width="240" height="76" rx="10" fill="#8b949e" fill-opacity=".10" stroke="#8b949e" stroke-opacity=".55"/>
-  <text class="h" x="355" y="375" font-size="13" font-weight="600" fill="#6e7681">Keep — project</text>
-  <text class="a mono" x="355" y="393" font-size="11" fill="#3b82f6">.claude/skills</text>
-  <text class="m" x="355" y="410" font-size="10.5" fill="#79818b">travels with the repo</text>
+  <!-- the version bump is the whole delivery mechanism -->
+  <path d="M440 392 V436" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="462" y="412" font-size="12.5" font-weight="600" fill="#77797d">That version is Claude Code's signal to refresh.</text>
+  <text x="462" y="428" font-size="11.5" fill="#77797d">No CI, no access token, nobody needing push rights.</text>
 
-  <rect class="card" x="610" y="350" width="240" height="76" rx="10" fill="#8b949e" fill-opacity=".10" stroke="#8b949e" stroke-opacity=".55"/>
-  <text class="h" x="630" y="375" font-size="13" font-weight="600" fill="#6e7681">Share — team</text>
-  <text class="a mono" x="630" y="393" font-size="11" fill="#3b82f6">pull request</text>
-  <text class="m" x="630" y="410" font-size="10.5" fill="#79818b">reviewed, merged, everyone gets it</text>
+  <!-- ── the arriving side ───────────────────────────────────────────────── -->
 
-  <!-- ── band 4: the receipt, and the loop back ──────────────────────────── -->
-
-  <rect class="al" x="60" y="442" width="790" height="34" rx="10" fill="none" stroke="#3b82f6" stroke-opacity=".5" stroke-dasharray="5 4"/>
-  <text class="h" x="455" y="464" font-size="12" font-weight="500" text-anchor="middle" fill="#6e7681">every skill carries its receipt — the quoted words, the failing command, the fix, the score</text>
-
-  <path class="ln" d="M760 476 V504 H34 V95 H52" fill="none" stroke="#79818b" stroke-width="1.5" stroke-opacity=".8" marker-end="url(#ar)"/>
-  <text class="m" x="740" y="497" font-size="10.5" text-anchor="end" fill="#79818b">the next session starts with it already loaded</text>
+  <rect x="32" y="442" width="816" height="82" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="467" font-size="13.5" font-weight="600" fill="#77797d">Every teammate's next session picks it up on its own</text>
+  <text x="52" y="490" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">team-handbook: 2 new skill(s) and 1 new command(s) since your last session: ...</text>
+  <text x="52" y="512" font-size="11.5" fill="#77797d">They subscribed once. Nothing is installed by hand, and nothing is deleted if the team drops the plugin.</text>
 </svg>
