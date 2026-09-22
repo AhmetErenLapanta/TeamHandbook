@@ -53,7 +53,7 @@ function heartbeatSnapshotFile(home: string): string {
 /**
  * Detector activity since the previous session-start notice. Advances the
  * snapshot on every call, so each session reports only what happened since the
- * last one — the product's "I'm alive and watching" signal without any noise
+ * last one - the product's "I'm alive and watching" signal without any noise
  * when nothing happened, plus a push of gate failures the user would otherwise
  * only discover by running status/doctor.
  */
@@ -90,7 +90,7 @@ export function heartbeatDelta(home: string = handbookHome()): HeartbeatDelta {
 }
 
 // Growth bridge: once the product has proven itself solo (a few approved skills)
-// and no team repo is configured, suggest — exactly once, ever — sharing them.
+// and no team repo is configured, suggest - exactly once, ever - sharing them.
 // This is the only moment the product markets its own team layer.
 const TEAM_NUDGE_APPROVALS = 3;
 
@@ -106,7 +106,7 @@ const DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Once a week: what your Claude actually learned. The single line that makes the
- * learning VISIBLE — the difference between a tool that quietly works and one you
+ * learning VISIBLE - the difference between a tool that quietly works and one you
  * can feel working. Silent when the week produced nothing, and never more than
  * once per interval.
  */
@@ -139,7 +139,7 @@ export function weeklyDigest(home: string = handbookHome(), now: number = Date.n
   if (shared > 0) parts.push(`${shared} shared with the team`);
   if (pending > 0) parts.push(`${pending} waiting for your call`);
   // decisions are the user's own clicks; usage is the only line that reports back
-  // something they did NOT do — whether a kept skill actually fired
+  // something they did NOT do - whether a kept skill actually fired
   const usage = summarizeUsage(readSkillUsage(home), handbookSkills(home));
   if (usage.totalUses > 0) {
     parts.push(
@@ -180,7 +180,7 @@ export function pendingHarvestCount(home: string = handbookHome()): number {
       const parsed = JSON.parse(readFileSync(join(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
-      // malformed / mid-write job — ignore
+      // malformed / mid-write job - ignore
     }
   }
   return total;
@@ -218,12 +218,12 @@ export function diffNewSkills(
 
 export interface SummaryInputs {
   pending: number;
-  // up to a couple of "slug — description" previews to make the review prompt concrete
+  // up to a couple of "slug - description" previews to make the review prompt concrete
   pendingPreviews?: string[];
-  // the highest repeat count among the pending queue — a lesson taught again while
+  // the highest repeat count among the pending queue - a lesson taught again while
   // its candidate sits unreviewed
   pendingRepeats?: number;
-  // freshly harvested lessons awaiting the keep/share/skip decision — the headline
+  // freshly harvested lessons awaiting the keep/share/skip decision - the headline
   harvested?: {
     // days since the oldest pending harvested candidate was written
     oldestDays?: number;
@@ -231,7 +231,7 @@ export interface SummaryInputs {
     kind: string;
     total: number | null;
     more: number;
-    // sessions this was already taught in — the promise on the tin, made visible
+    // sessions this was already taught in - the promise on the tin, made visible
     taughtBefore?: number;
   } | null;
   // the last harvest ran and honestly found nothing worth keeping. Silence here
@@ -244,7 +244,7 @@ export interface SummaryInputs {
   keptSkills?: number;
   teamNudge?: string | null;
   digest?: string | null;
-  // config.json exists but is unparseable — the kill switches failed closed
+  // config.json exists but is unparseable - the kill switches failed closed
   configBroken?: boolean;
   scoring?: number;
 }
@@ -283,13 +283,13 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     );
   }
   // The harvest headline: what TeamHandbook just learned, and the one question that
-  // matters — who gets it: just you, this project, or the whole team? All three are
+  // matters - who gets it: just you, this project, or the whole team? All three are
   // named, because a destination the notice never mentions is one nobody picks.
   if (harvested) {
     const score = harvested.total !== null ? `, ${harvested.total}/10` : "";
     const more = harvested.more > 0 ? ` (+${harvested.more} more)` : "";
     // The whole promise is "what you say twice, you say once". When it really is
-    // the second time, lead with that — it is the moment the product justifies
+    // the second time, lead with that - it is the moment the product justifies
     // itself, and it is the developer's own evidence, not a score they must trust.
     const repeats = (harvested.taughtBefore ?? 0) + 1;
     // A queue that has been growing for days is a different message from a single
@@ -319,18 +319,18 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     const nag =
       repeated > 0
         ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.`
-        : " — run /handbook:review to approve or reject.";
+        : " - run /handbook:review to approve or reject.";
     lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
   }
   if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {
     lines.push(
-      "handbook: read your last session and found nothing worth keeping — that's a normal " +
+      "handbook: read your last session and found nothing worth keeping - that's a normal " +
         "answer, not a failure. Run /handbook:learn if there was something it missed.",
     );
   }
   if (scoring > 0 && pending === 0 && !harvested) {
     lines.push(
-      `handbook: harvesting your last session${scoring === 1 ? "" : ` (${scoring} sessions)`} in the background — check /handbook:review shortly.`,
+      `handbook: harvesting your last session${scoring === 1 ? "" : ` (${scoring} sessions)`} in the background - check /handbook:review shortly.`,
     );
   }
   if (newSkills.length > 0) {
@@ -341,11 +341,11 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
   }
   if (teamNudge) lines.push(teamNudge);
   if (digest) lines.push(digest);
-  // A gate outage is pushed regardless of what else is on screen — the user would
+  // A gate outage is pushed regardless of what else is on screen - the user would
   // otherwise only discover it by running status/doctor.
   if (heartbeat && heartbeat.gateErrors > 0) {
     lines.push(
-      `handbook: ${heartbeat.gateErrors} gate run${heartbeat.gateErrors === 1 ? "" : "s"} failed since your last session (claude may be logged out, missing, or rate-limited) — run /handbook:doctor.`,
+      `handbook: ${heartbeat.gateErrors} gate run${heartbeat.gateErrors === 1 ? "" : "s"} failed since your last session (claude may be logged out, missing, or rate-limited) - run /handbook:doctor.`,
     );
   }
   // Every other line here is conditional, and a developer who approves their queue
@@ -364,7 +364,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     if (keptSkills > 0) parts.push(`${keptSkills} skill${keptSkills === 1 ? "" : "s"} kept so far`);
     lines.push(
       parts.length > 0
-        ? `handbook: on, nothing waiting for you — ${parts.join(", ")}.`
+        ? `handbook: on, nothing waiting for you - ${parts.join(", ")}.`
         : "handbook: on, nothing waiting for you yet.",
     );
   }
@@ -434,9 +434,9 @@ export function sessionStartNotice(
   const pendingRepeats = Math.max(0, ...rest.map((c) => (c.taughtBefore ? c.taughtBefore + 1 : 0)));
   const pendingPreviews = rest
     .slice(0, 2)
-    .map((c) => `${c.slug} — ${c.description.slice(0, 60)}`);
+    .map((c) => `${c.slug} - ${c.description.slice(0, 60)}`);
   // Watch the project's own skills AND (in team mode) the locally-pulled team
-  // marketplace — that's where teammates' merged skills actually appear.
+  // marketplace - that's where teammates' merged skills actually appear.
   const watchedDirs = [join(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);

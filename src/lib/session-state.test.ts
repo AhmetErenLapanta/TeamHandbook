@@ -135,7 +135,7 @@ describe("resolveOpenErrors", () => {
   });
 });
 
-describe("resolveOpenErrors — single most-recent (misattribution guard)", () => {
+describe("resolveOpenErrors - single most-recent (misattribution guard)", () => {
   it("resolves only the most-recently-seen matching error, leaving the rest open", () => {
     let state = recordFailure(emptySessionState("s1"), { ...failure, fingerprint: "old" }, "2026-08-08T00:00:00Z");
     state = recordFailure(state, { ...failure, fingerprint: "new" }, "2026-08-08T00:05:00Z");
@@ -146,7 +146,7 @@ describe("resolveOpenErrors — single most-recent (misattribution guard)", () =
   });
 });
 
-describe("attachEditToOpenErrors — most-recent-N ring buffer", () => {
+describe("attachEditToOpenErrors - most-recent-N ring buffer", () => {
   it("keeps the latest edits so a late real fix is not locked out", () => {
     let state = recordFailure(emptySessionState("s1"), failure);
     for (let i = 0; i < 25; i++) attachEditToOpenErrors(state, `/repo/flail-${i}.ts`);

@@ -27,12 +27,12 @@ export interface CandidateMeta {
   decidedAt?: string;
   deliveredTo?: string;
   deliveredMode?: "solo" | "personal" | "team";
-  // how this candidate came to exist and what it is — drives the review wording
+  // how this candidate came to exist and what it is - drives the review wording
   origin?: "harvest" | "manual" | "recurrence";
   kind?: "procedure" | "correction" | "error-fix" | "discovery";
-  // default answer to "keep it, or share it?" — derived from scope + team config
+  // default answer to "keep it, or share it?" - derived from scope + team config
   suggestedTarget?: "personal" | "project" | "team";
-  // how many sessions this lesson was taught in before the one that produced it —
+  // how many sessions this lesson was taught in before the one that produced it -
   // the "you have said this twice" evidence, absent when it is the first time
   taughtBefore?: number;
   // written together when a candidate is archived and both removed on restore, so a
@@ -306,7 +306,7 @@ function intakeRefusal(sourceDir: string, slug: string, audit: SkillAudit): stri
 /**
  * Amend a candidate only while it is still pending. The harvest runs in a background
  * process, so between reading the queue and writing to it the user may have approved
- * the very candidate a fresh notice told them to review — and a blind write would
+ * the very candidate a fresh notice told them to review - and a blind write would
  * reinstate the meta as read: pending again, with the delivery it was approved to
  * erased. Re-read at the last moment, the same guard decideCandidate uses.
  */
@@ -338,7 +338,7 @@ export function listCandidates(
     .map((e) => readCandidateMeta(join(base, e.name)))
     .filter((m): m is CandidateMeta => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
-  // newest first — the most recently captured lesson is the most relevant to review
+  // newest first - the most recently captured lesson is the most relevant to review
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug),
   );
@@ -522,7 +522,7 @@ export function restoreArchived(home: string, manifest: ArchiveManifest): Restor
   return result;
 }
 
-// A plain rejection does NOT suppress future recurrences — changing your mind (or
+// A plain rejection does NOT suppress future recurrences - changing your mind (or
 // misclicking) must stay possible. Only an explicit "don't suggest this again"
 // adds the fingerprint here, and the sieve then drops automatic recurrences.
 export function mutedFile(home: string = handbookHome()): string {

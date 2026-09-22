@@ -34,12 +34,12 @@ export interface SessionState {
   resolvedPairs: ResolvedPair[];
   // coarse what-happened-this-session shape, for repeated-work detection (T3)
   activity?: { families: string[]; exts: string[] };
-  // where this session's transcript lives — the harvest reads it at session end
+  // where this session's transcript lives - the harvest reads it at session end
   // (and salvage needs it recorded, since the hook input is gone by then)
   transcriptPath?: string;
-  // meaningful (non-generic) tool calls this session — one leg of the substance check
+  // meaningful (non-generic) tool calls this session - one leg of the substance check
   meaningfulToolCalls?: number;
-  // teaching-shaped prompts the user typed ("we never do X here") — flagged
+  // teaching-shaped prompts the user typed ("we never do X here") - flagged
   // deterministically as they happen so the harvest cannot miss them
   corrections?: CorrectionNote[];
   // set when salvage already harvested this (possibly still-alive) session, so an
@@ -125,14 +125,14 @@ export function saveSessionState(state: SessionState, home: string = handbookHom
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
 
-// A session is worth harvesting when it did real work. Deterministic and free —
+// A session is worth harvesting when it did real work. Deterministic and free -
 // this decides whether a claude call happens at all (spec §4).
 const SUBSTANCE_MIN_TOOL_CALLS = 5;
 
 export function sessionHasSubstance(state: SessionState): boolean {
   if (state.resolvedPairs.length > 0) return true;
   // Recorded prompts are deliberately NOT a leg of this. They used to be, back when a
-  // prompt only got recorded if it matched a teaching pattern — one of those meant a
+  // prompt only got recorded if it matched a teaching pattern - one of those meant a
   // human had stated a rule, which is substance by itself. Now every prompt long
   // enough to carry a lesson is recorded, so counting them here would make "a question
   // and two ls calls" a harvest, and the promise that a trivial session costs nothing
@@ -157,7 +157,7 @@ const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // salvaging before deletion.
 const SESSION_ORPHAN_MS = 3 * 60 * 60 * 1000;
 
-/** Session ids (file basenames) whose file hasn't changed in SESSION_ORPHAN_MS —
+/** Session ids (file basenames) whose file hasn't changed in SESSION_ORPHAN_MS -
  * candidates for salvage-then-delete at the next session start. */
 export function orphanedSessionIds(
   home: string = handbookHome(),
@@ -263,7 +263,7 @@ export function resolveOpenErrors(
   const sameCwd = (e: OpenError) => cwd === "" || e.cwd === "" || e.cwd === cwd;
   const matching = state.openErrors.filter((e) => e.family === family && sameCwd(e));
   if (matching.length === 0) return [];
-  // A single green run resolves only the MOST-RECENTLY-SEEN matching error — not
+  // A single green run resolves only the MOST-RECENTLY-SEEN matching error - not
   // every same-family error at once (which would mint false pairs all claiming
   // the same resolving command). The rest stay open to resolve on their own.
   matching.sort((a, b) => a.lastSeenAt.localeCompare(b.lastSeenAt));

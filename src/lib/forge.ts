@@ -62,7 +62,7 @@ export function openPr(
     return { url: extractUrl(out) };
   } catch (err) {
     // The branch is already pushed, so this is a soft failure (fall back to a manual
-    // link) — but surface WHY, so the user isn't left guessing that gh/glab just
+    // link) - but surface WHY, so the user isn't left guessing that gh/glab just
     // needs installing or `gh auth login`.
     const e = err as { code?: string; stderr?: string; message?: string };
     const tool = host && host.includes("github") ? "gh" : "glab";

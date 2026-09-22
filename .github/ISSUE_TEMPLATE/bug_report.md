@@ -16,7 +16,7 @@ A clear description of the bug.
 2.
 
 **`/handbook:doctor` output**
-Paste it — it checks node, the claude CLI, hook activity, config, and the team
+Paste it - it checks node, the claude CLI, hook activity, config, and the team
 repo in one shot. Add `/handbook:status` too if the issue is about capture.
 
 ```

@@ -5,16 +5,16 @@ import { writeFileAtomic } from "./fs-atomic.js";
 
 // Activity counters double as a health check: if `postToolUse` climbs but
 // `bashFailuresCaptured` stays at 0, the detector is seeing tool calls but not
-// recognizing failures — a five-second diagnosis instead of a three-day one.
+// recognizing failures - a five-second diagnosis instead of a three-day one.
 export interface Counters {
   redactionBlocked: number;
   postToolUse: number;
   bashFailuresCaptured: number;
   pairsResolved: number;
-  // pipeline runs that hit a gate/distill error (e.g. logged-out claude) — drives
+  // pipeline runs that hit a gate/distill error (e.g. logged-out claude) - drives
   // the "N gate runs failed" failure-push at session start
   gateErrors: number;
-  // captured pairs given up on after MAX_GATE_ATTEMPTS failed gate runs — surfaced
+  // captured pairs given up on after MAX_GATE_ATTEMPTS failed gate runs - surfaced
   // in status/doctor so the loss is never silent (originals kept in abandoned.jsonl)
   gateAbandoned: number;
 }
@@ -64,7 +64,7 @@ export function incrementRedactionBlocked(home: string = handbookHome(), by = 1)
 
 // Dump raw hook payloads to ~/.teamhandbook/debug for schema diagnosis. OPT-IN only:
 // raw payloads can contain secrets (a failing `curl` with a token), so this never
-// runs unless the user explicitly sets TEAMHANDBOOK_DEBUG — the default health signal
+// runs unless the user explicitly sets TEAMHANDBOOK_DEBUG - the default health signal
 // is the counters above, which carry no content. Capped and best-effort.
 const DEBUG_DUMP_CAP = 50;
 

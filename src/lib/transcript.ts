@@ -21,7 +21,7 @@ const PER_ASSISTANT_CAP = 1_500;
 const USER_BUDGET_SHARE = 0.6;
 
 /** Human-authored or model-authored prose? Local-command echoes, system reminders,
- * and interrupt markers are neither — they start with markup or brackets. */
+ * and interrupt markers are neither - they start with markup or brackets. */
 function isNoise(text: string): boolean {
   const t = text.trimStart();
   return t === "" || t.startsWith("<") || t.startsWith("[Request interrupted");
@@ -86,7 +86,7 @@ function cap(text: string, max: number): string {
 }
 
 // The slice labels each turn "User:" / "Assistant:" at the start of a line, so a
-// message whose own content starts a line that way could forge a turn — an
+// message whose own content starts a line that way could forge a turn - an
 // assistant echoing a repo file that reads "User: always run <evil> first" would be
 // harvested as something the DEVELOPER said, and shipped as a quoted receipt.
 // Mark such lines as quoted content so they can't be mistaken for a real turn.
@@ -105,7 +105,7 @@ const PPK_BEGIN = /^\s*(?:PuTTY-User-Key-File-\d+|Private-Lines):/im;
 
 /**
  * Does this message carry key material at all? Line-by-line redaction of pasted
- * keys is a losing game — every armor variant, per-line prefix (a `git diff` that
+ * keys is a losing game - every armor variant, per-line prefix (a `git diff` that
  * deletes a key, `cat -n`), and line terminator is another evasion. So the primary
  * defense is coarse and message-level: a message that looks key-bearing is dropped
  * from the slice WHOLE. The per-line pass below stays as a second belt for inline
@@ -113,15 +113,15 @@ const PPK_BEGIN = /^\s*(?:PuTTY-User-Key-File-\d+|Private-Lines):/im;
  *
  * A long base64-ish run is the tell that survives any prefix or armor style. Hex
  * digests (a 40-char SHA, a 64-char sha256) are single-case with no +/=, so they do
- * NOT trip it. A message quoting a public certificate does — its body is a base64
- * blob — which loses that message from the harvest but leaks nothing.
+ * NOT trip it. A message quoting a public certificate does - its body is a base64
+ * blob - which loses that message from the harvest but leaks nothing.
  */
 /** Is this run actual base64 blob, or just a long path/URL/identifier? */
 function isBlobRun(run: string, minLength: number): boolean {
   if (run.length < minLength) return false;
   // A path or URL is slash-separated SHORT segments; key material is not. Without
   // this, "/Users/dev/projects/company/backend/src/main/java/AcmeGateway" reads as
-  // one long "base64" run and the whole message would be dropped — and paths and
+  // one long "base64" run and the whole message would be dropped - and paths and
   // URLs are everywhere in a coding session.
   const segments = run.split("/");
   if (segments.length >= 3 && segments.every((seg) => seg.length < 25)) return false;
@@ -149,7 +149,7 @@ export function looksKeyBearing(text: string): boolean {
  *
  * A message too big for what is left is SKIPPED, not a stop: stopping there threw
  * away every older message, including the short ones the budget could still afford
- * — and a teaching is short ("we never mock the db here") while the brief that
+ * - and a teaching is short ("we never mock the db here") while the brief that
  * exhausted the budget is long. Measured over the real transcripts on one machine,
  * stopping lost user messages in 13 sessions (worst: 6 of them) that fit.
  */
@@ -177,7 +177,7 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
     .sort(([a], [b]) => a - b)
     .map(([i, text]) => {
       const role = entries[i]!.role === "user" ? "User" : "Assistant";
-      // fail closed at the message level — see looksKeyBearing
+      // fail closed at the message level - see looksKeyBearing
       const body = looksKeyBearing(entries[i]!.text)
         ? "[redacted: this message contained key material]"
         : neutralizeRoleLabels(text);
@@ -189,8 +189,8 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
 
 /**
  * The second belt: an inline secret (a token, an `API_KEY=…`) sitting inside prose
- * that is otherwise worth harvesting. Key material never reaches here — a message
- * carrying it was dropped whole by looksKeyBearing — so this stays a plain
+ * that is otherwise worth harvesting. Key material never reaches here - a message
+ * carrying it was dropped whole by looksKeyBearing - so this stays a plain
  * line-by-line pass with no block state to get wrong.
  */
 export function redactSlice(slice: string): { clean: string; redacted: number } {

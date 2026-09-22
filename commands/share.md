@@ -26,7 +26,7 @@ know which before they choose, not after:
 
 1. Run it read-only first: `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" list`
    If a team repository is configured this step clones it once, shallow, to see which names
-   the team already carries — so it can take a moment, and it is the only part of this
+   the team already carries - so it can take a moment, and it is the only part of this
    command that touches the network before anything is shared. A repository it cannot reach
    costs only the "already on the team" labels; the list still opens.
    Relay the whole list, all three sections, exactly as printed, including the entries it
@@ -47,11 +47,11 @@ know which before they choose, not after:
      pass; say how many are left after each.
    - Offer only what the list called shareable. A refusal is the point, not an obstacle.
    - An entry marked **already on the team** is a third state, not a refusal: it can still
-     be picked. Picking it alone changes nothing about theirs — the share turns it back and
+     be picked. Picking it alone changes nothing about theirs - the share turns it back and
      tells you the command that would update it, which you then ask about (step 7).
      Say that where it is offered, because the user is choosing to overwrite something
      other people already use. That mark is absent when the team repository could not be
-     read, so its absence never proves the team does not have it — the share itself makes
+     read, so its absence never proves the team does not have it - the share itself makes
      the real check and turns the selection back if it does.
    - Say once, before the first dialog, that they can answer in free text instead
      ("the three gitlab ones", "all of the servers, none of the skills") if they already

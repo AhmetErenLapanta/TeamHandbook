@@ -6,7 +6,7 @@ import type { HookInput } from "./hook-io.js";
 //   failure  → PostToolUseFailure event, error = "Exit code N\n<stderr>",
 //              is_interrupt, and NO tool_response.
 // The classifiers below key off the event, and also honor an explicit numeric exit
-// code if a future/other payload shape provides one — so the detector survives both.
+// code if a future/other payload shape provides one - so the detector survives both.
 
 const STDOUT_TAIL_CHARS = 2000;
 const EXIT_CODE_KEYS = ["code", "exit_code", "exitCode", "returnCode"];
@@ -16,7 +16,7 @@ const INTERRUPT_CODES = new Set([124, 130, 137, 143, 144, 145]);
 
 /**
  * Numeric exit code if the payload provides one. For OBJECT responses only the
- * structured numeric keys count — a successful command whose OUTPUT merely quotes
+ * structured numeric keys count - a successful command whose OUTPUT merely quotes
  * "exit code 1" (grep over logs, a test runner echoing a subprocess) must never be
  * reclassified as a failure, so stdout/stderr text is deliberately not scanned.
  * Text scanning applies only to string/array shapes, where no structure exists.
@@ -65,7 +65,7 @@ export function bashFailure(input: HookInput): BashFailure | null {
 
 /**
  * True if this event represents a SUCCESSFULLY COMPLETED Bash command. Success
- * requires POSITIVE evidence — either an explicit code 0, or the real PostToolUse
+ * requires POSITIVE evidence - either an explicit code 0, or the real PostToolUse
  * response shape ({stdout, stderr, interrupted}) with interrupted !== true. An
  * evidence-free payload (missing tool_response, or an error string under an
  * unfamiliar event name) must never resolve an open error into a fake pair.

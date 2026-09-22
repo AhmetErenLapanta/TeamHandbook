@@ -389,7 +389,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -398,7 +398,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),

@@ -514,7 +514,7 @@ describe("retryBranchAfterNameRejection", () => {
   });
 });
 
-describe("publishCandidate — a forge that polices branch names", () => {
+describe("publishCandidate - a forge that polices branch names", () => {
   it("given the default branch name is refused, when publishing, then it retries under the team's prefix and reports it", () => {
     remote = teamRepo();
     let pushes = 0;

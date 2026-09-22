@@ -29,7 +29,7 @@ function readMarketplaceName(repoDir: string): string | null {
  * Why the clone failed, in the words of someone who can act on it. git already says
  * which of these it is; the first person to hit this got "git clone failed (is the URL
  * correct and reachable?)" with git's own line appended, and had to work the rest out
- * themselves — the URL was right and reachable, they simply had no credentials for a
+ * themselves - the URL was right and reachable, they simply had no credentials for a
  * private repository. A handbook repo is private more often than not, so this is the
  * common path, not the edge case.
  */
@@ -67,7 +67,7 @@ export function joinTeamRepo(
     if (!name) {
       return {
         ok: false,
-        error: "the repository has no .claude-plugin/marketplace.json — is it a TeamHandbook team repo?",
+        error: "the repository has no .claude-plugin/marketplace.json - is it a TeamHandbook team repo?",
       };
     }
     saveTeamConfig(

@@ -50,7 +50,7 @@ function showCandidate(home: string, slug: string): void {
     const scores = Object.entries(gate.scores)
       .map(([k, v]) => `${k} ${v}`)
       .join(", ");
-    const dissent = gate.total < threshold ? `  — below the ${threshold}/10 bar` : "";
+    const dissent = gate.total < threshold ? `  - below the ${threshold}/10 bar` : "";
     console.log(`score:     ${gate.total}/10  (${scores})${dissent}`);
     if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
   } else {
@@ -75,7 +75,7 @@ function showCandidate(home: string, slug: string): void {
     console.log(`suggested: ${where}`);
   }
   // Repetition is the strongest argument for keeping a lesson and the one the user
-  // can confirm from memory — so it sits with the score, not inside the quote block
+  // can confirm from memory - so it sits with the score, not inside the quote block
   // that only corrections have.
   if (meta?.taughtBefore) {
     console.log(`repeated:  you have told Claude this in ${meta.taughtBefore + 1} sessions`);
@@ -86,7 +86,7 @@ function showCandidate(home: string, slug: string): void {
   console.log("── grounded case ──");
   try {
     const grounded = JSON.parse(readFileSync(join(dir, "grounded-case.json"), "utf8"));
-    // A correction's receipt is the user's own sentence — show it first and
+    // A correction's receipt is the user's own sentence - show it first and
     // verbatim; it is the strongest evidence any candidate can carry.
     if (grounded.quote) {
       console.log(`you said:  "${grounded.quote}"`);
@@ -103,7 +103,7 @@ function showCandidate(home: string, slug: string): void {
         console.log(`edits:     ${grounded.edits.join(", ")}`);
       }
     } else if (!grounded.quote) {
-      console.log("(no command/error recorded — this skill came from the conversation)");
+      console.log("(no command/error recorded - this skill came from the conversation)");
     }
     if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
   } catch {
@@ -149,7 +149,7 @@ function rejectOne(home: string, slug: string, never: boolean): void {
     return;
   }
   if (never && result.muted) {
-    console.log(`Rejected "${slug}" and muted its fingerprint — this learning will not be suggested again.`);
+    console.log(`Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`);
   } else if (never) {
     console.log(`Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`);
   } else {
@@ -198,8 +198,8 @@ async function main(): Promise<void> {
   const archived = args.includes("--archived");
   const dryRun = args.includes("--dry-run");
   // Accept both `--to personal` and `--to=personal`. Silently ignoring the `=`
-  // spelling would fall back to the candidate's suggested target — which is often
-  // "team" — so "keep this to myself" could publish to the team instead. Written once
+  // spelling would fall back to the candidate's suggested target - which is often
+  // "team" - so "keep this to myself" could publish to the team instead. Written once
   // for every flag that takes a value, because --as arrived with the same trap and the
   // index bookkeeping below is what stops its value being read as a slug.
   const consumed = new Set<number>();
@@ -244,16 +244,16 @@ async function main(): Promise<void> {
     if (pending.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
-        console.log(`(${scoring} session(s) are still being harvested in the background — try again in a minute.)`);
+        console.log(`(${scoring} session(s) are still being harvested in the background - try again in a minute.)`);
       } else {
         // An empty queue after a productive day usually means the gate scored and
-        // rejected — say so, so the review screen is a signal of life, not a dead end.
+        // rejected - say so, so the review screen is a signal of life, not a dead end.
         const reject = lastPipelineRun(home)?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
         if (reject) {
           const score = reject.total !== undefined ? `${reject.total}/10` : "n/a";
           const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "below the bar";
           console.log(
-            `(The most recent capture was scored but didn't clear the gate: ${score} — ${why}. Nothing is waiting for you.)`,
+            `(The most recent capture was scored but didn't clear the gate: ${score} - ${why}. Nothing is waiting for you.)`,
           );
         }
       }
