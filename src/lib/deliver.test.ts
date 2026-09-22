@@ -170,6 +170,23 @@ describe("approveAndDeliver", () => {
     }
   });
 
+  it("still delivers, with the warning it always gave, when candidate.json holds a cwd that is not a path", () => {
+    // readCandidateMeta passes cwd through unchecked, so a hand-edited or older-schema
+    // file reaches the delivery typed as a string without being one. Formatting it for
+    // display must not be what turns a delivery that used to succeed into a throw.
+    seedCandidate(meta({ cwd: 12345 as unknown as string }));
+    const fallback = mkdtempSync(join(tmpdir(), "handbook-fallback-"));
+    try {
+      const result = approveAndDeliver(home, "fix-npm-test", fallback);
+      expect(result.ok).toBe(true);
+      expect(result.warning).toContain("12345");
+      expect(existsSync(join(soloSkillsDir(fallback), "fix-npm-test", "SKILL.md"))).toBe(true);
+      expect(() => formatApproveResult("fix-npm-test", result)).not.toThrow();
+    } finally {
+      rmSync(fallback, { recursive: true, force: true });
+    }
+  });
+
   it("delivers a candidate that has no grounded case file", () => {
     const dir = seedCandidate(meta());
     rmSync(join(dir, "grounded-case.json"));
@@ -607,7 +624,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
 });
 
 describe("the route a refusal names has to work when it is walked", () => {
-  // The local path used to suffix and DELIVER, which set the candidate to `approved` — and
+  // The local path used to suffix and DELIVER, which set the candidate to `approved` - and
   // `approved` is terminal (queue.ts has no path back to `pending`). So the very next line
   // the CLI printed, "Approve with --update", answered with `candidate "fix-npm-test" is
   // already approved`, and the user was left holding the two disagreeing skills this
@@ -627,7 +644,7 @@ describe("the route a refusal names has to work when it is walked", () => {
       null, undefined, undefined, "project",
     );
 
-    // then nothing is written, and the candidate is STILL PENDING — which is the whole
+    // then nothing is written, and the candidate is STILL PENDING - which is the whole
     // point: the advice below is only reachable while it is
     expect(refused.ok).toBe(false);
     expect(refused.error).toContain("--update");
@@ -667,7 +684,7 @@ describe("the route a refusal names has to work when it is walked", () => {
 
 describe("two answers to one refusal are not one answer twice", () => {
   // `--update` lands on the name `--as` chose, not on the name the reviewer was refused
-  // for — so `approve foo --as bar --update` used to delete a skill called `bar` whose
+  // for - so `approve foo --as bar --update` used to delete a skill called `bar` whose
   // existence was never put in front of them, and say so only afterwards.
   it("refuses --as together with --update instead of deleting a skill the reviewer was never shown", () => {
     // given an unrelated, hand-written skill the reviewer has never been warned about

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats, pluginVersion } from "./status.js";
 import { incrementRedactionBlocked } from "./counters.js";
@@ -114,6 +114,13 @@ describe("gatherStatus / formatStatus", () => {
         sessionStartNotice: true,
       },
     });
+  });
+
+  it("prints a state directory under the user's home as ~, so the header can be shown to someone else", () => {
+    const report = { ...gatherStatus(home), home: join(homedir(), ".teamhandbook") };
+    const header = formatStatus(report).split("\n")[0];
+    expect(header).toContain("~/.teamhandbook");
+    expect(header).not.toContain(join(homedir(), ".teamhandbook"));
   });
 
   it("counts team-shared approvals from the persisted mode and renders the recap", () => {

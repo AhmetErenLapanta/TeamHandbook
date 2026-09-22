@@ -364,7 +364,7 @@ function buildScorePrompt(signal, occurrences, existingSkills = []) {
   });
   return [
     "You are the promotion gate of TeamHandbook, a tool that turns real coding-session",
-    "learnings \u2014 error\u2192fix moments and completed task procedures \u2014 into reusable team",
+    "learnings - error\u2192fix moments and completed task procedures - into reusable team",
     "skills. Decide whether this candidate deserves to become a skill by scoring five",
     "criteria, each from 0 (no) to 2 (clearly yes):",
     "",
@@ -432,7 +432,7 @@ function failureStderr(raw) {
 }
 function claudeErrorReason(err) {
   const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
   if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
@@ -686,18 +686,18 @@ function buildDistillPrompt(signal, occurrences) {
     "files edited for the fix": signal.edits.join(", ") || "(none)"
   });
   const bodyRule = signal.task ? [
-    "- body: the SKILL.md markdown body WITHOUT frontmatter \u2014 a step-by-step procedure",
+    "- body: the SKILL.md markdown body WITHOUT frontmatter - a step-by-step procedure",
     "  another developer (or agent) can follow to do this kind of task: when to use it,",
     "  the ordered steps, and how to verify success; generalize beyond this one task but",
     "  do not invent steps not supported by the case"
   ] : [
-    "- body: the SKILL.md markdown body WITHOUT frontmatter \u2014 cover the symptom (how the",
+    "- body: the SKILL.md markdown body WITHOUT frontmatter - cover the symptom (how the",
     "  error presents), the root cause, and the fix procedure step by step; generalize beyond",
     "  this one occurrence but do not invent facts not supported by the case"
   ];
   return [
-    "You are the distiller of TeamHandbook, a tool that turns real coding-session learnings \u2014",
-    "error\u2192fix moments and completed task procedures \u2014 into reusable team skills. This",
+    "You are the distiller of TeamHandbook, a tool that turns real coding-session learnings -",
+    "error\u2192fix moments and completed task procedures - into reusable team skills. This",
     "candidate already passed the promotion gate. Write a spec-compliant Agent Skill from",
     "it, in English.",
     "",
@@ -752,9 +752,9 @@ var ORIGIN_TEXT = {
 function assembleSkillMd(draft, scope, from = false) {
   const origin = typeof from === "string" ? ORIGIN_TEXT[from] ?? "real session" : from ? "completed task" : "error-to-fix session";
   const scoped = scope !== "team";
-  const guard = scoped ? ` Applies ONLY in the ${scope} repository \u2014 do not use it elsewhere.` : "";
+  const guard = scoped ? ` Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
   const description = draft.description + guard;
-  const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project \u2014 ignore this skill in any other repo.
+  const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project - ignore this skill in any other repo.
 
 ${draft.body}` : draft.body;
   return [
@@ -768,8 +768,8 @@ ${draft.body}` : draft.body;
     "",
     "## Grounded case",
     "",
-    `This skill was distilled from a real ${origin}. The case that produced it \u2014 and the`,
-    "behavior that would show it still holds \u2014 is in [grounded-case.json](grounded-case.json).",
+    `This skill was distilled from a real ${origin}. The case that produced it - and the`,
+    "behavior that would show it still holds - is in [grounded-case.json](grounded-case.json).",
     "Nothing re-runs it automatically: it is there so a human or an agent can check this",
     "skill against its evidence when it is edited, challenged, or suspected of being stale.",
     ""
@@ -1166,7 +1166,7 @@ async function main() {
       return 0;
     case "error":
       console.error(
-        `error: ${outcome.message}${/doctor/.test(outcome.message) ? "" : " \u2014 run /handbook:doctor to diagnose"}`
+        `error: ${outcome.message}${/doctor/.test(outcome.message) ? "" : " - run /handbook:doctor to diagnose"}`
       );
       return 1;
     case "written": {
@@ -1181,7 +1181,7 @@ async function main() {
       }
       if (advice.length > 0) {
         console.log(
-          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}). The gate ${advice.join(" and ")}. It is queued anyway because you asked for it \u2014 the publish decision is yours in /handbook:review.`
+          `Candidate "${outcome.slug}" written (scope: ${outcome.scope}). The gate ${advice.join(" and ")}. It is queued anyway because you asked for it - the publish decision is yours in /handbook:review.`
         );
       } else {
         console.log(

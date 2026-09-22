@@ -19,6 +19,7 @@ import type { McpAudit, McpServerEntry } from "./mcp.js";
 import { auditCommand, commandRefusalMessage } from "./commands.js";
 import type { CommandEntry } from "./commands.js";
 import { slugifySkillName } from "./distill.js";
+import { displayPath } from "./display-path.js";
 
 export function buildPrTitle(slug: string, update = false): string {
   return `feat(skill): ${update ? "update" : "add"} ${slug}`;
@@ -56,7 +57,7 @@ export function buildPrBody(meta: CandidateMeta, grounded: GroundedCase | null, 
       "## Grounded case",
       "",
       "This skill was distilled from a real completed task. The case below ships with it as",
-      "the evidence to review it against — nothing re-runs it automatically.",
+      "the evidence to review it against - nothing re-runs it automatically.",
       "",
       `- goal: ${grounded.task.goal}`,
       ...grounded.task.steps.map((s, i) => `- step ${i + 1}: ${s}`),
@@ -70,7 +71,7 @@ export function buildPrBody(meta: CandidateMeta, grounded: GroundedCase | null, 
       "## Grounded case",
       "",
       "This skill was distilled from a real error-to-fix session. The case below ships with",
-      "it as the evidence to review it against — nothing re-runs it automatically.",
+      "it as the evidence to review it against - nothing re-runs it automatically.",
       "",
       `- failed command: \`${grounded.command}\``,
       `- error (normalized): \`${grounded.error}\``,
@@ -177,7 +178,7 @@ export interface PublishOutcome {
  * one, a merged skill sits in the repository and no teammate's copy ever fetches it.
  * That used to be CI's job, which meant a token with write access, permission to push
  * to a protected default branch, and a commit made on the server under whatever rules
- * the organisation enforces — three things to get right before anyone receives
+ * the organisation enforces - three things to get right before anyone receives
  * anything, and nothing to warn you when they were not. Bumping it here costs nothing,
  * arrives atomically with the skill it belongs to, and gets reviewed alongside it.
  *
@@ -210,7 +211,7 @@ const MAX_BRANCH_PATTERN_CHARS = 200;
  *
  * This is not a guess. A group that polices branch names almost always polices commit
  * messages too, so the team already answered this question during /handbook:init and
- * had the answer accepted by the same server — it is sitting in the config as
+ * had the answer accepted by the same server - it is sitting in the config as
  * commitPrefix. And the rejection quotes the pattern, so the derived name is checked
  * against it before anything is pushed: if it does not match, we do not push it and the
  * developer gets the rule instead. The alternative was sending them to hand-edit
@@ -381,7 +382,7 @@ export function publishCandidate(
   try {
     candidateSkillMd = readFileSync(join(candidateDir, "SKILL.md"), "utf8");
   } catch {
-    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
+    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${displayPath(candidateDir)}` };
   }
   // The name the skill travels under: its own, or the one the publisher picked after being
   // told the first was taken. Checked here rather than at the copy, so a name that cannot

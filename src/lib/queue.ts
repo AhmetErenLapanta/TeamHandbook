@@ -8,6 +8,7 @@ import { detectSecret } from "./secrets.js";
 import { copySkillPayload, listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict } from "./score.js";
+import { displayPath } from "./display-path.js";
 
 // "archived" is a queue state, not a verdict: the developer never looked at these.
 // It exists so a queue that grew past reading can be shrunk to the handful still
@@ -27,12 +28,12 @@ export interface CandidateMeta {
   decidedAt?: string;
   deliveredTo?: string;
   deliveredMode?: "solo" | "personal" | "team";
-  // how this candidate came to exist and what it is — drives the review wording
+  // how this candidate came to exist and what it is - drives the review wording
   origin?: "harvest" | "manual" | "recurrence";
   kind?: "procedure" | "correction" | "error-fix" | "discovery";
-  // default answer to "keep it, or share it?" — derived from scope + team config
+  // default answer to "keep it, or share it?" - derived from scope + team config
   suggestedTarget?: "personal" | "project" | "team";
-  // how many sessions this lesson was taught in before the one that produced it —
+  // how many sessions this lesson was taught in before the one that produced it -
   // the "you have said this twice" evidence, absent when it is the first time
   taughtBefore?: number;
   // written together when a candidate is archived and both removed on restore, so a
@@ -247,7 +248,16 @@ export function auditSkillDir(sourceDir: string): SkillAudit {
  * that gets copied. Screening file by file as they are copied would leave the files that
  * sort earlier sitting in the queue when a later one trips the sieve.
  */
-export function intakeSkill(sourceDir: string, home: string = handbookHome()): IntakeResult {
+export function intakeSkill(
+  sourceDir: string,
+  home: string = handbookHome(),
+  // How the caller came by this directory, which decides how a refusal names it. An
+  // inventory path is the machine's own and is shortened to "~"; a path the user typed
+  // is echoed back exactly as typed, because they have to recognize their own argument
+  // and because path.resolve, which --skill-path runs it through, turns a copied "~/x"
+  // into "<cwd>/~/x" rather than expanding it.
+  namedBy: "inventory" | "user" = "inventory",
+): IntakeResult {
   const slug = basename(sourceDir);
   const dir = join(candidatesDir(home), slug);
   // Ahead of the audit because it is the cheapest refusal and, on a machine with a full
@@ -273,27 +283,27 @@ export function intakeSkill(sourceDir: string, home: string = handbookHome()): I
     return {
       ok: false,
       ...(audit.secret ? { secret: audit.secret } : {}),
-      error: intakeRefusal(sourceDir, slug, audit),
+      error: intakeRefusal(namedBy === "user" ? sourceDir : displayPath(sourceDir), slug, audit),
     };
   }
   copySkillPayload(sourceDir, dir, audit.skillMd!, audit.files!);
   return { ok: true, slug, dir, fileCount: audit.files!.length };
 }
 
-function intakeRefusal(sourceDir: string, slug: string, audit: SkillAudit): string {
+function intakeRefusal(shownDir: string, slug: string, audit: SkillAudit): string {
   switch (audit.reason) {
     case "unsafe-name":
       return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
     case "no-skill-md":
-      return `no readable SKILL.md in ${sourceDir}`;
+      return `no readable SKILL.md in ${shownDir}`;
     case "no-frontmatter":
-      return `the SKILL.md in ${sourceDir} has no name and description frontmatter`;
+      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
     case "irregular-entry":
       return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
     case "no-files":
       return `${slug} has no files to queue`;
     case "unreadable":
-      return `cannot read "${audit.detail}" in ${sourceDir}; nothing was queued`;
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was queued`;
     default:
       return (
         `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was ` +
@@ -306,7 +316,7 @@ function intakeRefusal(sourceDir: string, slug: string, audit: SkillAudit): stri
 /**
  * Amend a candidate only while it is still pending. The harvest runs in a background
  * process, so between reading the queue and writing to it the user may have approved
- * the very candidate a fresh notice told them to review — and a blind write would
+ * the very candidate a fresh notice told them to review - and a blind write would
  * reinstate the meta as read: pending again, with the delivery it was approved to
  * erased. Re-read at the last moment, the same guard decideCandidate uses.
  */
@@ -338,7 +348,7 @@ export function listCandidates(
     .map((e) => readCandidateMeta(join(base, e.name)))
     .filter((m): m is CandidateMeta => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
-  // newest first — the most recently captured lesson is the most relevant to review
+  // newest first - the most recently captured lesson is the most relevant to review
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug),
   );
@@ -522,7 +532,7 @@ export function restoreArchived(home: string, manifest: ArchiveManifest): Restor
   return result;
 }
 
-// A plain rejection does NOT suppress future recurrences — changing your mind (or
+// A plain rejection does NOT suppress future recurrences - changing your mind (or
 // misclicking) must stay possible. Only an explicit "don't suggest this again"
 // adds the fingerprint here, and the sieve then drops automatic recurrences.
 export function mutedFile(home: string = handbookHome()): string {

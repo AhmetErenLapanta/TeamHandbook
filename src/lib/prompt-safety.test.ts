@@ -46,7 +46,7 @@ describe("fence integrity under attack", () => {
 });
 
 describe("indent covers every line terminator the model reads", () => {
-  // NB: these must be escapes, not literal characters — U+2028/U+2029 are line
+  // NB: these must be escapes, not literal characters - U+2028/U+2029 are line
   // terminators in JS source too and would break this file.
   it.each([
     ["CR", "\r"],

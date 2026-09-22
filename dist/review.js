@@ -4,7 +4,7 @@ import { join as join12 } from "node:path";
 
 // src/lib/deliver.ts
 import { existsSync as existsSync4, readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
@@ -139,7 +139,7 @@ function failureStderr(raw) {
 }
 function claudeErrorReason(err) {
   const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
   if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
@@ -295,6 +295,17 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
   }
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
@@ -320,7 +331,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -668,7 +679,7 @@ function buildPrBody(meta, grounded, update = false) {
       "## Grounded case",
       "",
       "This skill was distilled from a real completed task. The case below ships with it as",
-      "the evidence to review it against \u2014 nothing re-runs it automatically.",
+      "the evidence to review it against - nothing re-runs it automatically.",
       "",
       `- goal: ${grounded.task.goal}`,
       ...grounded.task.steps.map((s, i) => `- step ${i + 1}: ${s}`),
@@ -682,7 +693,7 @@ function buildPrBody(meta, grounded, update = false) {
       "## Grounded case",
       "",
       "This skill was distilled from a real error-to-fix session. The case below ships with",
-      "it as the evidence to review it against \u2014 nothing re-runs it automatically.",
+      "it as the evidence to review it against - nothing re-runs it automatically.",
       "",
       `- failed command: \`${grounded.command}\``,
       `- error (normalized): \`${grounded.error}\``,
@@ -808,7 +819,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   try {
     candidateSkillMd = readFileSync4(join7(candidateDir, "SKILL.md"), "utf8");
   } catch {
-    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
+    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${displayPath(candidateDir)}` };
   }
   const conflict = conflictingOptions(options);
   if (conflict) return { ok: false, error: conflict };
@@ -890,7 +901,7 @@ function soloSkillsDir(projectCwd) {
   return join8(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join8(homedir2(), ".claude", "skills");
+  return join8(homedir3(), ".claude", "skills");
 }
 function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
@@ -922,7 +933,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
       return {
         ok: false,
         meta,
-        error: "no team configured \u2014 run /handbook:init or /handbook:join first, or approve with --to personal"
+        error: "no team configured - run /handbook:init or /handbook:join first, or approve with --to personal"
       };
     }
     const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
@@ -952,7 +963,7 @@ function installLocally(dir, meta, skillsDir, options) {
   return { slug, target, updatedExisting };
 }
 function localCollisionMessage(name, skillsDir, chosen) {
-  const taken = `a skill named "${name}" is already installed at ${join8(skillsDir, name)}. Nothing was written.`;
+  const taken = `a skill named "${name}" is already installed at ${displayPath(join8(skillsDir, name))}. Nothing was written.`;
   const warning = "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to replace the skill this candidate collided with. ${warning}` : `${taken} Approve again with --update to replace it, or with --as <name> to install this one under a different name. ${warning}`;
 }
@@ -1016,7 +1027,7 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
   const originGone = !!meta.cwd && !existsSync4(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
-  const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})` : void 0;
+  const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
   const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
   const placed = installLocally(dir, meta, skillsDir, options);
@@ -1043,6 +1054,7 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
 }
 function formatApproveResult(slug, result) {
   const name = result.deliveredSlug ?? slug;
+  const landedAt = result.deliveredTo ? displayPath(result.deliveredTo) : "(not recorded)";
   const lines = [];
   if (result.mode === "team") {
     const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
@@ -1054,7 +1066,7 @@ function formatApproveResult(slug, result) {
       lines.push(`${what} on branch ${result.branch}.${bump}`);
       if (result.prError) {
         lines.push(
-          `It could not open the request for you (${result.prError}) \u2014 install and sign in to gh or glab and it will next time.`
+          `It could not open the request for you (${result.prError}) - install and sign in to gh or glab and it will next time.`
         );
       }
       if (result.manualUrl) lines.push(`Open it here, then merge: ${result.manualUrl}`);
@@ -1064,20 +1076,20 @@ function formatApproveResult(slug, result) {
     }
     if (result.learnedBranchPrefix) {
       lines.push(
-        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered \u2014 later skills use it straight away.`
+        `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered - later skills use it straight away.`
       );
     }
     return lines.join("\n");
   }
   if (result.mode === "personal") {
     lines.push(
-      `Kept "${name}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`
+      `Kept "${name}" for you at ${landedAt}. Claude will load it in every project from your next session.`
     );
   } else {
     if (result.warning) lines.push(`Note: ${result.warning}`);
     const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
     const commit = result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
-    lines.push(`Approved "${name}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
+    lines.push(`Approved "${name}" and installed it at ${landedAt}. ${loads}. ${commit}`);
   }
   if (result.updatedExisting) {
     lines.push(`This replaced the "${name}" that was already there.`);
@@ -1103,7 +1115,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -1112,7 +1124,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
@@ -1412,10 +1424,10 @@ function showCandidate(home, slug) {
   const threshold = meta?.origin === "harvest" ? loadHarvestConfig(home).minScore : loadScoreConfig(home).threshold;
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
-  console.log(`location:  ${dir}`);
+  console.log(`location:  ${displayPath(dir)}`);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
-    const dissent = gate.total < threshold ? `  \u2014 below the ${threshold}/10 bar` : "";
+    const dissent = gate.total < threshold ? `  - below the ${threshold}/10 bar` : "";
     console.log(`score:     ${gate.total}/10  (${scores})${dissent}`);
     if (gate.rationale) console.log(`rationale: ${gate.rationale}`);
   } else {
@@ -1452,7 +1464,7 @@ function showCandidate(home, slug) {
         console.log(`edits:     ${grounded.edits.join(", ")}`);
       }
     } else if (!grounded.quote) {
-      console.log("(no command/error recorded \u2014 this skill came from the conversation)");
+      console.log("(no command/error recorded - this skill came from the conversation)");
     }
     if (grounded.expect) console.log(`expect:    ${grounded.expect}`);
   } catch {
@@ -1488,7 +1500,7 @@ function rejectOne(home, slug, never) {
     return;
   }
   if (never && result.muted) {
-    console.log(`Rejected "${slug}" and muted its fingerprint \u2014 this learning will not be suggested again.`);
+    console.log(`Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`);
   } else if (never) {
     console.log(`Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`);
   } else {
@@ -1516,7 +1528,7 @@ function restore(home, file) {
     process.exit(1);
   }
   const result = restoreArchived(home, manifest);
-  console.log(`Restored ${result.restored.length} candidate(s) from ${target}.`);
+  console.log(`Restored ${result.restored.length} candidate(s) from ${displayPath(target)}.`);
   for (const s of result.skipped) console.log(`  skipped ${s.slug} - ${s.reason}`);
 }
 async function main() {
@@ -1563,14 +1575,14 @@ async function main() {
     if (pending.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
-        console.log(`(${scoring} session(s) are still being harvested in the background \u2014 try again in a minute.)`);
+        console.log(`(${scoring} session(s) are still being harvested in the background - try again in a minute.)`);
       } else {
         const reject = lastPipelineRun(home)?.outcomes?.filter((o) => o.outcome === "reject").at(-1);
         if (reject) {
           const score = reject.total !== void 0 ? `${reject.total}/10` : "n/a";
           const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "below the bar";
           console.log(
-            `(The most recent capture was scored but didn't clear the gate: ${score} \u2014 ${why}. Nothing is waiting for you.)`
+            `(The most recent capture was scored but didn't clear the gate: ${score} - ${why}. Nothing is waiting for you.)`
           );
         }
       }

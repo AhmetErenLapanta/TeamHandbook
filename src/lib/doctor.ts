@@ -9,6 +9,7 @@ import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
 import { lastPipelineRun, pluginVersion } from "./status.js";
+import { displayPath } from "./display-path.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
 
@@ -49,7 +50,7 @@ function checkNode(): DoctorCheck {
   const major = Number(process.versions.node.split(".")[0]);
   return major >= 18
     ? ok("node", `${process.version} (≥ 18 required)`)
-    : fail("node", `${process.version} — TeamHandbook needs Node ≥ 18`);
+    : fail("node", `${process.version} - TeamHandbook needs Node ≥ 18`);
 }
 
 // The harvest itself allows 180s. This probe only asks for "OK", but it is often the
@@ -64,13 +65,13 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
     if ((err as { code?: string })?.code === "ENOENT") {
       return fail(
         "claude CLI",
-        "not found on PATH — the gate and distiller need it; install Claude Code CLI or fix PATH",
+        "not found on PATH - the gate and distiller need it; install Claude Code CLI or fix PATH",
       );
     }
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
     return fail("claude CLI", `found, but \`claude --version\` failed or timed out: ${message}`);
   }
-  // `--version` succeeds while logged OUT, so probe an actual prompt — this is the
+  // `--version` succeeds while logged OUT, so probe an actual prompt - this is the
   // exact failure (auth expired) that silently breaks the gate. Probe with the
   // CONFIGURED gate/distill model, not the default: a typo'd or retired gate.model
   // makes every real gate run fail while a default-model probe stays green.
@@ -90,7 +91,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
       if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
-        return fail("claude CLI", "installed but NOT logged in — run `claude` and /login; the gate cannot score until then");
+        return fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then");
       }
       // A timeout says nothing about the model, and the first headless call after an
       // install is the slowest one a machine ever makes. Reporting it as a failure sent
@@ -98,12 +99,12 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
       if ((err as { code?: string })?.code === "ETIMEDOUT" || lower.includes("etimedout")) {
         return warn(
           "claude CLI",
-          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s — usually a cold start; re-run this check`,
+          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
         );
       }
       return fail(
         "claude CLI",
-        `logged in, but \`claude -p --model ${model}\` failed — is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
+        `logged in, but \`claude -p --model ${model}\` failed - is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
       );
     }
   }
@@ -119,9 +120,9 @@ function checkGitIdentity(home: string, run: CommandRunner): DoctorCheck | null 
     const email = run("git", ["config", "user.email"], 5_000);
     return email
       ? ok("git identity", `user.email = ${email}`)
-      : fail("git identity", "git user.email is empty — team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
+      : fail("git identity", "git user.email is empty - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
   } catch {
-    return fail("git identity", "git user.email is not set — team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
+    return fail("git identity", "git user.email is not set - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
   }
 }
 
@@ -129,13 +130,13 @@ function checkHomeWritable(home: string): DoctorCheck {
   const probe = join(home, `.doctor-probe-${process.pid}`);
   try {
     // a missing home dir is the NORMAL fresh state (all writers create it
-    // lazily) — create it like they would, then probe writability
+    // lazily) - create it like they would, then probe writability
     mkdirSync(home, { recursive: true });
     writeFileSync(probe, "ok");
     rmSync(probe, { force: true });
-    return ok("state dir", `${home} writable`);
+    return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
-    return fail("state dir", `cannot write ${home}: ${String(err instanceof Error ? err.message : err)}`);
+    return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 
@@ -147,7 +148,7 @@ function checkConfig(home: string): DoctorCheck {
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
-        "config.json is not a JSON object — automatic harvesting is OFF until it is " +
+        "config.json is not a JSON object - automatic harvesting is OFF until it is " +
           "(the privacy switches fail closed); every other setting falls back to its default",
       );
     }
@@ -155,7 +156,7 @@ function checkConfig(home: string): DoctorCheck {
   } catch {
     return fail(
       "config",
-      "config.json is not valid JSON — automatic harvesting is OFF until it parses " +
+      "config.json is not valid JSON - automatic harvesting is OFF until it parses " +
         "(the privacy switches fail closed); every other setting falls back to its default",
     );
   }
@@ -166,19 +167,19 @@ function checkHooks(home: string): DoctorCheck {
   if (counters.postToolUse === 0) {
     return warn(
       "hooks",
-      "no hook events recorded yet — run any command in a Claude Code session and re-check; " +
+      "no hook events recorded yet - run any command in a Claude Code session and re-check; " +
         "if this stays 0 the hooks are not firing (was the plugin installed and the session restarted?)",
     );
   }
   return ok(
     "hooks",
-    `firing — ${counters.postToolUse} tool calls seen, ${counters.bashFailuresCaptured} failures captured, ${counters.pairsResolved} pairs resolved`,
+    `firing - ${counters.postToolUse} tool calls seen, ${counters.bashFailuresCaptured} failures captured, ${counters.pairsResolved} pairs resolved`,
   );
 }
 
 // Reachability alone is not health: the version-bump CI (the one thing that pushes
 // merged skills to teammates) is easy to leave unconfigured, and nothing else warns.
-// Shallow-clone the remote and read plugin.json — merged skills present while the
+// Shallow-clone the remote and read plugin.json - merged skills present while the
 // version is still the scaffold's 0.1.0 means the bump CI never ran. Best-effort: any
 // error falls back to plain reachability (which was already confirmed).
 function remoteDistributionState(url: string, run: CommandRunner): { version: string; skillCount: number } | null {
@@ -202,7 +203,7 @@ function remoteDistributionState(url: string, run: CommandRunner): { version: st
 
 function checkTeamRepo(home: string, run: CommandRunner): DoctorCheck {
   const team = loadTeamConfig(home);
-  if (!team) return ok("team repo", "not configured (solo mode — that's fine)");
+  if (!team) return ok("team repo", "not configured (solo mode - that's fine)");
   try {
     run("git", ["ls-remote", "--heads", "--", team.repoUrl], 20_000);
   } catch (err) {
@@ -210,13 +211,13 @@ function checkTeamRepo(home: string, run: CommandRunner): DoctorCheck {
       .split("\n")
       .slice(-2)
       .join(" | ");
-    return fail("team repo", `${team.repoUrl} NOT reachable — approvals cannot publish (${message})`);
+    return fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`);
   }
   const dist = remoteDistributionState(team.repoUrl, run);
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
     return warn(
       "team repo",
-      `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 — the ` +
+      `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 - the ` +
         "version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN " +
         "variable / Actions write permission)",
     );
@@ -230,17 +231,17 @@ function checkForge(home: string, run: CommandRunner): DoctorCheck | null {
   const tool = (hostFromUrl(team.repoUrl) ?? "").includes("github") ? "gh" : "glab";
   try {
     run(tool, ["auth", "status"], 10_000);
-    return ok("forge CLI", `${tool} authenticated — approvals can auto-open PRs`);
+    return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
   } catch (err) {
     if ((err as { code?: string })?.code === "ENOENT") {
       return warn(
         "forge CLI",
-        `${tool} not installed — approvals still push a branch and print a manual PR link; install ${tool} to auto-open PRs`,
+        `${tool} not installed - approvals still push a branch and print a manual PR link; install ${tool} to auto-open PRs`,
       );
     }
     return warn(
       "forge CLI",
-      `${tool} installed but not authenticated — run \`${tool} auth login\` (approvals still print a manual link)`,
+      `${tool} installed but not authenticated - run \`${tool} auth login\` (approvals still print a manual link)`,
     );
   }
 }
@@ -251,7 +252,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 // Mirrors mcp.ts's reader: a team's .mcp.json is either the documented
 // {"mcpServers": {...}} wrapper or a bare server map, and the wrapper key is only
-// trusted when it is itself a plain object — otherwise a bare map with a stray
+// trusted when it is itself a plain object - otherwise a bare map with a stray
 // "mcpServers" field would be misread as the wrapper and its real server names lost.
 // Read and parse are reported separately: an unreadable file (a permission error, a
 // race with a concurrent writer) is not the same fault as invalid JSON, and collapsing
@@ -285,7 +286,7 @@ type McpLineState = "connected" | "needs-auth" | "failed";
 
 // `claude mcp list` is a human-readable status line, not a contract: "N.N.NNN (Claude
 // Code) - ✔ Connected" today, something else tomorrow. Only a line this regex positively
-// matches — name, then a mark, then the status text after it — ever reports a state;
+// matches - name, then a mark, then the status text after it - ever reports a state;
 // anything else (a changed format, empty output, a thrown error) is reported unknown by
 // the caller. Never let a miss here read as "connected".
 const MCP_LIST_LINE = /^(.+?):\s.*[-–]\s*(✔|✘|!)\s*(.+)$/;
@@ -305,7 +306,7 @@ function parseMcpListing(output: string): Map<string, { state: McpLineState; det
 }
 
 // Only the servers the TEAM shared, matched against the ones `claude mcp list` actually
-// reports — not the other MCP servers this machine happens to have configured for
+// reports - not the other MCP servers this machine happens to have configured for
 // itself. Measured on a live install: `claude mcp list` prefixes a plugin-declared
 // server as `plugin:<pluginName>:<serverName>`, and TeamHandbook's own skeleton makes
 // the plugin name equal team.marketplaceName, so that is the exact key.
@@ -313,7 +314,7 @@ function parseMcpListing(output: string): Map<string, { state: McpLineState; det
 // There is deliberately no bare-name fallback here. One used to exist for a CLI that
 // might someday stop prefixing, but it let a personal server with the same name as a
 // never-installed team server (e.g. both called "notion") read as the team's server
-// being connected — a false "connected" for a server that was never even pulled onto
+// being connected - a false "connected" for a server that was never even pulled onto
 // this machine. Matching on name alone cannot prove the line belongs to the team's
 // plugin, so a miss is unknown, never connected.
 function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: string = marketplacesRoot()): DoctorCheck | null {
@@ -321,15 +322,15 @@ function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: strin
   if (!team) return null; // solo mode has no team-shared servers to verify
   const mcpFile = join(marketRoot, team.marketplaceName, ".mcp.json");
   // init.ts only creates .mcp.json once the team shares its first server, so a fresh
-  // team install has no such file — that is the normal pre-share state, not a fault.
+  // team install has no such file - that is the normal pre-share state, not a fault.
   if (!existsSync(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
   const declared = declaredMcpServerNames(mcpFile);
   if ("error" in declared) {
     return declared.error === "unreadable"
-      ? warn("team MCP servers", `cannot read ${mcpFile} — connection state unknown`)
-      : warn("team MCP servers", `${mcpFile} is not valid JSON — cannot verify connection state`);
+      ? warn("team MCP servers", `cannot read ${displayPath(mcpFile)} - connection state unknown`)
+      : warn("team MCP servers", `${displayPath(mcpFile)} is not valid JSON - cannot verify connection state`);
   }
   if (declared.names.length === 0) {
     return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
@@ -340,13 +341,13 @@ function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: strin
     listing = run("claude", ["mcp", "list"], 20_000);
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
-    return warn("team MCP servers", `\`claude mcp list\` failed — connection state unknown: ${message}`);
+    return warn("team MCP servers", `\`claude mcp list\` failed - connection state unknown: ${message}`);
   }
   const statuses = parseMcpListing(listing);
   if (statuses.size === 0) {
     return warn(
       "team MCP servers",
-      "`claude mcp list` returned nothing this check recognizes — connection state unknown " +
+      "`claude mcp list` returned nothing this check recognizes - connection state unknown " +
         "(never assumed connected)",
     );
   }
@@ -362,7 +363,7 @@ function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: strin
     return fail("team MCP servers", summary);
   }
   if (results.some((r) => r.state === "unknown")) {
-    return warn("team MCP servers", `connection state unknown for at least one server — ${summary}`);
+    return warn("team MCP servers", `connection state unknown for at least one server - ${summary}`);
   }
   // needs-auth is treated like checkForge treats "installed but not authenticated": a
   // setup step left unfinished, not a broken install, so it warns rather than fails.
@@ -377,10 +378,10 @@ function checkLastRun(home: string): DoctorCheck {
   if (!last) return ok("gate pipeline", "no runs yet (nothing recurred or was captured manually)");
   if (last.errored > 0) {
     const reason = last.outcomes?.filter((o) => o.outcome === "error").at(-1)?.error;
-    const why = reason ? ` — ${reason}` : "";
+    const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${join(home, "pipeline.log")})`,
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join(home, "pipeline.log"))})`,
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -391,7 +392,7 @@ function checkAbandoned(home: string): DoctorCheck | null {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures — recoverable in ${join(home, "abandoned.jsonl")} once claude works again`,
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join(home, "abandoned.jsonl"))} once claude works again`,
   );
 }
 

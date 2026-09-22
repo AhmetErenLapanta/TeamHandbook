@@ -15,16 +15,16 @@ the gate would otherwise have queued.
 
 There are TWO capture modes. Pick the one that matches what happened:
 
-**A. Error→fix moment** — something failed and was fixed. Collect, strictly from what
+**A. Error→fix moment** - something failed and was fixed. Collect, strictly from what
 actually happened (never invent):
 - `command`: the exact command that failed
 - `error`: the error output (verbatim; it will be normalized automatically)
 - `resolvedCommand`: the command that later succeeded, if any
 - `edits`: files that were edited to fix it, if any
 
-**B. Task procedure** — a piece of work was completed whose HOW is worth teaching
+**B. Task procedure** - a piece of work was completed whose HOW is worth teaching
 (similar tasks will come again). Collect from this session:
-- `goal`: one line — what the task achieved
+- `goal`: one line - what the task achieved
 - `steps`: the ordered list of meaningful steps actually taken (2–10 items; skip noise
   like `ls`; each step one sentence, concrete: what was created/edited/run and why)
 - `verification`: how success was confirmed (test run, build, manual check)
@@ -37,7 +37,7 @@ Procedure:
    prefer the most recent clear error→fix sequence, else the session's main completed
    task.
 2. If the session contains nothing matching the request, tell the user what you looked
-   for and ask them to describe the case — do not fabricate one.
+   for and ask them to describe the case - do not fabricate one.
 3. Submit by piping JSON to the learn CLI. Mode A:
 
    ```bash
@@ -54,13 +54,13 @@ Procedure:
    EOF
    ```
 
-   Never put secrets, tokens, or passwords in the payload — the secret scan will veto
+   Never put secrets, tokens, or passwords in the payload - the secret scan will veto
    the whole candidate.
-4. Relay the CLI's verdict to the user verbatim: written (with slug and gate score —
+4. Relay the CLI's verdict to the user verbatim: written (with slug and gate score -
    including the gate's concern when the score is below the threshold), dropped by a
    rule sieve (secret / oversized), or - only possible when you invoked this yourself,
    not the user - not captured because the gate rejected it.
 
-This uses the user's own `claude` CLI and runs two calls back to back — it scores, then
-distills — so it may take a couple of minutes. That is normal; do not cancel it. If it
+This uses the user's own `claude` CLI and runs two calls back to back - it scores, then
+distills - so it may take a couple of minutes. That is normal; do not cancel it. If it
 errors, the message ends with a `/handbook:doctor` pointer.

@@ -59,6 +59,17 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -70,7 +81,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join3(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -115,14 +126,14 @@ function formatLeaveSuccess(team) {
 function main() {
   if (configIsBroken()) {
     console.error(
-      "error: ~/.teamhandbook/config.json is not valid JSON, so TeamHandbook cannot tell whether a team is configured \u2014 and will not rewrite the file and risk discarding settings you wrote. Fix the JSON (or delete the file) and try again."
+      "error: ~/.teamhandbook/config.json is not valid JSON, so TeamHandbook cannot tell whether a team is configured - and will not rewrite the file and risk discarding settings you wrote. Fix the JSON (or delete the file) and try again."
     );
     process.exitCode = 1;
     return;
   }
   const team = loadTeamConfig();
   if (!team) {
-    console.log("No team is configured \u2014 nothing to leave. You're already in solo mode.");
+    console.log("No team is configured - nothing to leave. You're already in solo mode.");
     return;
   }
   clearTeamConfig();

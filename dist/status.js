@@ -57,7 +57,7 @@ import { readFileSync as readFileSync5 } from "node:fs";
 import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { dirname, join as join6 } from "node:path";
 
 // src/lib/config.ts
@@ -183,6 +183,17 @@ function listExistingSkills(dirs) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -203,7 +214,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join6(homedir2(), ".claude", "plugins", "marketplaces");
+  return join6(homedir3(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);
@@ -349,7 +360,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -358,7 +369,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
@@ -506,17 +517,17 @@ function formatLastRejection(lastRun) {
   if (!reject) return [];
   const score = reject.total !== void 0 ? `${reject.total}/10` : "n/a";
   const why = reject.duplicateOf ? `duplicate of "${reject.duplicateOf}"` : reject.rationale ?? "no rationale recorded";
-  return [`Last rejection:  ${score} \u2014 ${why}`];
+  return [`Last rejection:  ${score} - ${why}`];
 }
 function formatLastError(lastRun) {
   const errored = lastRun?.outcomes?.filter((o) => o.outcome === "error").at(-1);
   if (!errored) return [];
-  return [`Last error:      ${errored.error ?? "(no reason recorded)"} \u2014 run /handbook:doctor`];
+  return [`Last error:      ${errored.error ?? "(no reason recorded)"} - run /handbook:doctor`];
 }
 function formatStatus(report) {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
-    `TeamHandbook status  (v${report.version}, ${report.home})`,
+    `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
@@ -526,14 +537,14 @@ function formatStatus(report) {
     `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error\u2192fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
-    lastRun ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} \u2014 ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last harvest:    never",
+    lastRun ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} - ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last harvest:    never",
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
-    `Harvest runs:    ${report.pipeline.runs} run(s) in log \u2014 ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    `Harvest runs:    ${report.pipeline.runs} run(s) in log - ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
     ...report.usage.known > 0 ? [
-      report.usage.totalUses > 0 ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` + (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} \xD7${report.usage.topSkill.count})` : "") : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet \u2014 they load by description, so this fills in as the situations come up`
+      report.usage.totalUses > 0 ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` + (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} \xD7${report.usage.topSkill.count})` : "") : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`
     ] : [],
-    ...report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) \u2014 run /handbook:doctor`] : [],
+    ...report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) - run /handbook:doctor`] : [],
     ...report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : [],
     "",
     config.harvestEnabled ? `Config:          harvest model "${config.harvestModel}" (floor ${config.harvestFloor}/10, max ${config.harvestMax}/session), learn threshold ${config.learnThreshold}/10, session-start notice ${config.sessionStartNotice ? "on" : "off"}` : `Config:          harvest DISABLED (sessions are never read or sent); learn threshold ${config.learnThreshold}/10, session-start notice ${config.sessionStartNotice ? "on" : "off"}`
@@ -543,7 +554,7 @@ function formatStatus(report) {
   } else if (report.sinceInstall.approved === 0) {
     lines.push(
       "",
-      "No skills yet \u2014 normal early on: TeamHandbook harvests a session after it ends, so finish a real session and check back. /handbook:demo walks the whole loop in two minutes, /handbook:learn captures something right now, and /handbook:doctor confirms TeamHandbook can reach your claude CLI."
+      "No skills yet - normal early on: TeamHandbook harvests a session after it ends, so finish a real session and check back. /handbook:demo walks the whole loop in two minutes, /handbook:learn captures something right now, and /handbook:doctor confirms TeamHandbook can reach your claude CLI."
     );
   }
   return lines.join("\n");

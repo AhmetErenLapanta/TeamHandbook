@@ -10,11 +10,12 @@ import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
+import { displayPath } from "./display-path.js";
 
 // git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
 // runs arbitrary commands on clone, and a URL starting with `-` is parsed as an
-// option (`--upload-pack=...`). Everything else — https/ssh/git@ URLs, file://,
-// and plain local paths — is safe. Denylist those two forms rather than allowlist
+// option (`--upload-pack=...`). Everything else - https/ssh/git@ URLs, file://,
+// and plain local paths - is safe. Denylist those two forms rather than allowlist
 // transports, so legitimate local-path repos still work.
 const REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 
@@ -31,7 +32,7 @@ export interface TeamConfig {
   initializedAt?: string;
   joinedAt?: string;
   // What every branch this tool pushes is named with. Default "handbook/", which reads
-  // well and groups them — but organisations enforce branch naming rules, and one real
+  // well and groups them - but organisations enforce branch naming rules, and one real
   // GitLab group rejected `handbook/scaffold` outright because branches there must look
   // like `TEAM-42-something`. Every skill shared with the team would have been rejected
   // the same way, so this is not decoration.
@@ -62,8 +63,8 @@ export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null
 export class BrokenConfigError extends Error {
   constructor(home: string) {
     super(
-      `${join(home, "config.json")} exists but is not valid JSON. TeamHandbook will not ` +
-        "rewrite it, because doing so would silently discard settings you wrote — " +
+      `${displayPath(join(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not ` +
+        "rewrite it, because doing so would silently discard settings you wrote - " +
         "including the privacy switches, which are currently failing closed. Fix the " +
         "JSON (or delete the file) and try again.",
     );
@@ -72,7 +73,7 @@ export class BrokenConfigError extends Error {
 }
 
 /** Read-modify-write of config.json. REFUSES on a broken file: readConfigFile
- * collapses one to {}, so writing would erase whatever the user actually had —
+ * collapses one to {}, so writing would erase whatever the user actually had -
  * exactly the `{"harvest":{"enabled":false}}` opt-out that made it broken-looking. */
 export function saveTeamConfig(team: TeamConfig, home: string = handbookHome()): void {
   if (configIsBroken(home)) throw new BrokenConfigError(home);
@@ -145,7 +146,7 @@ const gitlabCi = (bump: string) => `# Bumps the plugin version on every merge to
 version-bump:
   image: node:20
   rules:
-    # only run when the CI token exists — otherwise skip (don't fail the pipeline)
+    # only run when the CI token exists - otherwise skip (don't fail the pipeline)
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
@@ -337,7 +338,7 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
   };
   // Opt-in only. The version bump now travels inside the merge request that carries the
   // skill, so the ordinary path needs no CI, no access token, and no permission to push
-  // to a protected default branch — three things that had to be right before anyone
+  // to a protected default branch - three things that had to be right before anyone
   // received anything, with nothing to warn you when they were not. The job stays
   // available for repositories where skills also arrive by hand, and it faces the same
   // commit-message rules the developer does.
@@ -367,7 +368,7 @@ export function writeSkeleton(dir: string, files: Record<string, string>): void 
  * Lay the skeleton into a repository that may already have things in it, and report
  * what was left alone. A file that already carries content is never overwritten: a
  * team's README is theirs, and a handbook is not worth losing it over. An empty file
- * is not content — forges create a placeholder README on project creation, and
+ * is not content - forges create a placeholder README on project creation, and
  * refusing to fill that in would be pedantry.
  */
 export function writeSkeletonPreserving(
@@ -399,7 +400,7 @@ export type GitRunner = (args: string[], cwd: string) => string | void;
 
 /**
  * Nothing run on the user's behalf may stop to ask a question. These calls happen
- * from a slash command or a detached hook, where a prompt has no one to answer it —
+ * from a slash command or a detached hook, where a prompt has no one to answer it -
  * git would wait on a username, glab on a confirmation, and the publish would hang
  * instead of failing. Every one of them fails with a reason instead.
  *
@@ -449,7 +450,7 @@ export function runGit(args: string[], cwd: string): string {
     });
   } catch (err) {
     // Surface git's actual reason (e.g. "Permission denied (publickey)") instead
-    // of the bare "Command failed: git …" — the difference between a five-second
+    // of the bare "Command failed: git …" - the difference between a five-second
     // and a half-hour diagnosis for the user.
     const stderr = (err as { stderr?: unknown })?.stderr;
     if (typeof stderr === "string" && stderr.trim()) {
@@ -606,7 +607,7 @@ export function initTeamRepo(
   if (loadTeamConfig(home)) {
     return {
       ok: false,
-      error: `a team repository is already configured; run /handbook:leave (or edit ${join(home, "config.json")}) to re-init`,
+      error: `a team repository is already configured; run /handbook:leave (or edit ${displayPath(join(home, "config.json"))}) to re-init`,
     };
   }
   const identity = gitIdentityArgs(git);
@@ -614,7 +615,7 @@ export function initTeamRepo(
     return {
       ok: false,
       error:
-        "git user.name/user.email is not set — the scaffold commit would have an author " +
+        "git user.name/user.email is not set - the scaffold commit would have an author " +
         "your forge is likely to reject. Run `git config --global user.name \"Your Name\"` " +
         "and `git config --global user.email you@example.com`, then re-run.",
     };
@@ -624,7 +625,7 @@ export function initTeamRepo(
   // Clone first, always. Building a fresh history locally and pushing it assumed the
   // remote was empty, and most teams create the repository through their organisation's
   // tooling, which leaves a README in it. It also assumed the branch was called main,
-  // while plenty of organisations still default to master — and a scaffold pushed to
+  // while plenty of organisations still default to master - and a scaffold pushed to
   // the wrong branch is a handbook whose version-bump CI never runs.
   try {
     git(["clone", "--", url, repoDir], workdir);
@@ -651,7 +652,7 @@ export function initTeamRepo(
   if (existsSync(join(repoDir, ".claude-plugin", "marketplace.json"))) {
     return {
       ok: false,
-      error: `${url} is already a handbook — run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
+      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
     };
   }
   const { skipped } = writeSkeletonPreserving(
@@ -662,7 +663,7 @@ export function initTeamRepo(
   // first commit has to go straight to it. Everywhere else the scaffold arrives the way
   // every skill will: a branch and a merge request. Pushing to the default branch needs
   // write access to a protected branch, which on most teams means Maintainer, while
-  // pushing a new branch is something almost any member can do — and the person setting
+  // pushing a new branch is something almost any member can do - and the person setting
   // the handbook up is not necessarily the person who administers the project.
   const scaffoldBranch = `${branchPrefix}scaffold`;
   const direct = isEmptyRepo;
@@ -736,7 +737,7 @@ export function formatInitSuccess(result: InitResult): string {
           `  pushed:      marketplace skeleton${result.withCi ? " + version-bump CI" : ""} to branch ${result.branch}`,
           result.prUrl
             ? `  request:     ${result.prUrl}`
-            : `  request:     open it here — ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
+            : `  request:     open it here - ${result.manualUrl ?? `push ${result.branch} and open a request against ${result.defaultBranch}`}`,
           ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
           `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`,
         ]),
@@ -745,11 +746,11 @@ export function formatInitSuccess(result: InitResult): string {
     ...(result.skipped?.length
       ? [
           `  left alone: ${result.skipped.join(", ")} (already had content)`,
-          "               the handbook README explains how teammates join — if yours was kept,",
+          "               the handbook README explains how teammates join - if yours was kept,",
           "               copy that section across from skills/README.md or this output.",
         ]
       : []),
-    `  config:      team repo saved to ${join(result.home ?? "", "config.json")}`,
+    `  config:      team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The

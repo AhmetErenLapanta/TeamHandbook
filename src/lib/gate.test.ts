@@ -59,7 +59,7 @@ describe("sieveSignal", () => {
     expect(sieveSignal(manual({ task }))).toMatchObject({ pass: false, reason: "oversized", detail: "task" });
   });
 
-  it("keeps a capture with no edits and no resolving command — the user asked for it", () => {
+  it("keeps a capture with no edits and no resolving command - the user asked for it", () => {
     // the automatic path has its own sieves; this one only guards secrets and size
     expect(sieveSignal(manual({ edits: [], resolvedCommand: undefined }))).toMatchObject({ pass: true });
   });

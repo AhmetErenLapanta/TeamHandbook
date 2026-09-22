@@ -14,8 +14,8 @@ up to four questions in one dialog, so ask about up to four candidates at a time
 user clear them in one pass.
 
 1. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" list`
-2. If there are no pending candidates, tell the user so — but if the CLI notes that sessions
-   are still being harvested in the background, relay that they should try again shortly —
+2. If there are no pending candidates, tell the user so - but if the CLI notes that sessions
+   are still being harvested in the background, relay that they should try again shortly -
    then stop.
 3. Show the whole queue first, one line each: name, kind, score, age, and the description's
    first line. The user decides what to spend attention on; drip-feeding them one candidate
@@ -28,12 +28,12 @@ user clear them in one pass.
    drip-feed with buttons on it.
    a. Per candidate, run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" show <slug>`
    b. Present a compact summary: name, kind (correction / procedure / discovery / error-fix),
-      description, scope, score (and its rationale, especially when low — the score is
+      description, scope, score (and its rationale, especially when low - the score is
       advice the user should see), and the grounded case (for a correction, that is the
       user's own quoted words). Quote the full SKILL.md body only if the user asks.
    c. In the dialog, one question per candidate, with these four options, the suggested
       destination first and marked as recommended:
-      - **Keep for yourself** — loads in every project, only for you
+      - **Keep for yourself** - loads in every project, only for you
       - **Add to <project>** - the `.claude/skills` of the project `show` names on its
         `project:` line (or `suggested:`, when that is what it recommends), for anyone who
         works there. A skill installs into the project it was captured in, not whichever
@@ -41,8 +41,8 @@ user clear them in one pass.
         the user answers from the option text, and the CLI names the project only after
         it has already copied the skill. "Add to this project" is right only when `show`
         says this one.
-      - **Share with the team** — a pull request to the team handbook
-      - **Reject** — not worth keeping
+      - **Share with the team** - a pull request to the team handbook
+      - **Reject** - not worth keeping
       The question header is a short tag, not a title: it fits about a dozen
       characters, so use "Skill 1" ... "Skill 4" and put the candidate's name in the
       question text itself, where it has room. Editing and skipping go through the tool's
@@ -56,19 +56,19 @@ user clear them in one pass.
    again.
 6. Map each answer to the CLI:
    - **Keep for yourself** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to personal`
-     (installs into the user-level `~/.claude/skills` — loads in every project).
+     (installs into the user-level `~/.claude/skills` - loads in every project).
    - **Add to <project>** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to project`
      (installs into the `.claude/skills` of the project the skill was captured in, which is
      the one `show` named; commit that repo and the skill travels with the code).
    - **Share with the team** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to team`
      (pushes a `handbook/<slug>` branch and opens a PR to the team handbook; needs
-     /handbook:init or /handbook:join first — the CLI says so if not).
+     /handbook:init or /handbook:join first - the CLI says so if not).
    - Plain `approve <slug>` (no --to) follows the candidate's suggested target, which is
      the `suggested:` line `show` prints, not its `scope:`; relay
      where the CLI says it landed. If the output shows an "Open the PR here" link
      instead of a PR URL, pass that link on.
    - **Reject** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" reject <slug>`
-     — a plain reject does NOT prevent the same skill from being suggested again later.
+     - a plain reject does NOT prevent the same skill from being suggested again later.
      Rejecting is the one answer worth a follow-up: ask, once the user has picked it,
      whether to drop it just this time or never suggest it again, and for the latter run
      `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" reject <slug> --never`. Do not put both
@@ -77,23 +77,23 @@ user clear them in one pass.
      follow-ups together, for the same reason the verdicts were asked together.
    - **Skip** → leave it pending and move on.
 7. **If the CLI says a skill by that name already exists**, nothing was written and the
-   candidate is still pending. This happens for every destination — the team repository,
-   your own `~/.claude/skills`, a project's `.claude/skills` — and the answer is the same
+   candidate is still pending. This happens for every destination - the team repository,
+   your own `~/.claude/skills`, a project's `.claude/skills` - and the answer is the same
    one everywhere. Treat it as the next question rather than as a failure, and ask it the
-   way every other verdict here is asked — one AskUserQuestion, three options:
+   way every other verdict here is asked - one AskUserQuestion, three options:
    - **Send it as an update** → add `--update` to the same command that was just refused.
      Say the consequence BEFORE they pick, and which consequence it is depends on where it
      lands. To the **team**: the merge request replaces their copy rather than adding a
-     file, and anything that copy gained since it landed is gone once it is merged — but a
+     file, and anything that copy gained since it landed is gone once it is merged - but a
      human still reviews it first. To a **local** destination (`--to personal` or
      `--to project`): the directory is deleted and rewritten the moment they answer. There
      is no merge request in front of it and no way back, so any file the installed skill
-     carries that the new version does not — a script, a reference, notes — goes with it.
+     carries that the new version does not - a script, a reference, notes - goes with it.
      The local one is the more dangerous of the two, precisely because it is the quiet one.
    - **Send it under a different name** → add `--as <new-name>` to the same command.
      Both skills then exist, and the one that goes out carries the new name in its own
      frontmatter. If that name is taken too, the CLI refuses again and names the one you
-     picked — offer a free one, do not reach for `--update`.
+     picked - offer a free one, do not reach for `--update`.
    - **Leave the existing one alone** → send this candidate somewhere else with a different
      `--to`, or reject it.
    Never choose for them and never re-run with `--update` on your own initiative: an update
@@ -104,7 +104,7 @@ user clear them in one pass.
    would land on the name `--as` chose rather than the one that was refused; and `--update`
    takes no value, so write it bare.
 8. The name in the CLI's output is the name that was written, and it is not always the one
-   in the queue — relay it as printed rather than repeating the slug you asked for.
+   in the queue - relay it as printed rather than repeating the slug you asked for.
 9. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and
    still pending.
 

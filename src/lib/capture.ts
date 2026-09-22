@@ -71,7 +71,7 @@ export function recordActivity(input: HookInput, home: string = handbookHome()):
 /**
  * Flag a teaching-shaped prompt ("we never use X here", "always run Y first") so
  * the harvest gets it as evidence instead of having to spot it in the transcript.
- * Secret-bearing prompts are dropped by noteCorrection — nothing raw is stored.
+ * Secret-bearing prompts are dropped by noteCorrection - nothing raw is stored.
  */
 export function captureCorrection(input: HookInput, home: string = handbookHome()): boolean {
   if (!input.session_id || typeof input.prompt !== "string") return false;
@@ -206,7 +206,7 @@ export function captureFileEdit(input: HookInput, home: string = handbookHome())
   const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
   if (!filePath) return false;
   // A path is rarely secret, but signalSecret inspects edits and this path would be
-  // persisted (and later shown in the skill/PR) — drop it rather than write it.
+  // persisted (and later shown in the skill/PR) - drop it rather than write it.
   if (signalSecret({ edits: [filePath] })) {
     incrementRedactionBlocked(home);
     return false;
@@ -230,7 +230,7 @@ export function captureBashSuccess(input: HookInput, home: string = handbookHome
   const state = loadSessionState(input.session_id, home);
   if (state.openErrors.length === 0) return 0;
   // The resolving command is the fix that ships in the skill; if it carries a secret
-  // we can neither store nor distill it, so don't pair — the error stays open (and is
+  // we can neither store nor distill it, so don't pair - the error stays open (and is
   // later flushed as a content-free weak signal).
   if (signalSecret({ resolvedCommand: command })) {
     incrementRedactionBlocked(home);

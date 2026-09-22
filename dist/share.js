@@ -245,6 +245,17 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
   }
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
@@ -270,7 +281,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -355,12 +366,12 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 
 // src/lib/share.ts
 import { existsSync as existsSync4, readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/mcp.ts
 import { readFileSync as readFileSync3 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { join as join5 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
@@ -369,7 +380,7 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join5(dir || homedir2(), ".claude.json");
+  return join5(dir || homedir3(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
@@ -654,7 +665,7 @@ function auditSkillDir(sourceDir) {
   }
   return { shareable: true, skillMd, files, summary };
 }
-function intakeSkill(sourceDir, home = handbookHome()) {
+function intakeSkill(sourceDir, home = handbookHome(), namedBy = "inventory") {
   const slug = basename(sourceDir);
   const dir = join7(candidatesDir(home), slug);
   if (isSafeSlug(slug) && existsSync2(dir)) {
@@ -670,26 +681,26 @@ function intakeSkill(sourceDir, home = handbookHome()) {
     return {
       ok: false,
       ...audit.secret ? { secret: audit.secret } : {},
-      error: intakeRefusal(sourceDir, slug, audit)
+      error: intakeRefusal(namedBy === "user" ? sourceDir : displayPath(sourceDir), slug, audit)
     };
   }
   copySkillPayload(sourceDir, dir, audit.skillMd, audit.files);
   return { ok: true, slug, dir, fileCount: audit.files.length };
 }
-function intakeRefusal(sourceDir, slug, audit) {
+function intakeRefusal(shownDir, slug, audit) {
   switch (audit.reason) {
     case "unsafe-name":
       return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
     case "no-skill-md":
-      return `no readable SKILL.md in ${sourceDir}`;
+      return `no readable SKILL.md in ${shownDir}`;
     case "no-frontmatter":
-      return `the SKILL.md in ${sourceDir} has no name and description frontmatter`;
+      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
     case "irregular-entry":
       return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
     case "no-files":
       return `${slug} has no files to queue`;
     case "unreadable":
-      return `cannot read "${audit.detail}" in ${sourceDir}; nothing was queued`;
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was queued`;
     default:
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not queued. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
@@ -701,15 +712,15 @@ import { join as join9 } from "node:path";
 
 // src/lib/commands.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
-function localCommandDirs(userHome = homedir3(), cwd = process.cwd()) {
+function localCommandDirs(userHome = homedir4(), cwd = process.cwd()) {
   return [
     { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
     { dir: join8(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
-function readLocalCommands(userHome = homedir3(), cwd = process.cwd()) {
+function readLocalCommands(userHome = homedir4(), cwd = process.cwd()) {
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
     let entries;
@@ -1220,7 +1231,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
 // src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join10(paths.userHome ?? homedir4(), ".claude", "skills"), scope: "personal" },
+    { dir: join10(paths.userHome ?? homedir5(), ".claude", "skills"), scope: "personal" },
     { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
@@ -1303,7 +1314,7 @@ function buildInventory(paths = {}, teamHas = null) {
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers)
   );
-  const commands = readLocalCommands(paths.userHome ?? homedir4(), paths.cwd ?? process.cwd()).map(
+  const commands = readLocalCommands(paths.userHome ?? homedir5(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands)
   );
   return { skills: [...byName.values()], servers, commands };
@@ -1382,7 +1393,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     else result.refused.push({ name, kind: "skill", reason: intake.error });
   }
   for (const dir of selection.skillPaths ?? []) {
-    const intake = intakeSkill(dir, home);
+    const intake = intakeSkill(dir, home, "user");
     if (intake.ok) result.queued.push(intake.slug);
     else result.refused.push({ name: basename3(dir), kind: "skill", reason: intake.error });
   }
@@ -1449,7 +1460,7 @@ function formatShareResult(result, marketplaceName) {
     const updated = [...shared.updated?.servers ?? [], ...shared.updated?.commands ?? []];
     if (updated.length) {
       lines.push(
-        `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} \u2014 the merge replaces theirs`
+        `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} - the merge replaces theirs`
       );
     }
     lines.push(

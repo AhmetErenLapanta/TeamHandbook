@@ -649,17 +649,17 @@ function buildSessionStartSummary(inputs) {
     const noun = pending === 1 ? "candidate skill is" : "candidate skills are";
     const preview = pendingPreviews.length > 0 ? ` (${pendingPreviews.join("; ")})` : "";
     const repeated = inputs.pendingRepeats ?? 0;
-    const nag = repeated > 0 ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.` : " \u2014 run /handbook:review to approve or reject.";
+    const nag = repeated > 0 ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.` : " - run /handbook:review to approve or reject.";
     lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
   }
   if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {
     lines.push(
-      "handbook: read your last session and found nothing worth keeping \u2014 that's a normal answer, not a failure. Run /handbook:learn if there was something it missed."
+      "handbook: read your last session and found nothing worth keeping - that's a normal answer, not a failure. Run /handbook:learn if there was something it missed."
     );
   }
   if (scoring > 0 && pending === 0 && !harvested) {
     lines.push(
-      `handbook: harvesting your last session${scoring === 1 ? "" : ` (${scoring} sessions)`} in the background \u2014 check /handbook:review shortly.`
+      `handbook: harvesting your last session${scoring === 1 ? "" : ` (${scoring} sessions)`} in the background - check /handbook:review shortly.`
     );
   }
   if (newSkills.length > 0) {
@@ -672,7 +672,7 @@ function buildSessionStartSummary(inputs) {
   if (digest) lines.push(digest);
   if (heartbeat && heartbeat.gateErrors > 0) {
     lines.push(
-      `handbook: ${heartbeat.gateErrors} gate run${heartbeat.gateErrors === 1 ? "" : "s"} failed since your last session (claude may be logged out, missing, or rate-limited) \u2014 run /handbook:doctor.`
+      `handbook: ${heartbeat.gateErrors} gate run${heartbeat.gateErrors === 1 ? "" : "s"} failed since your last session (claude may be logged out, missing, or rate-limited) - run /handbook:doctor.`
     );
   }
   if (!firstRun && lines.length === 0) {
@@ -685,7 +685,7 @@ function buildSessionStartSummary(inputs) {
     }
     if (keptSkills > 0) parts.push(`${keptSkills} skill${keptSkills === 1 ? "" : "s"} kept so far`);
     lines.push(
-      parts.length > 0 ? `handbook: on, nothing waiting for you \u2014 ${parts.join(", ")}.` : "handbook: on, nothing waiting for you yet."
+      parts.length > 0 ? `handbook: on, nothing waiting for you - ${parts.join(", ")}.` : "handbook: on, nothing waiting for you yet."
     );
   }
   return lines.length > 0 ? lines.join("\n") : null;
@@ -731,7 +731,7 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     ...top.taughtBefore ? { taughtBefore: top.taughtBefore } : {}
   } : null;
   const pendingRepeats = Math.max(0, ...rest.map((c) => c.taughtBefore ? c.taughtBefore + 1 : 0));
-  const pendingPreviews = rest.slice(0, 2).map((c) => `${c.slug} \u2014 ${c.description.slice(0, 60)}`);
+  const pendingPreviews = rest.slice(0, 2).map((c) => `${c.slug} - ${c.description.slice(0, 60)}`);
   const watchedDirs = [join8(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
@@ -893,7 +893,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -902,7 +902,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),

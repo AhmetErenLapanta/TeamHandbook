@@ -19,4 +19,4 @@ subscribe to that repository's plugin marketplace so merged skills reach this ma
 4. If the clone fails, show the error as-is; the most common causes are a typo in the URL
    or missing SSH access to the repository.
 
-Note: teammates who only want to USE the team's skills (not capture their own) do not need TeamHandbook at all — they run the two built-in `/plugin` commands the CLI prints, and the team plugin ships a tiny hook that shows them new-skill notices.
+Note: teammates who only want to USE the team's skills (not capture their own) do not need TeamHandbook at all - they run the two built-in `/plugin` commands the CLI prints, and the team plugin ships a tiny hook that shows them new-skill notices.

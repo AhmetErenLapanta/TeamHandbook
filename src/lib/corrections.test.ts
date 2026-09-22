@@ -6,7 +6,7 @@ describe("couldTeach", () => {
   it.each([
     ["always run make fmt before you commit"],
     ["we never use Lombok in this repo, plain records only"],
-    ["no, that's wrong — the gateway wants camelCase"],
+    ["no, that's wrong - the gateway wants camelCase"],
     // the whole point of dropping the English patterns: these used to score zero
     ["burada db'yi asla mocklamayız, testcontainer kullan"],
     ["hayır önce review sonra e2e test yapılsın, max 4 olsun"],
@@ -22,7 +22,7 @@ describe("couldTeach", () => {
     ["devam et"],
     ["/handbook:review"],
     ["<local-command-stdout>done</local-command-stdout>"],
-    // the harness writes these, not the developer — and across the transcripts on one
+    // the harness writes these, not the developer - and across the transcripts on one
     // machine "[Request interrupted by user]" was the single most repeated line of all
     ["[Request interrupted by user]"],
     ["[Your previous response had no visible output. Please continue.]"],
@@ -30,7 +30,7 @@ describe("couldTeach", () => {
     expect(couldTeach(prompt)).toBe(false);
   });
 
-  it("ignores very long prompts — those are task briefs, not rules", () => {
+  it("ignores very long prompts - those are task briefs, not rules", () => {
     expect(couldTeach(`always ${"x".repeat(700)}`)).toBe(false);
   });
 });

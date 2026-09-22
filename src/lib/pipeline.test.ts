@@ -175,7 +175,7 @@ describe("runHarvestJob", () => {
     expect(line.harvest.sessionId).toBe("s1");
   });
 
-  it("re-enqueues a failed job up to the attempt cap, then abandons it — never silently", async () => {
+  it("re-enqueues a failed job up to the attempt cap, then abandons it - never silently", async () => {
     const down: ClaudeRunner = async () => {
       throw new Error("logged out");
     };
@@ -707,7 +707,7 @@ describe("runManualSignal", () => {
     });
     // the user explicitly asked: the candidate is queued anyway, with the gate's
     // objection attached for the review to surface. A 10/10 duplicate is NOT
-    // "below threshold" — the duplicate flag is its own, separate advice.
+    // "below threshold" - the duplicate flag is its own, separate advice.
     expect(outcome).toMatchObject({
       stage: "written",
       slug: "fix-npm-test",

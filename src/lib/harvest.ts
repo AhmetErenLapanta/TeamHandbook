@@ -56,7 +56,7 @@ export const defaultHarvestConfig: HarvestConfig = {
   transcriptCharCap: 40_000,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 180_000,
@@ -66,7 +66,7 @@ export function loadHarvestConfig(home: string = handbookHome()): HarvestConfig 
   const harvest = readConfigFile(home).harvest as Record<string, unknown> | undefined;
   const num = (v: unknown, fallback: number) => (typeof v === "number" && v > 0 ? v : fallback);
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
@@ -100,7 +100,7 @@ export interface HarvestEvidence {
   // typed so a mid-session teaching survives transcript slicing. Which of them states
   // a rule is the model's call, not a pattern's.
   corrections?: Array<{ at: string; text: string }>;
-  // how many EARLIER sessions taught each of those — the model cannot see past
+  // how many EARLIER sessions taught each of those - the model cannot see past
   // sessions, so without this the recurrence score for a teaching is a guess
   echoes?: Echo[];
 }
@@ -138,7 +138,7 @@ const CRITERIA = ["recurrence", "unfindability", "generality", "durability", "co
 
 /**
  * A repeat that produced nothing new still matters. The usual reason the harvest
- * returns [] on a re-teaching is that a candidate for it is already pending — and
+ * returns [] on a re-teaching is that a candidate for it is already pending - and
  * "you have now told Claude this twice, and the skill for it is still waiting for
  * your call" is the strongest honest reason to go review it. Matched on the
  * candidate's own description, which is what it claims to be about.
@@ -166,11 +166,11 @@ export function repeatedEchoes(echoes: Echo[] | undefined): Echo[] {
 /**
  * Recurrence is the one criterion the model is in no position to judge: it reads a
  * single session, and "have you said this before?" is a question about all the others.
- * The prompt asks it to score 2 only on marked evidence, but asking is not enforcing —
+ * The prompt asks it to score 2 only on marked evidence, but asking is not enforcing -
  * so the number is settled here, from what was actually measured.
  *
  * Only upwards, for now. An unsupported 2 is a hunch dressed as evidence and capping it
- * would be the honest counterpart — but capping crosses the 4/10 floor for items the
+ * would be the honest counterpart - but capping crosses the 4/10 floor for items the
  * model scored 4, and this repo does not ship a change that quietly lowers yield
  * without measuring it first, which is why the slicer fix was A/B'd. The cap waits for
  * the same treatment.
@@ -222,11 +222,11 @@ export function buildHarvestPrompt(input: {
   const pairsText = evidence.pairs
     .map((p) => {
       const seen = evidence.recurrence[p.fingerprint];
-      return `- [pair:${p.fingerprint}] \`${p.family}\` failed (${p.error.split("\n")[0]}), fixed by editing ${p.edits.join(", ") || "(no file recorded)"} until \`${p.resolvedCommand}\` passed${seen && seen > 1 ? ` — recurred ${seen}×` : ""}`;
+      return `- [pair:${p.fingerprint}] \`${p.family}\` failed (${p.error.split("\n")[0]}), fixed by editing ${p.edits.join(", ") || "(no file recorded)"} until \`${p.resolvedCommand}\` passed${seen && seen > 1 ? ` - recurred ${seen}×` : ""}`;
     })
     .join("\n");
   // Skill descriptions come from any cloned repo's .claude/skills and from the
-  // auto-pulled team marketplace — attacker-authorable text. It must live INSIDE
+  // auto-pulled team marketplace - attacker-authorable text. It must live INSIDE
   // the fence, not in the instruction region (score.ts already gets this right).
   const skillsText = existingSkills.map((s) => `- ${s.name}: ${s.description}`).join("\n") || "(none)";
   const decisionsText = recentDecisions.join("\n") || "(none)";
@@ -235,18 +235,18 @@ export function buildHarvestPrompt(input: {
     "lessons that deserve to become durable skills for this developer or their team.",
     "",
     `Extract AT MOST ${maxItems} items, in priority order:`,
-    '1. "correction" — an explicit teaching the user gave the assistant ("we never use',
+    '1. "correction" - an explicit teaching the user gave the assistant ("we never use',
     '   X here", "always run Y first"). Quote the user\'s own words as evidence, in the',
     "   language they used. The repeated-prompts block below is the strongest place to",
     "   look, but a rule stated once, anywhere in the conversation, counts too.",
-    '2. "procedure" — a completed task whose repeatable procedure is worth keeping',
+    '2. "procedure" - a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
     '3. "discovery" - a repeatable way of working this session uncovered: a convention',
     "   to follow, a check to run before the obvious move, a trap worth avoiding next",
     "   time. It has to change how the NEXT piece of work is done. Writing down the",
     "   steps of a task that got completed is a procedure, not a discovery. At most ONE",
     "   discovery is kept per session, so propose the single most reusable one.",
-    '4. "error-fix" — a lesson from a resolved error→fix pair below; set source to its',
+    '4. "error-fix" - a lesson from a resolved error→fix pair below; set source to its',
     "   [pair:...] id.",
     "",
     "Rules:",
@@ -270,7 +270,7 @@ export function buildHarvestPrompt(input: {
             : []),
         ]
       : []),
-    // The developer may teach in any language, and the quote has to stay in theirs —
+    // The developer may teach in any language, and the quote has to stay in theirs -
     // it is evidence, and a translated quote is not what they said. The skill itself is
     // a shared artifact that can end up in a team repo, so it is written in English.
     // Until teachings in other languages could reach the model at all, this prompt had
@@ -280,7 +280,7 @@ export function buildHarvestPrompt(input: {
     "  words exactly as they typed them.",
     "- Produce NOTHING that overlaps an existing skill listed below.",
     "- Do not invent: every item must be grounded in the session data. When unsure,",
-    "  leave it out — an empty list is a valid answer.",
+    "  leave it out - an empty list is a valid answer.",
     "- Leave these out rather than scoring them low: one-off trivia, a personal",
     "  preference with no team value, anything derivable from the repo's own README and",
     "  tests, and anything a stronger model would already get right on its own. A skill",
@@ -324,8 +324,8 @@ export function buildHarvestPrompt(input: {
     `{"kind":"correction|procedure|discovery|error-fix","name":"kebab-case-skill-name",`,
     `"description":"Use when ...","body":"## ... markdown ...","expect":"observable behavior that proves it",`,
     `"scope":"team|project","scores":{"recurrence":0,"unfindability":0,"generality":0,"durability":0,"costOfError":0},`,
-    `"quote":"only for correction — the user's words","task":{"goal":"...","steps":["..."],"verification":"..."},`,
-    `"source":"pair:<id> — only for error-fix"}`,
+    `"quote":"only for correction - the user's words","task":{"goal":"...","steps":["..."],"verification":"..."},`,
+    `"source":"pair:<id> - only for error-fix"}`,
     "",
     "An empty array [] is a valid, respectable answer.",
   ].join("\n");
@@ -479,7 +479,7 @@ export function balancedArrayAt(raw: string, from: number): string | null {
 /**
  * Models routinely wrap the array in a ```json fence and add a sentence explaining
  * themselves. Reading from the first "[" to the LAST "]" swallowed any bracket in
- * that trailing sentence — a markdown link, a "[TeamHandbook]" — and lost the whole
+ * that trailing sentence - a markdown link, a "[TeamHandbook]" - and lost the whole
  * session as unparseable. Take the balanced close instead, and when a bracket in the
  * prose came first, try the next one. Still fail-closed: no valid array, no items.
  */
@@ -659,7 +659,7 @@ export async function harvestSession(
   const { slice, redacted } = job.transcriptPath
     ? buildTranscriptSlice(job.transcriptPath, config.transcriptCharCap)
     : { slice: "", redacted: 0 };
-  // Recorded prompts are not evidence on their own any more — they used to be, when a
+  // Recorded prompts are not evidence on their own any more - they used to be, when a
   // prompt was only recorded if it matched a teaching pattern. With no transcript to
   // read either, prompts alone would put a chat session in front of the model.
   const hasEvidence = job.evidence.pairs.length > 0;
@@ -671,7 +671,7 @@ export async function harvestSession(
   const existingSkills = deps.listSkills ? deps.listSkills(dirs) : listSkillsSafe(dirs);
   // Descriptions, not just slugs: told only "testcontainers-postgres-tests: pending"
   // the model cannot tell what that candidate already covers, and proposes a
-  // near-duplicate of it — which is how a review queue fills up with the same lesson.
+  // near-duplicate of it - which is how a review queue fills up with the same lesson.
   // Archived candidates are left out on purpose. This window is twenty items wide and
   // the prompt tells the model not to re-propose anything in it; an archiving run can
   // put hundreds of candidates in the queue at once, and they would fill the window
@@ -789,7 +789,7 @@ export async function harvestSession(
 }
 
 // Local helpers so harvest doesn't pull the whole pipeline module (bundle size +
-// import cycles): same dedup dirs the gate used — project, personal queue, team.
+// import cycles): same dedup dirs the gate used - project, personal queue, team.
 import { defaultSkillDirs, listExistingSkills } from "./skill-index.js";
 import { teamSkillsDir } from "./init.js";
 

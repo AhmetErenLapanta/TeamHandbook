@@ -12,7 +12,7 @@ npm test            # vitest
 npm run typecheck   # tsc --noEmit
 ```
 
-The plugin runs `dist/`, not `src/` — **after editing anything under `src/hooks/`
+The plugin runs `dist/`, not `src/` - **after editing anything under `src/hooks/`
 or `src/cli/`, run `npm run build`** and commit the updated bundles. `dist/` is
 committed on purpose (the plugin is installed by git clone).
 
@@ -23,6 +23,37 @@ a lockfile it recognizes (`package-lock.json`, `npm-shrinkwrap.json`, `bun.lock`
 installed copy: about 58 MB per version. Use `npm install` locally and do not commit
 the resulting lockfile.
 
+**The dev dependency versions are exact on purpose.** With no lockfile, every install and
+every CI run resolves them afresh, so a caret range means a version nobody chose can arrive
+between one run and the next. Two reasons put the pins there, and they overlap rather than
+divide the list:
+
+- *Reproducible committed output.* The bundler writes the `dist/` bundles that are committed
+  here and checked for drift on every pull request. A floating version lets two contributors
+  emit different bytes from the same source, and that noise surfaces in an unrelated pull
+  request rather than in the one that caused it.
+- *A CI verdict that reflects the change under review.* All four of them run in a CI step:
+  `typecheck`, `test`, `build`. Under a range, a version published that morning can turn a
+  pull request that touched only markdown red, with nothing in its diff to explain why.
+
+The bundler is the one package carrying both reasons, so it stays exact even if the second
+reason is ever dropped.
+
+`vite` is the deliberate exception and stays a range. It is not a direct dependency: it
+arrives under the test runner, so it is constrained rather than chosen, and what the
+constraint has to express is a boundary rather than a point. An `overrides` entry holds it at
+or above the line that clears a published advisory and below the major that would raise the
+dev toolchain's own Node requirement further than the upgrade needs. Do not lower it, because
+the `vite` lines beneath it carry that advisory, and do not narrow it to a single version,
+because the runner above it is what legitimately moves within those bounds. The field is
+npm's own, so pnpm (`pnpm.overrides`) and yarn (`resolutions`) do not read it and will
+resolve `vite` themselves.
+
+Bump a pin deliberately rather than loosening it: edit the version in `package.json`, run
+`npm install`, then `npm run build`, `npm test` and `npm run typecheck`, and commit the
+rebuilt `dist/` together with the bump, so the upgrade arrives as one reviewable change
+instead of a surprise inside someone else's.
+
 ## Ground rules
 
 - **Fail closed at trust boundaries.** An unparseable model reply, or any chance
@@ -30,7 +61,7 @@ the resulting lockfile.
   the secret redaction (`src/lib/secrets.ts`) or the "nothing is delivered without
   `/handbook:review` approval" invariant.
 - **Untrusted session text is data, never instructions.** Anything captured from a
-  session — stderr, commands, and the transcript slice (the conversation itself) —
+  session - stderr, commands, and the transcript slice (the conversation itself) -
   that flows into a model prompt must stay inside the `fenceUntrusted` block.
 - **Tests for services.** Cover `src/lib/` changes with a `*.test.ts` beside the
   file, using given/when/then structure. The thin hook/CLI entrypoints are

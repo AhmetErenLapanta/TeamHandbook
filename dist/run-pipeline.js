@@ -126,7 +126,7 @@ function failureStderr(raw) {
 }
 function claudeErrorReason(err) {
   const e = err;
-  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) \u2014 run /handbook:doctor";
+  if (e?.code === "ENOENT") return "claude CLI not found on PATH (install Claude Code or fix PATH) - run /handbook:doctor";
   const stderr = failureStderr(typeof e?.stderr === "string" ? e.stderr : "");
   if (stderr) return stderr;
   if (e?.killed) return "claude timed out with no output - raise harvest.timeoutMs, or run /handbook:doctor";
@@ -350,9 +350,9 @@ var ORIGIN_TEXT = {
 function assembleSkillMd(draft, scope, from = false) {
   const origin = typeof from === "string" ? ORIGIN_TEXT[from] ?? "real session" : from ? "completed task" : "error-to-fix session";
   const scoped = scope !== "team";
-  const guard = scoped ? ` Applies ONLY in the ${scope} repository \u2014 do not use it elsewhere.` : "";
+  const guard = scoped ? ` Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
   const description = draft.description + guard;
-  const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project \u2014 ignore this skill in any other repo.
+  const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project - ignore this skill in any other repo.
 
 ${draft.body}` : draft.body;
   return [
@@ -366,8 +366,8 @@ ${draft.body}` : draft.body;
     "",
     "## Grounded case",
     "",
-    `This skill was distilled from a real ${origin}. The case that produced it \u2014 and the`,
-    "behavior that would show it still holds \u2014 is in [grounded-case.json](grounded-case.json).",
+    `This skill was distilled from a real ${origin}. The case that produced it - and the`,
+    "behavior that would show it still holds - is in [grounded-case.json](grounded-case.json).",
     "Nothing re-runs it automatically: it is there so a human or an agent can check this",
     "skill against its evidence when it is edited, challenged, or suspected of being stale.",
     ""
@@ -628,7 +628,7 @@ var STOPWORDS = /* @__PURE__ */ new Set([
   "were",
   "have",
   "has",
-  // where the rule applies is scaffolding too — "in this repo" is not the lesson
+  // where the rule applies is scaffolding too - "in this repo" is not the lesson
   "repo",
   "project",
   "codebase",
@@ -841,7 +841,7 @@ var defaultHarvestConfig = {
   transcriptCharCap: 4e4,
   // Latency is dominated by how much the model writes, not by the slice: a 31k-char
   // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling — and a timeout here does not
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
   // degrade to a smaller answer, it burns an attempt and can park the session in
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
@@ -850,7 +850,7 @@ function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
   return {
-    // fail closed on a broken config — see configIsBroken
+    // fail closed on a broken config - see configIsBroken
     enabled: !configIsBroken(home) && harvest?.enabled !== false,
     model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
     maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
@@ -902,7 +902,7 @@ function buildHarvestPrompt(input) {
   const repeated = repeatedEchoes(evidence.echoes);
   const pairsText = evidence.pairs.map((p) => {
     const seen = evidence.recurrence[p.fingerprint];
-    return `- [pair:${p.fingerprint}] \`${p.family}\` failed (${p.error.split("\n")[0]}), fixed by editing ${p.edits.join(", ") || "(no file recorded)"} until \`${p.resolvedCommand}\` passed${seen && seen > 1 ? ` \u2014 recurred ${seen}\xD7` : ""}`;
+    return `- [pair:${p.fingerprint}] \`${p.family}\` failed (${p.error.split("\n")[0]}), fixed by editing ${p.edits.join(", ") || "(no file recorded)"} until \`${p.resolvedCommand}\` passed${seen && seen > 1 ? ` - recurred ${seen}\xD7` : ""}`;
   }).join("\n");
   const skillsText = existingSkills.map((s) => `- ${s.name}: ${s.description}`).join("\n") || "(none)";
   const decisionsText = recentDecisions.join("\n") || "(none)";
@@ -911,18 +911,18 @@ function buildHarvestPrompt(input) {
     "lessons that deserve to become durable skills for this developer or their team.",
     "",
     `Extract AT MOST ${maxItems} items, in priority order:`,
-    '1. "correction" \u2014 an explicit teaching the user gave the assistant ("we never use',
+    '1. "correction" - an explicit teaching the user gave the assistant ("we never use',
     `   X here", "always run Y first"). Quote the user's own words as evidence, in the`,
     "   language they used. The repeated-prompts block below is the strongest place to",
     "   look, but a rule stated once, anywhere in the conversation, counts too.",
-    '2. "procedure" \u2014 a completed task whose repeatable procedure is worth keeping',
+    '2. "procedure" - a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
     '3. "discovery" - a repeatable way of working this session uncovered: a convention',
     "   to follow, a check to run before the obvious move, a trap worth avoiding next",
     "   time. It has to change how the NEXT piece of work is done. Writing down the",
     "   steps of a task that got completed is a procedure, not a discovery. At most ONE",
     "   discovery is kept per session, so propose the single most reusable one.",
-    '4. "error-fix" \u2014 a lesson from a resolved error\u2192fix pair below; set source to its',
+    '4. "error-fix" - a lesson from a resolved error\u2192fix pair below; set source to its',
     "   [pair:...] id.",
     "",
     "Rules:",
@@ -942,7 +942,7 @@ function buildHarvestPrompt(input) {
         "  measured locally, not guessed, and it is the strongest signal here."
       ] : []
     ] : [],
-    // The developer may teach in any language, and the quote has to stay in theirs —
+    // The developer may teach in any language, and the quote has to stay in theirs -
     // it is evidence, and a translated quote is not what they said. The skill itself is
     // a shared artifact that can end up in a team repo, so it is written in English.
     // Until teachings in other languages could reach the model at all, this prompt had
@@ -952,7 +952,7 @@ function buildHarvestPrompt(input) {
     "  words exactly as they typed them.",
     "- Produce NOTHING that overlaps an existing skill listed below.",
     "- Do not invent: every item must be grounded in the session data. When unsure,",
-    "  leave it out \u2014 an empty list is a valid answer.",
+    "  leave it out - an empty list is a valid answer.",
     "- Leave these out rather than scoring them low: one-off trivia, a personal",
     "  preference with no team value, anything derivable from the repo's own README and",
     "  tests, and anything a stronger model would already get right on its own. A skill",
@@ -992,8 +992,8 @@ function buildHarvestPrompt(input) {
     `{"kind":"correction|procedure|discovery|error-fix","name":"kebab-case-skill-name",`,
     `"description":"Use when ...","body":"## ... markdown ...","expect":"observable behavior that proves it",`,
     `"scope":"team|project","scores":{"recurrence":0,"unfindability":0,"generality":0,"durability":0,"costOfError":0},`,
-    `"quote":"only for correction \u2014 the user's words","task":{"goal":"...","steps":["..."],"verification":"..."},`,
-    `"source":"pair:<id> \u2014 only for error-fix"}`,
+    `"quote":"only for correction - the user's words","task":{"goal":"...","steps":["..."],"verification":"..."},`,
+    `"source":"pair:<id> - only for error-fix"}`,
     "",
     "An empty array [] is a valid, respectable answer."
   ].join("\n");
@@ -1526,7 +1526,7 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
     },
     outcomes: [
       ...(summary.dropped ?? []).map((d) => ({
-        // an item dropped FOR containing a secret must not have its name logged —
+        // an item dropped FOR containing a secret must not have its name logged -
         // the name is model output derived from the same text
         fingerprint: d.reason === "secret" ? "(redacted)" : d.name,
         outcome: "sieved",
