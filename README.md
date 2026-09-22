@@ -1,5 +1,7 @@
 # TeamHandbook
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Node: >= 18](https://img.shields.io/badge/node-%3E%3D%2018-brightgreen)](package.json)
+
 **Your team's Claude Code setup, in one git repository.** One person creates it, everyone
 else connects once, and every skill, MCP server, or slash command the team approves shows
 up on its own.
@@ -7,6 +9,8 @@ up on its own.
 [What your team gets](#what-your-team-gets) · [Install](#install) ·
 [Who approves what](#nothing-ships-until-you-say-so) ·
 [Why you might not want this](#why-you-might-not-want-this)
+
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
 
 ## What this is
 
@@ -22,10 +26,6 @@ should belong to all of you.
 Approving something sends it to that repository as a merge request. Merge it and each
 teammate's copy picks it up at their next session: no CI, no access token, and nobody
 needing push rights on a protected branch.
-
-Noticing the thing worth sharing is the part that never happens on its own, so
-TeamHandbook reads each finished session and proposes what it found. That is how the
-repository gets filled without anyone having to remember to fill it.
 
 ## What your team gets
 
@@ -208,8 +208,6 @@ thing: it drops the contribution target and leaves the subscription alone.
   through the merged request.
 
 ## How it works
-
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
 
 - **One merge request for a whole selection.** The servers and commands you pick travel
   together, because each one raises the version and two requests opened before either is
