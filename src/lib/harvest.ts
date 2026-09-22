@@ -46,10 +46,12 @@ export interface HarvestConfig {
 export const defaultHarvestConfig: HarvestConfig = {
   enabled: true,
   // Measured, not assumed: on an identical prompt from a real session, haiku
-  // proposed the developer's stated rule 1 time in 3 and sonnet 3 in 3. The whole
-  // product is "every session teaches it something"; a default that stays silent
-  // two thirds of the time fails that. One call per session, and
-  // {"harvest": {"model": "haiku"}} is still there for whoever wants it cheaper.
+  // proposed the developer's stated rule 1 time in 3 and sonnet 3 in 3. That is one
+  // prompt, three runs per model - too little to put a rate on, and all the evidence
+  // this default rests on. The whole product is "every session teaches it something";
+  // a default that stays silent two thirds of the time fails that. One call per
+  // session, and {"harvest": {"model": "haiku"}} is still there for whoever wants it
+  // cheaper.
   model: "sonnet",
   maxPerSession: 3,
   minScore: 4,

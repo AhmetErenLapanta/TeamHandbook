@@ -1,5 +1,6 @@
 {
   "name": "teamhandbook",
+  "description": "Source for the TeamHandbook plugin. Install it to set up your team's shared skills repository, or to join the one a teammate already created.",
   "owner": {
     "name": "Ahmet Eren Lapanta"
   },
