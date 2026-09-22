@@ -55,7 +55,7 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { dirname, join as join4 } from "node:path";
 
 // src/lib/config.ts
@@ -140,6 +140,16 @@ function hostFromUrl(url) {
   return normalized.slice(0, normalized.indexOf("/"));
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -160,7 +170,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join4(homedir2(), ".claude", "plugins", "marketplaces");
+  return join4(homedir3(), ".claude", "plugins", "marketplaces");
 }
 
 // src/lib/harvest.ts
@@ -328,9 +338,9 @@ function checkHomeWritable(home) {
     mkdirSync3(home, { recursive: true });
     writeFileSync2(probe, "ok");
     rmSync2(probe, { force: true });
-    return ok("state dir", `${home} writable`);
+    return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
-    return fail("state dir", `cannot write ${home}: ${String(err instanceof Error ? err.message : err)}`);
+    return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 function checkConfig(home) {
@@ -463,7 +473,7 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   }
   const declared = declaredMcpServerNames(mcpFile);
   if ("error" in declared) {
-    return declared.error === "unreadable" ? warn("team MCP servers", `cannot read ${mcpFile} \u2014 connection state unknown`) : warn("team MCP servers", `${mcpFile} is not valid JSON \u2014 cannot verify connection state`);
+    return declared.error === "unreadable" ? warn("team MCP servers", `cannot read ${displayPath(mcpFile)} \u2014 connection state unknown`) : warn("team MCP servers", `${displayPath(mcpFile)} is not valid JSON \u2014 cannot verify connection state`);
   }
   if (declared.names.length === 0) {
     return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
@@ -507,7 +517,7 @@ function checkLastRun(home) {
     const why = reason ? ` \u2014 ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${join7(home, "pipeline.log")})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join7(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -517,7 +527,7 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures \u2014 recoverable in ${join7(home, "abandoned.jsonl")} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures \u2014 recoverable in ${displayPath(join7(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot()) {

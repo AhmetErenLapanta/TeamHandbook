@@ -5,6 +5,7 @@ import { configIsBroken } from "./config.js";
 import { cloneFailureReason } from "./git-errors.js";
 import type { GitRunner } from "./init.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { displayPath } from "./display-path.js";
 
 export interface JoinResult {
   ok: boolean;
@@ -52,7 +53,7 @@ export function joinTeamRepo(
   if (existing && existing.repoUrl !== url) {
     return {
       ok: false,
-      error: `already joined ${existing.repoUrl}; run /handbook:leave (or edit ${join(home, "config.json")}) to switch teams`,
+      error: `already joined ${existing.repoUrl}; run /handbook:leave (or edit ${displayPath(join(home, "config.json"))}) to switch teams`,
     };
   }
   const workdir = handbookWorkdir("handbook-join-", home);
@@ -90,7 +91,7 @@ export function formatJoinSuccess(result: JoinResult): string {
     `Joined the team skill base at ${result.url}.`,
     "",
     "  engine:  approved skills will now target this repository",
-    `  config:  team repo saved to ${join(result.home ?? "", "config.json")}`,
+    `  config:  team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
     "",
     "To finish, connect Claude Code to the team marketplace (built-in commands):",
     "",

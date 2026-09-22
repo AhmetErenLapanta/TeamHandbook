@@ -59,6 +59,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -70,7 +80,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join3(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }

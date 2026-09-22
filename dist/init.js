@@ -194,6 +194,16 @@ function cloneFailureReason(url, err, creds = probeCredentials()) {
   return `git clone failed for ${url}: ${detail}`;
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
@@ -213,7 +223,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join3(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join3(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -575,7 +585,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   if (loadTeamConfig(home)) {
     return {
       ok: false,
-      error: `a team repository is already configured; run /handbook:leave (or edit ${join3(home, "config.json")}) to re-init`
+      error: `a team repository is already configured; run /handbook:leave (or edit ${displayPath(join3(home, "config.json"))}) to re-init`
     };
   }
   const identity = gitIdentityArgs(git);
@@ -690,7 +700,7 @@ function formatInitSuccess(result) {
       "               the handbook README explains how teammates join \u2014 if yours was kept,",
       "               copy that section across from skills/README.md or this output."
     ] : [],
-    `  config:      team repo saved to ${join3(result.home ?? "", "config.json")}`,
+    `  config:      team repo saved to ${displayPath(join3(result.home ?? "", "config.json"))}`,
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The

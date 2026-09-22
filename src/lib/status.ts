@@ -12,6 +12,7 @@ import { loadHarvestConfig } from "./harvest.js";
 import { loadNotifyConfig } from "./notify.js";
 import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
+import { displayPath } from "./display-path.js";
 
 /**
  * The installed plugin's version, for support/bug reports. The bundle runs from
@@ -219,7 +220,7 @@ function formatLastError(lastRun: (PipelineSummary & { ts: string }) | null): st
 export function formatStatus(report: StatusReport): string {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
-    `TeamHandbook status  (v${report.version}, ${report.home})`,
+    `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,

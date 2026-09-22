@@ -9,6 +9,7 @@ import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
 import { lastPipelineRun, pluginVersion } from "./status.js";
+import { displayPath } from "./display-path.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
 
@@ -133,9 +134,9 @@ function checkHomeWritable(home: string): DoctorCheck {
     mkdirSync(home, { recursive: true });
     writeFileSync(probe, "ok");
     rmSync(probe, { force: true });
-    return ok("state dir", `${home} writable`);
+    return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
-    return fail("state dir", `cannot write ${home}: ${String(err instanceof Error ? err.message : err)}`);
+    return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 
@@ -328,8 +329,8 @@ function checkTeamMcpServers(home: string, run: CommandRunner, marketRoot: strin
   const declared = declaredMcpServerNames(mcpFile);
   if ("error" in declared) {
     return declared.error === "unreadable"
-      ? warn("team MCP servers", `cannot read ${mcpFile} — connection state unknown`)
-      : warn("team MCP servers", `${mcpFile} is not valid JSON — cannot verify connection state`);
+      ? warn("team MCP servers", `cannot read ${displayPath(mcpFile)} — connection state unknown`)
+      : warn("team MCP servers", `${displayPath(mcpFile)} is not valid JSON — cannot verify connection state`);
   }
   if (declared.names.length === 0) {
     return ok("team MCP servers", "the team's .mcp.json declares no servers yet");
@@ -380,7 +381,7 @@ function checkLastRun(home: string): DoctorCheck {
     const why = reason ? ` — ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${join(home, "pipeline.log")})`,
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join(home, "pipeline.log"))})`,
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -391,7 +392,7 @@ function checkAbandoned(home: string): DoctorCheck | null {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures — recoverable in ${join(home, "abandoned.jsonl")} once claude works again`,
+    `${abandoned} captured pair(s) were given up after repeated gate failures — recoverable in ${displayPath(join(home, "abandoned.jsonl"))} once claude works again`,
   );
 }
 

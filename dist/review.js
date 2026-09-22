@@ -4,7 +4,7 @@ import { join as join12 } from "node:path";
 
 // src/lib/deliver.ts
 import { existsSync as existsSync4, readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
@@ -295,6 +295,16 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
   }
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
@@ -320,7 +330,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -890,7 +900,7 @@ function soloSkillsDir(projectCwd) {
   return join8(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join8(homedir2(), ".claude", "skills");
+  return join8(homedir3(), ".claude", "skills");
 }
 function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
@@ -952,7 +962,7 @@ function installLocally(dir, meta, skillsDir, options) {
   return { slug, target, updatedExisting };
 }
 function localCollisionMessage(name, skillsDir, chosen) {
-  const taken = `a skill named "${name}" is already installed at ${join8(skillsDir, name)}. Nothing was written.`;
+  const taken = `a skill named "${name}" is already installed at ${displayPath(join8(skillsDir, name))}. Nothing was written.`;
   const warning = "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to replace the skill this candidate collided with. ${warning}` : `${taken} Approve again with --update to replace it, or with --as <name> to install this one under a different name. ${warning}`;
 }
@@ -1016,7 +1026,7 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
   const originGone = !!meta.cwd && !existsSync4(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
-  const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})` : void 0;
+  const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
   const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
   const placed = installLocally(dir, meta, skillsDir, options);
@@ -1043,6 +1053,7 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
 }
 function formatApproveResult(slug, result) {
   const name = result.deliveredSlug ?? slug;
+  const landedAt = result.deliveredTo ? displayPath(result.deliveredTo) : "(not recorded)";
   const lines = [];
   if (result.mode === "team") {
     const bump = result.version ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.` : "";
@@ -1071,13 +1082,13 @@ function formatApproveResult(slug, result) {
   }
   if (result.mode === "personal") {
     lines.push(
-      `Kept "${name}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`
+      `Kept "${name}" for you at ${landedAt}. Claude will load it in every project from your next session.`
     );
   } else {
     if (result.warning) lines.push(`Note: ${result.warning}`);
     const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
     const commit = result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
-    lines.push(`Approved "${name}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
+    lines.push(`Approved "${name}" and installed it at ${landedAt}. ${loads}. ${commit}`);
   }
   if (result.updatedExisting) {
     lines.push(`This replaced the "${name}" that was already there.`);
@@ -1389,16 +1400,6 @@ function lastPipelineRun(home = handbookHome()) {
     }
   }
   return null;
-}
-
-// src/lib/display-path.ts
-import { homedir as homedir3 } from "node:os";
-import { sep } from "node:path";
-function displayPath(path, userHome = homedir3()) {
-  if (!userHome) return path;
-  if (path === userHome) return "~";
-  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
-  return path;
 }
 
 // src/cli/review.ts

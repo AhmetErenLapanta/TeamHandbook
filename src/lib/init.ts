@@ -10,6 +10,7 @@ import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
+import { displayPath } from "./display-path.js";
 
 // git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
 // runs arbitrary commands on clone, and a URL starting with `-` is parsed as an
@@ -62,7 +63,7 @@ export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null
 export class BrokenConfigError extends Error {
   constructor(home: string) {
     super(
-      `${join(home, "config.json")} exists but is not valid JSON. TeamHandbook will not ` +
+      `${displayPath(join(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not ` +
         "rewrite it, because doing so would silently discard settings you wrote — " +
         "including the privacy switches, which are currently failing closed. Fix the " +
         "JSON (or delete the file) and try again.",
@@ -606,7 +607,7 @@ export function initTeamRepo(
   if (loadTeamConfig(home)) {
     return {
       ok: false,
-      error: `a team repository is already configured; run /handbook:leave (or edit ${join(home, "config.json")}) to re-init`,
+      error: `a team repository is already configured; run /handbook:leave (or edit ${displayPath(join(home, "config.json"))}) to re-init`,
     };
   }
   const identity = gitIdentityArgs(git);
@@ -749,7 +750,7 @@ export function formatInitSuccess(result: InitResult): string {
           "               copy that section across from skills/README.md or this output.",
         ]
       : []),
-    `  config:      team repo saved to ${join(result.home ?? "", "config.json")}`,
+    `  config:      team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The

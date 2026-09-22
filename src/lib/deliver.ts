@@ -11,6 +11,7 @@ import { handbookHome } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
 import { isSafeSlug, readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
+import { displayPath } from "./display-path.js";
 
 export function soloSkillsDir(projectCwd: string): string {
   return join(projectCwd, ".claude", "skills");
@@ -199,7 +200,7 @@ function installLocally(
  * nothing to revert from.
  */
 function localCollisionMessage(name: string, skillsDir: string, chosen: boolean): string {
-  const taken = `a skill named "${name}" is already installed at ${join(skillsDir, name)}. Nothing was written.`;
+  const taken = `a skill named "${name}" is already installed at ${displayPath(join(skillsDir, name))}. Nothing was written.`;
   const warning =
     "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
   return chosen
@@ -299,7 +300,7 @@ function deliverSolo(
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning =
     originGone || noOrigin
-      ? `origin project ${meta.cwd ? `"${meta.cwd}" no longer exists` : "was not recorded"}; installed into the current project instead (${skillsDir})`
+      ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})`
       : undefined;
   // The skill installs into the project where it was captured. If that is not the
   // project the reviewer is in right now, name it — otherwise "loads next session"
@@ -340,6 +341,10 @@ function deliverSolo(
  */
 export function formatApproveResult(slug: string, result: DeliverResult): string {
   const name = result.deliveredSlug ?? slug;
+  // Every ok result carries deliveredTo, but the type does not promise it: shortening it
+  // for display must not turn a delivery that forgot the field into a crash on the
+  // success line.
+  const landedAt = result.deliveredTo ? displayPath(result.deliveredTo) : "(not recorded)";
   const lines: string[] = [];
   if (result.mode === "team") {
     // What the reader needs is not "it worked" but what is now true and what is left for
@@ -378,7 +383,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
   }
   if (result.mode === "personal") {
     lines.push(
-      `Kept "${name}" for you at ${result.deliveredTo}. Claude will load it in every project from your next session.`,
+      `Kept "${name}" for you at ${landedAt}. Claude will load it in every project from your next session.`,
     );
   } else {
     if (result.warning) lines.push(`Note: ${result.warning}`);
@@ -390,7 +395,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     const commit = result.originProject
       ? "Commit it there so the skill travels with that repo."
       : "Commit this directory so the skill travels with the repo.";
-    lines.push(`Approved "${name}" and installed it at ${result.deliveredTo}. ${loads}. ${commit}`);
+    lines.push(`Approved "${name}" and installed it at ${landedAt}. ${loads}. ${commit}`);
   }
   if (result.updatedExisting) {
     lines.push(`This replaced the "${name}" that was already there.`);

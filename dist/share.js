@@ -245,6 +245,16 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
   }
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
@@ -270,7 +280,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${join4(home, "config.json")} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote \u2014 including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -355,12 +365,12 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 
 // src/lib/share.ts
 import { existsSync as existsSync4, readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/mcp.ts
 import { readFileSync as readFileSync3 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { join as join5 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
@@ -369,7 +379,7 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join5(dir || homedir2(), ".claude.json");
+  return join5(dir || homedir3(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
@@ -701,15 +711,15 @@ import { join as join9 } from "node:path";
 
 // src/lib/commands.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
-function localCommandDirs(userHome = homedir3(), cwd = process.cwd()) {
+function localCommandDirs(userHome = homedir4(), cwd = process.cwd()) {
   return [
     { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
     { dir: join8(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
-function readLocalCommands(userHome = homedir3(), cwd = process.cwd()) {
+function readLocalCommands(userHome = homedir4(), cwd = process.cwd()) {
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
     let entries;
@@ -1220,7 +1230,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
 // src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join10(paths.userHome ?? homedir4(), ".claude", "skills"), scope: "personal" },
+    { dir: join10(paths.userHome ?? homedir5(), ".claude", "skills"), scope: "personal" },
     { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
@@ -1303,7 +1313,7 @@ function buildInventory(paths = {}, teamHas = null) {
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers)
   );
-  const commands = readLocalCommands(paths.userHome ?? homedir4(), paths.cwd ?? process.cwd()).map(
+  const commands = readLocalCommands(paths.userHome ?? homedir5(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands)
   );
   return { skills: [...byName.values()], servers, commands };

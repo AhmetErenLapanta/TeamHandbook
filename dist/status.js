@@ -57,7 +57,7 @@ import { readFileSync as readFileSync5 } from "node:fs";
 import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { dirname, join as join6 } from "node:path";
 
 // src/lib/config.ts
@@ -183,6 +183,16 @@ function listExistingSkills(dirs) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -203,7 +213,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join6(homedir2(), ".claude", "plugins", "marketplaces");
+  return join6(homedir3(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);
@@ -516,7 +526,7 @@ function formatLastError(lastRun) {
 function formatStatus(report) {
   const { ledger, queue, lastRun, config } = report;
   const lines = [
-    `TeamHandbook status  (v${report.version}, ${report.home})`,
+    `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,
