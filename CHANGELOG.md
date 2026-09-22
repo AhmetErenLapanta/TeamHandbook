@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.11.2] - 2026-09-22
+
+- **The picture on the first screen now names what actually travels to the team: a
+  skill, an MCP server, a command.**
+
 ## [0.11.1] - 2026-09-22
 
 - **Someone opening the repository now sees what the product is for at a glance.** The
