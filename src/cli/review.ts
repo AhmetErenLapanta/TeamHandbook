@@ -19,6 +19,7 @@ import { pendingHarvestCount } from "../lib/notify.js";
 import { lastPipelineRun } from "../lib/status.js";
 import { handbookHome } from "../lib/session-state.js";
 import { candidatesDir } from "../lib/skill-index.js";
+import { displayPath } from "../lib/display-path.js";
 
 function usage(): never {
   console.error(
@@ -45,7 +46,7 @@ function showCandidate(home: string, slug: string): void {
     meta?.origin === "harvest" ? loadHarvestConfig(home).minScore : loadScoreConfig(home).threshold;
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
-  console.log(`location:  ${dir}`);
+  console.log(`location:  ${displayPath(dir)}`);
   if (gate) {
     const scores = Object.entries(gate.scores)
       .map(([k, v]) => `${k} ${v}`)

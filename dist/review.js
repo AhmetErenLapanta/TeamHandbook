@@ -1391,6 +1391,16 @@ function lastPipelineRun(home = handbookHome()) {
   return null;
 }
 
+// src/lib/display-path.ts
+import { homedir as homedir3 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir3()) {
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
 // src/cli/review.ts
 function usage() {
   console.error(
@@ -1412,7 +1422,7 @@ function showCandidate(home, slug) {
   const threshold = meta?.origin === "harvest" ? loadHarvestConfig(home).minScore : loadScoreConfig(home).threshold;
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
-  console.log(`location:  ${dir}`);
+  console.log(`location:  ${displayPath(dir)}`);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
     const dissent = gate.total < threshold ? `  \u2014 below the ${threshold}/10 bar` : "";
