@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No lockfile is committed, on purpose (CONTRIBUTING.md: Claude Code would
+      # install every devDependency into each copy of the plugin). That rules out
+      # `npm ci`, and setup-node's npm cache, which also needs a lockfile.
+      - run: npm install --no-audit --no-fund
+
+      - run: npm run typecheck
+
+      # publish.ts refuses to commit without an author, so the tests that drive a
+      # real git remote fail on a runner, which has no identity configured.
+      - name: Give git an identity for the tests
+        run: |
+          git config --global user.name "teamhandbook-ci"
+          git config --global user.email "ci@teamhandbook.invalid"
+
+      - run: npm test
+
+      - run: npm run build
+
+      # The plugin runs dist/, which is committed. A PR that edits src/ without
+      # rebuilding would otherwise merge a stale bundle.
+      - name: dist/ matches src/
+        run: |
+          if [ -n "$(git status --porcelain -- dist/)" ]; then
+            echo "dist/ is out of date with src/:"
+            git status --porcelain -- dist/
+            echo
+            echo "Run 'npm run build' and commit dist/."
+            exit 1
+          fi
