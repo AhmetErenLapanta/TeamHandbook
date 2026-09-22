@@ -218,7 +218,7 @@ thing: it drops the contribution target and leaves the subscription alone.
 The servers and commands you share are already on your machine. Skills are the one thing
 that has to be noticed first, and noticing never happens on its own, so that inlet is
 automatic: TeamHandbook reads each finished session and proposes what it found. This is
-the `/handbook:learn` and `/handbook:review` path, not the loop above.
+the `/handbook:learn` and `/handbook:review` path, not the loop in the diagram at the top.
 
 - **Capture is a hook, not a tool call.** The model won't remember to save a skill at
   the worst moment - a failing build, a frustrated developer. Hooks fire every time.
