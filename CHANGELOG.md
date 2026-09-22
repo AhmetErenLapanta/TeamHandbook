@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.6] - 2026-09-22
+
+- **The development toolchain is now pinned, and the `dist/` freshness check also
+  catches the bundle a deleted entry point leaves behind.** For a contributor: an
+  unrelated change no longer breaks from a shifting dependency tree, and a stale bundle
+  can't quietly merge alongside it.
+- Spelling consistency: em dashes in source comments and documentation are now a plain
+  dash. No behavior change.
+
 ## [0.10.5] - 2026-09-22
 
 - **The README now shows the product actually running.** A two-sided terminal capture:
