@@ -1,6 +1,7 @@
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { assertSafeGitUrl, BrokenConfigError, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { isSafeSlug } from "./queue.js";
 import { configIsBroken } from "./config.js";
 import { cloneFailureReason } from "./git-errors.js";
 import type { GitRunner } from "./init.js";
@@ -24,6 +25,42 @@ function readMarketplaceName(repoDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+// The cap slugifySkillName already truncates to, so nothing /handbook:init can produce
+// is refused by the length rule below.
+const MARKETPLACE_NAME_MAX = 64;
+
+/**
+ * Why this name cannot be the marketplace name, or null when it can.
+ *
+ * A joined repository belongs to somebody else, and this is the only value read out of
+ * it. It goes on to be a path segment (`teamSkillsDir`, and the team `.mcp.json` doctor
+ * looks for), a plugin key, and a line of the `/plugin install` instruction join prints
+ * for the user to run - so `../` walks out of the marketplace root and a newline writes
+ * fabricated instructions into that block, both measured before this guard existed.
+ *
+ * Refused rather than slugified. `/handbook:init` derives the name with
+ * `slugifySkillName`, so a repository scaffolded by it already carries a slug; rewriting
+ * one that does not would leave this config naming a marketplace directory that Claude
+ * Code never creates, and the breakage would surface later as skills that silently never
+ * arrive rather than here, where it can be explained.
+ */
+export function marketplaceNameProblem(name: string): string | null {
+  if (name.length > MARKETPLACE_NAME_MAX) {
+    return `longer than ${MARKETPLACE_NAME_MAX} characters`;
+  }
+  if (!isSafeSlug(name)) {
+    return "not a plain name (lowercase letters, digits and dashes, starting with a letter or a digit)";
+  }
+  return null;
+}
+
+/** The rejected name, quoted with JSON escaping so the newlines and ESC that make a name
+ * dangerous here cannot survive into the printed refusal. */
+function renderRejectedName(name: string): string {
+  const shown = name.slice(0, 60);
+  return JSON.stringify(shown) + (shown.length < name.length ? " (truncated)" : "");
 }
 
 /**
@@ -69,6 +106,17 @@ export function joinTeamRepo(
       return {
         ok: false,
         error: "the repository has no .claude-plugin/marketplace.json - is it a TeamHandbook team repo?",
+      };
+    }
+    const problem = marketplaceNameProblem(name);
+    if (problem) {
+      return {
+        ok: false,
+        error:
+          `the repository's .claude-plugin/marketplace.json names the marketplace ` +
+          `${renderRejectedName(name)}, which is ${problem}. That name becomes a directory ` +
+          `under ~/.claude/plugins/marketplaces and part of the commands printed here, so ` +
+          `TeamHandbook will not join with it. Fix the name in the repository and re-run.`,
       };
     }
     saveTeamConfig(

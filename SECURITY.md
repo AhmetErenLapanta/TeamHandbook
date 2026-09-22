@@ -173,6 +173,23 @@ instruction can never steer the harvest. Review the source before installing, as
 would any plugin. TeamHandbook is open source (Apache-2.0) specifically so this is
 auditable.
 
+### A team repository you joined
+
+`/handbook:join` clones a repository somebody else controls. Exactly one value is read
+out of it: the marketplace name in `.claude-plugin/marketplace.json`. That name goes on
+to be a directory under `~/.claude/plugins/marketplaces`, part of the plugin key
+`/handbook:doctor` looks for, and part of the `/plugin install` commands join prints for
+you to run - so it is accepted only when it is already a plain name (lowercase letters,
+digits and dashes, at most 64 characters), which is the form `/handbook:init` produces.
+Anything else is refused with the reason, never rewritten into something usable: a
+rewritten name would point this machine at a marketplace directory that does not exist.
+
+That is the whole of what is checked, because that name is the whole of what is read.
+Skills, servers and commands merged into that repository arrive on this machine through
+Claude Code's own marketplace subscription. TeamHandbook does not screen them: nothing
+here reads them, and nothing here approves them - `/handbook:review` gates what leaves
+this machine, not what arrives from the team.
+
 ### Install it for yourself, not for your teammates
 
 Claude Code can install a plugin at three scopes. Two of them are yours alone: user

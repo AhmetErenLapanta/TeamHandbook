@@ -206,6 +206,11 @@ function runGit(args, cwd) {
   }
 }
 
+// src/lib/queue.ts
+function isSafeSlug(slug) {
+  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
+}
+
 // src/lib/join.ts
 function readMarketplaceName(repoDir) {
   try {
@@ -216,6 +221,20 @@ function readMarketplaceName(repoDir) {
   } catch {
     return null;
   }
+}
+var MARKETPLACE_NAME_MAX = 64;
+function marketplaceNameProblem(name) {
+  if (name.length > MARKETPLACE_NAME_MAX) {
+    return `longer than ${MARKETPLACE_NAME_MAX} characters`;
+  }
+  if (!isSafeSlug(name)) {
+    return "not a plain name (lowercase letters, digits and dashes, starting with a letter or a digit)";
+  }
+  return null;
+}
+function renderRejectedName(name) {
+  const shown = name.slice(0, 60);
+  return JSON.stringify(shown) + (shown.length < name.length ? " (truncated)" : "");
 }
 function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString()) {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
@@ -247,6 +266,13 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       return {
         ok: false,
         error: "the repository has no .claude-plugin/marketplace.json - is it a TeamHandbook team repo?"
+      };
+    }
+    const problem = marketplaceNameProblem(name);
+    if (problem) {
+      return {
+        ok: false,
+        error: `the repository's .claude-plugin/marketplace.json names the marketplace ${renderRejectedName(name)}, which is ${problem}. That name becomes a directory under ~/.claude/plugins/marketplaces and part of the commands printed here, so TeamHandbook will not join with it. Fix the name in the repository and re-run.`
       };
     }
     saveTeamConfig(
