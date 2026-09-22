@@ -185,5 +185,8 @@ The graders are pass/fail, so they do not say which command a miss reached inste
 `--keep-temp` and read the `trace.jsonl` files it leaves behind, then delete the
 `/private/tmp/e-*` directories it leaves on disk.
 
+The sharing graders also accept the names that merged into `/handbook:share`: the
+baseline was measured with that pattern, and a retired name cannot be reached anyway.
+
 `evals/results/` is not committed: `aggregate-result.json` carries absolute paths and the
 machine's user name, and the HTML report embeds every prompt and transcript.
