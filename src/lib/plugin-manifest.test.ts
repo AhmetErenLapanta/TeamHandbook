@@ -212,8 +212,10 @@ describe("commands/*.md", () => {
 
     // then every entrypoint still has one. Deliberately checked in this direction only:
     // an entrypoint no command reaches is unreachable, but a command file need not be
-    // named after an entrypoint (one that aliases another command's binary is
-    // legitimate), so the reverse would red a working tree. The opposite gap - an
+    // named after an entrypoint, so the reverse would red the first contribution that
+    // adds one aliasing another command's binary. No such command exists today - this
+    // is a shape the check refuses in advance, not a failure anyone has hit. The
+    // opposite gap - an
     // entrypoint that stops being built while its committed bundle survives - is not
     // this test's to close: it closes at build time, by pruning bundles no entrypoint
     // produces, which the dist/ freshness check then sees as a deletion.
