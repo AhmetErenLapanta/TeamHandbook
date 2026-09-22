@@ -10,7 +10,7 @@ up on its own.
 [Who approves what](#nothing-ships-until-you-say-so) ·
 [Why you might not want this](#why-you-might-not-want-this)
 
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-one-to-team.svg" alt="A skill, an MCP server, or a command that is already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to four teammates, and each of them has it at their next session, with nothing to install by hand." width="880">
 
 ## What this is
 
@@ -78,10 +78,10 @@ request and nothing is live for anyone until a human merges it. A repository wit
 commits at all has no branch to open a request against, so there the scaffold goes
 straight to the default branch. Either way, files that are already there are kept.
 
-Three commands and a restart, plus the exchange where `init` settles which repository to
-use. The output ends with the message to send your team, and it is worth reading before
-you send it: a private handbook needs each teammate to have access to the repository and
-git credentials on their own machine, and that sign-in is something they run themselves.
+Three commands and a restart. `init` asks at least two questions: which repository to
+use, and a confirmation before it writes. More if it creates the repo, and a branch or
+commit prefix if the forge rejects either. Its output ends with your team's message; read
+it first: each teammate needs repo access and git credentials they set up themselves.
 
 ### Joining one your team already has
 
@@ -176,11 +176,11 @@ thing: it drops the contribution target and leaves the subscription alone.
   with no team repo involved. A queue you review by yourself is a poor trade against
   Claude Code's own memory, which keeps what you tell it without asking first. Running
   this pays off once other people read from the repository.
-- **The harvest is one model call, and the model matters.** On an identical prompt from a
-  real session the default (`sonnet`) proposed the developer's stated rule 3 times out of
-  3; `haiku` managed 1 in 3. A skill buried in a very long session can still be missed,
-  and the model can propose something plausible but wrong, which is why nothing installs
-  itself.
+- **The harvest is one model call, and the model changed what it found.** On a single
+  prompt from a real session, three runs per model, the default (`sonnet`) proposed the
+  developer's stated rule 3 times out of 3 and `haiku` 1 in 3 - too little to put a rate
+  on. A skill buried in a very long session can still be missed, and the model can propose
+  something plausible but wrong, which is why nothing installs itself.
 - **A private handbook has a setup step you cannot automate away.** Every teammate needs
   access to the repository and git credentials on their own machine, and that is a
   one-time interactive sign-in they run in their own terminal. A plugin can never stop to
@@ -198,6 +198,8 @@ thing: it drops the contribution target and leaves the subscription alone.
   through the merged request.
 
 ## How it works
+
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
 
 - **One merge request for a whole selection.** The servers and commands you pick travel
   together, because each one raises the version and two requests opened before either is
@@ -218,7 +220,7 @@ thing: it drops the contribution target and leaves the subscription alone.
 The servers and commands you share are already on your machine. Skills are the one thing
 that has to be noticed first, and noticing never happens on its own, so that inlet is
 automatic: TeamHandbook reads each finished session and proposes what it found. This is
-the `/handbook:learn` and `/handbook:review` path, not the loop in the diagram at the top.
+the `/handbook:learn` and `/handbook:review` path, not the loop in the diagram above.
 
 - **Capture is a hook, not a tool call.** The model won't remember to save a skill at
   the worst moment - a failing build, a frustrated developer. Hooks fire every time.
@@ -239,6 +241,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 |---|---|
 | `/handbook:review` | Keep, scope, share, edit, or reject each skill. **The only way anything ships.** |
 | `/handbook:init` | Scaffold the team handbook repo and print the message your team needs. |
+| `/handbook:init --upgrade` | Bring an existing team repo's scaffold up to this version: shows the diff, you pick file by file. |
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
 | `/handbook:share` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
 | `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |

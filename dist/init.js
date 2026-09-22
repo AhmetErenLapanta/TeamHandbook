@@ -1,7 +1,6 @@
-// src/lib/init.ts
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
+// src/lib/config.ts
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -42,8 +41,6 @@ var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
 // src/lib/config.ts
-import { existsSync, readFileSync as readFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
 function configFile(home = handbookHome()) {
   return join2(home, "config.json");
 }
@@ -65,6 +62,11 @@ function configIsBroken(home = handbookHome()) {
     return true;
   }
 }
+
+// src/lib/init.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
@@ -94,6 +96,11 @@ function normalizeRemoteUrl(raw) {
 function slugifySkillName(name) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/g, "");
   return slug || null;
+}
+function uniqueSlug(baseSlug, taken) {
+  let slug = baseSlug;
+  for (let i = 2; taken(slug); i++) slug = `${baseSlug}-${i}`;
+  return slug;
 }
 
 // src/lib/forge.ts
@@ -214,6 +221,12 @@ function assertSafeGitUrl(url) {
   }
 }
 var DEFAULT_BRANCH_PREFIX = "handbook/";
+function teamCommitPrefix(config) {
+  return config?.commitPrefix?.trim() ? `${config.commitPrefix.trim()} ` : "";
+}
+function teamBranchPrefix(config) {
+  return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
   if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
@@ -586,7 +599,12 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   if (loadTeamConfig(home)) {
     return {
       ok: false,
-      error: `a team repository is already configured; run /handbook:leave (or edit ${displayPath(join3(home, "config.json"))}) to re-init`
+      // Leaving used to be the only thing this could say, and it is the wrong advice for
+      // the common reason someone arrives here: their scaffold is behind the version they
+      // just installed. Leaving and re-initializing means a SECOND repository, which is a
+      // loss dressed as a fix, so the refresh is named first and leaving keeps its real
+      // job - pointing this machine at a different team.
+      error: `a team repository is already configured. To bring its scaffold up to this version, run \`/handbook:init --upgrade\` - it shows what would change and writes nothing until you pick. To point at a DIFFERENT team, run /handbook:leave (or edit ${displayPath(join3(home, "config.json"))}) first.`
     };
   }
   const identity = gitIdentityArgs(git);
@@ -735,13 +753,503 @@ function formatInitSuccess(result) {
   ].join("\n");
 }
 
+// src/lib/upgrade.ts
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readFileSync as readFileSync5, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname3, join as join5, relative } from "node:path";
+
+// src/lib/publish.ts
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
+function bumpPluginVersion(repoDir) {
+  const file = join4(repoDir, ".claude-plugin", "plugin.json");
+  try {
+    const plugin = JSON.parse(readFileSync4(file, "utf8"));
+    const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    parts[2] = (parts[2] ?? 0) + 1;
+    plugin.version = parts.join(".");
+    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
+    return plugin.version;
+  } catch {
+    return null;
+  }
+}
+
+// src/lib/upgrade.ts
+var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
+var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
+var CI_MARKER = "scripts/bump-version.mjs";
+var TEAM_OWNED_DIRS = ["skills/", "commands/", "agents/"];
+var TEAM_OWNED_FILES = [".mcp.json"];
+function isTeamOwned(path) {
+  return TEAM_OWNED_DIRS.some((dir) => path.startsWith(dir)) || TEAM_OWNED_FILES.includes(path);
+}
+function readIfPresent(file) {
+  try {
+    return readFileSync5(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+function symlinkOnPath(repoDir, path) {
+  let current = repoDir;
+  for (const part of path.split("/")) {
+    current = join5(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (stat.isSymbolicLink()) return relative(repoDir, current);
+  }
+  return null;
+}
+function parseObject(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function mergePluginManifest(existing, fresh) {
+  if (existing === null) return fresh;
+  const current = parseObject(existing);
+  if (!current) return null;
+  const next = JSON.parse(fresh);
+  const merged = { ...current, ...next };
+  if (typeof current.version === "string") merged.version = current.version;
+  return JSON.stringify(merged, null, 2) + "\n";
+}
+function isOwnPlugin(entry) {
+  return typeof entry === "object" && entry !== null && entry.source === "./";
+}
+function mergeMarketplaceManifest(existing, fresh) {
+  if (existing === null) return fresh;
+  const current = parseObject(existing);
+  if (!current) return null;
+  const next = JSON.parse(fresh);
+  const merged = { ...current };
+  for (const [key, value] of Object.entries(next)) if (!(key in merged)) merged[key] = value;
+  const own = next.plugins?.find(isOwnPlugin);
+  if (Array.isArray(current.plugins) && own) {
+    let found = false;
+    const kept = current.plugins.map((entry) => {
+      if (!isOwnPlugin(entry)) return entry;
+      found = true;
+      return { ...entry, ...own };
+    });
+    merged.plugins = found ? kept : [...current.plugins, own];
+  }
+  return JSON.stringify(merged, null, 2) + "\n";
+}
+var PREFIX_PROBE = "ZZTEAMHANDBOOKPREFIXPROBEZZ";
+function commitPrefixIsKnown(team) {
+  if (typeof team.commitPrefix === "string") return true;
+  return !!team.initializedAt;
+}
+function prefixDependentPaths(team, withCi) {
+  const host = hostFromUrl(team.repoUrl);
+  const plain = skeletonFiles(team.marketplaceName, team.repoUrl, host, "", withCi);
+  const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
+  return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
+}
+function upgradeCandidates(repoDir, team) {
+  const withCi = existsSync4(join5(repoDir, CI_MARKER));
+  const generated = skeletonFiles(
+    team.marketplaceName,
+    team.repoUrl,
+    hostFromUrl(team.repoUrl),
+    team.commitPrefix?.trim() ?? "",
+    withCi
+  );
+  const unknownPrefix = commitPrefixIsKnown(team) ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
+  const files = {};
+  const linked = [];
+  const withheld = [];
+  for (const [path, content] of Object.entries(generated)) {
+    if (isTeamOwned(path)) continue;
+    const link = symlinkOnPath(repoDir, path);
+    if (link) {
+      linked.push({
+        path,
+        reason: `the repository carries a symbolic link at "${link}". Nothing in the scaffold is a link, so this is not a file a refresh can write, and following it would write outside the repository.`
+      });
+      continue;
+    }
+    if (unknownPrefix.has(path)) {
+      withheld.push({
+        path,
+        reason: "it embeds the team's commit-message prefix, which only the machine that ran /handbook:init recorded. Regenerating it here would drop that prefix and stop the team's version bumps, so it is not offered on this machine."
+      });
+      continue;
+    }
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join5(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join5(repoDir, path)), content) : content;
+    if (merged !== null) files[path] = merged;
+  }
+  return { files, linked, withheld };
+}
+function classify(repoDir, candidates) {
+  return Object.entries(candidates).map(([path, content]) => {
+    const existing = readIfPresent(join5(repoDir, path));
+    if (existing === null) return { path, state: "absent" };
+    return { path, state: existing === content ? "current" : "differs" };
+  });
+}
+function refreshable(files) {
+  return files.filter((file) => file.state !== "current").map((file) => file.path);
+}
+function unreadableManifests(repoDir, candidates) {
+  const explained = new Set([...candidates.linked, ...candidates.withheld].map((file) => file.path));
+  return [PLUGIN_MANIFEST, MARKETPLACE_MANIFEST].filter(
+    (path) => !(path in candidates.files) && !explained.has(path) && readIfPresent(join5(repoDir, path)) !== null
+  );
+}
+function versionPlan(repoDir) {
+  const raw = readIfPresent(join5(repoDir, PLUGIN_MANIFEST));
+  const manifest = raw === null ? null : parseObject(raw);
+  const current = manifest && typeof manifest.version === "string" ? manifest.version : void 0;
+  if (!current) {
+    return {
+      blocked: `${PLUGIN_MANIFEST} in this repository declares no version this can read, so the refresh cannot raise one and no teammate's copy will pick it up. Refreshing that file itself puts a version there, and every refresh after it raises that.`
+    };
+  }
+  const parts = current.split(".").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+    return {
+      current,
+      blocked: `the plugin version "${current}" is not a three-part MAJOR.MINOR.PATCH number, so it cannot be raised - and without a raise, no teammate's copy refreshes for this. Set a three-part version in ${PLUGIN_MANIFEST} by hand first.`
+    };
+  }
+  return { current, next: [parts[0], parts[1], (parts[2] ?? 0) + 1].join(".") };
+}
+function cloneForUpgrade(git, team, repoDir, workdir) {
+  try {
+    git(["clone", "--depth", "1", "--", team.repoUrl, repoDir], workdir);
+  } catch (err) {
+    return `git clone failed (is ${team.repoUrl} reachable?): ${String(err instanceof Error ? err.message : err)}`;
+  }
+  if (!existsSync4(join5(repoDir, MARKETPLACE_MANIFEST))) {
+    return `${team.repoUrl} carries no ${MARKETPLACE_MANIFEST}, so it is not a handbook this can refresh. Check the repository in your config, or run /handbook:init against a repository that should become one.`;
+  }
+  return null;
+}
+function writeCandidates(repoDir, candidates, paths) {
+  for (const path of paths) {
+    const link = symlinkOnPath(repoDir, path);
+    if (link) {
+      return `"${path}" cannot be written: the repository carries a symbolic link at "${link}", and following it would write outside the repository. Nothing was changed.`;
+    }
+  }
+  for (const path of paths) {
+    const target = join5(repoDir, path);
+    mkdirSync5(dirname3(target), { recursive: true });
+    writeFileSync4(target, candidates[path]);
+  }
+  return null;
+}
+function stage(git, repoDir, paths) {
+  git(["add", "-A"], repoDir);
+  const staged = new Set(
+    String(git(["diff", "--cached", "--name-only"], repoDir) ?? "").split("\n").map((line) => line.trim()).filter(Boolean)
+  );
+  return { missing: paths.filter((path) => !staged.has(path)) };
+}
+function ignoredPathsMessage(missing) {
+  return `${missing.join(", ")} cannot be committed to this repository - git refused to stage it, which a \`.gitignore\` rule in the team repo is what normally does. Nothing was changed. Take that path out of the repository's .gitignore, or leave it out of the refresh.`;
+}
+function trackedModes(git, repoDir) {
+  const modes = /* @__PURE__ */ new Map();
+  try {
+    for (const line of String(git(["ls-files", "--stage"], repoDir) ?? "").split("\n")) {
+      const match = line.match(/^(\d{6}) [0-9a-f]+ \d\t(.*)$/);
+      if (match) modes.set(match[2], match[1]);
+    }
+  } catch {
+  }
+  return modes;
+}
+function checkIgnore(git, repoDir, paths) {
+  try {
+    return String(git(["check-ignore", "--", ...paths], repoDir) ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+function planUpgrade(team, git = runGit) {
+  try {
+    assertSafeGitUrl(team.repoUrl);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
+  const workdir = handbookWorkdir("handbook-upgrade-");
+  const repoDir = join5(workdir, "repo");
+  const scratch = join5(workdir, "candidate");
+  try {
+    const cloneError = cloneForUpgrade(git, team, repoDir, workdir);
+    if (cloneError) return { ok: false, error: cloneError };
+    const candidates = upgradeCandidates(repoDir, team);
+    const files = classify(repoDir, candidates.files);
+    const paths = refreshable(files);
+    const unreadable = unreadableManifests(repoDir, candidates);
+    const plan = {
+      ok: true,
+      url: team.repoUrl,
+      files,
+      withCi: existsSync4(join5(repoDir, CI_MARKER)),
+      version: versionPlan(repoDir),
+      ...candidates.linked.length ? { linked: candidates.linked } : {},
+      ...candidates.withheld.length ? { withheld: candidates.withheld } : {},
+      ...unreadable.length ? { unreadable } : {}
+    };
+    if (!paths.length) return plan;
+    try {
+      const ignored = checkIgnore(git, repoDir, paths);
+      if (ignored.length) plan.ignored = ignored;
+      const modes = trackedModes(git, repoDir);
+      const cacheinfo = [];
+      for (const path of paths) {
+        const file = join5(scratch, path);
+        mkdirSync5(dirname3(file), { recursive: true });
+        writeFileSync4(file, candidates.files[path]);
+        const sha = String(git(["hash-object", "-w", "--", file], repoDir) ?? "").trim();
+        cacheinfo.push("--cacheinfo", `${modes.get(path) ?? "100644"},${sha},${path}`);
+      }
+      git(["update-index", "--add", ...cacheinfo], repoDir);
+      plan.stat = String(git(["diff", "--cached", "--stat"], repoDir) ?? "").trimEnd();
+      plan.diff = String(git(["diff", "--cached"], repoDir) ?? "");
+    } catch {
+    }
+    return plan;
+  } finally {
+    rmSync4(workdir, { recursive: true, force: true });
+  }
+}
+function remoteBranches(git, repoDir) {
+  try {
+    return new Set(
+      String(git(["ls-remote", "--heads", "origin"], repoDir) ?? "").split("\n").map((line) => line.split("	")[1] ?? "").filter(Boolean).map((ref) => ref.replace("refs/heads/", ""))
+    );
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function applyUpgrade(team, paths, git = runGit, forge = runForge) {
+  if (!paths.length) {
+    return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
+  }
+  try {
+    assertSafeGitUrl(team.repoUrl);
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
+  const identity = gitIdentityArgs(git);
+  if (!identity) {
+    return {
+      ok: false,
+      error: 'git user.name/user.email is not set - the refresh commit would have an author your forge is likely to reject. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then try again.'
+    };
+  }
+  const workdir = handbookWorkdir("handbook-upgrade-");
+  const repoDir = join5(workdir, "repo");
+  try {
+    const cloneError = cloneForUpgrade(git, team, repoDir, workdir);
+    if (cloneError) return { ok: false, error: cloneError };
+    const candidates = upgradeCandidates(repoDir, team);
+    const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
+    for (const path of paths) {
+      const withheld = [...candidates.linked, ...candidates.withheld].find((file) => file.path === path);
+      if (withheld) return { ok: false, error: `"${path}" is not offered here: ${withheld.reason}` };
+      if (!(path in candidates.files)) {
+        return {
+          ok: false,
+          error: `"${path}" is not a scaffold file this can refresh. Run the plan again and copy a path from it; the team's own skills, commands and MCP settings are never touched.`
+        };
+      }
+      if (states.get(path) === "current") {
+        return { ok: false, error: `"${path}" already matches this version, so nothing was changed.` };
+      }
+    }
+    const version = versionPlan(repoDir);
+    const prefix = teamBranchPrefix(team);
+    const taken = remoteBranches(git, repoDir);
+    const branch = `${prefix}${uniqueSlug("refresh-scaffold", (slug) => taken.has(`${prefix}${slug}`))}`;
+    const title = "chore: refresh the team handbook scaffold";
+    let raised = null;
+    try {
+      git(["checkout", "-b", branch], repoDir);
+      const writeError = writeCandidates(repoDir, candidates.files, paths);
+      if (writeError) return { ok: false, error: writeError };
+      if (version.next) raised = bumpPluginVersion(repoDir);
+      const { missing } = stage(git, repoDir, paths);
+      if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
+      git([...identity, "commit", "-m", `${teamCommitPrefix(team)}${title}`], repoDir);
+      git(["push", "-u", "origin", branch], repoDir);
+    } catch (err) {
+      return {
+        ok: false,
+        error: pushFailureReason(
+          team.repoUrl,
+          branch,
+          err,
+          'Set "branchPrefix" under "team" in your TeamHandbook config.json to a prefix that fits (for example "TEAM-1-"), then run this again.'
+        )
+      };
+    }
+    const pr = openPr(
+      team.repoUrl,
+      branch,
+      title,
+      [
+        "Refreshes the scaffold files this repository received from `/handbook:init` to the version",
+        "TeamHandbook ships today. Nothing under `skills/`, `commands/`, `agents/` or `.mcp.json` is",
+        "touched; in the two manifests the team's own entries are carried across, and the plugin",
+        "version is raised rather than reset, so teammates' copies pick this up.",
+        "",
+        "Files in this request:",
+        ...paths.map((path) => `- \`${path}\``),
+        "",
+        "Opened by TeamHandbook."
+      ].join("\n"),
+      repoDir,
+      forge
+    );
+    return {
+      ok: true,
+      url: team.repoUrl,
+      refreshed: paths,
+      branch,
+      ...raised ? { version: raised } : {},
+      ...raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {},
+      ...pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0 },
+      ...pr.url ? {} : pr.error ? { prError: pr.error } : {}
+    };
+  } finally {
+    rmSync4(workdir, { recursive: true, force: true });
+  }
+}
+function withheldLines(files) {
+  return files.flatMap((file) => [`  ${"NOT OFFERED".padEnd(16)} ${file.path}`, `                   ${file.reason}`]);
+}
+function formatUpgradePlan(plan) {
+  const files = plan.files ?? [];
+  const paths = refreshable(files);
+  const lines = [`Team handbook scaffold at ${plan.url}`, ""];
+  for (const file of files) {
+    const label = file.state === "current" ? "up to date" : file.state === "absent" ? "NOT IN THE REPO" : "DIFFERS";
+    lines.push(`  ${label.padEnd(16)} ${file.path}`);
+  }
+  lines.push(...withheldLines(plan.linked ?? []), ...withheldLines(plan.withheld ?? []));
+  for (const path of plan.unreadable ?? []) {
+    lines.push(
+      `  ${"SKIPPED".padEnd(16)} ${path}`,
+      "                   it is not valid JSON, so what the team put in it could not be read and",
+      "                   carried across. Fix the JSON by hand and run this again."
+    );
+  }
+  if (!paths.length) {
+    lines.push("", "Nothing to refresh - every scaffold file already matches this version.");
+    return lines.join("\n");
+  }
+  lines.push(
+    "",
+    `${paths.length} file(s) can be refreshed. A DIFFERS file may be an old scaffold or an edit your team`,
+    "made on purpose - nothing records which, so read the diff before choosing it.",
+    "",
+    "The team's own content is never part of this: skills/, commands/, agents/ and .mcp.json are",
+    "not offered and cannot be written, and inside the two manifests the team's own entries - the",
+    "plugin version, any extra plugins, the marketplace owner - are carried across, not replaced."
+  );
+  const version = plan.version ?? {};
+  if (version.next) {
+    lines.push(
+      "",
+      `The merge request also raises the plugin version, ${version.current} -> ${version.next}, the way every share does.`,
+      "Without that, no teammate's copy refreshes for this."
+    );
+  } else if (version.blocked) {
+    lines.push("", `WARNING: ${version.blocked}`);
+  }
+  if (plan.ignored?.length) {
+    lines.push("", `WARNING: ${ignoredPathsMessage(plan.ignored)}`, "The diff below does not show it.");
+  }
+  if (plan.stat) lines.push("", plan.stat);
+  if (plan.diff) lines.push("", plan.diff.trimEnd());
+  lines.push(
+    "",
+    "Nothing has been changed, in this repository or on this machine. To send a refresh, name",
+    "each file you want:",
+    "",
+    `  ${paths.map((path) => `--file ${path}`).join(" ")}`
+  );
+  return lines.join("\n");
+}
+function formatUpgradeResult(result) {
+  return [
+    "Scaffold refresh opened.",
+    "",
+    `  repository:  ${result.url}`,
+    `  refreshed:   ${result.refreshed?.join(", ")}`,
+    `  branch:      ${result.branch}`,
+    ...result.version ? [`  version:     raised to ${result.version}`] : [],
+    ...result.versionNotRaised ? [`  version:     NOT raised. ${result.versionNotRaised}`] : [],
+    result.prUrl ? `  request:     ${result.prUrl}` : `  request:     open it here - ${result.manualUrl ?? `push ${result.branch} and open a request against the default branch`}`,
+    ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
+    "",
+    "Nothing reaches anyone until that is merged."
+  ].join("\n");
+}
+
 // src/cli/init.ts
 function usage() {
-  console.error("usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci]");
+  console.error(
+    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci]\n       init.js --upgrade [--file <scaffold-path>]..."
+  );
   process.exit(2);
+}
+function upgrade(args) {
+  const files = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--upgrade") continue;
+    if (args[i] !== "--file") usage();
+    const value = args[++i];
+    if (!value || value.startsWith("--")) usage();
+    files.push(value);
+  }
+  if (configIsBroken()) {
+    console.error(
+      "error: TeamHandbook's config.json is not valid JSON, so it cannot tell which repository your team uses. Fix the JSON (or delete the file) and try again."
+    );
+    process.exit(1);
+  }
+  const team = loadTeamConfig();
+  if (!team) {
+    console.error(
+      "error: no team repository is configured, so there is no scaffold to refresh. Run /handbook:init <url> to create one, or /handbook:join <url> to point at your team's."
+    );
+    process.exit(1);
+  }
+  if (!files.length) {
+    const plan = planUpgrade(team);
+    if (!plan.ok) {
+      console.error(`error: ${plan.error}`);
+      process.exit(1);
+    }
+    console.log(formatUpgradePlan(plan));
+    return;
+  }
+  const result = applyUpgrade(team, files);
+  if (!result.ok) {
+    console.error(`error: ${result.error}`);
+    process.exit(1);
+  }
+  console.log(formatUpgradeResult(result));
 }
 function main() {
   const args = process.argv.slice(2);
+  if (args.includes("--upgrade")) return upgrade(args);
   let url;
   let name;
   let branchPrefix;

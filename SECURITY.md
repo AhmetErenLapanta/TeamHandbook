@@ -141,6 +141,13 @@ Two things, and only these:
    before merging, and for the skills you pick it only fills the review queue - they still
    leave by route 2 above, one verdict at a time.
    Nothing is shared with your team before this.
+3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
+   name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
+   scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
+   the scaffold itself generates, and only the ones you name one by one with `--file`:
+   without a `--file` it prints the diff and makes no change at all. It never writes
+   `skills/`, `commands/`, `agents/` or `.mcp.json`, and inside the two `.claude-plugin`
+   manifests it carries the team's own entries across rather than replacing them.
 
 ## Removing your data
 
