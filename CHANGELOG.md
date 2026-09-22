@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.11.1] - 2026-09-22
+
+- **Someone opening the repository now sees what the product is for at a glance.** The
+  first screen carries a picture of one person's approval reaching the rest of the team.
+  The diagram that explains how that works is still there, further down in the section
+  that explains it.
+- A measurement the demo cites for why it works the way it does now says what was
+  measured, so a reader can judge how much it carries.
+
 ## [0.11.0] - 2026-09-22
 
 - **A team repository set up by an older version can now be brought up to date in
