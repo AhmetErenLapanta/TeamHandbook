@@ -47,11 +47,9 @@ const CLAUDE_CODE_HOOK_EVENTS = new Set([
 // is what catches one silently losing its only reference.
 const COMMANDS_WITHOUT_ENGINE = new Set(["demo.md"]);
 
-// The two exemptions to the cli <-> commands correspondence, each for a different reason:
-// run-pipeline is spawned from inside a hook bundle and is never typed by a user, and
-// demo is the command above that deliberately runs nothing.
+// run-pipeline is spawned from inside a hook bundle and is never typed by a user, so it
+// is the one entrypoint allowed to have no command markdown.
 const CLI_WITHOUT_COMMAND = new Set(["run-pipeline"]);
-const COMMAND_WITHOUT_CLI = new Set(["demo"]);
 
 // Not every shipped bundle is named in a manifest. run-pipeline.js is resolved at runtime
 // from the calling bundle's own location, so a build that stops emitting it breaks the
@@ -140,27 +138,27 @@ describe("commands/*.md", () => {
     }
   });
 
-  it("has a command for every CLI entrypoint, and an entrypoint behind every command", () => {
-    // given the two sides that have to agree for a slash command to do anything
+  it("has a command markdown for every CLI entrypoint a user is meant to reach", () => {
+    // given the entrypoints the engine ships and the command files that invoke them
     const cli = entrypointNames("src/cli");
     const commands = readdirSync(join(repoRoot, "commands"))
       .filter((name) => name.endsWith(".md"))
       .map((name) => name.replace(/\.md$/, ""));
 
-    // when each side is checked against the other. A file deleted outright cannot be
-    // caught by iterating the directory it was deleted from, which is why this sits
-    // beside the per-file check rather than replacing it.
+    // when each entrypoint is looked for among the commands. A command file deleted
+    // outright cannot be caught by iterating the directory it was deleted from, which
+    // is why this sits beside the per-file check rather than replacing it.
     expect(cli.length).toBeGreaterThan(0);
     expect(commands.length).toBeGreaterThan(0);
 
-    // then neither side has an unexplained entry
+    // then every entrypoint still has one. Deliberately checked in this direction only:
+    // an entrypoint with no command is unreachable, but a command file need not be named
+    // after an entrypoint (one that aliases another command's binary is legitimate), and
+    // an entrypoint that disappears already fails the per-file check above when its
+    // bundle stops being built.
     for (const name of cli) {
       if (CLI_WITHOUT_COMMAND.has(name)) continue;
-      expect(commands, `src/cli/${name}.ts has no commands/${name}.md`).toContain(name);
-    }
-    for (const name of commands) {
-      if (COMMAND_WITHOUT_CLI.has(name)) continue;
-      expect(cli, `commands/${name}.md has no src/cli/${name}.ts behind it`).toContain(name);
+      expect(commands, `src/cli/${name}.ts has no commands/${name}.md to reach it`).toContain(name);
     }
   });
 });
