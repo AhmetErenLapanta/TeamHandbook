@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.11.4] - 2026-09-22
+
+- **Joining a team repository no longer accepts whatever name that repository puts in
+  its marketplace manifest.** A name that is not a plain name is refused with the
+  reason, so it cannot become a directory outside the marketplace root or add lines to
+  the commands `/handbook:join` prints for you to run.
+
 ## [0.11.3] - 2026-09-22
 
 - **Running the test suite on a busy machine no longer fails for want of time rather
