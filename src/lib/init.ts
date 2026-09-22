@@ -607,7 +607,15 @@ export function initTeamRepo(
   if (loadTeamConfig(home)) {
     return {
       ok: false,
-      error: `a team repository is already configured; run /handbook:leave (or edit ${displayPath(join(home, "config.json"))}) to re-init`,
+      // Leaving used to be the only thing this could say, and it is the wrong advice for
+      // the common reason someone arrives here: their scaffold is behind the version they
+      // just installed. Leaving and re-initializing means a SECOND repository, which is a
+      // loss dressed as a fix, so the refresh is named first and leaving keeps its real
+      // job - pointing this machine at a different team.
+      error:
+        `a team repository is already configured. To bring its scaffold up to this version, run ` +
+        `\`/handbook:init --upgrade\` - it shows what would change and writes nothing until you pick. ` +
+        `To point at a DIFFERENT team, run /handbook:leave (or edit ${displayPath(join(home, "config.json"))}) first.`,
     };
   }
   const identity = gitIdentityArgs(git);

@@ -45,4 +45,35 @@ exactly what the rule is.
 
 Never create or push to a repository the user has not explicitly confirmed.
 
+## Refreshing a repository that already exists
+
+If a team repository is **already configured** - the user says theirs is old, a skeleton
+file is missing, `/handbook:doctor` reported the scaffold behind, or the command above
+refuses with "a team repository is already configured" - do not tell them to leave and
+re-init. That loses the repository. Refresh it in place instead:
+
+1. Run `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade`. It reads the repository in a
+   throwaway clone and changes nothing, there or on this machine: it prints which scaffold
+   files are missing or differ, and the diff.
+2. **Relay the plan and the diff, and ask which files to refresh.** A `DIFFERS` file may
+   be an old scaffold or an edit the team made on purpose - `hooks/notice.mjs` and
+   `README.md` are the likely ones - and nothing records which. Never pick on their behalf.
+3. Send only what they chose:
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade --file <path> --file <path>`.
+   It opens one merge request. The team's own skills, commands, agents and `.mcp.json` are
+   not offered and cannot be written, and inside the two manifests the team's own entries -
+   the plugin version, any extra plugins, the marketplace owner - are carried across rather
+   than replaced.
+4. **Read the plan's version line back to the user rather than promising a refresh.** The
+   merge request normally raises the plugin version, which is what makes teammates' copies
+   pick it up - but a repository whose version is not a three-part `MAJOR.MINOR.PATCH`
+   number cannot be raised, and the plan says so with a `WARNING`. When it does, the fix is
+   to set a three-part version by hand first; a refresh merged without one reaches nobody.
+5. A `NOT OFFERED` line is not a file to argue with. It means either the repository carries
+   a symbolic link on that path, or the file embeds the team's commit-message prefix and
+   only the machine that ran `/handbook:init` recorded it. Naming it anyway is refused.
+6. If the push is refused, the error names the rule - the same branch-name and
+   commit-message cases the setup steps above describe, except that here they are fixed in
+   the config rather than by a flag.
+
 Note: teammates who only want to USE the team's skills (not capture their own) do not need TeamHandbook at all - they run the two built-in `/plugin` commands the CLI prints, and the team plugin ships a tiny hook that shows them new-skill notices.

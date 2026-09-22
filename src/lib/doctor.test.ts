@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { doctorExitCode, formatDoctor, runDoctor } from "./doctor.js";
 import type { CommandRunner } from "./doctor.js";
 import { bumpCounter } from "./counters.js";
-import { saveTeamConfig } from "./init.js";
+import { saveTeamConfig, skeletonFiles } from "./init.js";
 
 let home: string;
 beforeEach(() => {
@@ -436,6 +436,72 @@ describe("doctor team-distribution checks", () => {
     expect(check.level).toBe("warn");
     expect(check.detail).toContain("0.1.0");
     expect(check.detail).toContain("receiving updates");
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  it("warns when the team's scaffold is behind the version this copy ships", () => {
+    // A repository scaffolded by an older TeamHandbook: the skeleton files it never
+    // received are what the check has to notice, and until /handbook:init --upgrade
+    // existed the only route forward was leaving the repository behind.
+    const bare = mkdtempSync(join(tmpdir(), "handbook-teambare-"));
+    execFileSync("git", ["init", "--bare", "-b", "main", bare]);
+    const seed = mkdtempSync(join(tmpdir(), "handbook-teamseed-"));
+    execFileSync("git", ["init", "-b", "main", seed]);
+    mkdirSync(join(seed, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(seed, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "t" }));
+    writeFileSync(join(seed, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "t", version: "0.3.4" }));
+    writeFileSync(join(seed, "README.md"), "# t\n");
+    execFileSync("git", ["-C", seed, "add", "-A"]);
+    execFileSync("git", ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
+    execFileSync("git", ["-C", seed, "push", bare, "main"]);
+    rmSync(seed, { recursive: true, force: true });
+
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    const realGitFakeClaude: CommandRunner = (cmd, args, timeoutMs) => {
+      if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.0";
+      if (cmd === "gh" || cmd === "glab") return "Logged in";
+      return execFileSync(cmd, args, { encoding: "utf8", timeout: timeoutMs }).trim();
+    };
+
+    const check = byName(runDoctor(home, realGitFakeClaude), "team repo");
+
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("scaffold file");
+    expect(check.detail).toContain("--upgrade");
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  it("stays quiet about a scaffold file whose contents the team changed on purpose", () => {
+    // init keeps a README the repository already had, so a team that wrote their own reads
+    // as "differs" for good. Warning on that produced a yellow line that could only be
+    // cleared by overwriting their README, on every run - which is how a warning stops
+    // being read. A file that is merely different is their decision; only a MISSING one is
+    // a fault nobody chose.
+    const bare = mkdtempSync(join(tmpdir(), "handbook-teambare-"));
+    execFileSync("git", ["init", "--bare", "-b", "main", bare]);
+    const seed = mkdtempSync(join(tmpdir(), "handbook-teamseed-"));
+    execFileSync("git", ["init", "-b", "main", seed]);
+    const team = { repoUrl: bare, marketplaceName: "t", initializedAt: "2026-01-01T00:00:00Z" };
+    const scaffold = { ...skeletonFiles("t", bare, null, "", false), "README.md": "# the team's own words\n" };
+    for (const [path, body] of Object.entries(scaffold)) {
+      mkdirSync(join(seed, dirname(path)), { recursive: true });
+      writeFileSync(join(seed, path), body);
+    }
+    execFileSync("git", ["-C", seed, "add", "-A"]);
+    execFileSync("git", ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
+    execFileSync("git", ["-C", seed, "push", bare, "main"]);
+    rmSync(seed, { recursive: true, force: true });
+
+    saveTeamConfig(team, home);
+    const realGitFakeClaude: CommandRunner = (cmd, args, timeoutMs) => {
+      if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.0";
+      if (cmd === "gh" || cmd === "glab") return "Logged in";
+      return execFileSync(cmd, args, { encoding: "utf8", timeout: timeoutMs }).trim();
+    };
+
+    const check = byName(runDoctor(home, realGitFakeClaude), "team repo");
+
+    expect(check.level).toBe("ok");
     rmSync(bare, { recursive: true, force: true });
   });
 });

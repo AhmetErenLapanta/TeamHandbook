@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
+import type { TeamConfig } from "./init.js";
+import { countStaleSkeleton } from "./upgrade.js";
 import { loadScoreConfig } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
@@ -182,10 +184,13 @@ function checkHooks(home: string): DoctorCheck {
 // Shallow-clone the remote and read plugin.json - merged skills present while the
 // version is still the scaffold's 0.1.0 means the bump CI never ran. Best-effort: any
 // error falls back to plain reachability (which was already confirmed).
-function remoteDistributionState(url: string, run: CommandRunner): { version: string; skillCount: number } | null {
+function remoteDistributionState(
+  team: TeamConfig,
+  run: CommandRunner,
+): { version: string; skillCount: number; missing: number } | null {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
-    run("git", ["clone", "--depth", "1", "--single-branch", "--", url, dir], 25_000);
+    run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25_000);
     const version = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
@@ -193,7 +198,20 @@ function remoteDistributionState(url: string, run: CommandRunner): { version: st
     } catch {
       // no skills/ dir yet
     }
-    return typeof version === "string" ? { version, skillCount } : null;
+    // The scaffold a team received is frozen at the version that wrote it, and until
+    // /handbook:init --upgrade existed the only way forward was to leave and re-init into a
+    // second repository. The clone for the version reading is already here, so measuring it
+    // costs no extra round trip - and it is measured, not assumed: this counts files whose
+    // bytes were compared, so a clone that failed reports nothing rather than reporting green.
+    //
+    // MISSING files only. A file whose bytes differ may be exactly what the team decided:
+    // init keeps a README the repository already had, so every team that wrote their own
+    // reads as "differs" for good, and warning on it produced a yellow line that could only
+    // be cleared by overwriting that README - on every run, for ever. A warning nobody can
+    // act on is a warning nobody reads. A file the repository has never had is not
+    // ambiguous in the same way: no version of the scaffold ever put it there.
+    const behind = countStaleSkeleton(dir, team);
+    return typeof version === "string" ? { version, skillCount, missing: behind.absent } : null;
   } catch {
     return null;
   } finally {
@@ -213,13 +231,21 @@ function checkTeamRepo(home: string, run: CommandRunner): DoctorCheck {
       .join(" | ");
     return fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`);
   }
-  const dist = remoteDistributionState(team.repoUrl, run);
+  const dist = remoteDistributionState(team, run);
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
     return warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 - the ` +
         "version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN " +
         "variable / Actions write permission)",
+    );
+  }
+  if (dist && dist.missing > 0) {
+    return warn(
+      "team repo",
+      `${team.repoUrl} reachable, but ${dist.missing} scaffold file(s) this version ships are not in ` +
+        "it at all - run `/handbook:init --upgrade` to see what they are and pick which to add " +
+        "(your skills, commands and MCP settings are never touched)",
     );
   }
   return ok("team repo", `${team.repoUrl} reachable`);

@@ -239,6 +239,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 |---|---|
 | `/handbook:review` | Keep, scope, share, edit, or reject each skill. **The only way anything ships.** |
 | `/handbook:init` | Scaffold the team handbook repo and print the message your team needs. |
+| `/handbook:init --upgrade` | Bring an existing team repo's scaffold up to this version: shows the diff, you pick file by file. |
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
 | `/handbook:share` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
 | `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |
