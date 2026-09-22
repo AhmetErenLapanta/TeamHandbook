@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.2] - 2026-09-22
+
+- **No functional change; nothing an installed copy does is different.** A handful of
+  eval-suite notes still described sharing commands that were retired when the three
+  sharing commands merged into one. They now name the one a reader will actually find.
+
 ## [0.10.1] - 2026-09-22
 
 - **The README's main diagram now shows what actually happens to each of the three
