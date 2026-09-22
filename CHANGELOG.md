@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.11.3] - 2026-09-22
+
+- **Running the test suite on a busy machine no longer fails for want of time rather
+  than a real problem.** The deadline a case is given now allows for a machine doing
+  other work; no test was skipped, silenced or made easier to pass.
+
 ## [0.11.2] - 2026-09-22
 
 - **The picture on the first screen now names what actually travels to the team: a
