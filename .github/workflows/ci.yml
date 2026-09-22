@@ -9,9 +9,16 @@ on:
 permissions:
   contents: read
 
+# A superseded pull-request run is noise, but cancelling a master run would leave that
+# commit with no result at all, so only pull requests are cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
