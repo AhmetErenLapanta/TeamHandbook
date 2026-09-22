@@ -5,8 +5,8 @@ description: >-
     that all speak about the team, which is what the sentence was chosen for.
 expected_outcome: >-
     /handbook:review. The thing being shared is already pending, which is the state
-    review acts on. Nothing says the user wrote a skill by hand (share-skill), and
-    nothing says the team repo is missing (init, join).
+    review acts on. Nothing says the user wrote a skill by hand (share), and nothing
+    says the team repo is missing (init, join).
 tags: [nl-gelistirme]
 max_turns: 6
 timeout_seconds: 180

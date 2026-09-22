@@ -7,7 +7,7 @@ description: >-
     conversational stand-in, not real state. The deictic "şu bağlantı" points at a
     server named in the prior turns.
 expected_outcome: >-
-    /handbook:mcp. An MCP server already configured locally, pushed out to the team.
+    /handbook:share. An MCP server already configured locally, pushed out to the team.
 tags: [nl-tutma]
 max_turns: 8
 timeout_seconds: 300

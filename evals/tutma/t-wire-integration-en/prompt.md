@@ -7,7 +7,7 @@ description: >-
     conversational stand-in, not real state. "This integration" and "mine" both point at
     the server in the prior turns.
 expected_outcome: >-
-    /handbook:mcp. Sharing a locally configured server so nobody repeats the setup.
+    /handbook:share. Sharing a locally configured server so nobody repeats the setup.
 tags: [nl-tutma]
 max_turns: 8
 timeout_seconds: 300

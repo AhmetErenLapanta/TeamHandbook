@@ -7,7 +7,7 @@ description: >-
     conversational stand-in, not real state. The hand-written skill is established in
     the prior turns.
 expected_outcome: >-
-    /handbook:share-skill. Written by hand, so it is not a harvested candidate.
+    /handbook:share. Written by hand, so it is not a harvested candidate.
 tags: [nl-tutma]
 max_turns: 8
 timeout_seconds: 300
