@@ -10,7 +10,7 @@ up on its own.
 [Who approves what](#nothing-ships-until-you-say-so) ·
 [Why you might not want this](#why-you-might-not-want-this)
 
-<img src="docs/handbook-one-to-team.svg" alt="One thing, approved once, on five machines. On the left, one member of the team holding the thing they approved, drawn as a small card. An arrow labelled approves carries it into a single repository in the middle, where the same card sits. From there four arrows fan out to four teammates on the right, and each of them has that same card at their next session, with nothing to install." width="880">
+<img src="docs/handbook-one-to-team.svg" alt="A skill, an MCP server, or a command that is already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to four teammates, and each of them has it at their next session, with nothing to install by hand." width="880">
 
 ## What this is
 
