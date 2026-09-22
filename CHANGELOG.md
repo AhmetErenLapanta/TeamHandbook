@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.4] - 2026-09-22
+
+- **A pull request could reach `master` with no automated check, and a stale `dist/`
+  could merge unnoticed.** Every pull request now runs typecheck, the test suite, and a
+  check that `dist/` is what `src/` actually builds. A contributor sees the result before
+  anyone reviews it, and a bundle that fell out of sync can't quietly slip through.
+- Fixed a stray cross-reference in the README and added a short note to the eval suite's
+  own documentation explaining a pattern choice that wasn't otherwise explained.
+
 ## [0.10.3] - 2026-09-22
 
 - **The README made a first-time visitor read four paragraphs before reaching the
