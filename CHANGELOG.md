@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.10.8] - 2026-09-22
+
+- **A mistake that would break a fresh install is now caught before it reaches the
+  repository.** The plugin's manifests are checked against the files they name, and a
+  hook they declare is actually run to see that it records what it should. Nothing an
+  installed copy does is different.
+
 ## [0.10.7] - 2026-09-22
 
 - **What the product prints is now something you can pass on as it stands.** A path
