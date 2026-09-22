@@ -184,11 +184,14 @@ function restore(home: string, file?: string): void {
   }
   const manifest = readArchiveManifest(target);
   if (!manifest) {
+    // The one path here that is NOT shortened: this is the string the user retries the
+    // command with, and readArchiveManifest opens it with readFileSync, which does not
+    // expand "~" any more than a shell does inside the quotes it would be pasted in.
     console.error(`error: "${target}" is not a readable archive manifest`);
     process.exit(1);
   }
   const result = restoreArchived(home, manifest);
-  console.log(`Restored ${result.restored.length} candidate(s) from ${target}.`);
+  console.log(`Restored ${result.restored.length} candidate(s) from ${displayPath(target)}.`);
   for (const s of result.skipped) console.log(`  skipped ${s.slug} - ${s.reason}`);
 }
 

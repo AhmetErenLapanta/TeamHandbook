@@ -19,6 +19,7 @@ import type { McpAudit, McpServerEntry } from "./mcp.js";
 import { auditCommand, commandRefusalMessage } from "./commands.js";
 import type { CommandEntry } from "./commands.js";
 import { slugifySkillName } from "./distill.js";
+import { displayPath } from "./display-path.js";
 
 export function buildPrTitle(slug: string, update = false): string {
   return `feat(skill): ${update ? "update" : "add"} ${slug}`;
@@ -381,7 +382,7 @@ export function publishCandidate(
   try {
     candidateSkillMd = readFileSync(join(candidateDir, "SKILL.md"), "utf8");
   } catch {
-    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
+    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${displayPath(candidateDir)}` };
   }
   // The name the skill travels under: its own, or the one the publisher picked after being
   // told the first was taken. Checked here rather than at the copy, so a name that cannot

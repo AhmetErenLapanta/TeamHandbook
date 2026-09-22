@@ -14,6 +14,12 @@ import { sep } from "node:path";
  * reader the location the line exists to give.
  */
 export function displayPath(path: string, userHome: string = homedir()): string {
+  // The type is not a guarantee at every call site: a candidate.json is a disk field that
+  // readCandidateMeta passes through unchecked, so a hand-edited "cwd": 12345 arrives here
+  // typed as a string. Shortening is a courtesy, and a courtesy must never be the reason a
+  // delivery that used to succeed throws instead. String() reproduces what the template
+  // printed before this helper existed.
+  if (typeof path !== "string") return String(path);
   // An empty home is a prefix of everything: without this, every absolute path would be
   // printed with a "~" glued to its front.
   if (!userHome) return path;

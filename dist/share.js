@@ -249,6 +249,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
 import { homedir as homedir2 } from "node:os";
 import { sep } from "node:path";
 function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
   if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
@@ -664,7 +665,7 @@ function auditSkillDir(sourceDir) {
   }
   return { shareable: true, skillMd, files, summary };
 }
-function intakeSkill(sourceDir, home = handbookHome()) {
+function intakeSkill(sourceDir, home = handbookHome(), namedBy = "inventory") {
   const slug = basename(sourceDir);
   const dir = join7(candidatesDir(home), slug);
   if (isSafeSlug(slug) && existsSync2(dir)) {
@@ -680,26 +681,26 @@ function intakeSkill(sourceDir, home = handbookHome()) {
     return {
       ok: false,
       ...audit.secret ? { secret: audit.secret } : {},
-      error: intakeRefusal(sourceDir, slug, audit)
+      error: intakeRefusal(namedBy === "user" ? sourceDir : displayPath(sourceDir), slug, audit)
     };
   }
   copySkillPayload(sourceDir, dir, audit.skillMd, audit.files);
   return { ok: true, slug, dir, fileCount: audit.files.length };
 }
-function intakeRefusal(sourceDir, slug, audit) {
+function intakeRefusal(shownDir, slug, audit) {
   switch (audit.reason) {
     case "unsafe-name":
       return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
     case "no-skill-md":
-      return `no readable SKILL.md in ${sourceDir}`;
+      return `no readable SKILL.md in ${shownDir}`;
     case "no-frontmatter":
-      return `the SKILL.md in ${sourceDir} has no name and description frontmatter`;
+      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
     case "irregular-entry":
       return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
     case "no-files":
       return `${slug} has no files to queue`;
     case "unreadable":
-      return `cannot read "${audit.detail}" in ${sourceDir}; nothing was queued`;
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was queued`;
     default:
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not queued. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
@@ -1392,7 +1393,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     else result.refused.push({ name, kind: "skill", reason: intake.error });
   }
   for (const dir of selection.skillPaths ?? []) {
-    const intake = intakeSkill(dir, home);
+    const intake = intakeSkill(dir, home, "user");
     if (intake.ok) result.queued.push(intake.slug);
     else result.refused.push({ name: basename3(dir), kind: "skill", reason: intake.error });
   }

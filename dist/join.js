@@ -125,6 +125,7 @@ function cloneFailureReason(url, err, creds = probeCredentials()) {
 import { homedir as homedir2 } from "node:os";
 import { sep } from "node:path";
 function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
   if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;

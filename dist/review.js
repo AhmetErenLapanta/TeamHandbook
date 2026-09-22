@@ -299,6 +299,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
 import { homedir as homedir2 } from "node:os";
 import { sep } from "node:path";
 function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
   if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
@@ -818,7 +819,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   try {
     candidateSkillMd = readFileSync4(join7(candidateDir, "SKILL.md"), "utf8");
   } catch {
-    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${candidateDir}` };
+    return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${displayPath(candidateDir)}` };
   }
   const conflict = conflictingOptions(options);
   if (conflict) return { ok: false, error: conflict };
@@ -1527,7 +1528,7 @@ function restore(home, file) {
     process.exit(1);
   }
   const result = restoreArchived(home, manifest);
-  console.log(`Restored ${result.restored.length} candidate(s) from ${target}.`);
+  console.log(`Restored ${result.restored.length} candidate(s) from ${displayPath(target)}.`);
   for (const s of result.skipped) console.log(`  skipped ${s.slug} - ${s.reason}`);
 }
 async function main() {

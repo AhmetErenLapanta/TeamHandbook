@@ -399,7 +399,7 @@ export function shareSelection(
   // name against. intakeSkill is still the only way in: it audits the directory and
   // refuses a credential exactly as it does for a skill picked off the screen.
   for (const dir of selection.skillPaths ?? []) {
-    const intake = intakeSkill(dir, home);
+    const intake = intakeSkill(dir, home, "user");
     if (intake.ok) result.queued.push(intake.slug!);
     else result.refused.push({ name: basename(dir), kind: "skill", reason: intake.error! });
   }
