@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runGit, skeletonFiles } from "./init.js";
+import { runGit, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import {
   PLUGIN_MANIFEST,
@@ -569,20 +569,62 @@ describe("a machine that joined rather than initialized", () => {
     expect(refreshable(plan.files!)).toEqual([]);
   });
 
-  it("given a teammate's machine, when the plan runs, then the CI file is withheld rather than offered", () => {
+  /** The same repository as a handbook scaffolded before `.teamhandbook.json` existed:
+   * the prefix is in the CI job and nowhere a reader can find it. */
+  function oldRepoWithPrefixedCi(): string {
+    return handbookRepo((remote) => {
+      const files: Record<string, string> = {
+        ...skeletonFiles("acme-skills", remote, null, "TEAM-1", true),
+        ...TEAM_CONTENT,
+      };
+      delete files[TEAM_PREFIX_FILE];
+      return files;
+    });
+  }
+
+  it("given a teammate and a repository that records its prefix, when the plan runs, then the CI file is up to date rather than withheld", () => {
     const remote = repoWithPrefixedCi();
 
     const plan = planUpgrade(joinerFor(remote));
 
-    // NOT "differs": on this machine the prefix is unknown, so regenerating it would
-    // silently delete the team's own
+    // The config is empty on this machine, but the repository answers the question, and a
+    // file regenerated FROM that answer cannot drop the prefix - which is the only thing
+    // withholding ever protected against.
     expect(refreshable(plan.files!)).toEqual([]);
-    expect(plan.withheld?.map((file) => file.path)).toEqual([".gitlab-ci.yml"]);
+    expect(plan.withheld).toBeUndefined();
+  });
+
+  it("given a teammate and a repository that records nothing, when the plan runs, then the CI file is withheld rather than offered", () => {
+    const remote = oldRepoWithPrefixedCi();
+
+    const plan = planUpgrade(joinerFor(remote));
+
+    // NOT "differs": neither this machine nor the repository knows the prefix, so
+    // regenerating it would silently delete the team's own. The record file is withheld
+    // for the same reason and it matters more: writing it from a machine that does not
+    // know the answer would publish "no prefix" to every teammate who joins after.
+    expect(refreshable(plan.files!)).toEqual([]);
+    expect(plan.withheld?.map((file) => file.path).sort()).toEqual([".gitlab-ci.yml", TEAM_PREFIX_FILE]);
     expect(formatUpgradePlan(plan)).toContain("commit-message prefix");
   });
 
+  it("given the founder and a repository that records nothing, when the plan runs, then the record is offered carrying their prefix", () => {
+    const remote = oldRepoWithPrefixedCi();
+
+    const plan = planUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }));
+
+    // The backward route both refusal messages send the reader to. If this file were not
+    // offered here, "run /handbook:init --upgrade" would be advice that does nothing.
+    expect(refreshable(plan.files!)).toEqual([TEAM_PREFIX_FILE]);
+
+    const result = applyUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), [TEAM_PREFIX_FILE], gitWithIdentity, noForge);
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(show(remote, result.branch!, TEAM_PREFIX_FILE)).commitPrefix).toBe("TEAM-1");
+  });
+
   it("given a teammate names the withheld file anyway, when it is sent, then it is refused", () => {
-    const remote = repoWithPrefixedCi();
+    const remote = oldRepoWithPrefixedCi();
     const before = heads(remote);
 
     const result = applyUpgrade(joinerFor(remote), [".gitlab-ci.yml"], gitWithIdentity, noForge);

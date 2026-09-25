@@ -7,6 +7,8 @@ import {
   assertSafeGitUrl,
   gitIdentityArgs,
   pushFailureReason,
+  readTeamCommitPrefix,
+  teamCommitPrefixFix,
   runGit,
   skeletonFiles,
   teamBranchPrefix,
@@ -178,9 +180,10 @@ const PREFIX_PROBE = "ZZTEAMHANDBOOKPREFIXPROBEZZ";
  * Whether this machine can reproduce the commit-message prefix the scaffold was written
  * with.
  *
- * `/handbook:join` records the repository URL and the marketplace name and nothing else,
- * so on a teammate's machine an absent `commitPrefix` does not mean "there is no prefix"
- * - it means nobody here knows. Reading it as the empty string regenerates the CI job
+ * `/handbook:join` now reads the prefix out of the repository, but only a repository
+ * scaffolded since that record existed HAS one to give: on a teammate who joined an older
+ * handbook, an absent `commitPrefix` still does not mean "there is no prefix" - it means
+ * nobody here knows. Join writes an absent key rather than "" for exactly this reason. Reading it as the empty string regenerates the CI job
  * without the team's prefix, and measured, that is exactly what happened: the founder's
  * machine said "Nothing to refresh" while a teammate's offered to rewrite
  * `git commit -am "TEAM-1ci: bump plugin version"` into `git commit -am "ci: bump plugin
@@ -236,14 +239,17 @@ export interface CandidateSet {
  */
 export function upgradeCandidates(repoDir: string, team: TeamConfig): CandidateSet {
   const withCi = existsSync(join(repoDir, CI_MARKER));
-  const generated = skeletonFiles(
-    team.marketplaceName,
-    team.repoUrl,
-    hostFromUrl(team.repoUrl),
-    team.commitPrefix?.trim() ?? "",
-    withCi,
-  );
-  const unknownPrefix = commitPrefixIsKnown(team) ? new Set<string>() : prefixDependentPaths(team, withCi);
+  // The repository is asked before this machine is written off as not knowing. A teammate
+  // who joined before the handbook recorded its prefix has nothing in their config, but the
+  // repository they are refreshing may have been given the record since - and regenerating
+  // a file FROM that record cannot drop the prefix, which is the only thing withholding
+  // protects against. Without this the very file carrying the answer would be withheld for
+  // not knowing the answer.
+  const recorded = commitPrefixIsKnown(team) ? undefined : readTeamCommitPrefix(repoDir).prefix;
+  const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
+  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi);
+  const known = commitPrefixIsKnown(team) || recorded !== undefined;
+  const unknownPrefix = known ? new Set<string>() : prefixDependentPaths(team, withCi);
   const files: Record<string, string> = {};
   const linked: WithheldFile[] = [];
   const withheld: WithheldFile[] = [];
@@ -263,9 +269,10 @@ export function upgradeCandidates(repoDir: string, team: TeamConfig): CandidateS
       withheld.push({
         path,
         reason:
-          "it embeds the team's commit-message prefix, which only the machine that ran /handbook:init " +
-          "recorded. Regenerating it here would drop that prefix and stop the team's version bumps, so " +
-          "it is not offered on this machine.",
+          "it embeds the team's commit-message prefix, and neither this machine nor the repository " +
+          "records what it is - only the machine that ran /handbook:init was ever told. Regenerating " +
+          "it here would write the file with no prefix at all, which is a different answer from the " +
+          "team's, so it is not offered on this machine.",
       });
       continue;
     }
@@ -687,6 +694,7 @@ export function applyUpgrade(
           err,
           'Set "branchPrefix" under "team" in your TeamHandbook config.json to a prefix that fits ' +
             '(for example "TEAM-1-"), then run this again.',
+          teamCommitPrefixFix(team, "run this again"),
         ),
       };
     }

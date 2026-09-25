@@ -103,6 +103,14 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    Handle it exactly as `/handbook:init` does: propose one prefix that satisfies the
    pattern, confirm it with the user, and have them set `branchPrefix` under `team` in
    `~/.teamhandbook/config.json`. A prefix discovered by a successful retry is remembered.
+9. **If it fails because the forge refuses the commit MESSAGE**, the error names both ways
+   out and they are not equivalent. Recording the prefix in the team repository (whoever
+   ran `/handbook:init` runs `/handbook:init --upgrade` once) fixes it for everyone who
+   joins after; setting `commitPrefix` under `team` in `~/.teamhandbook/config.json` fixes
+   this machine only. Offer the repository one first, and say which of the two you are
+   proposing. Do not suggest `--commit-prefix` here: it is an `/handbook:init` flag and
+   this command has never had one. A prefix the repository already records is picked up
+   without any of this, on the next share.
 
 `--update` is per name and repeatable, for the same reason every other flag here is: the
 user consents to one thing at a time, and a single word standing in for several answers is

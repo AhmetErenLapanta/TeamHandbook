@@ -68,6 +68,7 @@ function configIsBroken(home = handbookHome()) {
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/score.ts
@@ -302,6 +303,25 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+var COMMIT_PREFIX_MAX = 64;
+function commitPrefixProblem(value) {
+  if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
+  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  return null;
+}
+function readTeamCommitPrefix(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  const problem = commitPrefixProblem(value);
+  return problem ? { problem } : { prefix: value };
+}
 function nonInteractiveEnv(base = process.env) {
   return {
     ...base,
@@ -336,6 +356,17 @@ function runGit(args, cwd) {
   }
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
+var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
+function teamCommitPrefixFix(team, retry) {
+  const known = team.commitPrefix?.trim();
+  if (known === "") {
+    return `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit had none, and the rule now says otherwise. Correct "commitPrefix" in that file in the repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it for everyone. To unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
+  }
+  if (known) {
+    return `The prefix this machine uses, "${known}", does not satisfy that rule. Correct "commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran /handbook:init record the right one in the repository with \`/handbook:init --upgrade\` so no teammate hits this, then ${retry}.`;
+  }
+  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
+}
 var IDENTITY_RULES = [
   /(author|committer)'s email/i,
   /committer email '[^']*' is not verified/i,
@@ -353,7 +384,7 @@ function pushRuleSubject(raw) {
   if (refusesTheIdentity(raw)) return "identity";
   return null;
 }
-function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX) {
+function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX, commitPrefixFix = INIT_COMMIT_PREFIX_FIX) {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
@@ -371,7 +402,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
     return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} That is a pattern the project BANS rather than one it requires, so no prefix satisfies it; the commit title itself has to stop matching it.`;
   }
   if (subject === "commit-message" && /commit message does not follow the pattern/i.test(raw)) {
-    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.`;
+    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ${commitPrefixFix}`;
   }
   if (subject === "identity") {
     const said = remoteSaid[0] ?? detail;
@@ -396,7 +427,7 @@ import { homedir as homedir5 } from "node:os";
 import { basename as basename3, join as join9 } from "node:path";
 
 // src/lib/mcp.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join4 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
@@ -411,7 +442,7 @@ function claudeConfigFile() {
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync3(file, "utf8"));
+    parsed = JSON.parse(readFileSync4(file, "utf8"));
   } catch {
     return [];
   }
@@ -572,11 +603,11 @@ function refusalSummary(audit) {
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join6 } from "node:path";
 
 // src/lib/skill-files.ts
-import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { copyFileSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join5 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
@@ -603,12 +634,12 @@ function listSkillFiles(dir) {
   return { files, skipped };
 }
 function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
-  mkdirSync3(destDir, { recursive: true });
-  writeFileSync2(join5(destDir, "SKILL.md"), skillMd);
+  mkdirSync4(destDir, { recursive: true });
+  writeFileSync3(join5(destDir, "SKILL.md"), skillMd);
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
     const target = join5(destDir, rel);
-    mkdirSync3(dirname3(target), { recursive: true });
+    mkdirSync4(dirname3(target), { recursive: true });
     copyFileSync(join5(srcDir, rel), target);
   }
 }
@@ -622,7 +653,7 @@ function auditSkillDir(sourceDir) {
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let skillMd;
   try {
-    skillMd = readFileSync4(join6(sourceDir, "SKILL.md"), "utf8");
+    skillMd = readFileSync5(join6(sourceDir, "SKILL.md"), "utf8");
   } catch {
     return { shareable: false, reason: "no-skill-md" };
   }
@@ -636,7 +667,7 @@ function auditSkillDir(sourceDir) {
   for (const file of files) {
     let content;
     try {
-      content = readFileSync4(join6(sourceDir, file), "utf8");
+      content = readFileSync5(join6(sourceDir, file), "utf8");
     } catch {
       return { shareable: false, reason: "unreadable", detail: file };
     }
@@ -667,11 +698,11 @@ function skillRefusalMessage(shownDir, slug, audit) {
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync6, readdirSync as readdirSync5, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/lib/commands.ts
-import { readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { readdirSync as readdirSync4, readFileSync as readFileSync6 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { basename as basename2, join as join7 } from "node:path";
 function localCommandDirs(userHome = homedir4(), cwd = process.cwd()) {
@@ -708,7 +739,7 @@ function auditCommand(file) {
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let content;
   try {
-    content = readFileSync5(file, "utf8");
+    content = readFileSync6(file, "utf8");
   } catch {
     return { shareable: false, reason: "unreadable", detail: basename2(file) };
   }
@@ -742,12 +773,12 @@ function mayUpdate(options, name) {
 function bumpPluginVersion(repoDir) {
   const file = join8(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const plugin = JSON.parse(readFileSync6(file, "utf8"));
+    const plugin = JSON.parse(readFileSync7(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
     plugin.version = parts.join(".");
-    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
+    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
@@ -823,6 +854,16 @@ function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
 function skillCollisionMessage(name, chosen) {
   const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
+}
+function commitPrefixForPush(team, repoDir) {
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  const recorded = readTeamCommitPrefix(repoDir);
+  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    learned: recorded.prefix
+  };
 }
 var TEAM_MCP_FILE = ".mcp.json";
 var TEAM_COMMANDS_DIR = "commands";
@@ -1070,7 +1111,7 @@ function teamAssets(team, git = runGit) {
     const mcpFile = join8(repoDir, TEAM_MCP_FILE);
     return {
       skills: namesIn(join8(repoDir, "skills")),
-      servers: declaredServerNames(existsSync2(mcpFile) ? readFileSync6(mcpFile, "utf8") : null),
+      servers: declaredServerNames(existsSync3(mcpFile) ? readFileSync7(mcpFile, "utf8") : null),
       commands: namesIn(join8(repoDir, TEAM_COMMANDS_DIR), ".md")
     };
   } catch {
@@ -1158,12 +1199,13 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, refused, error: identity.error };
   const prefix = teamBranchPrefix(team);
-  const commitPrefix = teamCommitPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
   const repoDir = join8(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
+    const pushTeam = commitPrefixForPush(team, repoDir);
+    const commitPrefix = pushTeam.prefix;
     const remoteBranches = listRemoteBranches(git, repoDir);
     const target = join8(repoDir, TEAM_MCP_FILE);
     let merged = "";
@@ -1172,7 +1214,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     if (subjects.length) {
       try {
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
-          existsSync2(target) ? readFileSync6(target, "utf8") : null,
+          existsSync3(target) ? readFileSync7(target, "utf8") : null,
           subjects.map((s) => s.entry),
           (name) => mayUpdate(options, name)
         ));
@@ -1189,7 +1231,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingCommands = [];
     const replacedCommands = [];
     for (const command of commands) {
-      if (existsSync2(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+      if (existsSync3(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1207,7 +1249,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingSkills = [];
     const replacedSkills = [];
     for (const skill of skills) {
-      if (existsSync2(join8(repoDir, TEAM_SKILLS_DIR, skill.name))) {
+      if (existsSync3(join8(repoDir, TEAM_SKILLS_DIR, skill.name))) {
         if (!mayUpdate(options, skill.name)) {
           collisions.push(skillCollisionMessage(skill.name, false));
           refused.push({
@@ -1244,10 +1286,10 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     try {
       git(["checkout", "-b", branch], repoDir);
-      if (going.length) writeFileSync3(target, merged);
-      if (goingCommands.length) mkdirSync5(join8(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
+      if (going.length) writeFileSync4(target, merged);
+      if (goingCommands.length) mkdirSync6(join8(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
       for (const command of goingCommands) {
-        writeFileSync3(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+        writeFileSync4(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
       }
       for (const skill of goingSkills) {
         const dest = join8(repoDir, TEAM_SKILLS_DIR, skill.name);
@@ -1257,7 +1299,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, team, slug, remoteBranches);
+      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
@@ -1269,7 +1311,8 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
           team.repoUrl,
           branch,
           err,
-          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits (for example "TEAM-1-"), then run this again.'
+          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits (for example "TEAM-1-"), then run this again.',
+          teamCommitPrefixFix(pushTeam.team, "run this again")
         )
       };
     }
@@ -1299,7 +1342,8 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       ...version ? { version } : {},
       ...pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0 },
       ...pr.url ? {} : pr.error ? { prError: pr.error } : {},
-      ...learnedBranchPrefix ? { learnedBranchPrefix } : {}
+      ...learnedBranchPrefix ? { learnedBranchPrefix } : {},
+      ...pushTeam.learned !== void 0 ? { learnedCommitPrefix: pushTeam.learned } : {}
     };
   } finally {
     rmSync3(workdir, { recursive: true, force: true });
@@ -1667,9 +1711,11 @@ function main() {
   }
   const team = loadTeamConfig();
   const result = shareSelection(selection, team, {}, void 0, void 0, updates.length ? { update: updates } : {});
-  if (team && result.team?.learnedBranchPrefix) {
-    saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
-  }
+  const learned = {
+    ...result.team?.learnedBranchPrefix ? { branchPrefix: result.team.learnedBranchPrefix } : {},
+    ...result.team?.learnedCommitPrefix !== void 0 ? { commitPrefix: result.team.learnedCommitPrefix } : {}
+  };
+  if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
   if (result.refused.length) process.exitCode = 1;
 }

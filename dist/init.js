@@ -450,6 +450,25 @@ try {
 } catch {}
 process.exit(0);
 `;
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+var COMMIT_PREFIX_MAX = 64;
+function commitPrefixProblem(value) {
+  if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
+  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  return null;
+}
+function readTeamCommitPrefix(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  const problem = commitPrefixProblem(value);
+  return problem ? { problem } : { prefix: value };
+}
 function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
@@ -479,7 +498,19 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
       2
     ) + "\n",
     "README.md": readmeFor(name, url),
-    "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n"
+    "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
+    // Written even when there is no prefix, because "" and "absent" are different answers:
+    // "" is this team saying its forge asks for nothing, while an absent file is a
+    // repository that predates this record and knows nothing either way. A teammate who
+    // read the second as the first would regenerate the CI job without the team's prefix.
+    [TEAM_PREFIX_FILE]: JSON.stringify(
+      {
+        commitPrefix: commitPrefix.trim(),
+        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it."
+      },
+      null,
+      2
+    ) + "\n"
   };
   if (withCi) {
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
@@ -559,6 +590,17 @@ function gitIdentityArgs(git) {
   return ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
+var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
+function teamCommitPrefixFix(team, retry) {
+  const known = team.commitPrefix?.trim();
+  if (known === "") {
+    return `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit had none, and the rule now says otherwise. Correct "commitPrefix" in that file in the repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it for everyone. To unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
+  }
+  if (known) {
+    return `The prefix this machine uses, "${known}", does not satisfy that rule. Correct "commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran /handbook:init record the right one in the repository with \`/handbook:init --upgrade\` so no teammate hits this, then ${retry}.`;
+  }
+  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
+}
 var IDENTITY_RULES = [
   /(author|committer)'s email/i,
   /committer email '[^']*' is not verified/i,
@@ -576,7 +618,7 @@ function pushRuleSubject(raw) {
   if (refusesTheIdentity(raw)) return "identity";
   return null;
 }
-function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX) {
+function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX, commitPrefixFix = INIT_COMMIT_PREFIX_FIX) {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
@@ -594,7 +636,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
     return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} That is a pattern the project BANS rather than one it requires, so no prefix satisfies it; the commit title itself has to stop matching it.`;
   }
   if (subject === "commit-message" && /commit message does not follow the pattern/i.test(raw)) {
-    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.`;
+    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ${commitPrefixFix}`;
   }
   if (subject === "identity") {
     const said = remoteSaid[0] ?? detail;
@@ -888,14 +930,11 @@ function prefixDependentPaths(team, withCi) {
 }
 function upgradeCandidates(repoDir, team) {
   const withCi = existsSync4(join5(repoDir, CI_MARKER));
-  const generated = skeletonFiles(
-    team.marketplaceName,
-    team.repoUrl,
-    hostFromUrl(team.repoUrl),
-    team.commitPrefix?.trim() ?? "",
-    withCi
-  );
-  const unknownPrefix = commitPrefixIsKnown(team) ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
+  const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
+  const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
+  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi);
+  const known = commitPrefixIsKnown(team) || recorded !== void 0;
+  const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
   const linked = [];
   const withheld = [];
@@ -912,7 +951,7 @@ function upgradeCandidates(repoDir, team) {
     if (unknownPrefix.has(path)) {
       withheld.push({
         path,
-        reason: "it embeds the team's commit-message prefix, which only the machine that ran /handbook:init recorded. Regenerating it here would drop that prefix and stop the team's version bumps, so it is not offered on this machine."
+        reason: "it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine."
       });
       continue;
     }
@@ -1124,7 +1163,8 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge) {
           team.repoUrl,
           branch,
           err,
-          'Set "branchPrefix" under "team" in your TeamHandbook config.json to a prefix that fits (for example "TEAM-1-"), then run this again.'
+          'Set "branchPrefix" under "team" in your TeamHandbook config.json to a prefix that fits (for example "TEAM-1-"), then run this again.',
+          teamCommitPrefixFix(team, "run this again")
         )
       };
     }

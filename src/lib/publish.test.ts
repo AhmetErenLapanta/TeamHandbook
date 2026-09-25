@@ -16,8 +16,8 @@ import {
 } from "./publish.js";
 import { auditServer } from "./mcp.js";
 import type { McpServerEntry } from "./mcp.js";
-import { runGit } from "./init.js";
-import type { GitRunner } from "./init.js";
+import { runGit, TEAM_PREFIX_FILE } from "./init.js";
+import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import type { GroundedCase } from "./distill.js";
 
@@ -979,3 +979,190 @@ describe("publishCandidate carries the whole skill", () => {
   });
 });
 
+describe("a machine that joined before the repository recorded its prefix", () => {
+  const gitlab: McpServerEntry = {
+    name: "gitlab",
+    scope: "user",
+    config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+  };
+  const pluginJson = JSON.stringify({ name: "acme", version: "0.1.0" }, null, 2) + "\n";
+
+  /** A team repository that records the prefix its forge demands, the way /handbook:init
+   * now scaffolds one. */
+  function recordingRepo(commitPrefix: string): string {
+    return teamRepo([], {
+      ".claude-plugin/plugin.json": pluginJson,
+      [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix }, null, 2) + "\n",
+    });
+  }
+
+  /** The founder adding the record to a handbook that had none, which is what both
+   * refusal messages tell the reader to go and do. */
+  function recordPrefix(remote: string, commitPrefix: string): void {
+    const work = mkdtempSync(join(tmpdir(), "handbook-record-"));
+    try {
+      execFileSync("git", ["clone", remote, work], { stdio: "ignore" });
+      writeFileSync(join(work, TEAM_PREFIX_FILE), JSON.stringify({ commitPrefix }, null, 2) + "\n");
+      gitIn(work, ["add", "-A"]);
+      gitIn(work, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "OPS-42 record the prefix"]);
+      gitIn(work, ["push", "origin", "HEAD:main"]);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
+
+  /** The config joinTeamRepo leaves behind when the repository recorded nothing: no
+   * prefix of any kind, and no initializedAt to say this machine was ever told. */
+  const joiner = (repoUrl: string): TeamConfig => ({ repoUrl, marketplaceName: "acme", joinedAt: "2026-02-02T00:00:00Z" });
+
+  it("given a share from a machine with no prefix, when the repository records one, then the commit carries it without a rejection first", () => {
+    const remote = recordingRepo("OPS-42");
+
+    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), undefined, () => "https://example.com/mr/9");
+
+    expect(result.ok).toBe(true);
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).startsWith("OPS-42 ")).toBe(true);
+    // Persisted by the caller, so the second share needs no lookup at all.
+    expect(result.learnedCommitPrefix).toBe("OPS-42");
+  });
+
+  it("given an approval from a machine with no prefix, when the repository records one, then the skill's commit carries it too", () => {
+    const remote = recordingRepo("OPS-42");
+
+    const result = publishCandidate(candidateDir, meta(), joiner(remote), runGit, () => "");
+
+    expect(result.ok).toBe(true);
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).startsWith("OPS-42 ")).toBe(true);
+    expect(result.learnedCommitPrefix).toBe("OPS-42");
+  });
+
+  it("given a machine that already has its own prefix, when the repository records a different one, then the machine's own is kept", () => {
+    const remote = recordingRepo("OPS-42");
+
+    const result = publishTeamSelection(
+      { servers: [gitlab] },
+      { ...joiner(remote), commitPrefix: "OPS-99" },
+      undefined,
+      () => "https://example.com/mr/10",
+    );
+
+    // A prefix in the config may be a correction made by hand after a rejection; the
+    // repository never overwrites one.
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).startsWith("OPS-99 ")).toBe(true);
+    expect(result.learnedCommitPrefix).toBeUndefined();
+  });
+
+  it("given the repository records that the team needs no prefix, when shared, then that answer is learned rather than looked up again", () => {
+    const remote = recordingRepo("");
+
+    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), undefined, () => "https://example.com/mr/11");
+
+    expect(result.ok).toBe(true);
+    expect(result.learnedCommitPrefix).toBe("");
+    // No prefix, and no stray leading space either: the title is exactly what it would be
+    // on a machine that had always known the team asks for nothing.
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe("feat(mcp): add gitlab");
+  });
+
+  it("given a repository recording nothing, when a commit-message rule refuses the push, then the message names a route that exists", () => {
+    const remote = teamRepo([], { ".claude-plugin/plugin.json": pluginJson });
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") {
+        throw new Error(
+          "git push failed: remote: GitLab: Commit message does not follow the pattern " +
+            "'^(?:(TEAM|OPS|ENG|SEC)-\\d+)'",
+        );
+      }
+      return runGit(args, cwd);
+    };
+
+    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("rejected the commit MESSAGE");
+    // The defect this replaces: the share path printed init's own advice, sending the user
+    // to a flag share.js has never had.
+    expect(result.error).not.toContain("--commit-prefix");
+    expect(result.error).toContain(TEAM_PREFIX_FILE);
+    expect(result.error).toContain("/handbook:init --upgrade");
+  });
+
+  it("given a repository recording that no prefix is needed, when the forge starts demanding one, then the route named is the one that exists", () => {
+    const remote = recordingRepo("");
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") {
+        throw new Error(
+          "git push failed: remote: GitLab: Commit message does not follow the pattern " +
+            "'^(?:(TEAM|OPS|ENG|SEC)-\\d+)'",
+        );
+      }
+      return runGit(args, cwd);
+    };
+
+    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
+
+    expect(result.ok).toBe(false);
+    // The record EXISTS and says "nothing", so claiming it is absent is a lie, and
+    // `--upgrade` would regenerate the same empty answer and call the file current.
+    expect(result.error).not.toContain(`no ${TEAM_PREFIX_FILE}`);
+    expect(result.error).not.toContain("--upgrade");
+    expect(result.error).toContain("/handbook:join");
+  });
+
+  it("given a teammate refused for the commit message, when the founder records the prefix, then the very next share passes", () => {
+    const remote = teamRepo([], { ".claude-plugin/plugin.json": pluginJson });
+    // The forge as it actually behaves: it reads the commit it is being asked to accept.
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") {
+        const subject = String(runGit(["log", "-1", "--format=%s"], cwd) ?? "");
+        if (!subject.startsWith("OPS-")) {
+          throw new Error(
+            "git push failed: remote: GitLab: Commit message does not follow the pattern " +
+              "'^(?:(TEAM|OPS|ENG|SEC)-\\d+)'",
+          );
+        }
+      }
+      return runGit(args, cwd);
+    };
+
+    const first = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
+    expect(first.ok).toBe(false);
+    expect(first.error).toContain("rejected the commit MESSAGE");
+
+    // What the message told them to do, done by the person it named.
+    recordPrefix(remote, "OPS-42");
+
+    const second = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
+
+    expect(second.ok).toBe(true);
+    expect(second.learnedCommitPrefix).toBe("OPS-42");
+    expect(gitIn(remote, ["log", "-1", "--format=%s", second.branch!]).startsWith("OPS-42 ")).toBe(true);
+  });
+
+  it("given a repository that records its prefix, when the forge then refuses the branch NAME, then the recovery the prefix enables is reachable", () => {
+    const remote = recordingRepo("HQA-000");
+    let pushes = 0;
+    const policedGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") {
+        pushes++;
+        if (args.includes("handbook/mcp-gitlab")) {
+          throw new Error(
+            "git push failed: remote: GitLab: Branch name 'handbook/mcp-gitlab' does not follow the " +
+              "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
+          );
+        }
+      }
+      return runGit(args, cwd);
+    };
+
+    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
+
+    // Without the repository lookup there is no commitPrefix to derive a branch from, so
+    // this push failed outright before.
+    expect(result.ok).toBe(true);
+    expect(result.branch).toBe("HQA-000-mcp-gitlab");
+    expect(result.learnedBranchPrefix).toBe("HQA-000-");
+    expect(result.learnedCommitPrefix).toBe("HQA-000");
+    expect(pushes).toBe(2);
+  });
+});

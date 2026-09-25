@@ -1,14 +1,15 @@
 // src/cli/review.ts
-import { readFileSync as readFileSync9 } from "node:fs";
+import { readFileSync as readFileSync10 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6, rmSync as rmSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
@@ -356,6 +357,25 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+var COMMIT_PREFIX_MAX = 64;
+function commitPrefixProblem(value) {
+  if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
+  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  return null;
+}
+function readTeamCommitPrefix(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync3(join4(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  const problem = commitPrefixProblem(value);
+  return problem ? { problem } : { prefix: value };
+}
 function nonInteractiveEnv(base = process.env) {
   return {
     ...base,
@@ -390,6 +410,17 @@ function runGit(args, cwd) {
   }
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
+var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
+function teamCommitPrefixFix(team, retry) {
+  const known = team.commitPrefix?.trim();
+  if (known === "") {
+    return `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit had none, and the rule now says otherwise. Correct "commitPrefix" in that file in the repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it for everyone. To unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
+  }
+  if (known) {
+    return `The prefix this machine uses, "${known}", does not satisfy that rule. Correct "commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran /handbook:init record the right one in the repository with \`/handbook:init --upgrade\` so no teammate hits this, then ${retry}.`;
+  }
+  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
+}
 var IDENTITY_RULES = [
   /(author|committer)'s email/i,
   /committer email '[^']*' is not verified/i,
@@ -407,7 +438,7 @@ function pushRuleSubject(raw) {
   if (refusesTheIdentity(raw)) return "identity";
   return null;
 }
-function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX) {
+function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX, commitPrefixFix = INIT_COMMIT_PREFIX_FIX) {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
@@ -425,7 +456,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
     return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} That is a pattern the project BANS rather than one it requires, so no prefix satisfies it; the commit title itself has to stop matching it.`;
   }
   if (subject === "commit-message" && /commit message does not follow the pattern/i.test(raw)) {
-    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.`;
+    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ${commitPrefixFix}`;
   }
   if (subject === "identity") {
     const said = remoteSaid[0] ?? detail;
@@ -445,7 +476,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/skill-files.ts
-import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { copyFileSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join5 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
@@ -472,22 +503,22 @@ function listSkillFiles(dir) {
   return { files, skipped };
 }
 function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
-  mkdirSync3(destDir, { recursive: true });
-  writeFileSync2(join5(destDir, "SKILL.md"), skillMd);
+  mkdirSync4(destDir, { recursive: true });
+  writeFileSync3(join5(destDir, "SKILL.md"), skillMd);
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
     const target = join5(destDir, rel);
-    mkdirSync3(dirname3(target), { recursive: true });
+    mkdirSync4(dirname3(target), { recursive: true });
     copyFileSync(join5(srcDir, rel), target);
   }
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readdirSync as readdirSync4, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join6 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function isSafeSlug(slug) {
@@ -502,7 +533,7 @@ function writeCandidateMeta(dir, meta) {
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync3(join6(dir, "SKILL.md"), "utf8");
+    md = readFileSync4(join6(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -510,7 +541,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync3(join6(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync4(join6(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -527,7 +558,7 @@ function synthesizeMeta(dir) {
 }
 function readCandidateMeta(dir) {
   try {
-    const parsed = JSON.parse(readFileSync3(candidateMetaFile(dir), "utf8"));
+    const parsed = JSON.parse(readFileSync4(candidateMetaFile(dir), "utf8"));
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return {
         ...parsed,
@@ -570,7 +601,7 @@ function unreadableCandidates(home = handbookHome()) {
     const dir = join6(base, entry.name);
     let raw = null;
     try {
-      raw = readFileSync3(candidateMetaFile(dir), "utf8");
+      raw = readFileSync4(candidateMetaFile(dir), "utf8");
     } catch {
     }
     if (raw !== null) {
@@ -681,7 +712,7 @@ function archivesDir(home = handbookHome()) {
 }
 function writeArchiveManifest(home, manifest) {
   const dir = archivesDir(home);
-  mkdirSync4(dir, { recursive: true });
+  mkdirSync5(dir, { recursive: true });
   const file = join6(dir, `${manifest.sweptAt.replace(/[:.]/g, "-")}.json`);
   writeFileAtomic(file, JSON.stringify(manifest, null, 2) + "\n");
   return file;
@@ -689,7 +720,7 @@ function writeArchiveManifest(home, manifest) {
 function readArchiveManifest(file) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync3(file, "utf8"));
+    parsed = JSON.parse(readFileSync4(file, "utf8"));
   } catch {
     return null;
   }
@@ -735,7 +766,7 @@ function mutedFile(home = handbookHome()) {
 }
 function loadMutedFingerprints(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync3(mutedFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync4(mutedFile(home), "utf8"));
     if (Array.isArray(parsed)) return new Set(parsed.filter((f) => typeof f === "string"));
   } catch {
   }
@@ -819,7 +850,7 @@ function buildPrBody(meta, grounded, update = false) {
 }
 function readGroundedCase(candidateDir) {
   try {
-    const parsed = JSON.parse(readFileSync4(join7(candidateDir, "grounded-case.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync5(join7(candidateDir, "grounded-case.json"), "utf8"));
     if (typeof parsed?.command === "string" && typeof parsed?.error === "string" && typeof parsed?.expect === "string" && Array.isArray(parsed?.edits)) {
       return parsed;
     }
@@ -837,12 +868,12 @@ function conflictingOptions(options) {
 function bumpPluginVersion(repoDir) {
   const file = join7(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const plugin = JSON.parse(readFileSync4(file, "utf8"));
+    const plugin = JSON.parse(readFileSync5(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
     plugin.version = parts.join(".");
-    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
+    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
@@ -919,9 +950,18 @@ function skillCollisionMessage(name, chosen) {
   const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
 }
+function commitPrefixForPush(team, repoDir) {
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  const recorded = readTeamCommitPrefix(repoDir);
+  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    learned: recorded.prefix
+  };
+}
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge, options = {}) {
   const prefix = teamBranchPrefix(team);
-  const commitPrefix = teamCommitPrefix(team);
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -929,7 +969,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   }
   let candidateSkillMd;
   try {
-    candidateSkillMd = readFileSync4(join7(candidateDir, "SKILL.md"), "utf8");
+    candidateSkillMd = readFileSync5(join7(candidateDir, "SKILL.md"), "utf8");
   } catch {
     return { ok: false, error: `candidate SKILL.md is missing or unreadable in ${displayPath(candidateDir)}` };
   }
@@ -947,9 +987,11 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
+    const pushTeam = commitPrefixForPush(team, repoDir);
+    const commitPrefix = pushTeam.prefix;
     const remoteBranches = listRemoteBranches(git, repoDir);
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
-    const occupied = existsSync2(join7(repoDir, skillDir));
+    const occupied = existsSync3(join7(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
         ok: false,
@@ -973,7 +1015,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, team, branchSlug, remoteBranches);
+      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
@@ -983,12 +1025,16 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
           team.repoUrl,
           branch,
           err,
-          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits (for example "TEAM-1-"), then approve again; it is remembered for every skill after that.'
+          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits (for example "TEAM-1-"), then approve again; it is remembered for every skill after that.',
+          teamCommitPrefixFix(pushTeam.team, "approve again")
         )
       };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
-    const learned = learnedBranchPrefix ? { learnedBranchPrefix } : {};
+    const learned = {
+      ...learnedBranchPrefix ? { learnedBranchPrefix } : {},
+      ...pushTeam.learned !== void 0 ? { learnedCommitPrefix: pushTeam.learned } : {}
+    };
     const named = { skillDir, skillSlug, ...occupied ? { updatedExisting: true } : {} };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
@@ -1016,13 +1062,13 @@ function soloSkillsDir(projectCwd) {
 function personalSkillsDir() {
   return join8(homedir3(), ".claude", "skills");
 }
-function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync3) {
+function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
-function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync3) {
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync4) {
   return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
 }
-function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync3) {
+function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
   return `${basename2(origin)}'s .claude/skills (where it was captured, not this project)`;
@@ -1050,9 +1096,11 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
       };
     }
     const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
-    if (delivered.learnedBranchPrefix) {
-      saveTeamConfig({ ...team, branchPrefix: delivered.learnedBranchPrefix }, home);
-    }
+    const learned = {
+      ...delivered.learnedBranchPrefix ? { branchPrefix: delivered.learnedBranchPrefix } : {},
+      ...delivered.learnedCommitPrefix !== void 0 ? { commitPrefix: delivered.learnedCommitPrefix } : {}
+    };
+    if (Object.keys(learned).length) saveTeamConfig({ ...team, ...learned }, home);
     return delivered;
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
@@ -1061,13 +1109,13 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
   const target = join8(skillsDir, slug);
-  const occupied = existsSync3(target);
+  const occupied = existsSync4(target);
   const updatedExisting = occupied && mayUpdate(options, slug);
   if (occupied && !updatedExisting) {
     return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
   }
   try {
-    const skillMd = readFileSync5(join8(dir, "SKILL.md"), "utf8");
+    const skillMd = readFileSync6(join8(dir, "SKILL.md"), "utf8");
     if (updatedExisting) rmSync4(target, { recursive: true, force: true });
     copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
@@ -1133,15 +1181,16 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
     ...published.version ? { version: published.version } : {},
     manualUrl: published.manualUrl,
     ...published.prError ? { prError: published.prError } : {},
-    ...published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {}
+    ...published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {},
+    ...published.learnedCommitPrefix !== void 0 ? { learnedCommitPrefix: published.learnedCommitPrefix } : {}
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
-  const originGone = !!meta.cwd && !existsSync3(meta.cwd);
+  const originGone = !!meta.cwd && !existsSync4(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
-  const installedProject = meta.cwd && existsSync3(meta.cwd) ? meta.cwd : fallbackCwd;
+  const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
@@ -1211,7 +1260,7 @@ function formatApproveResult(slug, result) {
 }
 
 // src/lib/sweep.ts
-import { readFileSync as readFileSync6 } from "node:fs";
+import { readFileSync as readFileSync7 } from "node:fs";
 import { join as join9 } from "node:path";
 
 // src/lib/harvest.ts
@@ -1275,7 +1324,7 @@ var DEFAULT_REASON = "did not meet the discovery bar on re-judgement";
 function expectOf(home, slug) {
   try {
     const grounded = JSON.parse(
-      readFileSync6(join9(candidatesDir(home), slug, "grounded-case.json"), "utf8")
+      readFileSync7(join9(candidatesDir(home), slug, "grounded-case.json"), "utf8")
     );
     return typeof grounded?.expect === "string" ? grounded.expect : "";
   } catch {
@@ -1465,7 +1514,7 @@ function formatSweepReport(report, dryRun) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync4, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync8, readdirSync as readdirSync5 } from "node:fs";
 import { join as join10 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
@@ -1479,7 +1528,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync7(join10(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync8(join10(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -1488,7 +1537,7 @@ function pendingHarvestCount(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync8 } from "node:fs";
+import { readFileSync as readFileSync9 } from "node:fs";
 
 // src/lib/pipeline.ts
 import { basename as basename3, join as join11 } from "node:path";
@@ -1503,7 +1552,7 @@ var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync8(pipelineLogFile(home), "utf8");
+    raw = readFileSync9(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -1529,7 +1578,7 @@ function showCandidate(home, slug) {
   const dir = join12(candidatesDir(home), slug);
   let skillMd;
   try {
-    skillMd = readFileSync9(join12(dir, "SKILL.md"), "utf8");
+    skillMd = readFileSync10(join12(dir, "SKILL.md"), "utf8");
   } catch {
     console.error(`error: no candidate named "${slug}"`);
     process.exit(1);
@@ -1563,7 +1612,7 @@ function showCandidate(home, slug) {
   console.log("");
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
-    const grounded = JSON.parse(readFileSync9(join12(dir, "grounded-case.json"), "utf8"));
+    const grounded = JSON.parse(readFileSync10(join12(dir, "grounded-case.json"), "utf8"));
     if (grounded.quote) {
       console.log(`you said:  "${grounded.quote}"`);
     }

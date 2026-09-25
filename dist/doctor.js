@@ -1,6 +1,6 @@
 // src/lib/doctor.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/lib/session-state.ts
@@ -55,6 +55,7 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/init.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { dirname, join as join4 } from "node:path";
 
@@ -355,6 +356,25 @@ try {
 } catch {}
 process.exit(0);
 `;
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+var COMMIT_PREFIX_MAX = 64;
+function commitPrefixProblem(value) {
+  if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
+  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  return null;
+}
+function readTeamCommitPrefix(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync4(join4(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  const problem = commitPrefixProblem(value);
+  return problem ? { problem } : { prefix: value };
+}
 function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
@@ -384,7 +404,19 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
       2
     ) + "\n",
     "README.md": readmeFor(name, url),
-    "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n"
+    "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
+    // Written even when there is no prefix, because "" and "absent" are different answers:
+    // "" is this team saying its forge asks for nothing, while an absent file is a
+    // repository that predates this record and knows nothing either way. A teammate who
+    // read the second as the first would regenerate the CI job without the team's prefix.
+    [TEAM_PREFIX_FILE]: JSON.stringify(
+      {
+        commitPrefix: commitPrefix.trim(),
+        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it."
+      },
+      null,
+      2
+    ) + "\n"
   };
   if (withCi) {
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
@@ -402,7 +434,7 @@ function marketplacesRoot() {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync2, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname2, join as join5, relative } from "node:path";
 var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
 var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
@@ -414,7 +446,7 @@ function isTeamOwned(path) {
 }
 function readIfPresent(file) {
   try {
-    return readFileSync4(file, "utf8");
+    return readFileSync5(file, "utf8");
   } catch {
     return null;
   }
@@ -485,15 +517,12 @@ function prefixDependentPaths(team, withCi) {
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
 function upgradeCandidates(repoDir, team) {
-  const withCi = existsSync2(join5(repoDir, CI_MARKER));
-  const generated = skeletonFiles(
-    team.marketplaceName,
-    team.repoUrl,
-    hostFromUrl(team.repoUrl),
-    team.commitPrefix?.trim() ?? "",
-    withCi
-  );
-  const unknownPrefix = commitPrefixIsKnown(team) ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
+  const withCi = existsSync3(join5(repoDir, CI_MARKER));
+  const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
+  const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
+  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi);
+  const known = commitPrefixIsKnown(team) || recorded !== void 0;
+  const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
   const linked = [];
   const withheld = [];
@@ -510,7 +539,7 @@ function upgradeCandidates(repoDir, team) {
     if (unknownPrefix.has(path)) {
       withheld.push({
         path,
-        reason: "it embeds the team's commit-message prefix, which only the machine that ran /handbook:init recorded. Regenerating it here would drop that prefix and stop the team's version bumps, so it is not offered on this machine."
+        reason: "it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine."
       });
       continue;
     }
@@ -570,7 +599,7 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync5 } from "node:fs";
+import { readFileSync as readFileSync6 } from "node:fs";
 import { dirname as dirname3, join as join7 } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -592,7 +621,7 @@ function pluginVersion() {
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(
-        readFileSync5(join7(here, up, ".claude-plugin", "plugin.json"), "utf8")
+        readFileSync6(join7(here, up, ".claude-plugin", "plugin.json"), "utf8")
       );
       if (typeof parsed?.version === "string") return parsed.version;
     } catch {
@@ -603,7 +632,7 @@ function pluginVersion() {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync5(pipelineLogFile(home), "utf8");
+    raw = readFileSync6(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -709,8 +738,8 @@ function checkGitIdentity(home, run) {
 function checkHomeWritable(home) {
   const probe = join8(home, `.doctor-probe-${process.pid}`);
   try {
-    mkdirSync4(home, { recursive: true });
-    writeFileSync3(probe, "ok");
+    mkdirSync5(home, { recursive: true });
+    writeFileSync4(probe, "ok");
     rmSync3(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
@@ -719,9 +748,9 @@ function checkHomeWritable(home) {
 }
 function checkConfig(home) {
   const file = join8(home, "config.json");
-  if (!existsSync3(file)) return ok("config", "no config.json (defaults apply)");
+  if (!existsSync4(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync6(file, "utf8"));
+    const parsed = JSON.parse(readFileSync7(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -753,7 +782,7 @@ function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync6(join8(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync7(join8(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
       skillCount = readdirSync3(join8(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
@@ -817,7 +846,7 @@ function isPlainObject(value) {
 function declaredMcpServerNames(mcpFile) {
   let raw;
   try {
-    raw = readFileSync6(mcpFile, "utf8");
+    raw = readFileSync7(mcpFile, "utf8");
   } catch {
     return { error: "unreadable" };
   }
@@ -849,7 +878,7 @@ function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
   const mcpFile = join8(marketRoot, team.marketplaceName, ".mcp.json");
-  if (!existsSync3(mcpFile)) {
+  if (!existsSync4(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
   const declared = declaredMcpServerNames(mcpFile);
