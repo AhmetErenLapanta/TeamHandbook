@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.12.1] - 2026-09-25
+
+- **A refused push is now named for the reason it was actually refused.** A push turned
+  down over the email on the commit was reported as a rejected branch name, which sent
+  you to a branch prefix that could not have fixed it; the same mistake was on the
+  sharing path. Two smaller ones went with it: the prefix applied to a team repository's
+  first commit ran into the message with no space, and the diagnostic could call an
+  identity settled that the forge would refuse.
+- **The diagram and the command descriptions now match the way sharing works today.** A
+  skill you already have travels with the servers and commands you picked, in the same
+  request, without stopping for a verdict first; the picture and the text say so.
+
 ## [0.12.0] - 2026-09-25
 
 - **A skill you pick on the `/handbook:share` screen now travels to the team repository,
