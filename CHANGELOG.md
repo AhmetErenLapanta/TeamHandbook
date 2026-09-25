@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.1] - 2026-09-25
+
+- **What the product tells you after a forge turns your push down is now checked against
+  a real git server turning a real push down**, rather than against a sentence a test
+  wrote for itself. The rules a hosted project enforces - the branch name, the commit
+  message, the author's address, a protected default branch - are answered by a
+  repository that refuses for real, so an answer that would mislead you cannot pass
+  unnoticed. Nothing an installed copy does is different.
+
 ## [0.13.0] - 2026-09-25
 
 - **Whoever joins a team repository now learns the commit-message prefix that repository's
