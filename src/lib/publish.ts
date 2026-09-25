@@ -6,7 +6,17 @@ import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import type { GroundedCase } from "./distill.js";
-import { assertSafeGitUrl, pushFailureReason, pushRuleSubject, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
+import {
+  assertSafeGitUrl,
+  commitMessagePrefix,
+  pushFailureReason,
+  pushRuleSubject,
+  readTeamCommitPrefix,
+  runGit,
+  teamBranchPrefix,
+  teamCommitPrefix,
+  teamCommitPrefixFix,
+} from "./init.js";
 import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, runForge } from "./forge.js";
@@ -166,6 +176,10 @@ export interface PublishOutcome {
   // the branch prefix this push had to discover because the forge refused the default
   // one; the caller persists it so no later skill pays the same round trip
   learnedBranchPrefix?: string;
+  // the commit prefix this push read out of the team repository because this machine had
+  // none; the caller persists it, so a teammate who joined before the repository recorded
+  // one picks it up on their next share instead of being refused again
+  learnedCommitPrefix?: string;
   error?: string;
   // why the forge CLI couldn't auto-open the PR (branch is pushed; link is manual)
   prError?: string;
@@ -365,6 +379,36 @@ function skillCollisionMessage(name: string, chosen: boolean): string {
         "or with --as <name> to send it under a different name.";
 }
 
+/**
+ * The commit prefix for this push, taken from the team repository when this machine has
+ * none of its own.
+ *
+ * The second half of getting the prefix to the whole team, and the half that covers the
+ * people `/handbook:join` could not. Somebody who joined a repository that recorded no
+ * prefix took nothing, and joining again is not something anyone thinks to do; but the
+ * founder may since have run `/handbook:init --upgrade`, which writes the record. Every
+ * publish here already clones the repository, so asking it costs nothing and the answer
+ * arrives the first time it exists.
+ *
+ * A prefix this machine already knows is never overwritten from the repository: it may
+ * have been corrected by hand after a rejection, and the config is where that correction
+ * lives. An empty recorded prefix is learned like any other - the team saying "no prefix"
+ * is an answer, and remembering it stops this lookup repeating.
+ */
+function commitPrefixForPush(team: TeamConfig, repoDir: string): { team: TeamConfig; prefix: string; learned?: string } {
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  const recorded = readTeamCommitPrefix(repoDir);
+  if (recorded.prefix === undefined) return { team, prefix: teamCommitPrefix(team) };
+  // The whole config, not just the message: retryBranchAfterNameRejection derives a branch
+  // from commitPrefix, so a joiner who learns the prefix here also gets the branch-name
+  // recovery that was unreachable without it.
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    learned: recorded.prefix,
+  };
+}
+
 export function publishCandidate(
   candidateDir: string,
   meta: CandidateMeta,
@@ -374,7 +418,6 @@ export function publishCandidate(
   options: PublishOptions = {},
 ): PublishOutcome {
   const prefix = teamBranchPrefix(team);
-  const commitPrefix = teamCommitPrefix(team);
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -405,6 +448,8 @@ export function publishCandidate(
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
+    const pushTeam = commitPrefixForPush(team, repoDir);
+    const commitPrefix = pushTeam.prefix;
     const remoteBranches = listRemoteBranches(git, repoDir);
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
     const occupied = existsSync(join(repoDir, skillDir));
@@ -444,7 +489,7 @@ export function publishCandidate(
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, team, branchSlug, remoteBranches);
+      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
@@ -456,11 +501,15 @@ export function publishCandidate(
           err,
           'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits ' +
             '(for example "TEAM-1-"), then approve again; it is remembered for every skill after that.',
+          teamCommitPrefixFix(pushTeam.team, "approve again"),
         ),
       };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
-    const learned = learnedBranchPrefix ? { learnedBranchPrefix } : {};
+    const learned = {
+      ...(learnedBranchPrefix ? { learnedBranchPrefix } : {}),
+      ...(pushTeam.learned !== undefined ? { learnedCommitPrefix: pushTeam.learned } : {}),
+    };
     const named = { skillDir, skillSlug, ...(occupied ? { updatedExisting: true } : {}) };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
@@ -534,6 +583,9 @@ export interface TeamPublishOutcome {
   prUrl?: string;
   manualUrl?: string;
   learnedBranchPrefix?: string;
+  // the commit prefix read out of the team repository for this push, when this machine had
+  // none of its own; persisted by the caller so the next share needs no lookup
+  learnedCommitPrefix?: string;
   // variables each teammate must set before the server will start for them
   requiresEnv?: string[];
   startsProcess?: boolean;
@@ -1108,12 +1160,13 @@ export function publishTeamSelection(
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, refused, error: identity.error };
   const prefix = teamBranchPrefix(team);
-  const commitPrefix = teamCommitPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
   const repoDir = join(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
+    const pushTeam = commitPrefixForPush(team, repoDir);
+    const commitPrefix = pushTeam.prefix;
     const remoteBranches = listRemoteBranches(git, repoDir);
     const target = join(repoDir, TEAM_MCP_FILE);
     let merged = "";
@@ -1228,7 +1281,7 @@ export function publishTeamSelection(
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, team, slug, remoteBranches);
+      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
     } catch (err) {
@@ -1242,6 +1295,7 @@ export function publishTeamSelection(
           err,
           'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits ' +
             '(for example "TEAM-1-"), then run this again.',
+          teamCommitPrefixFix(pushTeam.team, "run this again"),
         ),
       };
     }
@@ -1272,6 +1326,7 @@ export function publishTeamSelection(
       ...(pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined }),
       ...(pr.url ? {} : pr.error ? { prError: pr.error } : {}),
       ...(learnedBranchPrefix ? { learnedBranchPrefix } : {}),
+      ...(pushTeam.learned !== undefined ? { learnedCommitPrefix: pushTeam.learned } : {}),
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });

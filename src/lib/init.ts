@@ -309,6 +309,65 @@ try {
 process.exit(0);
 `;
 
+/**
+ * Where the team repository records the commit-message prefix its forge demands.
+ *
+ * The prefix was a property of the SERVER's push rule all along, never of the person who
+ * happened to run /handbook:init, so every member needs the same one and only one machine
+ * was ever told it. Writing it into the repository is what makes it reachable: the repo is
+ * the one thing every member already clones.
+ *
+ * Its own file rather than a key in `.claude-plugin/marketplace.json`, for three measured
+ * reasons. `claude plugin validate` (2.1.278) accepts an unknown key there but warns
+ * "Unknown field 'commitPrefix'. Claude Code ignores it at load time." on every run, for
+ * everyone. `prefixDependentPaths` in upgrade.ts finds prefix-carrying files by diffing
+ * the skeleton, so a prefix inside the manifest would make the WHOLE manifest unrefreshable
+ * on a teammate's machine, taking unrelated manifest fixes down with it. And the manifest
+ * merge there only fills in keys a repository lacks, so a wrong prefix written once could
+ * never be corrected by a later refresh.
+ */
+export const TEAM_PREFIX_FILE = ".teamhandbook.json";
+
+// Long enough for any prefix a push rule asks for - the ticket keys these rules are built
+// from run to a handful of characters - and short enough that a repository cannot push a
+// wall of text through join's output and into a commit title.
+const COMMIT_PREFIX_MAX = 64;
+
+/**
+ * Why this value cannot be used as the team's commit-message prefix, or null when it can.
+ *
+ * It is read out of a repository somebody else controls and then reaches two places that
+ * make the check necessary: the terminal, where a control character rewrites what the user
+ * is shown, and `git commit -m`, where a newline ends the commit title and turns the rest
+ * into a body nobody wrote. Refused rather than stripped, for the reason join refuses a
+ * marketplace name it cannot use: a silently rewritten prefix would satisfy no push rule
+ * and the failure would surface later, at a push, where it explains nothing.
+ */
+export function commitPrefixProblem(value: string): string | null {
+  if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
+  // \p{C} is every control, format and unassigned code point: the C0 range with its
+  // newlines and ESC, the C1 range, and the bidirectional overrides that reorder a printed
+  // line without changing a byte of it.
+  if (/\p{C}/u.test(value)) return "carrying a control character";
+  return null;
+}
+
+/** The prefix a cloned team repository records, and nothing else. `prefix` absent means
+ * the repository does not say - which is not the same answer as the empty string, and the
+ * two must stay distinguishable all the way to the config (see commitPrefixIsKnown). */
+export function readTeamCommitPrefix(repoDir: string): { prefix?: string; problem?: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+  } catch {
+    return {}; // no file, or not JSON: a repository scaffolded before this existed
+  }
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  const problem = commitPrefixProblem(value);
+  return problem ? { problem } : { prefix: value };
+}
+
 export function skeletonFiles(name: string, url: string, host: string | null, commitPrefix = "", withCi = false): Record<string, string> {
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
@@ -342,6 +401,22 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
     "README.md": readmeFor(name, url),
     "skills/README.md":
       "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
+    // Written even when there is no prefix, because "" and "absent" are different answers:
+    // "" is this team saying its forge asks for nothing, while an absent file is a
+    // repository that predates this record and knows nothing either way. A teammate who
+    // read the second as the first would regenerate the CI job without the team's prefix.
+    [TEAM_PREFIX_FILE]:
+      JSON.stringify(
+        {
+          commitPrefix: commitPrefix.trim(),
+          comment:
+            "Written by TeamHandbook. commitPrefix is what this project's forge requires at the " +
+            "front of a commit message; /handbook:join reads it, so a teammate's first share " +
+            "satisfies that rule instead of being refused by it.",
+        },
+        null,
+        2,
+      ) + "\n",
   };
   // Opt-in only. The version bump now travels inside the merge request that carries the
   // skill, so the ordinary path needs no CI, no access token, and no permission to push
@@ -507,6 +582,57 @@ export function gitIdentityArgs(git: GitRunner): string[] | null {
 const INIT_BRANCH_PREFIX_FIX =
   'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 
+const INIT_COMMIT_PREFIX_FIX =
+  'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is ' +
+  "remembered for every skill shared later.";
+
+/**
+ * What to do about a commit-message rule on a path that is NOT /handbook:init.
+ *
+ * `--commit-prefix` is an /handbook:init flag and nothing else - `share.js` has no such
+ * flag and never had one - so the sentence init prints was, everywhere else, a rejection
+ * answered with a command that does not exist. That is the same defect as sending a push
+ * refused for its commit author to `--branch-prefix`: the rule is diagnosed correctly and
+ * the route out of it is fiction.
+ *
+ * The repository-side route is named first on purpose. Editing ~/.teamhandbook/config.json
+ * fixes one machine, and it is a file a sandboxed session may not be allowed to touch at
+ * all, while recording the prefix in the repository fixes it for everyone who joins after.
+ */
+export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
+  const known = team.commitPrefix?.trim();
+  // Recorded, and recorded as nothing. Falling through to the "nobody knows" branch below
+  // told this user their repository carries no record when it carries one, and sent them to
+  // `/handbook:init --upgrade`, which regenerates the same empty answer and then reports the
+  // file as current - a correct diagnosis with a route that does nothing, which is the
+  // defect this function exists to stop. It is reached whenever a forge adds a
+  // commit-message rule after the handbook was scaffolded.
+  if (known === "") {
+    return (
+      `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit ` +
+      "had none, and the rule now says otherwise. Correct \"commitPrefix\" in that file in the " +
+      `repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it ` +
+      'for everyone. To unblock only this machine, set "commitPrefix" under "team" in ' +
+      `~/.teamhandbook/config.json, then ${retry}.`
+    );
+  }
+  if (known) {
+    return (
+      `The prefix this machine uses, "${known}", does not satisfy that rule. Correct ` +
+      '"commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran ' +
+      "/handbook:init record the right one in the repository with `/handbook:init --upgrade` " +
+      `so no teammate hits this, then ${retry}.`
+    );
+  }
+  return (
+    "This machine does not know the team's commit-message prefix: /handbook:join reads it " +
+    `from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran ` +
+    "/handbook:init can add it there once with `/handbook:init --upgrade`, and every share after " +
+    'that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a ' +
+    `prefix that satisfies the rule, then ${retry}.`
+  );
+}
+
 export type PushRuleSubject = "branch-name" | "commit-message" | "identity";
 
 // The identity rules in the forge's own words: GitLab refuses a commit's author or its
@@ -556,6 +682,7 @@ export function pushFailureReason(
   branch: string,
   err: unknown,
   branchPrefixFix: string = INIT_BRANCH_PREFIX_FIX,
+  commitPrefixFix: string = INIT_COMMIT_PREFIX_FIX,
 ): string {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
@@ -601,11 +728,7 @@ export function pushFailureReason(
   // Only the pattern rule. The same file also refuses a message for a missing DCO sign-off,
   // and a prefix is no more the answer to that than --branch-prefix was to an author email.
   if (subject === "commit-message" && /commit message does not follow the pattern/i.test(raw)) {
-    return (
-      `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ` +
-      'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is ' +
-      "remembered for every skill shared later."
-    );
+    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ${commitPrefixFix}`;
   }
   if (subject === "identity") {
     const said = remoteSaid[0] ?? detail;

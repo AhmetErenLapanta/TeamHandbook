@@ -132,11 +132,16 @@ function main(): void {
   }
   const team = loadTeamConfig();
   const result = shareSelection(selection, team, {}, undefined, undefined, updates.length ? { update: updates } : {});
-  // The forge refused the default branch name and the push recovered under the team's own
-  // prefix: remember it, so no later share pays that round trip again.
-  if (team && result.team?.learnedBranchPrefix) {
-    saveTeamConfig({ ...team, branchPrefix: result.team.learnedBranchPrefix });
-  }
+  // Two prefixes can come back from one push, and they are written in ONE save: the forge
+  // refused the default branch name and the push recovered under the team's own prefix, and
+  // the repository turned out to record the commit prefix this machine joined too early to
+  // receive. Saving them separately would have the second write overwrite the first, since
+  // each starts from the same stale `team`.
+  const learned = {
+    ...(result.team?.learnedBranchPrefix ? { branchPrefix: result.team.learnedBranchPrefix } : {}),
+    ...(result.team?.learnedCommitPrefix !== undefined ? { commitPrefix: result.team.learnedCommitPrefix } : {}),
+  };
+  if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
   // A refusal is not a crash: some of the selection may have travelled. The exit code says
   // "not everything you asked for happened", and the text above says which part.

@@ -1,9 +1,10 @@
 // src/lib/join.ts
-import { readFileSync as readFileSync3, rmSync as rmSync3 } from "node:fs";
+import { readFileSync as readFileSync4, rmSync as rmSync3 } from "node:fs";
 import { join as join4 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/session-state.ts
@@ -172,6 +173,25 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+var COMMIT_PREFIX_MAX = 64;
+function commitPrefixProblem(value) {
+  if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
+  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  return null;
+}
+function readTeamCommitPrefix(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string") return {};
+  const value = raw.trim();
+  const problem = commitPrefixProblem(value);
+  return problem ? { problem } : { prefix: value };
+}
 function nonInteractiveEnv(base = process.env) {
   return {
     ...base,
@@ -215,7 +235,7 @@ function isSafeSlug(slug) {
 function readMarketplaceName(repoDir) {
   try {
     const parsed = JSON.parse(
-      readFileSync3(join4(repoDir, ".claude-plugin", "marketplace.json"), "utf8")
+      readFileSync4(join4(repoDir, ".claude-plugin", "marketplace.json"), "utf8")
     );
     return typeof parsed?.name === "string" && parsed.name ? parsed.name : null;
   } catch {
@@ -275,27 +295,44 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
         error: `the repository's .claude-plugin/marketplace.json names the marketplace ${renderRejectedName(name)}, which is ${problem}. That name becomes a directory under ~/.claude/plugins/marketplaces and part of the commands printed here, so TeamHandbook will not join with it. Fix the name in the repository and re-run.`
       };
     }
+    const recorded = readTeamCommitPrefix(repoDir);
     saveTeamConfig(
       {
         ...existing ?? {},
         repoUrl: url,
         marketplaceName: name,
-        joinedAt: now
+        joinedAt: now,
+        ...recorded.prefix !== void 0 ? { commitPrefix: recorded.prefix } : {}
       },
       home
     );
-    return { ok: true, name, url, home };
+    return {
+      ok: true,
+      name,
+      url,
+      home,
+      ...recorded.prefix ? { commitPrefix: recorded.prefix } : {},
+      ...recorded.prefix === void 0 ? { prefixNote: prefixNote(recorded.problem) } : {}
+    };
   } finally {
     rmSync3(workdir, { recursive: true, force: true });
   }
+}
+function prefixNote(problem) {
+  if (problem) {
+    return `The repository's ${TEAM_PREFIX_FILE} names a commit-message prefix TeamHandbook will not use: it is ${problem}. Nothing was taken from it. If your project enforces a commit-message rule, fix that file in the repository; until then a share refused by the rule will say so.`;
+  }
+  return `This repository does not record a commit-message prefix (no ${TEAM_PREFIX_FILE}), which is what a handbook scaffolded by an older TeamHandbook looks like. If your project enforces a commit-message rule, your first share will be refused by it and the message will name the two ways out; whoever ran /handbook:init can record the prefix for everyone with \`/handbook:init --upgrade\`.`;
 }
 function formatJoinSuccess(result) {
   return [
     `Joined the team skill base at ${result.url}.`,
     "",
     "  engine:  approved skills will now target this repository",
+    ...result.commitPrefix ? [`  commits: titled "${result.commitPrefix} ...", the prefix this repository records`] : [],
     `  config:  team repo saved to ${displayPath(join4(result.home ?? "", "config.json"))}`,
     "",
+    ...result.prefixNote ? [result.prefixNote, ""] : [],
     "To finish, connect Claude Code to the team marketplace (built-in commands):",
     "",
     `  /plugin marketplace add ${result.url}`,

@@ -4,7 +4,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatJoinSuccess, joinTeamRepo, marketplaceNameProblem } from "./join.js";
-import { initTeamRepo, loadTeamConfig, saveTeamConfig, teamSkillsDir } from "./init.js";
+import {
+  commitPrefixProblem,
+  initTeamRepo,
+  loadTeamConfig,
+  readTeamCommitPrefix,
+  saveTeamConfig,
+  teamSkillsDir,
+  TEAM_PREFIX_FILE,
+} from "./init.js";
 import { slugifySkillName } from "./distill.js";
 
 let home: string;
@@ -41,13 +49,52 @@ function seedNamed(name: string): void {
   seedRepoWithManifest(JSON.stringify({ name, owner: { name: "x" }, plugins: [{ name, source: "./" }] }));
 }
 
-function seedTeamRepo(): void {
+function seedTeamRepo(commitPrefix = ""): void {
   const championHome = mkdtempSync(join(tmpdir(), "handbook-champion-"));
   try {
-    const result = initTeamRepo(remote, "acme-skills", championHome);
+    const result = initTeamRepo(
+      remote,
+      "acme-skills",
+      championHome,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      commitPrefix,
+    );
     if (!result.ok) throw new Error(result.error);
   } finally {
     rmSync(championHome, { recursive: true, force: true });
+  }
+}
+
+/** A handbook as an older TeamHandbook left it: scaffolded, and recording no prefix
+ * because the file that records one did not exist yet. */
+function seedTeamRepoWithoutPrefixRecord(): void {
+  seedTeamRepo("OPS-42");
+  const work = mkdtempSync(join(tmpdir(), "handbook-strip-"));
+  try {
+    execFileSync("git", ["clone", remote, work]);
+    execFileSync("git", ["-C", work, "rm", "-q", TEAM_PREFIX_FILE]);
+    execFileSync("git", ["-C", work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "strip"]);
+    execFileSync("git", ["-C", work, "push", "origin", "HEAD"]);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** Replace the prefix record with contents of a repository's own choosing. */
+function seedTeamRepoRecording(record: string): void {
+  seedTeamRepo();
+  const work = mkdtempSync(join(tmpdir(), "handbook-record-"));
+  try {
+    execFileSync("git", ["clone", remote, work]);
+    writeFileSync(join(work, TEAM_PREFIX_FILE), record);
+    execFileSync("git", ["-C", work, "add", "-A"]);
+    execFileSync("git", ["-C", work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "record"]);
+    execFileSync("git", ["-C", work, "push", "origin", "HEAD"]);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
 }
 
@@ -128,10 +175,13 @@ describe("joinTeamRepo", () => {
     seedTeamRepo();
     const result = joinTeamRepo(remote, home, undefined, "2026-08-08T03:00:00Z");
     expect(result).toMatchObject({ ok: true, name: "acme-skills", url: remote });
+    // The prefix comes across too: seedTeamRepo runs /handbook:init with none, and "" is
+    // the team's answer rather than a gap, so it is recorded as one.
     expect(loadTeamConfig(home)).toEqual({
       repoUrl: remote,
       marketplaceName: "acme-skills",
       joinedAt: "2026-08-08T03:00:00Z",
+      commitPrefix: "",
     });
   });
 
@@ -148,6 +198,7 @@ describe("joinTeamRepo", () => {
       marketplaceName: "acme-skills",
       initializedAt: "2026-08-08T02:00:00Z",
       joinedAt: "2026-08-08T03:00:00Z",
+      commitPrefix: "",
     });
   });
 
@@ -294,5 +345,112 @@ describe("formatJoinSuccess", () => {
     const text = formatJoinSuccess({ ok: true, name: "acme-skills", url: "git@x.com:a/b.git", home });
     expect(text).toContain("/plugin marketplace add git@x.com:a/b.git");
     expect(text).toContain("/plugin install acme-skills");
+  });
+});
+
+describe("the team's commit-message prefix reaching the people who join", () => {
+  it("given a repository that records a prefix, when a teammate joins, then it is taken and said out loud", () => {
+    seedTeamRepo("OPS-42");
+
+    const result = joinTeamRepo(remote, home, undefined, "2026-08-08T03:00:00Z");
+
+    expect(result.commitPrefix).toBe("OPS-42");
+    expect(loadTeamConfig(home)?.commitPrefix).toBe("OPS-42");
+    // Said on the screen, not only written to a file: the teammate is being told what
+    // their commit titles will look like before anything of theirs goes out under one.
+    expect(formatJoinSuccess(result)).toContain("OPS-42");
+    expect(result.prefixNote).toBeUndefined();
+  });
+
+  it("given a repository scaffolded before the record existed, when a teammate joins, then nothing is invented and the gap is named", () => {
+    seedTeamRepoWithoutPrefixRecord();
+
+    const result = joinTeamRepo(remote, home, undefined, "2026-08-08T03:00:00Z");
+
+    expect(result.ok).toBe(true);
+    // Absent, not "": "" would tell `/handbook:init --upgrade` on this machine that the
+    // team has no prefix and let it offer to regenerate the CI job without one.
+    expect(loadTeamConfig(home)).not.toHaveProperty("commitPrefix");
+    // The failure this whole path exists to end is a prefix going missing in silence.
+    expect(result.prefixNote).toBeTruthy();
+    expect(formatJoinSuccess(result)).toContain("/handbook:init --upgrade");
+  });
+
+  it("given a repository recording a prefix with a newline in it, when a teammate joins, then it is refused rather than carried into a commit title", () => {
+    seedTeamRepoRecording(JSON.stringify({ commitPrefix: "TEAM-1\nBody-Injected: yes" }));
+
+    const result = joinTeamRepo(remote, home);
+
+    expect(result.ok).toBe(true);
+    expect(loadTeamConfig(home)).not.toHaveProperty("commitPrefix");
+    expect(result.prefixNote).toContain("control character");
+  });
+
+  it("given a repository recording a prefix longer than the cap, when a teammate joins, then it is refused", () => {
+    seedTeamRepoRecording(JSON.stringify({ commitPrefix: "T".repeat(65) }));
+
+    const result = joinTeamRepo(remote, home);
+
+    expect(loadTeamConfig(home)).not.toHaveProperty("commitPrefix");
+    expect(result.prefixNote).toContain("64 characters");
+  });
+
+  it("given a repository whose record is not JSON, when a teammate joins, then the join still succeeds", () => {
+    seedTeamRepoRecording("this is not json");
+
+    const result = joinTeamRepo(remote, home);
+
+    expect(result.ok).toBe(true);
+    expect(result.prefixNote).toBeTruthy();
+  });
+
+  it("given a team whose forge asks for no prefix, when a teammate joins, then the empty answer is recorded as an answer", () => {
+    seedTeamRepo();
+
+    const result = joinTeamRepo(remote, home);
+
+    // "" and absent are different facts, and only "" means "the team told us: nothing".
+    expect(loadTeamConfig(home)?.commitPrefix).toBe("");
+    expect(result.prefixNote).toBeUndefined();
+    expect(formatJoinSuccess(result)).not.toContain("--upgrade");
+  });
+});
+
+describe("commitPrefixProblem", () => {
+  it("given an ordinary ticket prefix, when screened, then it is accepted", () => {
+    expect(commitPrefixProblem("OPS-42")).toBeNull();
+  });
+
+  it("given an empty prefix, when screened, then it is accepted as the team's own answer", () => {
+    expect(commitPrefixProblem("")).toBeNull();
+  });
+
+  it("given an escape sequence, when screened, then it is refused before it can rewrite the screen", () => {
+    expect(commitPrefixProblem("\u001b[2KTEAM-1")).toContain("control character");
+  });
+
+  it("given a bidirectional override, when screened, then it is refused", () => {
+    expect(commitPrefixProblem("TEAM-\u202e1")).toContain("control character");
+  });
+});
+
+describe("readTeamCommitPrefix", () => {
+  it("given a repository with no record at all, when read, then the answer is absent rather than empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-empty-"));
+    try {
+      expect(readTeamCommitPrefix(dir)).toEqual({});
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("given a record whose commitPrefix is not a string, when read, then it is ignored rather than coerced", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-typed-"));
+    try {
+      writeFileSync(join(dir, TEAM_PREFIX_FILE), JSON.stringify({ commitPrefix: { evil: true } }));
+      expect(readTeamCommitPrefix(dir)).toEqual({});
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

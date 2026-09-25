@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.0] - 2026-09-25
+
+- **Whoever joins a team repository now learns the commit-message prefix that repository's
+  forge requires, instead of discovering it when their first share is refused by a rule the
+  team had already answered.** A repository scaffolded from now on records that prefix and
+  joining reads it; one scaffolded earlier says so plainly and points at the command that
+  adds the record, and a share refused over it learns the prefix from the refusal. The
+  sharing path also no longer offers a way out that does not exist: the fix it suggests is
+  one you can actually carry out.
+
 ## [0.12.1] - 2026-09-25
 
 - **A refused push is now named for the reason it was actually refused.** A push turned

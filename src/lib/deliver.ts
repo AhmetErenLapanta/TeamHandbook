@@ -82,6 +82,9 @@ export interface DeliverResult {
   // the branch prefix the forge forced this push to adopt, once, so it can be said out
   // loud instead of the branch quietly having a different name than the one reported
   learnedBranchPrefix?: string;
+  // the commit prefix this push read out of the team repository, for a machine that joined
+  // before the repository recorded one; the caller persists it
+  learnedCommitPrefix?: string;
   // The name the skill was actually filed under. It is not always the one the reviewer
   // typed, and for a year it was nowhere in this type: publishCandidate picked
   // skills/foo-2, deliver dropped the field on the way through, and the CLI printed the
@@ -137,11 +140,15 @@ export function approveAndDeliver(
       };
     }
     const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
-    // The forge taught us its branch rule the only way it can: by refusing one. Remember
-    // it here, where the home directory is known, so the next skill goes out first time.
-    if (delivered.learnedBranchPrefix) {
-      saveTeamConfig({ ...team, branchPrefix: delivered.learnedBranchPrefix }, home);
-    }
+    // The forge taught us its branch rule the only way it can: by refusing one, and the
+    // repository told us the commit rule by recording it. Remember both here, where the
+    // home directory is known, so the next skill goes out first time - and in one save,
+    // because two saves from the same stale `team` lose whichever was written first.
+    const learned = {
+      ...(delivered.learnedBranchPrefix ? { branchPrefix: delivered.learnedBranchPrefix } : {}),
+      ...(delivered.learnedCommitPrefix !== undefined ? { commitPrefix: delivered.learnedCommitPrefix } : {}),
+    };
+    if (Object.keys(learned).length) saveTeamConfig({ ...team, ...learned }, home);
     return delivered;
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
@@ -283,6 +290,7 @@ function deliverToTeam(
     manualUrl: published.manualUrl,
     ...(published.prError ? { prError: published.prError } : {}),
     ...(published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {}),
+    ...(published.learnedCommitPrefix !== undefined ? { learnedCommitPrefix: published.learnedCommitPrefix } : {}),
   };
 }
 

@@ -178,16 +178,29 @@ auditable.
 
 ### A team repository you joined
 
-`/handbook:join` clones a repository somebody else controls. Exactly one value is read
-out of it: the marketplace name in `.claude-plugin/marketplace.json`. That name goes on
-to be a directory under `~/.claude/plugins/marketplaces`, part of the plugin key
-`/handbook:doctor` looks for, and part of the `/plugin install` commands join prints for
-you to run - so it is accepted only when it is already a plain name (lowercase letters,
-digits and dashes, at most 64 characters), which is the form `/handbook:init` produces.
-Anything else is refused with the reason, never rewritten into something usable: a
-rewritten name would point this machine at a marketplace directory that does not exist.
+`/handbook:join` clones a repository somebody else controls. Two values are read out of
+it, and each is screened where it is read.
 
-That is the whole of what is checked, because that name is the whole of what is read.
+The marketplace name in `.claude-plugin/marketplace.json` goes on to be a directory under
+`~/.claude/plugins/marketplaces`, part of the plugin key `/handbook:doctor` looks for, and
+part of the `/plugin install` commands join prints for you to run - so it is accepted only
+when it is already a plain name (lowercase letters, digits and dashes, at most 64
+characters), which is the form `/handbook:init` produces. Anything else is refused with the
+reason, never rewritten into something usable: a rewritten name would point this machine at
+a marketplace directory that does not exist.
+
+The commit-message prefix in `.teamhandbook.json` is the string your forge requires at the
+front of a commit title, and it is read because it belongs to the project's push rule
+rather than to the person who happened to run `/handbook:init` - without it, every
+teammate's first share is refused by a rule the team already knows the answer to. It
+reaches your terminal and the `-m` of a commit this tool makes in a clone of that same
+repository, so it is accepted only when it is at most 64 characters and carries no control
+character: a newline would end the commit title and turn the rest into a body nobody wrote,
+and an escape sequence would rewrite what you are shown. A prefix that fails either check
+is refused with the reason and nothing is recorded, exactly as a bad marketplace name is.
+It is never used to name a file, run a command, or reach the network.
+
+That is the whole of what is checked, because those two are the whole of what is read.
 Skills, servers and commands merged into that repository arrive on this machine through
 Claude Code's own marketplace subscription. TeamHandbook does not screen them: nothing
 here reads them, and nothing here approves them - `/handbook:review` and
