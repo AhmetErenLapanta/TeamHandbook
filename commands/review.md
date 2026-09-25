@@ -1,5 +1,5 @@
 ---
-description: Review what TeamHandbook has captured and give each pending skill a verdict: keep it for yourself, add it to this project, share it with the team, or reject it. This is the only route by which anything leaves this machine, and the place to go whenever captured work should reach other people. Triggers: "go through the pending ones", "what has it learned so far", "deal with the queue", "my team should get these", "approve or throw these out", "empty the review queue".
+description: Review what TeamHandbook has captured and give each pending skill a verdict: keep it for yourself, add it to this project, share it with the team, or reject it. Nothing TeamHandbook captured reaches anyone until you decide here, and this is the place to go whenever captured work should reach other people. Triggers: "go through the pending ones", "what has it learned so far", "deal with the queue", "my team should get these", "approve or throw these out", "empty the review queue".
 ---
 
 You are running TeamHandbook's review flow. Pending skill candidates were harvested from real
