@@ -57,6 +57,9 @@ export interface GitLabRepo {
   branches(): string[];
   filesOn(ref: string): string;
   fileOn(ref: string, path: string): string;
+  /** The subject line of a ref's tip commit: what the project's commit-message rule is
+   * measured against, and the only place a prefix that satisfied it can be seen. */
+  subjectOn(ref: string): string;
   /** Push one commit straight at the hook, with no product code in between. A rule that
    * is never observed refusing is a rule the harness only believes in. */
   pushAttempt(options: { branch: string; message: string; identity: CommitIdentity }): PushAttempt;
@@ -202,6 +205,9 @@ export function createGitLabRepo(options: GitLabRepoOptions = {}): GitLabRepo {
     },
     fileOn(ref, path) {
       return git(bare, ["show", `${ref}:${path}`]);
+    },
+    subjectOn(ref) {
+      return git(bare, ["log", "-1", "--format=%s", ref]).trim();
     },
     pushAttempt({ branch, message, identity }) {
       const work = mkdtempSync(join(tmpdir(), "forge-push-"));

@@ -270,7 +270,9 @@ describe("the whole chain against the project the field produced", () => {
 });
 
 describe("share by someone who joined a project that was already answered", () => {
-  function joined(rules: GitLabPushRules, prefixes: { branchPrefix?: string; commitPrefix?: string }) {
+  /** A handbook the founder scaffolded with this version: the repository records the
+   * commit-message prefix, so joining reads it rather than asking for it again. */
+  function joined(rules: GitLabPushRules, prefixes: { branchPrefix?: string; commitPrefix?: string } = {}) {
     const repo = project({ rules });
     const owner = mkdtempSync(join(tmpdir(), "handbook-owner-"));
     try {
@@ -279,16 +281,53 @@ describe("share by someone who joined a project that was already answered", () =
       rmSync(owner, { recursive: true, force: true });
     }
     repo.mergeIntoDefault("TEAM-1-scaffold");
-    expect(joinTeamRepo(repo.url, home)).toMatchObject({ ok: true });
-    saveTeamConfig({ ...loadTeamConfig(home)!, ...prefixes }, home);
     return repo;
   }
 
+  /** A handbook scaffolded before a repository recorded anything: the manifests a join
+   * needs, and no prefix record for it to read. Written as a seed rather than scaffolded
+   * and stripped, because that IS what those repositories are - and they are still out
+   * there, so the route out of a rule they cannot answer has to stay measured. */
+  function legacyScaffold(): Record<string, string> {
+    return {
+      ".claude-plugin/marketplace.json": JSON.stringify(
+        {
+          name: "acme-skills",
+          owner: { name: "acme-skills maintainers" },
+          plugins: [{ name: "acme-skills", source: "./", description: "The team's approved setup." }],
+        },
+        null,
+        2,
+      ) + "\n",
+      ".claude-plugin/plugin.json": JSON.stringify(
+        { name: "acme-skills", description: "The team's approved setup.", version: "0.1.0" },
+        null,
+        2,
+      ) + "\n",
+      "skills/README.md": "Approved skills live here.\n",
+    };
+  }
+
+  it("given a repository that records the prefix, when a machine joins, then its first share goes straight in", () => {
+    // The whole point of recording it: the rule the team already answered is answered
+    // again on a machine that was never told, without anyone editing a config by hand.
+    const repo = joined({ commitMessage: MESSAGE_RULE });
+
+    expect(joinTeamRepo(repo.url, home)).toMatchObject({ ok: true, commitPrefix: COMMIT_PREFIX });
+    expect(loadTeamConfig(home)).toMatchObject({ commitPrefix: COMMIT_PREFIX });
+
+    const outcome = share();
+
+    expect(outcome).toMatchObject({ ok: true, branch: "handbook/skills-my-skill" });
+    // the prefix did not just satisfy the rule, it is on the commit the project now holds
+    expect(repo.subjectOn("handbook/skills-my-skill")).toMatch(/^TEAM-1 /);
+  });
+
   it("given a joined machine whose config carries both prefixes, when it shares first, then the project takes it", () => {
-    const repo = joined(
-      { branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE, email: EMAIL_RULE },
-      { branchPrefix: BRANCH_PREFIX, commitPrefix: COMMIT_PREFIX },
-    );
+    // The branch prefix is the half a repository does not record, so it is still set here.
+    const repo = joined({ branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE, email: EMAIL_RULE });
+    expect(joinTeamRepo(repo.url, home)).toMatchObject({ ok: true });
+    saveTeamConfig({ ...loadTeamConfig(home)!, branchPrefix: BRANCH_PREFIX }, home);
 
     const outcome = share();
 
@@ -296,25 +335,30 @@ describe("share by someone who joined a project that was already answered", () =
     expect(repo.filesOn("TEAM-1-skills-my-skill")).toContain("skills/my-skill/SKILL.md");
   });
 
-  it("given a commit-message rule and a config that knows no prefix, when it shares, then the message rule is what it names", () => {
-    // The rule the sharing machine is refused by has to be read off the same sentence on
-    // this path as on init's; which knob that machine is then offered is a separate
-    // question, and not one this case settles.
-    const repo = joined({ commitMessage: MESSAGE_RULE }, {});
+  it("given a repository that records no prefix, when the commit message is refused, then the route offered is one this machine has", () => {
+    // The case a repository scaffolded before the record still produces. Diagnosing the
+    // rule correctly and answering it with `--commit-prefix` would be a flag the sharing
+    // command has never had, so what is asserted here is the route, not just the rule.
+    const repo = project({ rules: { commitMessage: MESSAGE_RULE }, seed: legacyScaffold() });
+    expect(joinTeamRepo(repo.url, home)).toMatchObject({ ok: true });
+    expect(loadTeamConfig(home)!.commitPrefix).toBeUndefined();
 
     const outcome = share();
 
     expect(outcome.ok).toBe(false);
     expect(outcome.error).toContain("rejected the commit MESSAGE");
     expect(outcome.error).toContain(MESSAGE_RULE);
+    expect(outcome.error).toContain("/handbook:init --upgrade");
+    expect(outcome.error).not.toContain("--commit-prefix");
     expect(repo.branches()).not.toContain("handbook/skills-my-skill");
   });
 
-  it("given only the commit prefix, when the branch name is refused, then the branch the retry derives is one the project accepts", () => {
+  it("given a joined machine and a branch rule, when the branch name is refused, then the branch the retry derives is one the project accepts", () => {
     // The recovery exists because a project that polices branch names polices commit
-    // messages too, so the answer to one is already the answer to the other. Whether the
-    // derived name actually satisfies the rule is a question only a real refusal can put.
-    const repo = joined({ branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE }, { commitPrefix: COMMIT_PREFIX });
+    // messages too, so the answer to one is already the answer to the other - and since
+    // joining now supplies that answer, this is the whole route a teammate actually walks.
+    const repo = joined({ branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE });
+    expect(joinTeamRepo(repo.url, home)).toMatchObject({ ok: true, commitPrefix: COMMIT_PREFIX });
 
     const outcome = share();
 
