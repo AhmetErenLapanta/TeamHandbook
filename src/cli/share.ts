@@ -53,7 +53,13 @@ const UPDATE = "--update";
  * selection flags are, so "GitLab" and "gitlab" name the same server in both places. */
 function parseUpdates(args: string[], inv: Inventory): string[] {
   const names: string[] = [];
-  const available = [...inv.servers.map((s) => s.name), ...inv.commands.map((c) => c.name)];
+  // Skills are here too now that they collide in the team repository like the rest: an
+  // update named "Add-Endpoint" has to resolve to add-endpoint the same way "GitLab" does.
+  const available = [
+    ...inv.skills.map((s) => s.name),
+    ...inv.servers.map((s) => s.name),
+    ...inv.commands.map((c) => c.name),
+  ];
   for (let i = 0; i < args.length; i++) {
     if (args[i] !== UPDATE) continue;
     const value = args[i + 1];
@@ -101,8 +107,8 @@ function main(): void {
     console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
     if (!config) {
       console.log(
-        "\nNo team repository is configured yet. Skills can still be queued for review, but the " +
-          "MCP servers and commands have nowhere to go: run /handbook:init (or /handbook:join <url>) first.",
+        "\nNo team repository is configured yet, so nothing on this screen has anywhere to go: " +
+          "run /handbook:init (or /handbook:join <url>) first.",
       );
     }
     return;
@@ -113,7 +119,7 @@ function main(): void {
   // The point, in one branch: nothing is selected by default, so a share with
   // no flags shares nothing rather than everything.
   if (!selection.skills.length && !selection.skillPaths!.length && !selection.servers.length && !selection.commands.length) {
-    console.log("Nothing was selected, so nothing was queued and nothing was shared.");
+    console.log("Nothing was selected, so nothing was shared.");
     return;
   }
   if (configIsBroken()) {

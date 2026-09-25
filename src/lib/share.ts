@@ -3,12 +3,10 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { auditServer, claudeConfigFile, readLocalServers, refusalMessage, refusalSummary } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
-import { auditSkillDir, intakeSkill, readCandidateMeta } from "./queue.js";
-import type { CandidateStatus, SkillAudit } from "./queue.js";
-import { candidatesDir } from "./skill-index.js";
-import { handbookHome } from "./session-state.js";
+import { auditSkillDir } from "./queue.js";
+import type { SkillAudit } from "./queue.js";
 import { publishTeamSelection } from "./publish.js";
-import type { PublishOptions, TeamAssets, TeamPublishOutcome } from "./publish.js";
+import type { PublishOptions, SkillShareEntry, TeamAssets, TeamPublishOutcome } from "./publish.js";
 import { auditCommand, commandRefusalSummary, readLocalCommands } from "./commands.js";
 import type { CommandAudit, CommandEntry } from "./commands.js";
 import { runGit } from "./init.js";
@@ -29,10 +27,15 @@ import type { ForgeRunner } from "./forge.js";
 // and it always opens on the selection screen. Naming a single item costs one more step;
 // that price was paid deliberately.
 //
-// This module reads that setup and runs the selection. It opens no new route out of the
-// machine: a selected skill goes through intakeSkill, a selected server or command through
-// publishTeamSelection, and all of those screen for credentials themselves. The screen is
-// advisory; the refusal lives where it lived before.
+// This module reads that setup and runs the selection. Everything selected leaves by ONE
+// route: publishTeamSelection, which screens each item for credentials itself before it
+// opens a merge request. The screen is advisory; the refusal lives in that single path.
+//
+// A skill used to be the exception - it was copied into the review queue and stopped there.
+// That split is gone. The approval gate exists because the HARVEST proposes things nobody
+// asked for; here the user opens the screen and picks their own skill, and that picking is
+// the approval, exactly as it already was for a server and a command. /handbook:review
+// keeps the job it was built for: the candidates the harvest produced.
 //
 // Everything here reads ~/.claude/skills, ~/.claude/commands, the current project's
 // .claude/skills and .claude/commands, and ~/.claude.json. It writes to none of them.
@@ -117,8 +120,6 @@ export interface Selection {
  * machine, and because the requirement behind this made those three paths read-only.
  */
 export interface InventoryPaths {
-  /** ~/.teamhandbook, for the review queue this cross-checks against */
-  home?: string;
   /** the project whose .claude/skills and MCP scope apply here */
   cwd?: string;
   /** the home whose ~/.claude/skills and ~/.claude/commands load everywhere */
@@ -150,12 +151,6 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function queueState(home: string, name: string): CandidateStatus | null {
-  const dir = join(candidatesDir(home), name);
-  if (!existsSync(dir)) return null;
-  return readCandidateMeta(dir)?.status ?? "pending";
-}
-
 function skillRefusal(audit: SkillAudit): string {
   switch (audit.reason) {
     case "unsafe-name":
@@ -175,21 +170,21 @@ function skillRefusal(audit: SkillAudit): string {
   }
 }
 
-function readSkillDir(dir: string, scope: InventoryScope, home: string): SkillItem {
+/**
+ * A skill as the screen shows it.
+ *
+ * The review queue is deliberately NOT consulted here. It used to be: while sharing a skill
+ * meant copying it into the queue, a skill already sitting there could not be taken in
+ * again, so offering it would have spent the manager's attention on an answer already
+ * recorded. Now a skill travels to the team instead, the queue is not on its way, and
+ * reading it would refuse skills for being somewhere that no longer matters - which is
+ * exactly what stranded the ones queued by the old flow. What the team already has is a
+ * separate, useful mark, and `onTeam` carries it.
+ */
+function readSkillDir(dir: string, scope: InventoryScope): SkillItem {
   const name = basename(dir);
   const audit = auditSkillDir(dir);
-  const queued = queueState(home, name);
   const base = { kind: "skill" as const, name, scope, dir, description: audit.summary?.description ?? "" };
-  // A skill already in the queue is offered nowhere, whatever the queue decided about it:
-  // intakeSkill refuses all four states, and a screen that offers it anyway spends the
-  // manager's attention on an answer that is already recorded.
-  if (queued) {
-    return {
-      ...base,
-      shareable: false,
-      reason: queued === "pending" ? "already waiting in the review queue" : `already ${queued} in the review queue`,
-    };
-  }
   return audit.shareable
     ? { ...base, shareable: true }
     : { ...base, shareable: false, reason: skillRefusal(audit) };
@@ -228,7 +223,6 @@ function serverItem(entry: McpServerEntry, audit: McpAudit): ServerItem {
  * something the sieve refuses.
  */
 export function buildInventory(paths: InventoryPaths = {}, teamHas: TeamAssets | null = null): Inventory {
-  const home = paths.home ?? handbookHome();
   // Null when nobody asked, and null again when the repository could not be read: both
   // mean "not known", and neither is allowed to read as "not there". An item is marked
   // only on a positive match, so a missing index costs a label and never a refusal.
@@ -250,7 +244,7 @@ export function buildInventory(paths: InventoryPaths = {}, teamHas: TeamAssets |
       // ordinary file sitting beside the skills - .DS_Store is in the real directory this
       // was measured against - which is not a skill that failed, it is not a skill.
       if (!isDirectory(join(dir, entry))) continue;
-      byName.set(entry, onTeam(readSkillDir(join(dir, entry), scope, home), teamHas?.skills));
+      byName.set(entry, onTeam(readSkillDir(join(dir, entry), scope), teamHas?.skills));
     }
   }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
@@ -280,9 +274,9 @@ function oneLine(text: string): string {
  * concludes the rest does not exist, while one who reads "headers.Authorization holds a
  * literal value" knows there is one edit between them and sharing it.
  *
- * The two halves are labelled with what selecting them DOES, because they do different
- * things. A skill lands in the review queue and stays on this machine; a server opens a
- * merge request. Reading "shared" over both would be wrong about one of them.
+ * The three sections are labelled with what selecting them DOES. They now do the same
+ * thing - every kind travels in one merge request - and saying so per section is what
+ * stops a reader assuming the old split, where a skill stopped in the review queue.
  */
 /** The third state, said where the refusals are said, so the two cannot be confused: one
  * of these can still go, and what it changes is what happens when it arrives. */
@@ -301,7 +295,7 @@ export function formatInventory(inv: Inventory): string {
   if (inv.skills.length) {
     lines.push(
       "",
-      `Skills (${inv.skills.length}) - the ones you pick are copied into the review queue; nothing leaves this machine`,
+      `Skills (${inv.skills.length}) - the ones you pick go out as part of ONE merge request to the team repository`,
       "",
     );
     inv.skills.forEach((skill, i) => {
@@ -313,7 +307,7 @@ export function formatInventory(inv: Inventory): string {
   if (inv.servers.length) {
     lines.push(
       "",
-      `MCP servers (${inv.servers.length}) - the ones you pick go out as part of ONE merge request to the team repository`,
+      `MCP servers (${inv.servers.length}) - the ones you pick travel in that SAME merge request`,
       "",
     );
     inv.servers.forEach((server, i) => {
@@ -343,6 +337,7 @@ export function formatInventory(inv: Inventory): string {
   }
   lines.push(
     "",
+    "Everything you pick travels together, in one merge request, and other people can see it.",
     "Nothing is selected and nothing has been shared. A skill or a command carrying a",
     "credential is refused rather than redacted, and anything in a server's headers or env",
     "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
@@ -352,27 +347,41 @@ export function formatInventory(inv: Inventory): string {
 }
 
 export interface ShareResult {
-  /** skills now waiting in the review queue */
-  queued: string[];
-  /** the request the selected servers and commands went out in, absent when neither was */
+  /** the one request everything selected went out in, absent when nothing did */
   team?: TeamPublishOutcome;
   /** anything named that did not travel, with the reason the path that refused it gave.
    * `collision` marks the refusals that have a route out of them, so the report can group
    * them and name that route per item instead of the reader matching on prose. */
-  refused: Array<{ name: string; kind: "skill" | "mcp" | "command"; reason: string; collision?: true }>;
+  refused: Array<{
+    name: string;
+    kind: "skill" | "mcp" | "command";
+    reason: string;
+    collision?: true;
+    /**
+     * How to name this one item again on a retry, flag and value.
+     *
+     * Only the caller knows it: a skill picked off the screen is `--skill <name>`, but one
+     * named by path was never on the screen, so `--skill <name>` would come back "no skill
+     * of that name is installed here". A refusal that names a command which fails when you
+     * run it is the exact defect the collision message avoids by not naming one itself.
+     */
+    selector?: string;
+  }>;
 }
 
 /**
  * Run the selection.
  *
- * The order is deliberate: the reversible half first. Queueing a skill writes only to
- * ~/.teamhandbook and can be undone in /handbook:review; the servers open a merge request
- * that other people can see. A failure in the second half must not cost the first.
+ * Everything picked travels in ONE merge request, whatever kind it is. Skills used to be
+ * handled first and separately because they stopped in the review queue; now that they go
+ * to the team, splitting them out would open a second request for the same selection - and
+ * two requests opened before either is merged both claim the same plugin version, which is
+ * the defect publishTeamSelection exists to make impossible.
  *
- * Every selected skill is handed to intakeSkill even when the screen already marked it
- * refused, and every selected server and command to publishTeamSelection. Those two own
- * the credential sieve, and a batch that decided for itself which items were worth
- * screening would be exactly the shortcut this safeguard exists to prevent.
+ * Every selected item is handed to publishTeamSelection even when the screen already marked
+ * it refused. That path owns the credential sieve, and a batch that decided for itself
+ * which items were worth screening would be exactly the shortcut this safeguard exists to
+ * prevent.
  */
 export function shareSelection(
   selection: Selection,
@@ -382,26 +391,22 @@ export function shareSelection(
   forge: ForgeRunner = runForge,
   options: PublishOptions = {},
 ): ShareResult {
-  const home = paths.home ?? handbookHome();
-  const result: ShareResult = { queued: [], refused: [] };
+  const result: ShareResult = { refused: [] };
   const inv = buildInventory(paths);
+  const skills: SkillShareEntry[] = [];
   for (const name of selection.skills) {
     const skill = inv.skills.find((s) => s.name === name);
     if (!skill) {
       result.refused.push({ name, kind: "skill", reason: "no skill of that name is installed here" });
       continue;
     }
-    const intake = intakeSkill(skill.dir, home);
-    if (intake.ok) result.queued.push(intake.slug!);
-    else result.refused.push({ name, kind: "skill", reason: intake.error! });
+    skills.push({ name, dir: skill.dir, namedBy: "inventory" });
   }
-  // Named by path, so there is no inventory entry to look up and nothing to check the
-  // name against. intakeSkill is still the only way in: it audits the directory and
-  // refuses a credential exactly as it does for a skill picked off the screen.
+  // Named by path, so there is no inventory entry to look up and nothing to check the name
+  // against. The audit inside publishTeamSelection is still the only way out: it reads the
+  // directory and refuses a credential exactly as it does for a skill picked off the screen.
   for (const dir of selection.skillPaths ?? []) {
-    const intake = intakeSkill(dir, home, "user");
-    if (intake.ok) result.queued.push(intake.slug!);
-    else result.refused.push({ name: basename(dir), kind: "skill", reason: intake.error! });
+    skills.push({ name: basename(dir), dir, namedBy: "user" });
   }
   const entries: McpServerEntry[] = [];
   for (const name of selection.servers) {
@@ -415,23 +420,37 @@ export function shareSelection(
     if (!command) result.refused.push({ name, kind: "command", reason: "no command of that name is installed here" });
     else commands.push({ name: command.name, scope: command.scope === "project" ? "project" : "personal", file: command.file });
   }
-  if (!entries.length && !commands.length) return result;
+  if (!entries.length && !commands.length && !skills.length) return result;
   if (!team) {
-    // Both kinds need the repository, so both are turned back by name. The skills above
-    // are already queued and stay queued: a missing team repo is not their problem.
+    // Every kind needs the repository now, so every kind is turned back by name rather
+    // than one of them appearing to have succeeded.
     const reason = "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first";
+    for (const skill of skills) result.refused.push({ name: skill.name, kind: "skill", reason });
     for (const entry of entries) result.refused.push({ name: entry.name, kind: "mcp", reason });
     for (const command of commands) result.refused.push({ name: command.name, kind: "command", reason });
     return result;
   }
-  const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge, options);
+  const outcome = publishTeamSelection({ servers: entries, commands, skills }, team, git, forge, options);
   result.team = outcome;
+  const selectors = new Map(
+    skills.map((skill) => [
+      skill.name,
+      skill.namedBy === "user" ? `--skill-path ${skill.dir}` : `--skill ${skill.name}`,
+    ]),
+  );
   for (const refusal of outcome.refused ?? []) {
+    const selector =
+      refusal.kind === "skill"
+        ? selectors.get(refusal.name)
+        : refusal.kind === "mcp"
+          ? `--mcp ${refusal.name}`
+          : `--command ${refusal.name}`;
     result.refused.push({
       name: refusal.name,
       kind: refusal.kind,
       reason: refusal.reason,
       ...(refusal.collision ? { collision: true as const } : {}),
+      ...(selector ? { selector } : {}),
     });
   }
   // A whole-request failure (an unreadable team file, a rejected push, no git identity)
@@ -440,6 +459,11 @@ export function shareSelection(
   // by kind as well as name, because a server and a command may share one.
   if (!outcome.ok && outcome.error) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
+    for (const skill of skills) {
+      if (!judged.has(`skill:${skill.name}`)) {
+        result.refused.push({ name: skill.name, kind: "skill", reason: outcome.error });
+      }
+    }
     for (const entry of entries) {
       if (!judged.has(`mcp:${entry.name}`)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
     }
@@ -453,37 +477,32 @@ export function shareSelection(
 }
 
 /**
- * What happened, said in two groups because two things happened.
+ * What happened, listed by kind because one request carried three kinds of thing.
  *
- * The selection was one dialog, but it had two consequences: the skills are on this
- * machine waiting for a verdict, and the servers are in a merge request other people can
- * already read. A single "shared 7 things" line would leave the manager believing they
- * had sent five skills they have not sent.
+ * Named per kind rather than totalled: a skill somebody reads, a server that connects and
+ * a command somebody types are not interchangeable, and the manager checking what they
+ * just sent reads this line, not the merge request.
  */
 export function formatShareResult(result: ShareResult, marketplaceName?: string): string {
   const lines: string[] = [];
-  if (result.queued.length) {
-    lines.push(
-      `Queued for review (${result.queued.length}) - nothing has left this machine yet:`,
-      ...result.queued.map((slug) => `  ${slug}`),
-      "",
-      "Run /handbook:review to send them to the team, add them to a project, or keep them.",
-    );
-  }
   const shared = result.team;
   if (shared?.ok) {
     const servers = shared.serverNames ?? [];
     const commands = shared.commandNames ?? [];
-    if (lines.length) lines.push("");
-    // Named by kind rather than totalled. One request carried them, but a server that
-    // connects and a command somebody types are not interchangeable, and a manager
-    // checking what they just sent reads this line, not the merge request.
-    lines.push(`Shared with the team (${servers.length + commands.length}) in one merge request:`);
+    const skills = shared.skillNames ?? [];
+    lines.push(
+      `Shared with the team (${skills.length + servers.length + commands.length}) in one merge request:`,
+    );
+    if (skills.length) lines.push(`  - skills (${skills.length}): ${skills.join(", ")}`);
     if (servers.length) lines.push(`  - MCP servers (${servers.length}): ${servers.join(", ")}`);
     if (commands.length) lines.push(`  - commands (${commands.length}): ${commands.join(", ")}`);
     // Named separately from the list above, because "shared" and "replaced what the team
     // was using" are not the same event and the manager is entitled to see which happened.
-    const updated = [...(shared.updated?.servers ?? []), ...(shared.updated?.commands ?? [])];
+    const updated = [
+      ...(shared.updated?.skills ?? []),
+      ...(shared.updated?.servers ?? []),
+      ...(shared.updated?.commands ?? []),
+    ];
     if (updated.length) {
       lines.push(
         `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} - the merge replaces theirs`,
@@ -544,9 +563,12 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
       "To send one of them as an update to the team's copy, name that one and only that one:",
-      ...collisions.map((r) => `  share.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`),
+      // The selector the run itself recorded, not one rebuilt from the kind: a skill named
+      // by path is re-named by that path, and printing "--skill <name>" for it would hand
+      // the reader a command that comes back "no skill of that name is installed here".
+      ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`),
     );
   }
-  if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";
+  if (!lines.length) return "Nothing was selected, so nothing was shared.";
   return lines.join("\n");
 }

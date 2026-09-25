@@ -222,7 +222,7 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 
 // src/lib/queue.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
@@ -282,6 +282,62 @@ function listCandidates(home = handbookHome(), status) {
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
   );
 }
+function brokenMeta(dir, reason) {
+  return { reason, listed: readCandidateMeta(dir) !== null };
+}
+function unreadableCandidates(home = handbookHome()) {
+  const base = candidatesDir(home);
+  let entries;
+  try {
+    entries = readdirSync3(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const broken = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join7(base, entry.name);
+    let raw = null;
+    try {
+      raw = readFileSync4(candidateMetaFile(dir), "utf8");
+    } catch {
+    }
+    if (raw !== null) {
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json is not valid JSON") });
+        continue;
+      }
+      const meta = parsed;
+      if (typeof meta !== "object" || meta === null) {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json is not an object") });
+        continue;
+      }
+      if (!STATUSES.includes(meta.status)) {
+        broken.push({
+          slug: entry.name,
+          ...brokenMeta(dir, `its candidate.json has an unknown status ${JSON.stringify(meta.status)}`)
+        });
+        continue;
+      }
+      if (typeof meta.description !== "string" || typeof meta.scope !== "string") {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json has no description or scope") });
+        continue;
+      }
+      continue;
+    }
+    if (readCandidateMeta(dir) === null) {
+      broken.push({
+        slug: entry.name,
+        reason: "it has no candidate.json and no readable SKILL.md frontmatter",
+        listed: false
+      });
+    }
+  }
+  return broken.sort((a, b) => a.slug.localeCompare(b.slug));
+}
 
 // src/lib/usage.ts
 function usageFile(home = handbookHome()) {
@@ -317,7 +373,7 @@ function summarizeUsage(usage, known) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync3, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
 import { join as join9 } from "node:path";
 function loadNotifyConfig(home = handbookHome()) {
   const notify = readConfigFile(home).notify;
@@ -487,6 +543,7 @@ function gatherStatus(home = handbookHome()) {
       rejected: count("rejected"),
       archived: count("archived")
     },
+    unreadable: unreadableCandidates(home),
     redactionBlocked: counters.redactionBlocked,
     sinceInstall: {
       approved: approved.length,
@@ -526,8 +583,18 @@ function formatLastError(lastRun) {
   if (!errored) return [];
   return [`Last error:      ${errored.error ?? "(no reason recorded)"} - run /handbook:doctor`];
 }
+function unreadableNote(unreadable) {
+  if (!unreadable.length) return "";
+  const lost = unreadable.filter((u) => !u.listed).length;
+  const listed = unreadable.length - lost;
+  const parts = [
+    ...listed ? [`${listed} of them with an unusable candidate.json`] : [],
+    ...lost ? [`${lost} unreadable and counted nowhere`] : []
+  ];
+  return ` (${parts.join(", ")})`;
+}
 function formatStatus(report) {
-  const { ledger, queue, lastRun, config } = report;
+  const { ledger, queue, unreadable, lastRun, config } = report;
   const lines = [
     `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
     "",
@@ -536,7 +603,7 @@ function formatStatus(report) {
     // Archived candidates are counted here and nowhere else. "Quietly" means no nag,
     // not no trace: a queue that shrank by 151 items with no number to show for it
     // would have the product telling the developer something untrue about their data.
-    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}`,
+    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}${unreadableNote(unreadable)}`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error\u2192fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun ? `Last harvest:    ${lastRun.ts}${lastRun.trigger === "manual" ? " (manual)" : ""} - ${lastRun.received} received, ${lastRun.sievedOut} sieved out, ${lastRun.rejected} rejected, ${lastRun.errored} errored, ${lastRun.written.length} written` : "Last harvest:    never",

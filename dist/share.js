@@ -68,7 +68,7 @@ function configIsBroken(home = handbookHome()) {
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
@@ -76,10 +76,6 @@ import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 
 // src/lib/skill-index.ts
-import { join as join3 } from "node:path";
-function candidatesDir(home = handbookHome()) {
-  return join3(home, "candidates");
-}
 var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
 function foldBlockScalar(lines, start, folded) {
   const body = [];
@@ -281,7 +277,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join3(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -290,7 +286,7 @@ function saveTeamConfig(team, home = handbookHome()) {
   if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   config.team = team;
-  writeFileAtomic(join4(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -365,14 +361,14 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/share.ts
-import { existsSync as existsSync4, readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
+import { readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { basename as basename3, join as join10 } from "node:path";
+import { basename as basename3, join as join9 } from "node:path";
 
 // src/lib/mcp.ts
 import { readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join4 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
 function isPlainObject(value) {
@@ -380,7 +376,7 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join5(dir || homedir3(), ".claude.json");
+  return join4(dir || homedir3(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
@@ -546,12 +542,12 @@ function refusalSummary(audit) {
 }
 
 // src/lib/queue.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join7 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { basename, join as join6 } from "node:path";
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { dirname as dirname3, join as join5 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -568,7 +564,7 @@ function listSkillFiles(dir) {
     for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
       if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
       const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-      if (entry.isDirectory()) walk(join6(current, entry.name), rel);
+      if (entry.isDirectory()) walk(join5(current, entry.name), rel);
       else if (entry.isFile()) files.push(rel);
       else skipped.push(rel);
     }
@@ -578,69 +574,25 @@ function listSkillFiles(dir) {
 }
 function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
   mkdirSync3(destDir, { recursive: true });
-  writeFileSync2(join6(destDir, "SKILL.md"), skillMd);
+  writeFileSync2(join5(destDir, "SKILL.md"), skillMd);
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
-    const target = join6(destDir, rel);
+    const target = join5(destDir, rel);
     mkdirSync3(dirname3(target), { recursive: true });
-    copyFileSync(join6(srcDir, rel), target);
+    copyFileSync(join5(srcDir, rel), target);
   }
 }
 
 // src/lib/queue.ts
-var STATUSES = ["pending", "approved", "rejected", "archived"];
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
-}
-function candidateMetaFile(dir) {
-  return join7(dir, "candidate.json");
-}
-function synthesizeMeta(dir) {
-  let md;
-  try {
-    md = readFileSync4(join7(dir, "SKILL.md"), "utf8");
-  } catch {
-    return null;
-  }
-  const summary = parseSkillFrontmatter(md);
-  if (!summary) return null;
-  let grounded = {};
-  try {
-    grounded = JSON.parse(readFileSync4(join7(dir, "grounded-case.json"), "utf8"));
-  } catch {
-  }
-  const gate = grounded.gate;
-  return {
-    slug: basename(dir),
-    status: "pending",
-    createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
-    scope: summary.scope ?? "team",
-    description: summary.description,
-    fingerprint: typeof grounded.fingerprint === "string" ? grounded.fingerprint : "",
-    sessionId: "",
-    gate: gate && typeof gate.total === "number" ? gate : null
-  };
-}
-function readCandidateMeta(dir) {
-  try {
-    const parsed = JSON.parse(readFileSync4(candidateMetaFile(dir), "utf8"));
-    if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
-      return {
-        ...parsed,
-        slug: basename(dir),
-        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
-      };
-    }
-  } catch {
-  }
-  return synthesizeMeta(dir);
 }
 function auditSkillDir(sourceDir) {
   const name = basename(sourceDir);
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let skillMd;
   try {
-    skillMd = readFileSync4(join7(sourceDir, "SKILL.md"), "utf8");
+    skillMd = readFileSync4(join6(sourceDir, "SKILL.md"), "utf8");
   } catch {
     return { shareable: false, reason: "no-skill-md" };
   }
@@ -654,7 +606,7 @@ function auditSkillDir(sourceDir) {
   for (const file of files) {
     let content;
     try {
-      content = readFileSync4(join7(sourceDir, file), "utf8");
+      content = readFileSync4(join6(sourceDir, file), "utf8");
     } catch {
       return { shareable: false, reason: "unreadable", detail: file };
     }
@@ -665,29 +617,7 @@ function auditSkillDir(sourceDir) {
   }
   return { shareable: true, skillMd, files, summary };
 }
-function intakeSkill(sourceDir, home = handbookHome(), namedBy = "inventory") {
-  const slug = basename(sourceDir);
-  const dir = join7(candidatesDir(home), slug);
-  if (isSafeSlug(slug) && existsSync2(dir)) {
-    const existing = readCandidateMeta(dir);
-    const decided = existing && existing.status !== "pending" ? existing.status : null;
-    return {
-      ok: false,
-      error: decided ? `"${slug}" was already ${decided} here; nothing was changed` : `"${slug}" is already waiting in the review queue`
-    };
-  }
-  const audit = auditSkillDir(sourceDir);
-  if (!audit.shareable) {
-    return {
-      ok: false,
-      ...audit.secret ? { secret: audit.secret } : {},
-      error: intakeRefusal(namedBy === "user" ? sourceDir : displayPath(sourceDir), slug, audit)
-    };
-  }
-  copySkillPayload(sourceDir, dir, audit.skillMd, audit.files);
-  return { ok: true, slug, dir, fileCount: audit.files.length };
-}
-function intakeRefusal(shownDir, slug, audit) {
+function skillRefusalMessage(shownDir, slug, audit) {
   switch (audit.reason) {
     case "unsafe-name":
       return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
@@ -696,28 +626,28 @@ function intakeRefusal(shownDir, slug, audit) {
     case "no-frontmatter":
       return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
     case "irregular-entry":
-      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was shared`;
     case "no-files":
-      return `${slug} has no files to queue`;
+      return `${slug} has no files to share`;
     case "unreadable":
-      return `cannot read "${audit.detail}" in ${shownDir}; nothing was queued`;
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
     default:
-      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not queued. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // src/lib/commands.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename2, join as join8 } from "node:path";
+import { basename as basename2, join as join7 } from "node:path";
 function localCommandDirs(userHome = homedir4(), cwd = process.cwd()) {
   return [
-    { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
-    { dir: join8(cwd, ".claude", "commands"), scope: "project" }
+    { dir: join7(userHome, ".claude", "commands"), scope: "personal" },
+    { dir: join7(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
 function readLocalCommands(userHome = homedir4(), cwd = process.cwd()) {
@@ -731,7 +661,7 @@ function readLocalCommands(userHome = homedir4(), cwd = process.cwd()) {
     }
     for (const entry of entries.sort()) {
       const name = basename2(entry, ".md");
-      byName.set(name, { name, scope, file: join8(dir, entry) });
+      byName.set(name, { name, scope, file: join7(dir, entry) });
     }
   }
   return [...byName.values()];
@@ -780,14 +710,14 @@ function mayUpdate(options, name) {
   return options.update === true || Array.isArray(options.update) && options.update.includes(name);
 }
 function bumpPluginVersion(repoDir) {
-  const file = join9(repoDir, ".claude-plugin", "plugin.json");
+  const file = join8(repoDir, ".claude-plugin", "plugin.json");
   try {
     const plugin = JSON.parse(readFileSync6(file, "utf8"));
     const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
     plugin.version = parts.join(".");
-    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
+    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
@@ -860,16 +790,27 @@ function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
     return { branch: retry.branch, learnedBranchPrefix: retry.prefix };
   }
 }
+function skillCollisionMessage(name, chosen) {
+  const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
+  return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
+}
 var TEAM_MCP_FILE = ".mcp.json";
 var TEAM_COMMANDS_DIR = "commands";
-var NOTHING_UPDATED = { servers: [], commands: [] };
-function buildSelectionPrTitle(serverNames, commandNames, updated = NOTHING_UPDATED) {
-  const scopes = [serverNames.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean);
+var TEAM_SKILLS_DIR = "skills";
+var NOTHING_UPDATED = { servers: [], commands: [], skills: [] };
+function buildSelectionPrTitle(serverNames, commandNames, updated = NOTHING_UPDATED, skillNames = []) {
+  const scopes = [
+    skillNames.length ? "skill" : "",
+    serverNames.length ? "mcp" : "",
+    commandNames.length ? "commands" : ""
+  ].filter(Boolean);
   const added = [
+    ...skillNames.filter((n) => !updated.skills.includes(n)),
     ...serverNames.filter((n) => !updated.servers.includes(n)),
     ...commandNames.filter((n) => !updated.commands.includes(n))
   ];
   const changed = [
+    ...skillNames.filter((n) => updated.skills.includes(n)),
     ...serverNames.filter((n) => updated.servers.includes(n)),
     ...commandNames.filter((n) => updated.commands.includes(n))
   ];
@@ -878,7 +819,28 @@ function buildSelectionPrTitle(serverNames, commandNames, updated = NOTHING_UPDA
   if (changed.length) parts.push(`update ${changed.join(", ")}`);
   return `feat(${scopes.join(",")}): ${parts.join("; ")}`;
 }
-function selectionIntro(servers, commands) {
+function selectionIntro(servers, commands, skills = 0) {
+  if (skills) {
+    if (!servers && !commands) {
+      return skills === 1 ? [
+        "Adds one skill to this plugin. Once this is merged, every teammate whose copy",
+        "refreshes has it: nobody copies a directory into their own setup."
+      ] : [
+        `Adds ${skills} skills to this plugin. Once this is merged, every teammate whose copy`,
+        "refreshes has them: nobody copies a directory into their own setup."
+      ];
+    }
+    const parts = [
+      `${skills} skill${skills === 1 ? "" : "s"}`,
+      ...servers ? [`${servers} MCP server${servers === 1 ? "" : "s"}`] : [],
+      ...commands ? [`${commands} slash command${commands === 1 ? "" : "s"}`] : []
+    ];
+    const listed = parts.length === 2 ? parts.join(" and ") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+    return [
+      `Adds ${listed} to this plugin. Once this is merged, every teammate whose copy`,
+      "refreshes has all of it: nobody installs, configures or copies anything."
+    ];
+  }
   if (!servers) {
     return commands === 1 ? [
       "Adds one slash command to this plugin. Once this is merged, every teammate whose copy",
@@ -903,9 +865,9 @@ function selectionIntro(servers, commands) {
     "and can type the commands: nobody installs, configures or copies anything."
   ];
 }
-function buildSelectionPrBody(subjects, commands, marketplaceName, updated = NOTHING_UPDATED) {
-  const single = subjects.length === 1 && !commands.length;
-  const lines = selectionIntro(subjects.length, commands.length).map(
+function buildSelectionPrBody(subjects, commands, marketplaceName, updated = NOTHING_UPDATED, skills = []) {
+  const single = subjects.length === 1 && !commands.length && !skills.length;
+  const lines = selectionIntro(subjects.length, commands.length, skills.length).map(
     (line) => line.replace("SERVER_NAME", subjects[0]?.entry.name ?? "")
   );
   for (const { entry, audit } of subjects) {
@@ -945,7 +907,26 @@ function buildSelectionPrBody(subjects, commands, marketplaceName, updated = NOT
       `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``
     );
   }
+  for (const skill of skills) {
+    lines.push(
+      "",
+      `- skill: \`${skill.name}\``,
+      `- files: \`${TEAM_SKILLS_DIR}/${skill.name}/\` (${skill.files.length})`
+    );
+    if (skill.description) lines.push(`- description: ${skill.description}`);
+  }
+  if (skills.length) {
+    lines.push(
+      "",
+      skills.length === 1 ? "## This skill was written by hand" : "## These skills were written by hand",
+      "",
+      "Their author picked them from their own machine, so they carry no gate score and no",
+      "grounded case: nothing proposed them and there is nothing to score. Review them by",
+      "reading them, the same way you would review any other document in this repository."
+    );
+  }
   const changed = [
+    ...skills.filter((s) => updated.skills.includes(s.name)).map((s) => `${TEAM_SKILLS_DIR}/${s.name}/`),
     ...subjects.filter((s) => updated.servers.includes(s.entry.name)).map((s) => s.entry.name),
     // Namespaced, like the bullet above and for the same reason: a bare `/<command>` is a
     // name nobody can type once the plugin is installed. Two spellings of one command in
@@ -1053,14 +1034,14 @@ function teamAssets(team, git = runGit) {
     return null;
   }
   const workdir = handbookWorkdir("handbook-index-");
-  const repoDir = join9(workdir, "repo");
+  const repoDir = join8(workdir, "repo");
   try {
     if (cloneTeamRepo(git, team.repoUrl, repoDir, workdir)) return null;
-    const mcpFile = join9(repoDir, TEAM_MCP_FILE);
+    const mcpFile = join8(repoDir, TEAM_MCP_FILE);
     return {
-      skills: namesIn(join9(repoDir, "skills")),
-      servers: declaredServerNames(existsSync3(mcpFile) ? readFileSync6(mcpFile, "utf8") : null),
-      commands: namesIn(join9(repoDir, TEAM_COMMANDS_DIR), ".md")
+      skills: namesIn(join8(repoDir, "skills")),
+      servers: declaredServerNames(existsSync2(mcpFile) ? readFileSync6(mcpFile, "utf8") : null),
+      commands: namesIn(join8(repoDir, TEAM_COMMANDS_DIR), ".md")
     };
   } catch {
     return null;
@@ -1071,7 +1052,8 @@ function teamAssets(team, git = runGit) {
 function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
   const entries = selection.servers ?? [];
   const commandEntries = selection.commands ?? [];
-  const single = entries.length === 1 && !commandEntries.length ? { serverName: entries[0].name } : {};
+  const skillEntries = selection.skills ?? [];
+  const single = entries.length === 1 && !commandEntries.length && !skillEntries.length ? { serverName: entries[0].name } : {};
   const subjects = [];
   const refused = [];
   for (const entry of entries) {
@@ -1085,7 +1067,38 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     if (audit.shareable) commands.push({ name: entry.name, content: audit.content });
     else refused.push({ name: entry.name, kind: "command", reason: commandRefusalMessage(entry.name, audit) });
   }
-  if (!subjects.length && !commands.length) {
+  const skills = [];
+  for (const entry of skillEntries) {
+    if (skills.some((skill) => skill.name === entry.name)) {
+      refused.push({
+        name: entry.name,
+        kind: "skill",
+        reason: `two of the skills selected are named "${entry.name}"; only the first was taken`
+      });
+      continue;
+    }
+    const audit = auditSkillDir(entry.dir);
+    if (audit.shareable) {
+      skills.push({
+        name: entry.name,
+        dir: entry.dir,
+        skillMd: audit.skillMd,
+        files: audit.files,
+        description: audit.summary?.description ?? ""
+      });
+    } else {
+      refused.push({
+        name: entry.name,
+        kind: "skill",
+        reason: skillRefusalMessage(
+          entry.namedBy === "user" ? entry.dir : displayPath(entry.dir),
+          entry.name,
+          audit
+        )
+      });
+    }
+  }
+  if (!subjects.length && !commands.length && !skills.length) {
     return {
       ok: false,
       ...single,
@@ -1103,24 +1116,33 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       return { ok: false, refused, error: `cannot derive a branch name from the server name "${entry.name}"` };
     }
   }
+  for (const skill of skills) {
+    if (!isSafeSlug(skill.name)) {
+      return {
+        ok: false,
+        refused,
+        error: `"${skill.name}" cannot be a skill name (lowercase letters, digits and dashes)`
+      };
+    }
+  }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, refused, error: identity.error };
   const prefix = teamBranchPrefix(team);
   const commitPrefix = teamCommitPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
-  const repoDir = join9(workdir, "repo");
+  const repoDir = join8(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const target = join9(repoDir, TEAM_MCP_FILE);
+    const target = join8(repoDir, TEAM_MCP_FILE);
     let merged = "";
     let collided = [];
     let replacedServers = [];
     if (subjects.length) {
       try {
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
-          existsSync3(target) ? readFileSync6(target, "utf8") : null,
+          existsSync2(target) ? readFileSync6(target, "utf8") : null,
           subjects.map((s) => s.entry),
           (name) => mayUpdate(options, name)
         ));
@@ -1137,7 +1159,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingCommands = [];
     const replacedCommands = [];
     for (const command of commands) {
-      if (existsSync3(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+      if (existsSync2(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1152,30 +1174,55 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       }
       goingCommands.push(command);
     }
+    const goingSkills = [];
+    const replacedSkills = [];
+    for (const skill of skills) {
+      if (existsSync2(join8(repoDir, TEAM_SKILLS_DIR, skill.name))) {
+        if (!mayUpdate(options, skill.name)) {
+          collisions.push(skillCollisionMessage(skill.name, false));
+          refused.push({
+            name: skill.name,
+            kind: "skill",
+            reason: skillCollisionMessage(skill.name, false),
+            collision: true
+          });
+          continue;
+        }
+        replacedSkills.push(skill.name);
+      }
+      goingSkills.push(skill);
+    }
     const updated = {
       servers: replacedServers.filter((n) => going.some((s) => s.entry.name === n)),
-      commands: replacedCommands
+      commands: replacedCommands,
+      skills: replacedSkills
     };
-    if (!going.length && !goingCommands.length) {
+    if (!going.length && !goingCommands.length && !goingSkills.length) {
       return { ok: false, ...single, refused, error: collisions[0] ?? refused[0]?.reason ?? "nothing was left to share" };
     }
     const names = going.map((s) => s.entry.name);
     const commandNames = goingCommands.map((c) => c.name);
-    const all = [...names, ...commandNames];
-    const label = names.length ? commandNames.length ? "share" : "mcp" : "commands";
+    const skillNames = goingSkills.map((s) => s.name);
+    const all = [...skillNames, ...names, ...commandNames];
+    const label = [skillNames.length ? "skills" : "", names.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean).length > 1 ? "share" : skillNames.length ? "skills" : names.length ? "mcp" : "commands";
     const first = slugifySkillName(all[0]);
     const base = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix;
     let version = null;
-    const title = buildSelectionPrTitle(names, commandNames, updated);
+    const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     try {
       git(["checkout", "-b", branch], repoDir);
-      if (going.length) writeFileSync4(target, merged);
-      if (goingCommands.length) mkdirSync5(join9(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
+      if (going.length) writeFileSync3(target, merged);
+      if (goingCommands.length) mkdirSync5(join8(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
       for (const command of goingCommands) {
-        writeFileSync4(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+        writeFileSync3(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+      }
+      for (const skill of goingSkills) {
+        const dest = join8(repoDir, TEAM_SKILLS_DIR, skill.name);
+        if (replacedSkills.includes(skill.name)) rmSync3(dest, { recursive: true, force: true });
+        copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
@@ -1204,7 +1251,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       team.repoUrl,
       branch,
       title,
-      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated),
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated, goingSkills),
       repoDir,
       forge
     );
@@ -1213,7 +1260,8 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       ...single,
       ...names.length ? { serverNames: names } : {},
       ...commandNames.length ? { commandNames } : {},
-      ...updated.servers.length || updated.commands.length ? { updated } : {},
+      ...skillNames.length ? { skillNames } : {},
+      ...updated.servers.length || updated.commands.length || updated.skills.length ? { updated } : {},
       ...refused.length ? { refused } : {},
       branch,
       requiresEnv,
@@ -1231,8 +1279,8 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
 // src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join10(paths.userHome ?? homedir5(), ".claude", "skills"), scope: "personal" },
-    { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
+    { dir: join9(paths.userHome ?? homedir5(), ".claude", "skills"), scope: "personal" },
+    { dir: join9(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
 function isDirectory(path) {
@@ -1241,11 +1289,6 @@ function isDirectory(path) {
   } catch {
     return false;
   }
-}
-function queueState(home, name) {
-  const dir = join10(candidatesDir(home), name);
-  if (!existsSync4(dir)) return null;
-  return readCandidateMeta(dir)?.status ?? "pending";
 }
 function skillRefusal(audit) {
   switch (audit.reason) {
@@ -1265,18 +1308,10 @@ function skillRefusal(audit) {
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
   }
 }
-function readSkillDir(dir, scope, home) {
+function readSkillDir(dir, scope) {
   const name = basename3(dir);
   const audit = auditSkillDir(dir);
-  const queued = queueState(home, name);
   const base = { kind: "skill", name, scope, dir, description: audit.summary?.description ?? "" };
-  if (queued) {
-    return {
-      ...base,
-      shareable: false,
-      reason: queued === "pending" ? "already waiting in the review queue" : `already ${queued} in the review queue`
-    };
-  }
   return audit.shareable ? { ...base, shareable: true } : { ...base, shareable: false, reason: skillRefusal(audit) };
 }
 function commandItem(entry, audit) {
@@ -1296,7 +1331,6 @@ function serverItem(entry, audit) {
   return audit.migratable ? { ...base, shareable: true } : { ...base, shareable: false, reason: refusalSummary(audit), fullReason: refusalMessage(entry.name, audit) };
 }
 function buildInventory(paths = {}, teamHas = null) {
-  const home = paths.home ?? handbookHome();
   const onTeam = (item, names) => names?.includes(item.name) ? { ...item, onTeam: true } : item;
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localSkillDirs(paths)) {
@@ -1307,8 +1341,8 @@ function buildInventory(paths = {}, teamHas = null) {
       continue;
     }
     for (const entry of entries.sort()) {
-      if (!isDirectory(join10(dir, entry))) continue;
-      byName.set(entry, onTeam(readSkillDir(join10(dir, entry), scope, home), teamHas?.skills));
+      if (!isDirectory(join9(dir, entry))) continue;
+      byName.set(entry, onTeam(readSkillDir(join9(dir, entry), scope), teamHas?.skills));
     }
   }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
@@ -1335,7 +1369,7 @@ function formatInventory(inv) {
   if (inv.skills.length) {
     lines.push(
       "",
-      `Skills (${inv.skills.length}) - the ones you pick are copied into the review queue; nothing leaves this machine`,
+      `Skills (${inv.skills.length}) - the ones you pick go out as part of ONE merge request to the team repository`,
       ""
     );
     inv.skills.forEach((skill, i) => {
@@ -1347,7 +1381,7 @@ function formatInventory(inv) {
   if (inv.servers.length) {
     lines.push(
       "",
-      `MCP servers (${inv.servers.length}) - the ones you pick go out as part of ONE merge request to the team repository`,
+      `MCP servers (${inv.servers.length}) - the ones you pick travel in that SAME merge request`,
       ""
     );
     inv.servers.forEach((server, i) => {
@@ -1371,6 +1405,7 @@ function formatInventory(inv) {
   }
   lines.push(
     "",
+    "Everything you pick travels together, in one merge request, and other people can see it.",
     "Nothing is selected and nothing has been shared. A skill or a command carrying a",
     "credential is refused rather than redacted, and anything in a server's headers or env",
     "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
@@ -1379,23 +1414,19 @@ function formatInventory(inv) {
   return lines.join("\n");
 }
 function shareSelection(selection, team, paths = {}, git = runGit, forge = runForge, options = {}) {
-  const home = paths.home ?? handbookHome();
-  const result = { queued: [], refused: [] };
+  const result = { refused: [] };
   const inv = buildInventory(paths);
+  const skills = [];
   for (const name of selection.skills) {
     const skill = inv.skills.find((s) => s.name === name);
     if (!skill) {
       result.refused.push({ name, kind: "skill", reason: "no skill of that name is installed here" });
       continue;
     }
-    const intake = intakeSkill(skill.dir, home);
-    if (intake.ok) result.queued.push(intake.slug);
-    else result.refused.push({ name, kind: "skill", reason: intake.error });
+    skills.push({ name, dir: skill.dir, namedBy: "inventory" });
   }
   for (const dir of selection.skillPaths ?? []) {
-    const intake = intakeSkill(dir, home, "user");
-    if (intake.ok) result.queued.push(intake.slug);
-    else result.refused.push({ name: basename3(dir), kind: "skill", reason: intake.error });
+    skills.push({ name: basename3(dir), dir, namedBy: "user" });
   }
   const entries = [];
   for (const name of selection.servers) {
@@ -1409,25 +1440,39 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     if (!command) result.refused.push({ name, kind: "command", reason: "no command of that name is installed here" });
     else commands.push({ name: command.name, scope: command.scope === "project" ? "project" : "personal", file: command.file });
   }
-  if (!entries.length && !commands.length) return result;
+  if (!entries.length && !commands.length && !skills.length) return result;
   if (!team) {
     const reason = "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first";
+    for (const skill of skills) result.refused.push({ name: skill.name, kind: "skill", reason });
     for (const entry of entries) result.refused.push({ name: entry.name, kind: "mcp", reason });
     for (const command of commands) result.refused.push({ name: command.name, kind: "command", reason });
     return result;
   }
-  const outcome = publishTeamSelection({ servers: entries, commands }, team, git, forge, options);
+  const outcome = publishTeamSelection({ servers: entries, commands, skills }, team, git, forge, options);
   result.team = outcome;
+  const selectors = new Map(
+    skills.map((skill) => [
+      skill.name,
+      skill.namedBy === "user" ? `--skill-path ${skill.dir}` : `--skill ${skill.name}`
+    ])
+  );
   for (const refusal of outcome.refused ?? []) {
+    const selector = refusal.kind === "skill" ? selectors.get(refusal.name) : refusal.kind === "mcp" ? `--mcp ${refusal.name}` : `--command ${refusal.name}`;
     result.refused.push({
       name: refusal.name,
       kind: refusal.kind,
       reason: refusal.reason,
-      ...refusal.collision ? { collision: true } : {}
+      ...refusal.collision ? { collision: true } : {},
+      ...selector ? { selector } : {}
     });
   }
   if (!outcome.ok && outcome.error) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
+    for (const skill of skills) {
+      if (!judged.has(`skill:${skill.name}`)) {
+        result.refused.push({ name: skill.name, kind: "skill", reason: outcome.error });
+      }
+    }
     for (const entry of entries) {
       if (!judged.has(`mcp:${entry.name}`)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
     }
@@ -1441,23 +1486,22 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
 }
 function formatShareResult(result, marketplaceName) {
   const lines = [];
-  if (result.queued.length) {
-    lines.push(
-      `Queued for review (${result.queued.length}) - nothing has left this machine yet:`,
-      ...result.queued.map((slug) => `  ${slug}`),
-      "",
-      "Run /handbook:review to send them to the team, add them to a project, or keep them."
-    );
-  }
   const shared = result.team;
   if (shared?.ok) {
     const servers = shared.serverNames ?? [];
     const commands = shared.commandNames ?? [];
-    if (lines.length) lines.push("");
-    lines.push(`Shared with the team (${servers.length + commands.length}) in one merge request:`);
+    const skills = shared.skillNames ?? [];
+    lines.push(
+      `Shared with the team (${skills.length + servers.length + commands.length}) in one merge request:`
+    );
+    if (skills.length) lines.push(`  - skills (${skills.length}): ${skills.join(", ")}`);
     if (servers.length) lines.push(`  - MCP servers (${servers.length}): ${servers.join(", ")}`);
     if (commands.length) lines.push(`  - commands (${commands.length}): ${commands.join(", ")}`);
-    const updated = [...shared.updated?.servers ?? [], ...shared.updated?.commands ?? []];
+    const updated = [
+      ...shared.updated?.skills ?? [],
+      ...shared.updated?.servers ?? [],
+      ...shared.updated?.commands ?? []
+    ];
     if (updated.length) {
       lines.push(
         `  - sent as an update to the team's own copy (${updated.length}): ${updated.join(", ")} - the merge replaces theirs`
@@ -1508,10 +1552,10 @@ function formatShareResult(result, marketplaceName) {
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
       "To send one of them as an update to the team's copy, name that one and only that one:",
-      ...collisions.map((r) => `  share.js share ${r.kind === "mcp" ? "--mcp" : "--command"} ${r.name} --update ${r.name}`)
+      ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`)
     );
   }
-  if (!lines.length) return "Nothing was selected, so nothing was queued and nothing was shared.";
+  if (!lines.length) return "Nothing was selected, so nothing was shared.";
   return lines.join("\n");
 }
 
@@ -1532,7 +1576,11 @@ var SKILL_PATH = "--skill-path";
 var UPDATE = "--update";
 function parseUpdates(args, inv) {
   const names = [];
-  const available = [...inv.servers.map((s) => s.name), ...inv.commands.map((c) => c.name)];
+  const available = [
+    ...inv.skills.map((s) => s.name),
+    ...inv.servers.map((s) => s.name),
+    ...inv.commands.map((c) => c.name)
+  ];
   for (let i = 0; i < args.length; i++) {
     if (args[i] !== UPDATE) continue;
     const value = args[i + 1];
@@ -1568,7 +1616,7 @@ function main() {
     console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
     if (!config) {
       console.log(
-        "\nNo team repository is configured yet. Skills can still be queued for review, but the MCP servers and commands have nowhere to go: run /handbook:init (or /handbook:join <url>) first."
+        "\nNo team repository is configured yet, so nothing on this screen has anywhere to go: run /handbook:init (or /handbook:join <url>) first."
       );
     }
     return;
@@ -1577,7 +1625,7 @@ function main() {
   const selection = parseSelection(args, inv);
   const updates = parseUpdates(args, inv);
   if (!selection.skills.length && !selection.skillPaths.length && !selection.servers.length && !selection.commands.length) {
-    console.log("Nothing was selected, so nothing was queued and nothing was shared.");
+    console.log("Nothing was selected, so nothing was shared.");
     return;
   }
   if (configIsBroken()) {

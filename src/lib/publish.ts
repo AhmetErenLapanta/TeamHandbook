@@ -12,7 +12,7 @@ import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { GitRunner, TeamConfig } from "./init.js";
-import { isSafeSlug } from "./queue.js";
+import { auditSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { auditServer, declaredServerNames, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
@@ -402,7 +402,7 @@ export function publishCandidate(
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const skillDir = `skills/${skillSlug}`;
+    const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
     const occupied = existsSync(join(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
@@ -498,6 +498,14 @@ export const TEAM_MCP_FILE = ".mcp.json";
  */
 export const TEAM_COMMANDS_DIR = "commands";
 
+/**
+ * Where a plugin's skills live, discovered by the same convention. publishCandidate has
+ * always written here for a harvested candidate; a skill picked on the share screen lands
+ * in the same place, so the team repository has one skills directory rather than one per
+ * route in.
+ */
+export const TEAM_SKILLS_DIR = "skills";
+
 export interface TeamPublishOutcome {
   ok: boolean;
   serverName?: string;
@@ -505,13 +513,17 @@ export interface TeamPublishOutcome {
   serverNames?: string[];
   // every command it carries, for the same reason
   commandNames?: string[];
+  // every skill it carries. A skill picked on the share screen travels in this same
+  // request rather than through the review queue: the picking IS the approval, the same
+  // way it already was for a server and a command.
+  skillNames?: string[];
   // what the selection named that did not travel, each with the reason it did not. The
   // kind travels with the name: a caller reporting "explain" back to the user has to be
   // able to say which of its three lists that name came from. `collision` marks the one
   // refusal that has a way forward, so a caller can offer it without matching on prose.
-  refused?: { name: string; kind: "mcp" | "command"; reason: string; collision?: true }[];
+  refused?: { name: string; kind: "mcp" | "command" | "skill"; reason: string; collision?: true }[];
   // the names in this request that rewrite something the team already had
-  updated?: { servers: string[]; commands: string[] };
+  updated?: UpdatedNames;
   branch?: string;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
@@ -539,9 +551,10 @@ export function buildMcpPrTitle(names: string[]): string {
 export interface UpdatedNames {
   servers: string[];
   commands: string[];
+  skills: string[];
 }
 
-const NOTHING_UPDATED: UpdatedNames = { servers: [], commands: [] };
+const NOTHING_UPDATED: UpdatedNames = { servers: [], commands: [], skills: [] };
 
 /**
  * One title for a request that may carry two kinds of thing.
@@ -554,15 +567,22 @@ export function buildSelectionPrTitle(
   serverNames: string[],
   commandNames: string[],
   updated: UpdatedNames = NOTHING_UPDATED,
+  skillNames: string[] = [],
 ): string {
-  const scopes = [serverNames.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean);
+  const scopes = [
+    skillNames.length ? "skill" : "",
+    serverNames.length ? "mcp" : "",
+    commandNames.length ? "commands" : "",
+  ].filter(Boolean);
   // Kept per kind rather than as one list of names, because a server and a command are
   // allowed to share a name and the verb in front of it would then be a coin toss.
   const added = [
+    ...skillNames.filter((n) => !updated.skills.includes(n)),
     ...serverNames.filter((n) => !updated.servers.includes(n)),
     ...commandNames.filter((n) => !updated.commands.includes(n)),
   ];
   const changed = [
+    ...skillNames.filter((n) => updated.skills.includes(n)),
     ...serverNames.filter((n) => updated.servers.includes(n)),
     ...commandNames.filter((n) => updated.commands.includes(n)),
   ];
@@ -597,7 +617,32 @@ export interface CommandSubject {
   content: string;
 }
 
-function selectionIntro(servers: number, commands: number): string[] {
+function selectionIntro(servers: number, commands: number, skills = 0): string[] {
+  // The existing wording for a request of one kind is kept exactly as it was; only a
+  // request that mixes kinds needs a sentence that can name all three.
+  if (skills) {
+    if (!servers && !commands) {
+      return skills === 1
+        ? [
+            "Adds one skill to this plugin. Once this is merged, every teammate whose copy",
+            "refreshes has it: nobody copies a directory into their own setup.",
+          ]
+        : [
+            `Adds ${skills} skills to this plugin. Once this is merged, every teammate whose copy`,
+            "refreshes has them: nobody copies a directory into their own setup.",
+          ];
+    }
+    const parts = [
+      `${skills} skill${skills === 1 ? "" : "s"}`,
+      ...(servers ? [`${servers} MCP server${servers === 1 ? "" : "s"}`] : []),
+      ...(commands ? [`${commands} slash command${commands === 1 ? "" : "s"}`] : []),
+    ];
+    const listed = parts.length === 2 ? parts.join(" and ") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+    return [
+      `Adds ${listed} to this plugin. Once this is merged, every teammate whose copy`,
+      "refreshes has all of it: nobody installs, configures or copies anything.",
+    ];
+  }
   if (!servers) {
     return commands === 1
       ? [
@@ -647,9 +692,10 @@ export function buildSelectionPrBody(
   commands: CommandSubject[],
   marketplaceName: string,
   updated: UpdatedNames = NOTHING_UPDATED,
+  skills: SkillSubject[] = [],
 ): string {
-  const single = subjects.length === 1 && !commands.length;
-  const lines = selectionIntro(subjects.length, commands.length).map((line) =>
+  const single = subjects.length === 1 && !commands.length && !skills.length;
+  const lines = selectionIntro(subjects.length, commands.length, skills.length).map((line) =>
     line.replace("SERVER_NAME", subjects[0]?.entry.name ?? ""),
   );
   for (const { entry, audit } of subjects) {
@@ -692,7 +738,30 @@ export function buildSelectionPrBody(
       `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``,
     );
   }
+  for (const skill of skills) {
+    lines.push(
+      "",
+      `- skill: \`${skill.name}\``,
+      `- files: \`${TEAM_SKILLS_DIR}/${skill.name}/\` (${skill.files.length})`,
+    );
+    if (skill.description) lines.push(`- description: ${skill.description}`);
+  }
+  if (skills.length) {
+    // The reviewer is the only gate these passed. A harvested skill arrives with a gate
+    // score and a grounded case to read it against; one picked off the share screen has
+    // neither, because a person chose it deliberately instead of a model proposing it.
+    // Saying so is what stops the absence of a score reading as a missing section.
+    lines.push(
+      "",
+      skills.length === 1 ? "## This skill was written by hand" : "## These skills were written by hand",
+      "",
+      "Their author picked them from their own machine, so they carry no gate score and no",
+      "grounded case: nothing proposed them and there is nothing to score. Review them by",
+      "reading them, the same way you would review any other document in this repository.",
+    );
+  }
   const changed = [
+    ...skills.filter((s) => updated.skills.includes(s.name)).map((s) => `${TEAM_SKILLS_DIR}/${s.name}/`),
     ...subjects.filter((s) => updated.servers.includes(s.entry.name)).map((s) => s.entry.name),
     // Namespaced, like the bullet above and for the same reason: a bare `/<command>` is a
     // name nobody can type once the plugin is installed. Two spellings of one command in
@@ -877,14 +946,36 @@ export function teamAssets(team: TeamConfig, git: GitRunner = runGit): TeamAsset
   }
 }
 
+/**
+ * A skill named for sharing, as the caller found it: the directory to read, and how the
+ * caller came by it. `namedBy` decides only how a refusal spells the path back - an
+ * inventory entry is the machine's own and is shortened to "~", while a path the user
+ * typed is echoed exactly as typed, because they have to recognize their own argument.
+ */
+export interface SkillShareEntry {
+  name: string;
+  dir: string;
+  namedBy?: "inventory" | "user";
+}
+
+/** A skill that cleared the audit, with the exact file list that was screened. */
+export interface SkillSubject {
+  name: string;
+  dir: string;
+  skillMd: string;
+  files: string[];
+  description: string;
+}
+
 export interface TeamSelection {
   servers?: McpServerEntry[];
   commands?: CommandEntry[];
+  skills?: SkillShareEntry[];
 }
 
 /**
- * Write the chosen servers and commands into the team repository as ONE merge request that
- * also raises the plugin version, so a merge reaches everyone the same way a skill does.
+ * Write the chosen skills, servers and commands into the team repository as ONE merge
+ * request that also raises the plugin version, so a merge reaches everyone at once.
  *
  * One request for the whole selection, not one per item, and the version is the reason.
  * `bumpPluginVersion` reads the version from a fresh clone, so two requests opened before
@@ -892,12 +983,19 @@ export interface TeamSelection {
  * conflict and the second change lands with no version of its own, which means no
  * teammate's copy refreshes for it. Selecting six servers would have
  * hit that five times over. Collecting them into one commit makes the arithmetic right by
- * construction: one clone, one bump, one request - and that is why commands joined this
- * function instead of getting a publishing path of their own, which would have re-created
- * the defect inside a single run.
+ * construction: one clone, one bump, one request - and that is why commands, and then
+ * skills, joined this function instead of getting a publishing path of their own, which
+ * would have re-created the defect inside a single run. Picking five skills escaped that
+ * collision before only because those five never left the machine at all.
  *
- * Nothing here reads ~/.claude.json or ~/.claude/commands and nothing writes them: the
- * caller hands over what it already read, and the local copies are left as they were.
+ * A skill picked here has NOT been through /handbook:review, and does not need to be: the
+ * user opened the screen and chose their own skill, and that choosing is the approval. What
+ * /handbook:review still gates is everything the HARVEST proposed, which nobody chose.
+ * publishCandidate remains that path; this one never touches the review queue.
+ *
+ * Nothing here reads ~/.claude.json, ~/.claude/commands or ~/.claude/skills and nothing
+ * writes them: the caller hands over what it already read, the skill directories are only
+ * read, and the local copies are left exactly as they were.
  */
 export function publishTeamSelection(
   selection: TeamSelection,
@@ -908,7 +1006,11 @@ export function publishTeamSelection(
 ): TeamPublishOutcome {
   const entries = selection.servers ?? [];
   const commandEntries = selection.commands ?? [];
-  const single = entries.length === 1 && !commandEntries.length ? { serverName: entries[0]!.name } : {};
+  const skillEntries = selection.skills ?? [];
+  const single =
+    entries.length === 1 && !commandEntries.length && !skillEntries.length
+      ? { serverName: entries[0]!.name }
+      : {};
   // FIRST, before assertSafeGitUrl and before the identity preflight, because those call
   // git. A refusal has to happen while the credential still exists nowhere but this
   // process: not in a clone, not in an index, not in a working tree that a later crash
@@ -929,7 +1031,45 @@ export function publishTeamSelection(
     if (audit.shareable) commands.push({ name: entry.name, content: audit.content! });
     else refused.push({ name: entry.name, kind: "command", reason: commandRefusalMessage(entry.name, audit) });
   }
-  if (!subjects.length && !commands.length) {
+  // Skills are screened in this same pre-git loop, and for the same reason: a credential
+  // in the last skill of six must not reach a clone opened for the first five. This route
+  // used to pass through the review queue, which ran the sieve a second time; that stop is
+  // gone, so this one is now the only one and it stays ahead of every git call.
+  const skills: SkillSubject[] = [];
+  for (const entry of skillEntries) {
+    // Two selections resolving to one name would write the same skills/<name> twice and the
+    // second would silently win. Named rather than merged: the user picked two things and is
+    // entitled to know only one of them can travel under that name.
+    if (skills.some((skill) => skill.name === entry.name)) {
+      refused.push({
+        name: entry.name,
+        kind: "skill",
+        reason: `two of the skills selected are named "${entry.name}"; only the first was taken`,
+      });
+      continue;
+    }
+    const audit = auditSkillDir(entry.dir);
+    if (audit.shareable) {
+      skills.push({
+        name: entry.name,
+        dir: entry.dir,
+        skillMd: audit.skillMd!,
+        files: audit.files!,
+        description: audit.summary?.description ?? "",
+      });
+    } else {
+      refused.push({
+        name: entry.name,
+        kind: "skill",
+        reason: skillRefusalMessage(
+          entry.namedBy === "user" ? entry.dir : displayPath(entry.dir),
+          entry.name,
+          audit,
+        ),
+      });
+    }
+  }
+  if (!subjects.length && !commands.length && !skills.length) {
     return {
       ok: false,
       ...single,
@@ -948,6 +1088,17 @@ export function publishTeamSelection(
   for (const { entry } of subjects) {
     if (!slugifySkillName(entry.name)) {
       return { ok: false, refused, error: `cannot derive a branch name from the server name "${entry.name}"` };
+    }
+  }
+  // The name becomes a directory in the team repository, so it is checked before a clone
+  // exists rather than at the copy - the same order publishCandidate uses.
+  for (const skill of skills) {
+    if (!isSafeSlug(skill.name)) {
+      return {
+        ok: false,
+        refused,
+        error: `"${skill.name}" cannot be a skill name (lowercase letters, digits and dashes)`,
+      };
     }
   }
   const identity = resolveGitIdentity(git);
@@ -1004,30 +1155,71 @@ export function publishTeamSelection(
       }
       goingCommands.push(command);
     }
+    const goingSkills: SkillSubject[] = [];
+    const replacedSkills: string[] = [];
+    for (const skill of skills) {
+      if (existsSync(join(repoDir, TEAM_SKILLS_DIR, skill.name))) {
+        if (!mayUpdate(options, skill.name)) {
+          collisions.push(skillCollisionMessage(skill.name, false));
+          refused.push({
+            name: skill.name,
+            kind: "skill",
+            reason: skillCollisionMessage(skill.name, false),
+            collision: true,
+          });
+          continue;
+        }
+        replacedSkills.push(skill.name);
+      }
+      goingSkills.push(skill);
+    }
     const updated: UpdatedNames = {
       servers: replacedServers.filter((n) => going.some((s) => s.entry.name === n)),
       commands: replacedCommands,
+      skills: replacedSkills,
     };
-    if (!going.length && !goingCommands.length) {
+    if (!going.length && !goingCommands.length && !goingSkills.length) {
       return { ok: false, ...single, refused, error: collisions[0] ?? refused[0]?.reason ?? "nothing was left to share" };
     }
     const names = going.map((s) => s.entry.name);
     const commandNames = goingCommands.map((c) => c.name);
-    const all = [...names, ...commandNames];
-    const label = names.length ? (commandNames.length ? "share" : "mcp") : "commands";
+    const skillNames = goingSkills.map((s) => s.name);
+    const all = [...skillNames, ...names, ...commandNames];
+    // Every kind that is actually in the request, so a skills-only one is not branched as
+    // "commands-<name>" - a branch that lies about its contents is the thing a reviewer
+    // scanning a list of open requests reads first.
+    const label =
+      [skillNames.length ? "skills" : "", names.length ? "mcp" : "", commandNames.length ? "commands" : ""]
+        .filter(Boolean)
+        .length > 1
+        ? "share"
+        : skillNames.length
+          ? "skills"
+          : names.length
+            ? "mcp"
+            : "commands";
     const first = slugifySkillName(all[0]!);
     const base = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
     let branch = `${prefix}${slug}`;
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
-    const title = buildSelectionPrTitle(names, commandNames, updated);
+    const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);
       if (goingCommands.length) mkdirSync(join(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
       for (const command of goingCommands) {
         writeFileSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+      }
+      for (const skill of goingSkills) {
+        const dest = join(repoDir, TEAM_SKILLS_DIR, skill.name);
+        // An update replaces the team's copy rather than merging into it: a file the new
+        // version dropped would otherwise survive in the team's tree and keep being read.
+        if (replacedSkills.includes(skill.name)) rmSync(dest, { recursive: true, force: true });
+        // The screened list, not a fresh walk: the set the sieve cleared is the set that
+        // gets copied, so a file added between the audit and here cannot ride along.
+        copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
@@ -1057,7 +1249,7 @@ export function publishTeamSelection(
       team.repoUrl,
       branch,
       title,
-      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated),
+      buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated, goingSkills),
       repoDir,
       forge,
     );
@@ -1066,7 +1258,8 @@ export function publishTeamSelection(
       ...single,
       ...(names.length ? { serverNames: names } : {}),
       ...(commandNames.length ? { commandNames } : {}),
-      ...(updated.servers.length || updated.commands.length ? { updated } : {}),
+      ...(skillNames.length ? { skillNames } : {}),
+      ...(updated.servers.length || updated.commands.length || updated.skills.length ? { updated } : {}),
       ...(refused.length ? { refused } : {}),
       branch,
       requiresEnv,

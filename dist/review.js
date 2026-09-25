@@ -3,7 +3,7 @@ import { readFileSync as readFileSync9 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { basename as basename2, join as join8 } from "node:path";
 
@@ -453,11 +453,11 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync5, readdirSync as readdirSync4, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync5, readdirSync as readdirSync4, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/queue.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join6 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function isSafeSlug(slug) {
@@ -522,6 +522,88 @@ function listCandidates(home = handbookHome(), status) {
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
   );
+}
+function brokenMeta(dir, reason) {
+  return { reason, listed: readCandidateMeta(dir) !== null };
+}
+function unreadableCandidates(home = handbookHome()) {
+  const base = candidatesDir(home);
+  let entries;
+  try {
+    entries = readdirSync3(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const broken = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join6(base, entry.name);
+    let raw = null;
+    try {
+      raw = readFileSync3(candidateMetaFile(dir), "utf8");
+    } catch {
+    }
+    if (raw !== null) {
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json is not valid JSON") });
+        continue;
+      }
+      const meta = parsed;
+      if (typeof meta !== "object" || meta === null) {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json is not an object") });
+        continue;
+      }
+      if (!STATUSES.includes(meta.status)) {
+        broken.push({
+          slug: entry.name,
+          ...brokenMeta(dir, `its candidate.json has an unknown status ${JSON.stringify(meta.status)}`)
+        });
+        continue;
+      }
+      if (typeof meta.description !== "string" || typeof meta.scope !== "string") {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json has no description or scope") });
+        continue;
+      }
+      continue;
+    }
+    if (readCandidateMeta(dir) === null) {
+      broken.push({
+        slug: entry.name,
+        reason: "it has no candidate.json and no readable SKILL.md frontmatter",
+        listed: false
+      });
+    }
+  }
+  return broken.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+function formatUnreadableCandidates(broken) {
+  if (!broken.length) return "";
+  const listed = broken.filter((b) => b.listed);
+  const lost = broken.filter((b) => !b.listed);
+  const lines = [];
+  if (listed.length) {
+    lines.push(
+      `${listed.length} candidate ${listed.length === 1 ? "directory has" : "directories have"} an unusable candidate.json:`,
+      ...listed.map((b) => `  ${b.slug} - ${b.reason}`),
+      "",
+      "These ARE listed above as pending, rebuilt from their SKILL.md. The status and",
+      "evidence their candidate.json recorded are lost, so one already decided can reappear",
+      "here as new - read it before approving, and fix or delete the file named above."
+    );
+  }
+  if (lost.length) {
+    if (lines.length) lines.push("");
+    lines.push(
+      `${lost.length} candidate ${lost.length === 1 ? "directory is" : "directories are"} in the queue but cannot be read at all:`,
+      ...lost.map((b) => `  ${b.slug} - ${b.reason}`),
+      "",
+      "These are counted nowhere and shown nowhere else. Fix or delete them."
+    );
+  }
+  return lines.join("\n");
 }
 function relativeAge(iso, now) {
   const then = new Date(iso).getTime();
@@ -730,7 +812,7 @@ function bumpPluginVersion(repoDir) {
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
     plugin.version = parts.join(".");
-    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
+    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
@@ -836,8 +918,8 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
     const remoteBranches = listRemoteBranches(git, repoDir);
-    const skillDir = `skills/${skillSlug}`;
-    const occupied = existsSync3(join7(repoDir, skillDir));
+    const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
+    const occupied = existsSync2(join7(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
         ok: false,
@@ -895,6 +977,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     rmSync3(workdir, { recursive: true, force: true });
   }
 }
+var TEAM_SKILLS_DIR = "skills";
 
 // src/lib/deliver.ts
 function soloSkillsDir(projectCwd) {
@@ -903,13 +986,13 @@ function soloSkillsDir(projectCwd) {
 function personalSkillsDir() {
   return join8(homedir3(), ".claude", "skills");
 }
-function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
+function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync3) {
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
-function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync4) {
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync3) {
   return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
 }
-function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
+function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync3) {
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
   return `${basename2(origin)}'s .claude/skills (where it was captured, not this project)`;
@@ -948,7 +1031,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
   const target = join8(skillsDir, slug);
-  const occupied = existsSync4(target);
+  const occupied = existsSync3(target);
   const updatedExisting = occupied && mayUpdate(options, slug);
   if (occupied && !updatedExisting) {
     return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
@@ -1024,11 +1107,11 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
-  const originGone = !!meta.cwd && !existsSync4(meta.cwd);
+  const originGone = !!meta.cwd && !existsSync3(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
-  const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
+  const installedProject = meta.cwd && existsSync3(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
@@ -1352,7 +1435,7 @@ function formatSweepReport(report, dryRun) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 import { join as join10 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
@@ -1574,6 +1657,9 @@ async function main() {
     }
     const pending = listCandidates(home, "pending");
     console.log(formatCandidateList(pending));
+    const broken = formatUnreadableCandidates(unreadableCandidates(home));
+    if (broken) console.log(`
+${broken}`);
     if (pending.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {

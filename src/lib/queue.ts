@@ -1,14 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
 import { detectSecret } from "./secrets.js";
-import { copySkillPayload, listSkillFiles } from "./skill-files.js";
+import { listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict } from "./score.js";
-import { displayPath } from "./display-path.js";
 
 // "archived" is a queue state, not a verdict: the developer never looked at these.
 // It exists so a queue that grew past reading can be shrunk to the handful still
@@ -141,17 +140,6 @@ export function readCandidateMeta(dir: string): CandidateMeta | null {
   return synthesizeMeta(dir);
 }
 
-export interface IntakeResult {
-  ok: boolean;
-  slug?: string;
-  dir?: string;
-  /** how many files were taken in, so the caller can say the extras came along */
-  fileCount?: number;
-  error?: string;
-  /** set when the secret sieve is what refused the skill: the pattern, and where */
-  secret?: { pattern: string; file: string };
-}
-
 export type SkillRefusal =
   | "unsafe-name"
   | "no-skill-md"
@@ -178,12 +166,21 @@ export interface SkillAudit {
  * Everything that can be decided about a skill directory by reading it, and nothing
  * that depends on the queue.
  *
- * It exists because there are now two callers and they must not drift: intakeSkill
- * enforces this, and the inventory screen previews it. A screen that decided
- * shareability with its own copy of the rules would eventually offer a skill the
- * enforcing path refuses - or, far worse, stop offering one it would have accepted and
- * then grow a shortcut past the sieve to "fix" that. The sieve runs here, once, and the
+ * It exists because there are now two callers and they must not drift: publishTeamSelection
+ * enforces this before it opens a merge request, and the inventory screen previews it. A
+ * screen that decided shareability with its own copy of the rules would eventually offer a
+ * skill the enforcing path refuses - or, far worse, stop offering one it would have accepted
+ * and then grow a shortcut past the sieve to "fix" that. The sieve runs here, once, and the
  * list it cleared is the list the caller copies.
+ *
+ * The secret sieve is the load-bearing part. A skill picked on the share screen goes
+ * straight into a merge request, so this is the last point at which a credential can be
+ * stopped, and it stops the whole skill rather than redacting it. Redaction is the right
+ * answer for a transcript slice, where the lesson survives losing a token. It is the wrong
+ * answer for a skill: a blanked out reference file or a pruned script still installs, still
+ * reads as complete to the teammate who receives it, and fails only when they run it. A
+ * skill that never arrives is better than a skill that arrives hollow, so the audit names
+ * the file, which is the one thing that lets the author fix it.
  */
 export function auditSkillDir(sourceDir: string): SkillAudit {
   const name = basename(sourceDir);
@@ -221,76 +218,14 @@ export function auditSkillDir(sourceDir: string): SkillAudit {
 }
 
 /**
- * Take a skill somebody wrote by hand into the review queue.
+ * The refusal a publisher acts on, with the directory named.
  *
- * Until this existed, a hand-written skill had no route to a team at all: the queue was
- * reachable only by re-living the lesson and hoping the harvest caught it. From here the
- * existing chain takes over unchanged - /handbook:review, approveAndDeliver, and for the
- * team answer publishCandidate. No candidate.json is written on purpose, so the meta is
- * synthesized from the frontmatter by readCandidateMeta, and the review flow sees an
- * ordinary pending candidate.
- *
- * The secret sieve has to be re-established here, and this is the load-bearing part of
- * the function. The harvest reaches the queue through pipeline.ts, which runs
- * signalSecret over every captured field before a candidate is ever written. A directory
- * copied straight into candidatesDir() never passes that point, so this is the second
- * door into the pending queue and it needs its own lock: no captured secret reaches the
- * queue, a candidate, or a PR.
- *
- * It refuses rather than redacts. Redaction is the right answer for a transcript slice,
- * where the lesson survives losing a token. It is the wrong answer for a skill: a blanked
- * out reference file or a pruned script still installs, still reads as complete to the
- * teammate who receives it, and fails only when they run it. A skill that never arrives
- * is better than a skill that arrives hollow, so the whole intake stops and names the
- * file, which is the one thing that lets the author fix it.
- *
- * Every file that would be copied is screened first, and the screened list is the list
- * that gets copied. Screening file by file as they are copied would leave the files that
- * sort earlier sitting in the queue when a later one trips the sieve.
+ * Mirrors commandRefusalMessage: the audit decides, and this turns its verdict into the
+ * sentence that says what to fix. `shownDir` is the caller's spelling of the path - the
+ * machine's own directories are shortened to "~", while a path the user typed is echoed
+ * back exactly as typed, because they have to recognize their own argument.
  */
-export function intakeSkill(
-  sourceDir: string,
-  home: string = handbookHome(),
-  // How the caller came by this directory, which decides how a refusal names it. An
-  // inventory path is the machine's own and is shortened to "~"; a path the user typed
-  // is echoed back exactly as typed, because they have to recognize their own argument
-  // and because path.resolve, which --skill-path runs it through, turns a copied "~/x"
-  // into "<cwd>/~/x" rather than expanding it.
-  namedBy: "inventory" | "user" = "inventory",
-): IntakeResult {
-  const slug = basename(sourceDir);
-  const dir = join(candidatesDir(home), slug);
-  // Ahead of the audit because it is the cheapest refusal and, on a machine with a full
-  // queue, by far the commonest: a batch of twenty skills should not read every file of
-  // the fifteen that are already waiting to find that out.
-  if (isSafeSlug(slug) && existsSync(dir)) {
-    // Overwriting would silently discard a decision already made about that slug: an
-    // approved candidate keeps its meta here, and rewriting it would offer a delivered
-    // skill for review a second time. A decided one is named as decided, because
-    // "waiting in the review queue" would send the user to look for something
-    // /handbook:review will not show them.
-    const existing = readCandidateMeta(dir);
-    const decided = existing && existing.status !== "pending" ? existing.status : null;
-    return {
-      ok: false,
-      error: decided
-        ? `"${slug}" was already ${decided} here; nothing was changed`
-        : `"${slug}" is already waiting in the review queue`,
-    };
-  }
-  const audit = auditSkillDir(sourceDir);
-  if (!audit.shareable) {
-    return {
-      ok: false,
-      ...(audit.secret ? { secret: audit.secret } : {}),
-      error: intakeRefusal(namedBy === "user" ? sourceDir : displayPath(sourceDir), slug, audit),
-    };
-  }
-  copySkillPayload(sourceDir, dir, audit.skillMd!, audit.files!);
-  return { ok: true, slug, dir, fileCount: audit.files!.length };
-}
-
-function intakeRefusal(shownDir: string, slug: string, audit: SkillAudit): string {
+export function skillRefusalMessage(shownDir: string, slug: string, audit: SkillAudit): string {
   switch (audit.reason) {
     case "unsafe-name":
       return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
@@ -299,15 +234,15 @@ function intakeRefusal(shownDir: string, slug: string, audit: SkillAudit): strin
     case "no-frontmatter":
       return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
     case "irregular-entry":
-      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was queued`;
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was shared`;
     case "no-files":
-      return `${slug} has no files to queue`;
+      return `${slug} has no files to share`;
     case "unreadable":
-      return `cannot read "${audit.detail}" in ${shownDir}; nothing was queued`;
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
     default:
       return (
         `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was ` +
-        `not queued. Skills are reviewed and shared as they are, and a redacted one would install ` +
+        `not shared. Skills are reviewed and shared as they are, and a redacted one would install ` +
         `and then fail; take the credential out of the skill and try again.`
       );
   }
@@ -352,6 +287,129 @@ export function listCandidates(
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug),
   );
+}
+
+/**
+ * The candidate directories the queue cannot read, named rather than dropped.
+ *
+ * listCandidates filters these out, and has to: its callers list, sort and count real
+ * candidates, and a null in that array would take down every command that reads the queue.
+ * But silence is its own failure - a directory that fell out of the list is one the user is
+ * never told about, and the way they find out is that a skill they were promised is simply
+ * not there.
+ *
+ * A MISSING candidate.json is not reported. Synthesis from the frontmatter is the intended
+ * path for it and it produces a reviewable candidate. What is reported is a file that
+ * exists and cannot be used, and a directory that yields nothing at all.
+ *
+ * Those two are not the same failure, so `listed` tells them apart. A broken candidate.json
+ * beside a readable SKILL.md is still LISTED: synthesis rebuilds it as a fresh "pending",
+ * which is the resurrection STATUSES above exists to prevent - the danger is not that it
+ * vanished but that its recorded status and evidence silently did, and it can be approved
+ * as though it never had any. A directory that yields nothing is the other case, and that
+ * one really is invisible.
+ */
+export interface UnreadableCandidate {
+  slug: string;
+  reason: string;
+  /** true when readCandidateMeta still synthesizes a pending candidate for this directory,
+   * so it appears in the queue listing and counts toward the pending total */
+  listed: boolean;
+}
+
+/** Whether synthesis still rescues this directory into the listing, which decides what
+ * the reader has to do about it: check it before approving, or go and find it. */
+function brokenMeta(dir: string, reason: string): { reason: string; listed: boolean } {
+  return { reason, listed: readCandidateMeta(dir) !== null };
+}
+
+export function unreadableCandidates(home: string = handbookHome()): UnreadableCandidate[] {
+  const base = candidatesDir(home);
+  let entries: { name: string; isDirectory(): boolean }[];
+  try {
+    entries = readdirSync(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const broken: UnreadableCandidate[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(base, entry.name);
+    let raw: string | null = null;
+    try {
+      raw = readFileSync(candidateMetaFile(dir), "utf8");
+    } catch {
+      // absent is legitimate - synthesizeMeta is the path for it
+    }
+    if (raw !== null) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json is not valid JSON") });
+        continue;
+      }
+      const meta = parsed as Partial<CandidateMeta> | null;
+      if (typeof meta !== "object" || meta === null) {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json is not an object") });
+        continue;
+      }
+      if (!STATUSES.includes(meta.status as CandidateStatus)) {
+        broken.push({
+          slug: entry.name,
+          ...brokenMeta(dir, `its candidate.json has an unknown status ${JSON.stringify(meta.status)}`),
+        });
+        continue;
+      }
+      if (typeof meta.description !== "string" || typeof meta.scope !== "string") {
+        broken.push({ slug: entry.name, ...brokenMeta(dir, "its candidate.json has no description or scope") });
+        continue;
+      }
+      continue;
+    }
+    if (readCandidateMeta(dir) === null) {
+      broken.push({
+        slug: entry.name,
+        reason: "it has no candidate.json and no readable SKILL.md frontmatter",
+        listed: false,
+      });
+    }
+  }
+  return broken.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/**
+ * One line per unreadable candidate, or nothing at all when the queue is clean.
+ *
+ * Split by what the reader has to DO, which is not the same for the two cases. Saying
+ * "shown nowhere else" over both would be false of the listed ones and would send someone
+ * hunting for a candidate that is sitting in the list they just read.
+ */
+export function formatUnreadableCandidates(broken: UnreadableCandidate[]): string {
+  if (!broken.length) return "";
+  const listed = broken.filter((b) => b.listed);
+  const lost = broken.filter((b) => !b.listed);
+  const lines: string[] = [];
+  if (listed.length) {
+    lines.push(
+      `${listed.length} candidate ${listed.length === 1 ? "directory has" : "directories have"} an unusable candidate.json:`,
+      ...listed.map((b) => `  ${b.slug} - ${b.reason}`),
+      "",
+      "These ARE listed above as pending, rebuilt from their SKILL.md. The status and",
+      "evidence their candidate.json recorded are lost, so one already decided can reappear",
+      "here as new - read it before approving, and fix or delete the file named above.",
+    );
+  }
+  if (lost.length) {
+    if (lines.length) lines.push("");
+    lines.push(
+      `${lost.length} candidate ${lost.length === 1 ? "directory is" : "directories are"} in the queue but cannot be read at all:`,
+      ...lost.map((b) => `  ${b.slug} - ${b.reason}`),
+      "",
+      "These are counted nowhere and shown nowhere else. Fix or delete them.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function relativeAge(iso: string, now: number): string {

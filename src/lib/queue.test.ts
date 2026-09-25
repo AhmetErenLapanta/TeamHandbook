@@ -8,7 +8,7 @@ import {
   candidateMetaFromArtifact,
   decideCandidate,
   formatCandidateList,
-  intakeSkill,
+  auditSkillDir,
   isSafeSlug,
   listArchiveManifests,
   listCandidates,
@@ -16,7 +16,10 @@ import {
   loadMutedFingerprints,
   readArchiveManifest,
   readCandidateMeta,
+  formatUnreadableCandidates,
   restoreArchived,
+  skillRefusalMessage,
+  unreadableCandidates,
   writeArchiveManifest,
   writeCandidateMeta,
 } from "./queue.js";
@@ -452,26 +455,20 @@ describe("archiving the queue", () => {
   });
 });
 
-describe("intakeSkill", () => {
-  let home: string;
+describe("auditSkillDir", () => {
   let local: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
     local = mkdtempSync(join(tmpdir(), "handbook-local-"));
   });
 
   afterEach(() => {
-    rmSync(home, { recursive: true, force: true });
     rmSync(local, { recursive: true, force: true });
   });
 
   // A hand-written skill directory, the shape a manager already has on disk: no
   // candidate.json and no grounded-case.json, because nothing harvested it.
-  function handWrittenSkill(
-    name: string,
-    extras: Record<string, string> = {},
-  ): string {
+  function handWrittenSkill(name: string, extras: Record<string, string> = {}): string {
     const dir = join(local, name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -486,159 +483,196 @@ describe("intakeSkill", () => {
     return dir;
   }
 
-  it("given a hand-written SKILL.md, when it is taken in, then the queue reads it as pending", () => {
-    const source = handWrittenSkill("rebuild-nightly-report");
+  it("given a hand-written SKILL.md, when the directory is audited, then it is shareable with its frontmatter read", () => {
+    const dir = handWrittenSkill("rebuild-nightly-report");
 
-    const result = intakeSkill(source, home);
+    const audit = auditSkillDir(dir);
 
-    expect(result.ok).toBe(true);
-    expect(result.slug).toBe("rebuild-nightly-report");
-    // no candidate.json is written: the meta comes from the frontmatter via synthesizeMeta
-    const dir = join(candidatesDir(home), "rebuild-nightly-report");
-    expect(existsSync(candidateMetaFile(dir))).toBe(false);
-    const meta = readCandidateMeta(dir);
-    expect(meta?.status).toBe("pending");
-    expect(meta?.scope).toBe("team");
-    expect(meta?.description).toBe("Use when the nightly report has to be rebuilt by hand.");
-    expect(listCandidates(home, "pending").map((m) => m.slug)).toContain("rebuild-nightly-report");
+    expect(audit.shareable).toBe(true);
+    expect(audit.summary).toMatchObject({
+      name: "rebuild-nightly-report",
+      description: "Use when the nightly report has to be rebuilt by hand.",
+      scope: "team",
+    });
+    expect(audit.files).toEqual(["SKILL.md"]);
   });
 
-  it("given a skill with scripts and references, when it is taken in, then every file comes with it", () => {
-    const source = handWrittenSkill("rebuild-nightly-report", {
-      "preflight.sh": "#!/bin/sh\necho ready\n",
-      "scripts/server.cjs": "module.exports = {};\n",
-      "references/queries.sql": "select count(*) from orders;\n",
+  it("given the skill carries extra files, when it is audited, then every one of them is in the screened list", () => {
+    const dir = handWrittenSkill("rebuild-nightly-report", {
+      "references/queries.sql": "select 1;\n",
+      "scripts/run.sh": "#!/bin/sh\necho hi\n",
     });
 
-    const result = intakeSkill(source, home);
+    const audit = auditSkillDir(dir);
 
-    expect(result.ok).toBe(true);
-    expect(result.fileCount).toBe(4);
-    const dir = join(candidatesDir(home), "rebuild-nightly-report");
-    expect(readFileSync(join(dir, "preflight.sh"), "utf8")).toContain("echo ready");
-    expect(readFileSync(join(dir, "scripts", "server.cjs"), "utf8")).toContain("module.exports");
-    expect(readFileSync(join(dir, "references", "queries.sql"), "utf8")).toContain("select count(*)");
+    // the list the sieve cleared is the list the publisher copies, so a skill whose
+    // scripts were left behind cannot reach a teammate looking complete
+    expect(audit.shareable).toBe(true);
+    expect(audit.files).toEqual(["references/queries.sql", "scripts/run.sh", "SKILL.md"]);
   });
 
-  it("given a secret in a file that is not SKILL.md, when it is taken in, then nothing is written to the queue", () => {
-    // the scan cannot stop at SKILL.md: the credential lives in the file the skill runs
-    const source = handWrittenSkill("rebuild-nightly-report", {
-      "references/queries.sql": "-- connect first\nPGPASSWORD=hunter2trustno1 psql -h db -U reports\n",
+  it("given a credential in a file beside SKILL.md, when it is audited, then the whole skill is refused and the file named", () => {
+    const dir = handWrittenSkill("rebuild-nightly-report", {
+      "scripts/seed.sh": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
     });
 
-    const result = intakeSkill(source, home);
+    const audit = auditSkillDir(dir);
 
-    expect(result.ok).toBe(false);
-    expect(result.secret?.file).toBe("references/queries.sql");
-    expect(result.error).toContain("references/queries.sql");
-    // the refusal happens BEFORE the copy: the candidate directory was never created,
-    // so not even the clean SKILL.md reached the queue
-    expect(existsSync(join(candidatesDir(home), "rebuild-nightly-report"))).toBe(false);
-    expect(listCandidates(home)).toEqual([]);
-  });
-
-  it("given a secret in SKILL.md itself, when it is taken in, then it is refused too", () => {
-    const dir = join(local, "rebuild-nightly-report");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "SKILL.md"),
-      '---\nname: rebuild-nightly-report\ndescription: "Rebuild the report."\n---\n\n' +
-        "Authenticate with token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 first.\n",
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("secret");
+    expect(audit.secret?.file).toBe("scripts/seed.sh");
+    // refused rather than redacted: a skill with a blanked-out script installs and then
+    // fails, which is worse than one that never arrives
+    expect(skillRefusalMessage("~/skills/rebuild-nightly-report", "rebuild-nightly-report", audit)).toContain(
+      "scripts/seed.sh",
     );
-
-    const result = intakeSkill(dir, home);
-
-    expect(result.ok).toBe(false);
-    expect(result.secret?.file).toBe("SKILL.md");
-    expect(existsSync(join(candidatesDir(home), "rebuild-nightly-report"))).toBe(false);
   });
 
-  it("given a refusal, when the skill is fixed, then it is refused for the secret and not for a leftover directory", () => {
-    // proves the failed intake left no half-built candidate that would block a retry
-    const source = handWrittenSkill("rebuild-nightly-report", {
-      "notes.md": "export API_KEY=sk_live_0123456789abcdef0123\n",
-    });
-    expect(intakeSkill(source, home).ok).toBe(false);
+  it("given a symlink in the directory, when it is audited, then it is refused rather than followed or dropped", () => {
+    const dir = handWrittenSkill("rebuild-nightly-report");
+    symlinkSync("/etc/passwd", join(dir, "linked.txt"));
 
-    writeFileSync(join(source, "notes.md"), "no credentials here\n");
-    const retry = intakeSkill(source, home);
+    const audit = auditSkillDir(dir);
 
-    expect(retry.ok).toBe(true);
-    expect(retry.fileCount).toBe(2);
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("irregular-entry");
+    expect(audit.detail).toBe("linked.txt");
   });
 
-  it("given a symlink in the skill, when it is taken in, then it is refused rather than silently dropped", () => {
-    const source = handWrittenSkill("rebuild-nightly-report");
-    symlinkSync(join(local, "elsewhere.txt"), join(source, "linked.txt"));
-
-    const result = intakeSkill(source, home);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("linked.txt");
-    expect(existsSync(join(candidatesDir(home), "rebuild-nightly-report"))).toBe(false);
-  });
-
-  it("given a slug already in the queue, when it is taken in again, then the queued one is left alone", () => {
-    const source = handWrittenSkill("rebuild-nightly-report");
-    expect(intakeSkill(source, home).ok).toBe(true);
-    writeFileSync(join(source, "SKILL.md"), '---\nname: rebuild-nightly-report\ndescription: "Rewritten."\n---\n\nNew body.\n');
-
-    const result = intakeSkill(source, home);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("already waiting in the review queue");
-    const queued = join(candidatesDir(home), "rebuild-nightly-report", "SKILL.md");
-    expect(readFileSync(queued, "utf8")).toContain("Body.");
-  });
-
-  it("given a slug already decided, when it is taken in again, then the decision is named and kept", () => {
-    const source = handWrittenSkill("rebuild-nightly-report");
-    expect(intakeSkill(source, home).ok).toBe(true);
-    const dir = join(candidatesDir(home), "rebuild-nightly-report");
-    const approved = readCandidateMeta(dir)!;
-    writeCandidateMeta(dir, { ...approved, status: "approved", deliveredMode: "personal" });
-
-    const result = intakeSkill(source, home);
-
-    expect(result.ok).toBe(false);
-    // "waiting in the review queue" would send the user to a queue that will not show it
-    expect(result.error).toContain("already approved");
-    expect(readCandidateMeta(dir)?.status).toBe("approved");
-    expect(readCandidateMeta(dir)?.deliveredMode).toBe("personal");
-  });
-
-  it("given a directory with no SKILL.md, when it is taken in, then it is refused", () => {
-    const dir = join(local, "not-a-skill");
+  it("given no frontmatter, when it is audited, then it is refused as something Claude Code would not load either", () => {
+    const dir = join(local, "no-frontmatter");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "notes.md"), "just notes\n");
+    writeFileSync(join(dir, "SKILL.md"), "Just a body.\n");
 
-    const result = intakeSkill(dir, home);
+    const audit = auditSkillDir(dir);
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("no readable SKILL.md");
-    expect(existsSync(join(candidatesDir(home), "not-a-skill"))).toBe(false);
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("no-frontmatter");
+    expect(skillRefusalMessage("~/skills/no-frontmatter", "no-frontmatter", audit)).toContain(
+      "no name and description frontmatter",
+    );
   });
 
-  it("given a SKILL.md without frontmatter, when it is taken in, then it is refused", () => {
-    const dir = join(local, "bare-skill");
+  it("given no SKILL.md at all, when it is audited, then it is refused by name", () => {
+    const dir = join(local, "empty-skill");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), "# just a heading\n");
 
-    const result = intakeSkill(dir, home);
+    const audit = auditSkillDir(dir);
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("frontmatter");
-    expect(existsSync(join(candidatesDir(home), "bare-skill"))).toBe(false);
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("no-skill-md");
   });
 
-  it("given a directory name that is not a safe slug, when it is taken in, then it is refused", () => {
+  it("given a directory name that cannot be a skill name, when it is audited, then it is refused before anything is read", () => {
     const dir = join(local, "Not A Slug");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), '---\nname: x\ndescription: "y"\n---\n\nBody.\n');
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: x\ndescription: y\n---\n");
 
-    const result = intakeSkill(dir, home);
+    const audit = auditSkillDir(dir);
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("cannot be a skill name");
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("unsafe-name");
+    expect(skillRefusalMessage("~/skills/Not A Slug", "Not A Slug", audit)).toContain("cannot be a skill name");
+  });
+
+  it("given the user typed the path, when a refusal names it, then it is echoed exactly rather than shortened", () => {
+    const dir = join(local, "no-frontmatter");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "Just a body.\n");
+
+    // the caller picks the spelling; the message must not rewrite an argument the user
+    // has to recognize as their own
+    expect(skillRefusalMessage(dir, "no-frontmatter", auditSkillDir(dir))).toContain(dir);
+  });
+});
+
+describe("unreadableCandidates", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    mkdirSync(candidatesDir(home), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function candidateDir(slug: string): string {
+    const dir = join(candidatesDir(home), slug);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  it("given a candidate.json that is not valid JSON, when the queue is checked, then it is named rather than dropped", () => {
+    const dir = candidateDir("torn-write");
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: torn-write\ndescription: d\n---\n");
+    writeFileSync(candidateMetaFile(dir), "{ not json");
+
+    const broken = unreadableCandidates(home);
+
+    // readCandidateMeta synthesizes a fresh "pending" from the frontmatter here, which is
+    // the resurrection the status list exists to prevent - so the file has to be visible
+    expect(broken).toEqual([
+      { slug: "torn-write", reason: "its candidate.json is not valid JSON", listed: true },
+    ]);
+    // and the message must not claim it is shown nowhere: it is in the listing above,
+    // which is exactly what makes a decided candidate reappear as new
+    const text = formatUnreadableCandidates(broken);
+    expect(text).toContain("torn-write - its candidate.json is not valid JSON");
+    expect(text).toContain("ARE listed above as pending");
+    expect(text).not.toContain("counted nowhere");
+    expect(listCandidates(home, "pending").map((c) => c.slug)).toEqual(["torn-write"]);
+  });
+
+  it("given a status nothing recognizes, when the queue is checked, then the file is named instead of silently reset", () => {
+    const dir = candidateDir("unknown-status");
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: unknown-status\ndescription: d\n---\n");
+    writeFileSync(candidateMetaFile(dir), JSON.stringify({ status: "shipped", description: "d", scope: "team" }));
+
+    expect(unreadableCandidates(home)).toEqual([
+      { slug: "unknown-status", reason: 'its candidate.json has an unknown status "shipped"', listed: true },
+    ]);
+  });
+
+  it("given a directory with neither metadata nor frontmatter, when the queue is checked, then it is named", () => {
+    candidateDir("empty-dir");
+
+    const broken = unreadableCandidates(home);
+
+    // nothing rescues this one, so it really is invisible and the message says so
+    expect(broken).toEqual([
+      { slug: "empty-dir", reason: "it has no candidate.json and no readable SKILL.md frontmatter", listed: false },
+    ]);
+    expect(formatUnreadableCandidates(broken)).toContain("counted nowhere and shown nowhere else");
+    expect(listCandidates(home, "pending")).toEqual([]);
+  });
+
+  it("given a candidate with no candidate.json but good frontmatter, when the queue is checked, then it is NOT reported", () => {
+    const dir = candidateDir("hand-written");
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: hand-written\ndescription: d\n---\n");
+
+    // synthesis is the intended path for a missing file and produces a reviewable
+    // candidate, so reporting it would cry wolf on every one of them
+    expect(unreadableCandidates(home)).toEqual([]);
+    expect(listCandidates(home, "pending").map((c) => c.slug)).toEqual(["hand-written"]);
+    expect(formatUnreadableCandidates([])).toBe("");
+  });
+
+  it("given a healthy candidate, when the queue is checked, then nothing is reported", () => {
+    const dir = candidateDir("healthy");
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: healthy\ndescription: d\n---\n");
+    writeCandidateMeta(dir, {
+      slug: "healthy",
+      status: "pending",
+      createdAt: "2026-09-01T00:00:00Z",
+      scope: "team",
+      description: "d",
+      fingerprint: "f",
+      sessionId: "s",
+      gate: null,
+    });
+
+    expect(unreadableCandidates(home)).toEqual([]);
   });
 });

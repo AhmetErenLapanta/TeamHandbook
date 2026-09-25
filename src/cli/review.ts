@@ -9,8 +9,10 @@ import {
   listArchiveManifests,
   listCandidates,
   readArchiveManifest,
+  formatUnreadableCandidates,
   readCandidateMeta,
   restoreArchived,
+  unreadableCandidates,
 } from "../lib/queue.js";
 import { formatSweepReport, sweepQueue } from "../lib/sweep.js";
 import { loadScoreConfig } from "../lib/score.js";
@@ -245,6 +247,10 @@ async function main(): Promise<void> {
     }
     const pending = listCandidates(home, "pending");
     console.log(formatCandidateList(pending));
+    // Said on the same screen as the queue it is missing from. A directory the queue
+    // cannot read is counted nowhere, so this is the only place it can surface at all.
+    const broken = formatUnreadableCandidates(unreadableCandidates(home));
+    if (broken) console.log(`\n${broken}`);
     if (pending.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {

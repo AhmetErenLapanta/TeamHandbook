@@ -33,11 +33,12 @@ This document states exactly what it reads, what it writes, and where data goes.
   directory names, `SKILL.md` frontmatter and file contents under `~/.claude/skills` and
   this project's `.claude/skills`, so the list can say which of them could travel. Nothing
   there is modified, moved or deleted, and the contents are read in order to screen them:
-  a skill carrying a credential in any of its files is refused rather than queued. The same
-  command reads the review queue under `~/.teamhandbook/` to avoid offering you a skill you
-  have already decided about. If you hand it a skill directory by path (`--skill-path`,
+  a skill carrying a credential in any of its files is refused rather than shared, and the
+  whole skill is refused rather than redacted, because a skill with a blanked-out script
+  installs and then fails. The screening happens before any git command runs, so a refused
+  skill never reaches a clone. If you hand it a skill directory by path (`--skill-path`,
   for a skill you are writing somewhere the client does not load from) it reads that
-  directory too, and only that one: it is screened and queued exactly like a listed skill.
+  directory too, and only that one: it is screened exactly like a listed skill.
 - **`~/.claude.json`, read-only, and only when you run `/handbook:share`:** the MCP
   servers Claude Code has configured for your user and for
   the current project, so they can be offered to your team. TeamHandbook never writes to
@@ -135,12 +136,14 @@ Two things, and only these:
    - A session with no substance (no error→fix pair, no teaching, no real work) is
      never harvested and costs no model call at all.
 2. **On your approval:** `/handbook:review` → approve installs the skill locally or
-   opens a PR to the team repo you configured (your git credentials, your chosen
-   repo). `/handbook:share` does the same for as many MCP servers and slash commands as
-   you pick, adding their definitions to the team plugin in a single PR you can read
-   before merging, and for the skills you pick it only fills the review queue - they still
-   leave by route 2 above, one verdict at a time.
-   Nothing is shared with your team before this.
+   opens a PR to the team repo you configured (your git credentials, your chosen repo).
+   That command is the gate for everything the HARVEST proposed: a candidate it produced
+   reaches nobody until you give it a verdict.
+   `/handbook:share` is the other approval, for content you already have. Whatever you
+   pick on its screen - skills, MCP servers, slash commands - goes out together in a
+   single PR you can read before merging. Picking it there is the approval, the same act
+   for all three kinds; the harvest proposed none of it, so there is no second verdict to
+   give. Nothing is shared with your team before one of these two.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
@@ -187,8 +190,8 @@ rewritten name would point this machine at a marketplace directory that does not
 That is the whole of what is checked, because that name is the whole of what is read.
 Skills, servers and commands merged into that repository arrive on this machine through
 Claude Code's own marketplace subscription. TeamHandbook does not screen them: nothing
-here reads them, and nothing here approves them - `/handbook:review` gates what leaves
-this machine, not what arrives from the team.
+here reads them, and nothing here approves them - `/handbook:review` and
+`/handbook:share` gate what leaves this machine, not what arrives from the team.
 
 ### Install it for yourself, not for your teammates
 

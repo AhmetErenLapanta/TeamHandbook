@@ -744,7 +744,7 @@ describe("a name the destination already has", () => {
     // then both carry the publisher's version, and the request says which names it rewrites
     expect(result.ok).toBe(true);
     expect(result.refused).toBeUndefined();
-    expect(result.updated).toEqual({ servers: ["gitlab"], commands: ["explain"] });
+    expect(result.updated).toEqual({ servers: ["gitlab"], commands: ["explain"], skills: [] });
     expect(JSON.parse(gitIn(remote, ["show", `${result.branch}:.mcp.json`])).mcpServers.gitlab).toEqual(gitlab.config);
     expect(gitIn(remote, ["show", `${result.branch}:commands/explain.md`])).toContain("Mine.");
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
@@ -769,7 +769,7 @@ describe("a name the destination already has", () => {
     // then the consented one travels as an update and the other is STILL refused: one word
     // cannot stand in for two answers, which is the same rule the batch guard enforces
     expect(result.ok).toBe(true);
-    expect(result.updated).toEqual({ servers: ["gitlab"], commands: [] });
+    expect(result.updated).toEqual({ servers: ["gitlab"], commands: [], skills: [] });
     expect(result.commandNames).toBeUndefined();
     expect(result.refused).toEqual([
       { name: "explain", kind: "command", reason: expect.stringContaining("already has a command"), collision: true },
@@ -793,7 +793,7 @@ describe("a name the destination already has", () => {
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
       "feat(mcp): add linear; update gitlab",
     );
-    expect(result.updated).toEqual({ servers: ["gitlab"], commands: [] });
+    expect(result.updated).toEqual({ servers: ["gitlab"], commands: [], skills: [] });
   });
 });
 

@@ -59,7 +59,12 @@ you hit - and offers each one as a personal, project, or team skill. See
 
 ## Non-negotiable invariants (don't regress these)
 
-- Nothing is delivered without explicit user approval via `/handbook:review`.
+- Nothing leaves this machine without explicit user approval. Where that approval is
+  given depends on who proposed the thing: anything the HARVEST produced is approved in
+  `/handbook:review` and reaches nobody before that, while content the user already has
+  is approved by picking it on the `/handbook:share` screen, which is the act of consent
+  for a skill exactly as it already was for an MCP server or a slash command. No path
+  delivers anything nobody picked.
 - Secrets are redacted at the persistence boundary - no captured secret reaches
   `signals.jsonl`, the pending queue, a candidate, or a PR.
 - Untrusted session text - stderr, commands, and the transcript slice (the

@@ -8,7 +8,7 @@ import {
   rmSync as rmSync2,
   statSync,
   utimesSync,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync4
 } from "node:fs";
 import { basename as basename2, join as join10 } from "node:path";
 
@@ -470,7 +470,7 @@ function maybeDumpPayload(raw, home = handbookHome()) {
 }
 
 // src/lib/queue.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
@@ -720,7 +720,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
 }
 
 // src/lib/harvest.ts
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 
 // src/lib/transcript.ts
 import { readFileSync as readFileSync7 } from "node:fs";
@@ -1238,7 +1238,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync4(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync3(join9(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,
@@ -1306,7 +1306,7 @@ function enqueueHarvestJob(job, home = handbookHome()) {
   let file = join10(pendingDir(home), `${base}.json`);
   for (let i = 0; i < 50; i++) {
     try {
-      writeFileSync5(file, JSON.stringify(job), { flag: "wx" });
+      writeFileSync4(file, JSON.stringify(job), { flag: "wx" });
       return file;
     } catch {
       file = join10(pendingDir(home), `${base}-x${i}.json`);
@@ -1449,7 +1449,7 @@ function markerIsFinished(marker) {
 function claimHarvest(marker, home) {
   try {
     mkdirSync5(harvestedDir(home), { recursive: true });
-    writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
+    writeFileSync4(marker, MARKER_CLAIMED, { flag: "wx" });
     return true;
   } catch (err) {
     if (err?.code !== "EEXIST") return true;
@@ -1463,7 +1463,7 @@ function claimHarvest(marker, home) {
     if (Date.now() - claimedAt <= STALE_CLAIM_MS) return false;
     rmSync2(marker, { force: true });
     try {
-      writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
+      writeFileSync4(marker, MARKER_CLAIMED, { flag: "wx" });
       return true;
     } catch {
       return false;
@@ -1472,7 +1472,7 @@ function claimHarvest(marker, home) {
 }
 function finishHarvest(marker) {
   try {
-    writeFileSync5(marker, MARKER_DONE);
+    writeFileSync4(marker, MARKER_DONE);
   } catch {
   }
 }

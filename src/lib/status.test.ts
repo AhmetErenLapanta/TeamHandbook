@@ -97,6 +97,7 @@ describe("gatherStatus / formatStatus", () => {
       version: pluginVersion(),
       ledger: { total: 2, candidates: 1, weak: 1, distinctFingerprints: 2 },
       queue: { pending: 1, approved: 1, rejected: 1, archived: 0 },
+      unreadable: [],
       redactionBlocked: 1,
       sinceInstall: { approved: 1, teamShared: 0, pairsCaptured: 0, secretsBlocked: 1 },
       detector: { postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 },

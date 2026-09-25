@@ -5,7 +5,8 @@ import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
 import { readCounters } from "./counters.js";
 import { readSkillUsage, handbookSkills, summarizeUsage } from "./usage.js";
-import { listCandidates } from "./queue.js";
+import { listCandidates, unreadableCandidates } from "./queue.js";
+import type { UnreadableCandidate } from "./queue.js";
 import { pendingHarvestCount } from "./notify.js";
 import { loadScoreConfig } from "./score.js";
 import { loadHarvestConfig } from "./harvest.js";
@@ -125,6 +126,10 @@ export interface StatusReport {
   version: string;
   ledger: LedgerStats;
   queue: { pending: number; approved: number; rejected: number; archived: number };
+  /** queue directories whose candidate.json is unusable, or that cannot be read at all.
+   * A `listed` one is ALSO counted in the four above, rebuilt from its SKILL.md as
+   * pending, so the line below marks it rather than adding it again. */
+  unreadable: UnreadableCandidate[];
   redactionBlocked: number;
   // cumulative value scoreboard - the user's ready-made "was it worth it" line
   sinceInstall: { approved: number; teamShared: number; pairsCaptured: number; secretsBlocked: number };
@@ -173,6 +178,7 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
       rejected: count("rejected"),
       archived: count("archived"),
     },
+    unreadable: unreadableCandidates(home),
     redactionBlocked: counters.redactionBlocked,
     sinceInstall: {
       approved: approved.length,
@@ -217,8 +223,21 @@ function formatLastError(lastRun: (PipelineSummary & { ts: string }) | null): st
   return [`Last error:      ${errored.error ?? "(no reason recorded)"} - run /handbook:doctor`];
 }
 
+/** Said as a mark on the counts, not as another count: a listed one is already inside
+ * the pending total, and adding it again would make the four numbers not sum to the queue. */
+function unreadableNote(unreadable: UnreadableCandidate[]): string {
+  if (!unreadable.length) return "";
+  const lost = unreadable.filter((u) => !u.listed).length;
+  const listed = unreadable.length - lost;
+  const parts = [
+    ...(listed ? [`${listed} of them with an unusable candidate.json`] : []),
+    ...(lost ? [`${lost} unreadable and counted nowhere`] : []),
+  ];
+  return ` (${parts.join(", ")})`;
+}
+
 export function formatStatus(report: StatusReport): string {
-  const { ledger, queue, lastRun, config } = report;
+  const { ledger, queue, unreadable, lastRun, config } = report;
   const lines = [
     `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
     "",
@@ -227,7 +246,7 @@ export function formatStatus(report: StatusReport): string {
     // Archived candidates are counted here and nowhere else. "Quietly" means no nag,
     // not no trace: a queue that shrank by 151 items with no number to show for it
     // would have the product telling the developer something untrue about their data.
-    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}`,
+    `Candidate queue: ${queue.pending} pending, ${queue.approved} approved, ${queue.rejected} rejected${queue.archived > 0 ? `, ${queue.archived} archived` : ""}${unreadableNote(unreadable)}`,
     `Secret vetoes:   ${report.redactionBlocked} candidate(s) dropped by the secret scan`,
     `Since install:   ${report.sinceInstall.approved} skill${report.sinceInstall.approved === 1 ? "" : "s"} approved${report.sinceInstall.teamShared > 0 ? ` (${report.sinceInstall.teamShared} shared with the team)` : ""}, ${report.sinceInstall.pairsCaptured} error→fix pair${report.sinceInstall.pairsCaptured === 1 ? "" : "s"} captured, ${report.sinceInstall.secretsBlocked} secret${report.sinceInstall.secretsBlocked === 1 ? "" : "s"} blocked`,
     lastRun
