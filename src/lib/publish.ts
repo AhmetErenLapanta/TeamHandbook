@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import type { GroundedCase } from "./distill.js";
-import { assertSafeGitUrl, pushFailureReason, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
+import { assertSafeGitUrl, pushFailureReason, pushRuleSubject, runGit, teamBranchPrefix, teamCommitPrefix } from "./init.js";
 import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, runForge } from "./forge.js";
@@ -224,7 +224,11 @@ export function retryBranchAfterNameRejection(
   slug: string,
 ): { branch: string; prefix: string } | null {
   const raw = String(err instanceof Error ? err.message : err);
-  if (/commit message/i.test(raw)) return null; // a different rule, a different knob
+  // A different rule wants a different knob, and GitLab words three of them the same way,
+  // so the rule is read from the subject it names rather than from the one word it omits:
+  // deriving a branch out of a rejection that was really about the commit author's email
+  // would push a second time to be refused for the same reason.
+  if (pushRuleSubject(raw) !== "branch-name") return null;
   const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
   if (!pattern || pattern.length > MAX_BRANCH_PATTERN_CHARS) return null;
   const commitPrefix = team.commitPrefix?.trim().replace(/-+$/, "");

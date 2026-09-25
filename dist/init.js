@@ -221,8 +221,11 @@ function assertSafeGitUrl(url) {
   }
 }
 var DEFAULT_BRANCH_PREFIX = "handbook/";
+function commitMessagePrefix(prefix) {
+  return prefix?.trim() ? `${prefix.trim()} ` : "";
+}
 function teamCommitPrefix(config) {
-  return config?.commitPrefix?.trim() ? `${config.commitPrefix.trim()} ` : "";
+  return commitMessagePrefix(config?.commitPrefix);
 }
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
@@ -480,7 +483,7 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
   };
   if (withCi) {
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
-    const bump = `${commitPrefix}ci: bump plugin version`;
+    const bump = `${commitMessagePrefix(commitPrefix)}ci: bump plugin version`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
     } else {
@@ -556,23 +559,50 @@ function gitIdentityArgs(git) {
   return ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
+var IDENTITY_RULES = [
+  /(author|committer)'s email/i,
+  /committer email '[^']*' is not verified/i,
+  /you cannot push commits for/i,
+  /(author|committer) '[^']*' is not a member of team/i,
+  /author name is inconsistent/i
+];
+function refusesTheIdentity(raw) {
+  if (IDENTITY_RULES.some((rule) => rule.test(raw))) return true;
+  return /author|committer/i.test(raw) && /email|not a .* user|restricted/i.test(raw);
+}
+function pushRuleSubject(raw) {
+  if (/\bbranch name\b/i.test(raw)) return "branch-name";
+  if (/\bcommit message\b/i.test(raw)) return "commit-message";
+  if (refusesTheIdentity(raw)) return "identity";
+  return null;
+}
 function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFIX_FIX) {
   const raw = String(err instanceof Error ? err.message : err);
   const text = raw.toLowerCase();
   const detail = raw.split("\n").find((l) => l.trim())?.slice(0, 140) ?? "";
-  const remoteSaid = raw.split("\n").filter((l) => l.trim().startsWith("remote:")).map((l) => l.replace(/^\s*remote:\s*/, "").trim()).filter(Boolean);
+  const remoteSaid = raw.split("\n").filter((l) => l.includes("remote:")).map((l) => l.slice(l.indexOf("remote:") + "remote:".length).trim().replace(/^GitLab:\s*/i, "")).filter(Boolean);
   const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
-  if (pattern && !/commit message/i.test(raw)) {
-    return `${url} rejected the branch NAME "${branch}": this project requires branch names matching ${pattern}. Nothing is wrong with your access. ${branchPrefixFix}`;
+  const forbidden = raw.match(/contains the forbidden pattern\s*'([^']+)'/)?.[1];
+  const subject = pushRuleSubject(raw);
+  if (subject === "branch-name") {
+    return `${url} rejected the branch NAME "${branch}": this project requires branch names ${pattern ? `matching ${pattern}` : "of a shape it did not quote"}. Nothing is wrong with your access. ${branchPrefixFix}`;
   }
   if (text.includes("protected") || text.includes("not allowed to push")) {
-    return `${url} refused the push to ${branch}: ${remoteSaid[0] ?? "that branch is protected"}. Ask for the role that lets you write there, or have someone who has it push once.`;
+    return `${url} refused the push to ${branch}: ${remoteSaid[0]?.replace(/\.$/, "") ?? "that branch is protected"}. Ask for the role that lets you write there, or have someone who has it push once.`;
   }
-  if (/commit message/i.test(raw) && /pattern|does not|must/i.test(raw)) {
+  if (subject === "commit-message" && forbidden) {
+    return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} That is a pattern the project BANS rather than one it requires, so no prefix satisfies it; the commit title itself has to stop matching it.`;
+  }
+  if (subject === "commit-message" && /commit message does not follow the pattern/i.test(raw)) {
     return `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.`;
   }
-  if (/author|committer/i.test(raw) && /email|not a .* user|restricted/i.test(raw)) {
-    return `${url} rejected the commit AUTHOR: ${remoteSaid[0] ?? detail} The commit is made with your own \`git config user.name/user.email\`, so set those to the address your forge knows you by.`;
+  if (subject === "identity") {
+    const said = remoteSaid[0] ?? detail;
+    return `${url} rejected the commit AUTHOR, not the branch name or the contents: ${said} ` + // only when the quote lost it: a 140-character fallback truncates the rule away
+    (pattern && !said.includes(pattern) ? `The address it accepts matches ${pattern}. ` : "") + "Every commit is made with your own `git config user.name/user.email` as they resolve in the directory this ran from, so set those to the identity your forge knows you by.";
+  }
+  if (pattern) {
+    return `${url} refused the push to ${branch} against a rule requiring ${pattern}, without saying which rule: ${remoteSaid.join(" ") || detail} Check the branch name, the commit message and the commit author's email against it - one of the three is what it is measuring.`;
   }
   if (text.includes("pre-receive hook declined")) {
     return `${url} refused the push to ${branch} through a server-side rule: ${remoteSaid.join(" ") || detail}`;
@@ -651,7 +681,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   try {
     if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
     git(["add", "-A"], repoDir);
-    git([...identity, "commit", "-m", `${commitPrefix}chore: scaffold team skill base`], repoDir);
+    git([...identity, "commit", "-m", `${commitMessagePrefix(commitPrefix)}chore: scaffold team skill base`], repoDir);
     git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
   } catch (err) {
     return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };

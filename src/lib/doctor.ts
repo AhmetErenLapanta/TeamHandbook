@@ -118,14 +118,33 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
 
 function checkGitIdentity(home: string, run: CommandRunner): DoctorCheck | null {
   if (!loadTeamConfig(home)) return null; // only matters for team publishing
-  try {
-    const email = run("git", ["config", "user.email"], 5_000);
-    return email
-      ? ok("git identity", `user.email = ${email}`)
-      : fail("git identity", "git user.email is empty - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
-  } catch {
+  // `git config` exits non-zero for a key that is unset, which is an answer rather than a
+  // breakage for the two comparison reads below.
+  const read = (args: string[]): string => {
+    try {
+      return run("git", args, 5_000);
+    } catch {
+      return "";
+    }
+  };
+  const email = read(["config", "user.email"]);
+  if (!email) {
     return fail("git identity", "git user.email is not set - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
   }
+  // The address that reaches the forge is the one git resolves in the directory this ran
+  // from, and a repository-local user.email silently outranks the global one. That is
+  // deliberate - a forge that checks commit authors needs the developer's own identity -
+  // but a push refused for its author email looked inexplicable beside a doctor line that
+  // printed the winning value and never said where it came from. It stays a tick: this is
+  // information the line was missing, not a fault to report.
+  const global = read(["config", "--global", "user.email"]);
+  if (global === email) return ok("git identity", `user.email = ${email}`);
+  return ok(
+    "git identity",
+    `user.email = ${email}, resolved in ${displayPath(process.cwd())} rather than from your global ` +
+      `config (${global || "unset"}) - team PRs are authored by the first of those, so check it is the ` +
+      "address your forge knows you by",
+  );
 }
 
 function checkHomeWritable(home: string): DoctorCheck {

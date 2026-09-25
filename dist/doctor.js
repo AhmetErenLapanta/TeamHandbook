@@ -152,6 +152,9 @@ function displayPath(path, userHome = homedir2()) {
 }
 
 // src/lib/init.ts
+function commitMessagePrefix(prefix) {
+  return prefix?.trim() ? `${prefix.trim()} ` : "";
+}
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
   if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
@@ -385,7 +388,7 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
   };
   if (withCi) {
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
-    const bump = `${commitPrefix}ci: bump plugin version`;
+    const bump = `${commitMessagePrefix(commitPrefix)}ci: bump plugin version`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
     } else {
@@ -685,12 +688,23 @@ function checkClaudeCli(run, home) {
 }
 function checkGitIdentity(home, run) {
   if (!loadTeamConfig(home)) return null;
-  try {
-    const email = run("git", ["config", "user.email"], 5e3);
-    return email ? ok("git identity", `user.email = ${email}`) : fail("git identity", "git user.email is empty - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
-  } catch {
+  const read = (args) => {
+    try {
+      return run("git", args, 5e3);
+    } catch {
+      return "";
+    }
+  };
+  const email = read(["config", "user.email"]);
+  if (!email) {
     return fail("git identity", "git user.email is not set - team PRs would ship with a junk author; run `git config --global user.email you@example.com`");
   }
+  const global = read(["config", "--global", "user.email"]);
+  if (global === email) return ok("git identity", `user.email = ${email}`);
+  return ok(
+    "git identity",
+    `user.email = ${email}, resolved in ${displayPath(process.cwd())} rather than from your global config (${global || "unset"}) - team PRs are authored by the first of those, so check it is the address your forge knows you by`
+  );
 }
 function checkHomeWritable(home) {
   const probe = join8(home, `.doctor-probe-${process.pid}`);

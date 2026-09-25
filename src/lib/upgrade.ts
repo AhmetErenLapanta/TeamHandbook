@@ -228,10 +228,11 @@ export interface CandidateSet {
  * would be if the team ran init now, minus everything the team owns, everything a
  * symbolic link sits on, and everything this machine cannot honestly regenerate.
  *
- * `commitPrefix` is read raw rather than through `teamCommitPrefix`, which appends a
- * separating space for a commit message. The prefix reaches the skeleton only inside the
- * CI job's own commit message, and init wrote it there raw; normalizing it here would
- * report a stale CI file on a repository that is current.
+ * `commitPrefix` is passed raw: the prefix reaches the skeleton only inside the CI job's
+ * own commit message, and `skeletonFiles` is the one place that formats it, so init and
+ * this comparison cannot drift apart the way they did while each glued the prefix on
+ * itself. A repository scaffolded before that formatting was fixed does report its CI
+ * file as stale, which is what the file being out of date means.
  */
 export function upgradeCandidates(repoDir: string, team: TeamConfig): CandidateSet {
   const withCi = existsSync(join(repoDir, CI_MARKER));

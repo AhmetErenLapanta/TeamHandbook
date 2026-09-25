@@ -497,6 +497,16 @@ describe("retryBranchAfterNameRejection", () => {
     expect(retryBranchAfterNameRejection(refusesEverything, team, "fix-npm-test")).toBeNull();
   });
 
+  it("given the commit AUTHOR was refused, when classified, then no second branch is pushed for it", () => {
+    // the author-email rule quotes an address, and a branch derived from it would be
+    // refused for exactly the same reason the first push was
+    const authorRule = new Error(
+      "git push failed: remote: GitLab: Committer's email 'dev@personal.example' does not follow the pattern '@acme\\.com$'",
+    );
+
+    expect(retryBranchAfterNameRejection(authorRule, team, "fix-npm-test")).toBeNull();
+  });
+
   it("given the commit MESSAGE was refused, when classified, then the branch name is left alone", () => {
     const commitRule = new Error(
       "git push failed: remote: GitLab: Commit message does not follow the pattern '^HQA-\\d+'",

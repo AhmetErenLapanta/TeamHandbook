@@ -44,8 +44,15 @@ export interface TeamConfig {
 
 export const DEFAULT_BRANCH_PREFIX = "handbook/";
 
+/** A commit-message prefix is a word in the title, not glue: the separating space belongs
+ * here rather than at each call site, one of which forgot it and put
+ * "TEAM-1chore: scaffold team skill base" on the first commit of a team's repository. */
+export function commitMessagePrefix(prefix: string | undefined): string {
+  return prefix?.trim() ? `${prefix.trim()} ` : "";
+}
+
 export function teamCommitPrefix(config: TeamConfig | null): string {
-  return config?.commitPrefix?.trim() ? `${config.commitPrefix.trim()} ` : "";
+  return commitMessagePrefix(config?.commitPrefix);
 }
 
 export function teamBranchPrefix(config: TeamConfig | null): string {
@@ -346,7 +353,7 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
     // The script only exists to be run by that job. Shipping it without the job put a
     // file in every team's repository that nothing on earth would ever execute.
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
-    const bump = `${commitPrefix}ci: bump plugin version`;
+    const bump = `${commitMessagePrefix(commitPrefix)}ci: bump plugin version`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
     } else {
@@ -500,6 +507,50 @@ export function gitIdentityArgs(git: GitRunner): string[] | null {
 const INIT_BRANCH_PREFIX_FIX =
   'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 
+export type PushRuleSubject = "branch-name" | "commit-message" | "identity";
+
+// The identity rules in the forge's own words: GitLab refuses a commit's author or its
+// committer in five different sentences (ee/lib/ee/gitlab/checks/push_rules/commit_check.rb),
+// and two of them - the membership check and the name check - name neither an email nor a
+// user, so they used to be reported as an unnamed server-side rule.
+const IDENTITY_RULES = [
+  /(author|committer)'s email/i,
+  /committer email '[^']*' is not verified/i,
+  /you cannot push commits for/i,
+  /(author|committer) '[^']*' is not a member of team/i,
+  /author name is inconsistent/i,
+];
+
+function refusesTheIdentity(raw: string): boolean {
+  if (IDENTITY_RULES.some((rule) => rule.test(raw))) return true;
+  // Deliberately wider than the sentences above, and kept from the condition that
+  // preceded them: a forge whose wording is not GitLab's, or a GitLab old enough to still
+  // say "Author '…' is not a GitLab user", is talking about who signed the commit all the
+  // same. It is safe to be this loose only because it runs last - the branch-name and
+  // commit-message rules have already claimed their own sentences.
+  return /author|committer/i.test(raw) && /email|not a .* user|restricted/i.test(raw);
+}
+
+/**
+ * Which of a forge's push rules refused this push, or null when its words do not say.
+ *
+ * GitLab phrases three different rules with one sentence - "<subject> does not follow the
+ * pattern '<regex>'" - and only the subject differs: `Branch name '%{branch_name}' …`,
+ * `Commit message …`, `Author's email '%{email}' …` and `Committer's email '%{email}' …`
+ * (ee/lib/ee/gitlab/checks/push_rules/{branch,commit}_check.rb). Reading that sentence as
+ * a branch-NAME rejection whenever it did not also say "commit message" therefore sent a
+ * push refused for its commit AUTHOR to --branch-prefix, which cannot fix it: the rule the
+ * server had quoted was `@example\.com$`, an address, and the branch was the default one,
+ * which GitLab does not check the name of at all. Every rule here is recognised by its own
+ * words, never by the absence of another's.
+ */
+export function pushRuleSubject(raw: string): PushRuleSubject | null {
+  if (/\bbranch name\b/i.test(raw)) return "branch-name";
+  if (/\bcommit message\b/i.test(raw)) return "commit-message";
+  if (refusesTheIdentity(raw)) return "identity";
+  return null;
+}
+
 export function pushFailureReason(
   url: string,
   branch: string,
@@ -512,38 +563,68 @@ export function pushFailureReason(
   // The forge usually explains itself on a `remote:` line; the classifier's job is to
   // not lose it. Reporting "protected branch, ask for Maintainer" against a GitLab group
   // that had simply banned the branch NAME sent one real user to ask for permissions
-  // they already had.
+  // they already had. The marker is looked for anywhere in the line rather than at its
+  // start, because by the time runGit has wrapped stderr the first line reads
+  // "git push failed: remote: GitLab: …" and a startsWith test dropped the one sentence
+  // worth quoting, leaving a 140-character truncation of the wrapper in its place.
   const remoteSaid = raw
     .split("\n")
-    .filter((l) => l.trim().startsWith("remote:"))
-    .map((l) => l.replace(/^\s*remote:\s*/, "").trim())
+    .filter((l) => l.includes("remote:"))
+    .map((l) => l.slice(l.indexOf("remote:") + "remote:".length).trim().replace(/^GitLab:\s*/i, ""))
     .filter(Boolean);
   const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
-  // both branch-name and commit-message rules phrase themselves the same way, so the
-  // subject has to decide which knob to point at
-  if (pattern && !/commit message/i.test(raw)) {
+  const forbidden = raw.match(/contains the forbidden pattern\s*'([^']+)'/)?.[1];
+  const subject = pushRuleSubject(raw);
+
+  if (subject === "branch-name") {
     return (
       `${url} rejected the branch NAME "${branch}": this project requires branch names ` +
-      `matching ${pattern}. Nothing is wrong with your access. ${branchPrefixFix}`
+      `${pattern ? `matching ${pattern}` : "of a shape it did not quote"}. ` +
+      `Nothing is wrong with your access. ${branchPrefixFix}`
     );
   }
   if (text.includes("protected") || text.includes("not allowed to push")) {
     return (
-      `${url} refused the push to ${branch}: ${remoteSaid[0] ?? "that branch is protected"}. ` +
+      `${url} refused the push to ${branch}: ${remoteSaid[0]?.replace(/\.$/, "") ?? "that branch is protected"}. ` +
       "Ask for the role that lets you write there, or have someone who has it push once."
     );
   }
-  if (/commit message/i.test(raw) && /pattern|does not|must/i.test(raw)) {
+  // A banned pattern is not a missing one: no prefix removes words from a title, so the
+  // flag that fixes the required-pattern rule would be the wrong advice here.
+  if (subject === "commit-message" && forbidden) {
+    return (
+      `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ` +
+      `That is a pattern the project BANS rather than one it requires, so no prefix satisfies it; ` +
+      "the commit title itself has to stop matching it."
+    );
+  }
+  // Only the pattern rule. The same file also refuses a message for a missing DCO sign-off,
+  // and a prefix is no more the answer to that than --branch-prefix was to an author email.
+  if (subject === "commit-message" && /commit message does not follow the pattern/i.test(raw)) {
     return (
       `${url} rejected the commit MESSAGE, not the contents: ${remoteSaid[0] ?? detail} ` +
       'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is ' +
       "remembered for every skill shared later."
     );
   }
-  if (/author|committer/i.test(raw) && /email|not a .* user|restricted/i.test(raw)) {
+  if (subject === "identity") {
+    const said = remoteSaid[0] ?? detail;
     return (
-      `${url} rejected the commit AUTHOR: ${remoteSaid[0] ?? detail} The commit is made with ` +
-      "your own `git config user.name/user.email`, so set those to the address your forge knows you by."
+      `${url} rejected the commit AUTHOR, not the branch name or the contents: ${said} ` +
+      // only when the quote lost it: a 140-character fallback truncates the rule away
+      (pattern && !said.includes(pattern) ? `The address it accepts matches ${pattern}. ` : "") +
+      "Every commit is made with your own `git config user.name/user.email` as they resolve in the " +
+      "directory this ran from, so set those to the identity your forge knows you by."
+    );
+  }
+  // A forge that phrases its rules differently still gets its own words through, but no
+  // knob is named that the message does not support: being sent to the wrong flag costs
+  // the user more than being told the rejection did not say which rule fired.
+  if (pattern) {
+    return (
+      `${url} refused the push to ${branch} against a rule requiring ${pattern}, without saying which ` +
+      `rule: ${remoteSaid.join(" ") || detail} Check the branch name, the commit message and the commit ` +
+      "author's email against it - one of the three is what it is measuring."
     );
   }
   if (text.includes("pre-receive hook declined")) {
@@ -682,7 +763,7 @@ export function initTeamRepo(
     // because a forge that checks commit authors rejects anything else, and init pushes
     // to the same repository under the same rules. "TeamHandbook@localhost" was an
     // author waiting to be refused.
-    git([...identity, "commit", "-m", `${commitPrefix}chore: scaffold team skill base`], repoDir);
+    git([...identity, "commit", "-m", `${commitMessagePrefix(commitPrefix)}chore: scaffold team skill base`], repoDir);
     git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
   } catch (err) {
     return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };

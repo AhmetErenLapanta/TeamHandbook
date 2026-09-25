@@ -383,6 +383,50 @@ describe("doctor auth + git identity checks", () => {
   });
 });
 
+describe("doctor git identity - where the address came from", () => {
+  beforeEach(() => {
+    saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "t" }, home);
+  });
+
+  function identityRunner(effective: string, global: string): CommandRunner {
+    return (cmd, args) => {
+      if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.225";
+      if (cmd === "git" && args[0] === "config") {
+        if (args.includes("--global")) {
+          if (!global) throw new Error("exit 1");
+          return global;
+        }
+        return effective;
+      }
+      if (cmd === "git") return "abc\trefs/heads/main";
+      throw new Error("x");
+    };
+  }
+
+  it("given one address everywhere, when checked, then the line says only what it is", () => {
+    const check = byName(runDoctor(home, identityRunner("me@acme.com", "me@acme.com")), "git identity");
+
+    expect(check.level).toBe("ok");
+    expect(check.detail).toBe("user.email = me@acme.com");
+  });
+
+  it("given the directory's address outranking the global one, when checked, then both are named", () => {
+    const check = byName(runDoctor(home, identityRunner("me@personal.example", "me@acme.com")), "git identity");
+
+    // an information gap, not a fault: the tick stays and the exit code with it
+    expect(check.level).toBe("ok");
+    expect(check.detail).toContain("me@personal.example");
+    expect(check.detail).toContain("me@acme.com");
+    expect(check.detail).toContain("rather than from your global");
+  });
+
+  it("given no global address at all, when checked, then the missing one is named as unset", () => {
+    const check = byName(runDoctor(home, identityRunner("me@personal.example", "")), "git identity");
+
+    expect(check.detail).toContain("unset");
+  });
+});
+
 describe("doctor team-distribution checks", () => {
   function forgeRunner(forge: "ok" | "enoent" | "unauth"): CommandRunner {
     return (cmd, args) => {

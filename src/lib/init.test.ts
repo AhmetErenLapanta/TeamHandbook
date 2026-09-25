@@ -18,6 +18,7 @@ import {
   skeletonFiles,
   writeSkeleton,
   pushFailureReason,
+  commitMessagePrefix,
   summarizeGitStderr,
 } from "./init.js";
 
@@ -428,33 +429,166 @@ describe("pushFailureReason - a branch name the forge forbids", () => {
   });
 });
 
-describe("pushFailureReason - the other rules a forge enforces", () => {
+// The three rules a GitLab project enforces on a push, in the server's own words
+// (ee/lib/ee/gitlab/checks/push_rules/{branch,commit}_check.rb), wrapped the way runGit
+// hands them to the classifier - `remote:` buried mid-line behind its own prefix.
+function gitlabRejection(rule: string): Error {
+  return new Error(
+    `git push failed: ${summarizeGitStderr(
+      [
+        `remote: GitLab: ${rule}`,
+        "To gitlab.com:acme/handbook.git",
+        " ! [remote rejected] master -> master (pre-receive hook declined)",
+        "error: failed to push some refs to 'gitlab.com:acme/handbook.git'",
+      ].join("\n"),
+    )}`,
+  );
+}
+
+describe("pushFailureReason - each of the three rules names its own knob", () => {
   const url = "git@gitlab.com:acme/handbook.git";
 
-  it("given the commit message is refused, when reported, then it points at the commit prefix", () => {
-    const reason = pushFailureReason(url, "handbook/scaffold", new Error(
-      "remote: GitLab: Commit message does not follow the pattern '^(TEAM)-\\d+'\n ! [remote rejected] HEAD -> x (pre-receive hook declined)",
+  it("given the branch NAME is refused, when reported, then it points at the branch prefix and no other", () => {
+    const reason = pushFailureReason(url, "handbook/scaffold", gitlabRejection(
+      "Branch name 'handbook/scaffold' does not follow the pattern '((^(TEAM|OPS)-\\d+(-[a-z0-9]+)*)|dev|master)$'",
+    ));
+
+    expect(reason).toContain("rejected the branch NAME");
+    expect(reason).toContain("--branch-prefix");
+    expect(reason).toContain("TEAM|OPS");
+    expect(reason).not.toContain("--commit-prefix");
+    expect(reason).not.toContain("user.email");
+  });
+
+  it("given the commit MESSAGE is refused, when reported, then it points at the commit prefix and no other", () => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(
+      "Commit message does not follow the pattern '^(?:(TEAM|OPS)-\\d+)'",
     ));
 
     expect(reason).toContain("rejected the commit MESSAGE");
     expect(reason).toContain("--commit-prefix");
+    expect(reason).toContain("Commit message does not follow the pattern");
+    expect(reason).not.toContain("branch NAME");
+    expect(reason).not.toContain("--branch-prefix");
+    expect(reason).not.toContain("user.email");
   });
 
-  it("given the commit author is refused, when reported, then it points at the developer's git config", () => {
-    const reason = pushFailureReason(url, "handbook/scaffold", new Error(
-      "remote: GitLab: Author 'TeamHandbook@localhost' is not a GitLab user\n ! [remote rejected] HEAD -> x (pre-receive hook declined)",
+  // the field case: a group whose author-email rule quotes an ADDRESS, refusing a push to
+  // the default branch - whose name GitLab does not check at all - and the CLI answered
+  // "rejected the branch NAME" and offered --branch-prefix, which could not fix it
+  it("given the commit AUTHOR's email is refused, when reported, then it points at the git identity and no flag", () => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(
+      "Committer's email 'dev@personal.example' does not follow the pattern '@acme\\.com$'",
     ));
 
     expect(reason).toContain("rejected the commit AUTHOR");
-    expect(reason).toContain("git config user.name/user.email");
+    expect(reason).toContain("user.name/user.email");
+    expect(reason).toContain("@acme\\.com$");
+    expect(reason).not.toContain("branch NAME");
+    expect(reason).not.toContain("--branch-prefix");
+    expect(reason).not.toContain("--commit-prefix");
+  });
+
+  it("given the AUTHOR's email rather than the committer's, when reported, then it lands on the same diagnosis", () => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(
+      "Author's email 'dev@personal.example' does not follow the pattern '@acme\\.com$'",
+    ));
+
+    expect(reason).toContain("rejected the commit AUTHOR");
+    expect(reason).not.toContain("--branch-prefix");
+  });
+
+  // the other sentences a forge refuses an identity with, including the one an older
+  // GitLab used and the wording this classifier was built before seeing
+  it.each([
+    "Author 'TeamHandbook@localhost' is not a GitLab user",
+    "Author 'dev@personal.example' is not a member of team",
+    "Committer 'dev@personal.example' is not a member of team",
+    "Committer email 'dev@personal.example' is not verified.",
+    "You cannot push commits for 'dev@personal.example'. You can only push commits if the committer email is one of your own verified emails.",
+    "Your git author name is inconsistent with GitLab account name",
+  ])("given the identity rule phrased as %s, when reported, then it is still the AUTHOR", (rule) => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(rule));
+
+    expect(reason).toContain("rejected the commit AUTHOR");
+    expect(reason).toContain("user.name/user.email");
+  });
+
+  it("given a banned commit-message pattern, when reported, then no prefix is offered for a rule no prefix satisfies", () => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(
+      "Commit message contains the forbidden pattern '(?i)wip'",
+    ));
+
+    expect(reason).toContain("rejected the commit MESSAGE");
+    expect(reason).toContain("BANS");
+    expect(reason).not.toContain("--commit-prefix");
+  });
+
+  it.each([
+    "Commit message must contain a DCO signoff",
+    "Commit must be signed",
+  ])("given the commit-message rule %s, when reported, then no prefix is offered for a rule no prefix satisfies", (rule) => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(rule));
+
+    expect(reason).toContain(rule);
+    expect(reason).not.toContain("--commit-prefix");
+    expect(reason).not.toContain("--branch-prefix");
+  });
+
+  it("given a pattern rule whose subject the forge did not name, when reported, then no knob is guessed at", () => {
+    const reason = pushFailureReason(url, "master", gitlabRejection(
+      "Refused: 'handbook/x' does not follow the pattern '^ACME-'",
+    ));
+
+    expect(reason).toContain("without saying which rule");
+    expect(reason).toContain("^ACME-");
+    expect(reason).not.toContain("--branch-prefix");
+    expect(reason).not.toContain("--commit-prefix");
   });
 
   it("given a rule nobody anticipated, when reported, then the forge's own words are kept", () => {
-    const reason = pushFailureReason(url, "handbook/scaffold", new Error(
-      "remote: GitLab: Your push was rejected by a rule we have never seen\n ! [remote rejected] HEAD -> x (pre-receive hook declined)",
+    const reason = pushFailureReason(url, "handbook/scaffold", gitlabRejection(
+      "Your push was rejected by a rule we have never seen",
     ));
 
     expect(reason).toContain("Your push was rejected by a rule we have never seen");
+  });
+
+  it("given the caller's own branch-prefix advice, when the branch NAME is refused, then that advice is what is printed", () => {
+    const reason = pushFailureReason(url, "handbook/scaffold", gitlabRejection(
+      "Branch name 'handbook/scaffold' does not follow the pattern '^TEAM-'",
+    ), 'Set "branchPrefix" under "team" in the config.');
+
+    expect(reason).toContain('Set "branchPrefix" under "team"');
+  });
+
+  it("given an identity rejection on the share path, when reported, then the branch-prefix advice is withheld", () => {
+    const reason = pushFailureReason(url, "TEAM-1-npm-test", gitlabRejection(
+      "Author's email 'dev@personal.example' does not follow the pattern '@acme\\.com$'",
+    ), 'Set "branchPrefix" under "team" in the config.');
+
+    expect(reason).toContain("rejected the commit AUTHOR");
+    expect(reason).not.toContain("branchPrefix");
+  });
+});
+
+describe("commitMessagePrefix", () => {
+  it("given a prefix, when a commit message is built, then the prefix stays a separate word", () => {
+    expect(`${commitMessagePrefix("TEAM-1")}chore: scaffold team skill base`).toBe(
+      "TEAM-1 chore: scaffold team skill base",
+    );
+  });
+
+  it("given no prefix, when a commit message is built, then nothing is prepended", () => {
+    expect(commitMessagePrefix(undefined)).toBe("");
+    expect(commitMessagePrefix("   ")).toBe("");
+  });
+
+  it("given a prefix the CI job will commit with, when scaffolded, then it is spaced there too", () => {
+    const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "TEAM-1", true);
+
+    expect(files[".gitlab-ci.yml"]).toContain("TEAM-1 ci: bump plugin version");
+    expect(files[".gitlab-ci.yml"]).not.toContain("TEAM-1ci:");
   });
 });
 
