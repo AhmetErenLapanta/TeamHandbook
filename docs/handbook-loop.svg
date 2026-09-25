@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 530" width="880" height="530"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 490" width="880" height="490"
      role="img" aria-labelledby="t d"
      font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
   <title id="t">How the team handbook reaches everyone</title>
-  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine can
-    go to the team repository, but not by the same route. A skill goes to /handbook:review first:
-    your verdict decides, and keeping it for yourself or for one project stops it there, on this
-    machine. The servers and commands you pick go straight out, together in a single merge request;
-    a skill that is approved for the team travels in a request of its own. Either way somebody on
-    the team reviews it and merges it. That repository is a Claude Code
-    plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal
-    that the plugin moved. Every teammate's next session refreshes on that version and reports what
-    landed, with nothing installed or configured by hand.</desc>
+  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine
+    reaches the team repository by one route: you pick it, and everything you picked travels
+    together in a single merge request. Picking it is the approval, so there is no second verdict
+    to give; the one thing that does not start here is a skill TeamHandbook proposed out of a
+    session, which waits for your verdict in /handbook:review. Somebody on the team reviews the
+    request and merges it. That repository is a Claude Code plugin marketplace, and the same merge
+    raises the plugin version, which is Claude Code's signal that the plugin moved. Every
+    teammate's next session refreshes on that version and reports what landed, with nothing
+    installed or configured by hand.</desc>
 
   <!-- No <style> element and no prefers-color-scheme query here, deliberately. GitHub's page theme
        is chosen in the site's own settings, while an SVG loaded through <img> resolves
@@ -47,8 +47,8 @@
   <rect x="32" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
   <text x="52" y="65" font-size="14.5" font-weight="600" fill="#77797d">A skill</text>
   <text x="52" y="87" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">~/.claude/skills</text>
-  <text x="52" y="107" font-size="11.5" fill="#77797d">written by you, or proposed</text>
-  <text x="52" y="121" font-size="11.5" fill="#77797d">from a finished session</text>
+  <text x="52" y="107" font-size="11.5" fill="#77797d">written by you, or one you</text>
+  <text x="52" y="121" font-size="11.5" fill="#77797d">already kept from a session</text>
 
   <rect x="306" y="38" width="268" height="88" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
   <text x="326" y="65" font-size="14.5" font-weight="600" fill="#77797d">An MCP server</text>
@@ -62,62 +62,57 @@
   <text x="600" y="107" font-size="11.5" fill="#77797d">the one you already type</text>
   <text x="600" y="121" font-size="11.5" fill="#77797d">in your own sessions</text>
 
-  <!-- The gate sits on the skill leg ALONE, and it is drawn rather than implied because it is the
-       product's stated invariant: nothing reaches the team without a verdict here. In the code a
-       picked skill reaches intakeSkill, which only copies it into the local queue and makes no git
-       or forge call at all; publishCandidate, the one function that opens a skill's merge request,
-       is reached from the review verdict and from nowhere else. A verdict of personal or project
-       ends the journey on this machine, which is why the box says it can stop here. Servers and
-       commands genuinely skip this step, so their legs genuinely bypass the box. -->
-  <path d="M166 126 V150" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
-  <rect x="32" y="154" width="268" height="50" rx="10" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
-  <text x="52" y="177" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">/handbook:review</text>
-  <text x="52" y="194" font-size="11.5" fill="#77797d">your verdict, and it can stop here</text>
+  <!-- Three legs drawn alike, and the skill leg no longer carries a gate box in front of the
+       bracket. That box drew a split that is gone: a picked skill used to be copied into the
+       review queue and stop there, and shareSelection now hands skills, servers and commands
+       alike to publishTeamSelection, the single function that opens the request. Picking on the
+       share screen IS the approval, which is the invariant the box stood for - nothing reaches
+       the team that nobody picked. /handbook:review still holds that line for what the HARVEST
+       proposed, because nobody chose those; publishCandidate is that path and it has its own
+       drawing, so putting it here would draw it twice and add an inlet the row above ("already
+       set up on your machine") does not describe.
 
-  <!-- The bracket is three routes reaching one destination, NOT one request carrying all three,
-       and the label states the count for that reason. Servers and commands are the pair
-       publishTeamSelection deliberately collects into a SINGLE request: each item raises the
-       plugin version, and two requests opened before either is merged both claim the same
-       number, so the second one lands with no version of its own and nobody's copy refreshes
-       for it. A skill cannot join that batch - TeamSelection carries servers and commands only,
-       and publishCandidate opens a skill's own request, after the verdict drawn above. Drawing
-       or labelling these as one request would promise a skill and a server leaving together,
-       which no code path does. -->
-  <path d="M166 204 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
-  <path d="M440 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
-  <path d="M714 126 V220" fill="none" stroke="#818790" stroke-width="1.5"/>
-  <path d="M166 220 H714" fill="none" stroke="#818790" stroke-width="1.5"/>
-  <path d="M440 220 V264" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
-  <text x="462" y="240" font-size="12.5" font-weight="600" fill="#77797d">Servers and commands travel together in one request.</text>
-  <text x="462" y="256" font-size="11.5" fill="#77797d">A skill travels in its own. Somebody on the team reviews and merges it.</text>
+       ONE request carrying the whole selection, rather than one per item, is the measured part.
+       Each item raises the plugin version, bumpPluginVersion reads that version from a fresh
+       clone, and two requests opened before either is merged both claim the same number: git
+       merges the identical line without a conflict, so the second one lands with no version of
+       its own and refreshes nobody's copy. Picking five skills is that case five times over,
+       which is why a skill travels inside the batch rather than beside it. -->
+  <path d="M166 126 V180" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M440 126 V180" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M714 126 V180" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M166 180 H714" fill="none" stroke="#818790" stroke-width="1.5"/>
+  <path d="M440 180 V224" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="462" y="200" font-size="12.5" font-weight="600" fill="#77797d">Everything you pick travels together in one request.</text>
+  <text x="462" y="216" font-size="11.5" fill="#77797d">Somebody on the team reviews that request and merges it.</text>
 
   <!-- ── the team repository ─────────────────────────────────────────────── -->
 
-  <rect x="32" y="270" width="816" height="122" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
-  <text x="52" y="295" font-size="13.5" font-weight="600" fill="#77797d">The team repository, which is a Claude Code plugin marketplace</text>
+  <rect x="32" y="230" width="816" height="122" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="255" font-size="13.5" font-weight="600" fill="#77797d">The team repository, which is a Claude Code plugin marketplace</text>
 
-  <text x="52" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">skills/&lt;name&gt;/</text>
-  <text x="52" y="339" font-size="11" fill="#77797d">with the evidence it came from</text>
+  <text x="52" y="282" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">skills/&lt;name&gt;/</text>
+  <text x="52" y="299" font-size="11" fill="#77797d">with every file it carries</text>
 
-  <text x="326" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.mcp.json</text>
-  <text x="326" y="339" font-size="11" fill="#77797d">merged in, existing entries kept</text>
+  <text x="326" y="282" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.mcp.json</text>
+  <text x="326" y="299" font-size="11" fill="#77797d">merged in, existing entries kept</text>
 
-  <text x="600" y="322" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">commands/&lt;name&gt;.md</text>
-  <text x="600" y="339" font-size="11" fill="#77797d">found there by convention</text>
+  <text x="600" y="282" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">commands/&lt;name&gt;.md</text>
+  <text x="600" y="299" font-size="11" fill="#77797d">found there by convention</text>
 
-  <rect x="52" y="352" width="776" height="26" rx="8" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
-  <text x="68" y="369" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.claude-plugin/plugin.json</text>
-  <text x="276" y="369" font-size="12" font-weight="600" fill="#77797d">the same merge raises the version</text>
+  <rect x="52" y="312" width="776" height="26" rx="8" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
+  <text x="68" y="329" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.claude-plugin/plugin.json</text>
+  <text x="276" y="329" font-size="12" font-weight="600" fill="#77797d">the same merge raises the version</text>
 
   <!-- the version bump is the whole delivery mechanism -->
-  <path d="M440 392 V436" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
-  <text x="462" y="412" font-size="12.5" font-weight="600" fill="#77797d">That version is Claude Code's signal to refresh.</text>
-  <text x="462" y="428" font-size="11.5" fill="#77797d">No CI, no access token, nobody needing push rights.</text>
+  <path d="M440 352 V396" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="462" y="372" font-size="12.5" font-weight="600" fill="#77797d">That version is Claude Code's signal to refresh.</text>
+  <text x="462" y="388" font-size="11.5" fill="#77797d">No CI, no access token, nobody needing push rights.</text>
 
   <!-- ── the arriving side ───────────────────────────────────────────────── -->
 
-  <rect x="32" y="442" width="816" height="82" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
-  <text x="52" y="467" font-size="13.5" font-weight="600" fill="#77797d">Every teammate's next session picks it up on its own</text>
-  <text x="52" y="490" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">team-handbook: 2 new skill(s) and 1 new command(s) since your last session: ...</text>
-  <text x="52" y="512" font-size="11.5" fill="#77797d">They subscribed once. Nothing is installed by hand, and nothing is deleted if the team drops the plugin.</text>
+  <rect x="32" y="402" width="816" height="82" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
+  <text x="52" y="427" font-size="13.5" font-weight="600" fill="#77797d">Every teammate's next session picks it up on its own</text>
+  <text x="52" y="450" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">team-handbook: 2 new skill(s) and 1 new command(s) since your last session: ...</text>
+  <text x="52" y="472" font-size="11.5" fill="#77797d">They subscribed once. Nothing is installed by hand, and nothing is deleted if the team drops the plugin.</text>
 </svg>

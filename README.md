@@ -36,7 +36,7 @@ that the plugin moved, which is what makes every teammate's copy refresh.
 | What you share | Command | What lands in the repo |
 |---|---|---|
 | A skill the harvest proposed | `/handbook:review` | `skills/<name>/`, with the evidence it came from, plus a version bump |
-| A skill you wrote yourself | `/handbook:share` | the same, through the same review |
+| A skill you wrote yourself | `/handbook:share` | `skills/<name>/`, with every file it carries, plus a version bump |
 | An MCP server already configured on this machine | `/handbook:share` | an entry in the repo's `.mcp.json`, plus a version bump |
 | A slash command already installed on this machine | `/handbook:share` | `commands/<name>.md`, plus a version bump |
 
@@ -148,9 +148,11 @@ words, the failing command, the fix - and then asks where the skill goes:
 - **Keep for yourself** - `~/.claude/skills`: every project you open, nobody else
 - **Reject** - not worth keeping, and it can be silenced for good
 
-You can also ask for an edit before deciding, or leave one pending and come back. No
-other path reaches the team repo, and the one that does ends in a merge request somebody
-reviews.
+You can also ask for an edit before deciding, or leave one pending and come back. Nothing
+the harvest proposed moves anywhere without that verdict, and the answer that sends it to
+the team ends in a merge request somebody reviews. A skill you wrote yourself has no
+verdict to wait for: you pick it on the `/handbook:share` screen, and that picking is the
+approval.
 
 ### What arrives on your machine
 
@@ -199,12 +201,11 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ## How it works
 
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command already set up on your machine can go to the team repository, but not by the same route. A skill goes to /handbook:review first: your verdict decides, and keeping it for yourself or for one project stops it there, on this machine. The servers and commands you pick go straight out, together in a single merge request; a skill that is approved for the team travels in a request of its own. Either way somebody on the team reviews it and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version; that version is the signal every teammate's next session refreshes on, so what landed arrives with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a skill TeamHandbook proposed out of a session, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal that the plugin moved. Every teammate's next session refreshes on that version and reports what landed, with nothing installed or configured by hand." width="880">
 
-- **One merge request for a whole selection.** The servers and commands you pick travel
-  together, because each one raises the version and two requests opened before either is
-  merged claim the same number. One clone, one bump, one request. A skill is the
-  exception: it waits for a `/handbook:review` verdict and then goes on its own.
+- **One merge request for a whole selection.** Everything you pick travels together,
+  skills included, because each one raises the version and two requests opened before
+  either is merged claim the same number. One clone, one bump, one request.
 - **The version bump is the delivery.** Nothing pushes to your teammates. The raised
   version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
   moved, and refreshing on it is something each copy does for itself.
@@ -239,7 +240,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 
 | Command | What it does |
 |---|---|
-| `/handbook:review` | Keep, scope, share, edit, or reject each skill. **The only way anything ships.** |
+| `/handbook:review` | Keep, scope, share, edit, or reject each skill TeamHandbook captured. **Nothing it captured ships without this.** |
 | `/handbook:init` | Scaffold the team handbook repo and print the message your team needs. |
 | `/handbook:init --upgrade` | Bring an existing team repo's scaffold up to this version: shows the diff, you pick file by file. |
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
