@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.12.0] - 2026-09-25
+
+- **A skill you pick on the `/handbook:share` screen now travels to the team repository,
+  the same way an MCP server or a slash command already did, and everything you picked
+  goes out together in a single merge request.** It used to stop and wait for a second
+  approval instead. One request because each item raises the plugin version: two opened
+  before either is merged claim the same number, and the second one refreshes nobody's
+  copy. `/handbook:review` keeps its job - it is where the candidates drawn out of your
+  sessions get a verdict. What changed is the route for content you wrote yourself.
+
 ## [0.11.4] - 2026-09-22
 
 - **Joining a team repository no longer accepts whatever name that repository puts in
