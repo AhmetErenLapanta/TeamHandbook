@@ -323,6 +323,10 @@ overlaps an existing skill, and the sieve drops an item whose slug already exist
 labels are out of every recall denominator and reported as suppression instead - whether
 anything came back for them, and which of the two mechanisms stopped it.
 
+Measured: the model stopped all nine of them (three labels, three runs), so **the sieve's
+duplicate branch is still not exercised by this package** - the first mechanism never handed it
+anything. The gap the first tier's note above describes is narrower now and it is not closed.
+
 ## What holds the tier up
 
 - **The canonical sentence is nowhere in the session.** Tier 1 bans a five-word run of it from

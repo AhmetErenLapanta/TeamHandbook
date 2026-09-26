@@ -307,34 +307,44 @@ labelled lessons nobody ever states the rule at all. It is measured the same way
 hand-labelled grader pairs, because agreement on pairs about voiced rules says nothing about a
 grader reading an item against a sentence that appears nowhere in the session.
 
-Measured 2026-09-26, harvest model `claude-sonnet-5`, grader `haiku`, three runs:
+Measured 2026-09-26 at `c207d94` (the evals commit) against product `535ad27` (v0.13.4), harvest
+model `claude-sonnet-5`, grader `haiku`, three runs:
 
 | | run 1 | run 2 | run 3 | mean | 2 sd band |
 |---|---:|---:|---:|---:|---:|
 | recall | 0.7368 | 0.7368 | 0.7778 | 0.7505 | [0.7032 ; 0.7978] |
-| precision | 0.2593 | 0.3684 | 0.3333 | 0.3203 | [0.2089 ; 0.4318] |
+| labelled precision | 0.2593 | 0.3684 | 0.3333 | 0.3203 | [0.2089 ; 0.4318] |
+
+The second row is called **labelled** precision because that is all it is: kept items that sit on
+a lesson THIS corpus labelled, 42 of 134. It is a lower bound on precision rather than a measure of
+it - a dense session contains more lessons than a corpus labels, and of the 92 items that sat on no
+label, an independent review read nine and found nine of nine grounded in the session.
 
 **A rule the developer states still comes back every time: 18 of 18, at this density.** Twelve
 flat prohibitions and six "from here on"s, found in every run. That extends the first tier's
 57-of-57 rather than replacing it.
 
 **All of the drop is in the lessons that were not stated as rules** - 12 of the 26 unstated
-label-runs and 2 of the 12 implicit ones - and it is systematic rather than noisy: thirteen of the
-nineteen labels came back in all three runs, one in two, one in one, and **four in none at all**.
-Three of those four are the same case: the developer quietly fixing the same thing twice without
-ever saying the rule.
+label-runs and 2 of the 12 implicit ones - and it is systematic rather than noisy: of the nineteen
+labels, thirteen came back in all three runs, one in two, one in one, and **four in none**. (One of
+those four had only two runs to come back in: its session's model call failed in run 3 and is out
+of every denominator, which is why the per-run label counts read 19, 19 and 18.) Three of the four
+are the same case: the developer quietly fixing the same thing twice without ever saying the rule.
 
-**Nothing was competing for the slot.** In six of the twelve runs of those four sessions the
-harvest kept fewer than the three items it was allowed, and in two it returned nothing at all; the
-sieve's over-cap rule never fired in any run of any session. So the model had room to propose the
-quiet correction and did not - which points at what it treats as a correction, not at the quota.
+**In most of those sessions nothing was competing for the slot.** Of the eleven calls that reached
+the model across those four sessions, five kept fewer than the three items they were allowed and
+one returned nothing at all - so the harvest had room and did not use it. The exception is worth
+naming: for the fourth of those labels, the session filled all three slots in all three runs, so
+"there was room" is not measured there. What the sieve's cap rule did is not evidence either way,
+because it cannot fire on this corpus: the model never produced more than three items in any
+session (at most 3 in each of the 68 calls that reached it), so the quota is being applied by the
+prompt and never by the sieve.
 
-**Read the precision band as a property of the corpus, not of the product.** A dense session
-contains more lessons than a corpus can label: of 134 kept items, 42 sat on a planted label and
-92 did not, and all 92 were read one by one. Six are a planted lesson split or re-framed; **none
-is an invented claim and none is a bare fact about one system** (the distractor question agrees:
-0 of 54, with its positive control at 4/4). The other 86 are real lessons the corpus simply had
-not labelled.
+**What the 92 unlabelled items are.** All 92 were read one by one. Six are a planted lesson split
+or re-framed; **none is an invented claim and none is a bare fact about one system** (the distractor
+question agrees: 0 of 54, with its positive control at 4/4). The other 86 are real lessons the
+corpus simply had not labelled. That reading is the author's; the independent sample of nine above
+is not.
 
 **What they are says something about the corpus.** Eighty-four of those 86 items are seven
 lessons - the filler's own chores, generalised - wearing 72 different names across the three runs.
