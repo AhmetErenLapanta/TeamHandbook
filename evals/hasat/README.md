@@ -97,11 +97,14 @@ the fixtures would be measuring each other.
 
 ## Running it
 
-    npx vite-node evals/hasat/run.ts -- --dry-run              # preflight and cost projection only
-    npx vite-node evals/hasat/run.ts -- --grader-check-only    # measure the grader, spend nothing else
-    npx vite-node evals/hasat/run.ts -- --runs 3               # the measurement
+    npx vite-node evals/hasat/run.ts -- --tier 1 --dry-run            # preflight and cost projection only
+    npx vite-node evals/hasat/run.ts -- --tier 1 --grader-check-only  # measure the grader, spend nothing else
+    npx vite-node evals/hasat/run.ts -- --tier 1 --runs 3             # the measurement
 
-Flags: `--runs N`, `--model <name>` (written into the temporary home's config, which is the
+`--tier` is required and has no default: a second corpus lives beside this one (below), the two
+are never pooled, and they cost differently.
+
+Flags: `--tier 1|2|1,2`, `--runs N`, `--budget N`, `--model <name>` (written into the temporary home's config, which is the
 product's own override path), `--sessions a,b,c`, `--no-grade`, `--no-grader-check`,
 `--out <dir>`.
 
@@ -267,3 +270,94 @@ A related thing the corpus deliberately cannot tell you: of 77 kept items, 68 ca
 defect - its first kind is "an explicit teaching the user gave", and nearly every lesson here is
 stated as a rule. Whether the kinds discriminate when a lesson is *not* stated is unmeasured, so
 no distribution of kinds in a real queue can be read against these numbers.
+
+---
+
+# Tier 2: the same question at production's density
+
+The number above is a ceiling and the paragraph under it says why: the rule is stated outright
+in 23 of 24 sessions, the slice that reaches the model fills 2% of its cap, and the
+existing-skill list is injected empty. Two of the conclusions were also unreadable by
+construction - `error-fix` and `implicit` named the same five labels, so no adjustment could
+tell which attribute it moved, and the sieve's duplicate branch never fired because there was
+no existing skill to collide with.
+
+Tier 2 is the same instrument with three things changed and nothing else. `corpus-tier2.ts`,
+selected with `--tier 2`, reported apart from tier 1 and never pooled with it.
+
+## What is different
+
+**The session is dense.** Measured through the product's own slicer and recorder rather than
+estimated, and asserted by `corpus.test.ts`:
+
+| | tier 1 | tier 2 |
+|---|---:|---:|
+| slice that reaches the model, median | 824 chars (2.1% of the cap) | 32,703 chars (82% of the cap) |
+| developer turns, median | 3 | 26 |
+| of those, short enough to be recorded as prompts | 3 | 15 |
+| the turn carrying the lesson, as a share of everything typed | 70% | 1.1% |
+| existing skills injected | 0 | 4 |
+
+The bulk comes from `noise.ts`: chores, pasted data and inventories of what changed, over
+twenty-four invented service areas. It is generated rather than written by hand, which is a
+real limit on this tier and the reason tier 3 exists - a model may well find templated filler
+easier to ignore than the real thing.
+
+**The lesson is often not stated at all.** Nine of the twenty-two labels are a new form,
+`unstated`: the same mistake is corrected twice on its own terms, or the developer quietly
+reverts the same thing twice, or a procedure is carried out step by step because each step was
+asked for, and no turn generalises any of it. There is no sentence to quote. Four more are
+`implicit` - pushback on the general case without a rule sentence - and the rest are stated,
+filling the cells tier 1 left empty: a voiced error-fix, a procedure stated as a hard rule.
+
+| kind \ form | hard-never | soft-henceforth | implicit | unstated |
+|---|---:|---:|---:|---:|
+| correction | 1 | 0 | 2 | 4 |
+| procedure | 2 | 1 | 2 | 3 |
+| error-fix | 3 | 2 | 0 | 2 |
+
+**The model is told what already exists.** Every session injects three to five existing skills
+with real descriptions, and in three of them one of those skills already covers the session's
+own lesson. The right outcome there is silence: the prompt says to propose nothing that
+overlaps an existing skill, and the sieve drops an item whose slug already exists. Those three
+labels are out of every recall denominator and reported as suppression instead - whether
+anything came back for them, and which of the two mechanisms stopped it.
+
+## What holds the tier up
+
+- **The canonical sentence is nowhere in the session.** Tier 1 bans a five-word run of it from
+  an assistant turn and an eight-word run from a developer turn. For an `unstated` or
+  `implicit` label the bound here is four words in EITHER role, because a lesson nobody stated
+  has no reason to share a phrase with anything.
+- **And it is barely there as vocabulary.** Content-word overlap between a label's sentence
+  and the best single developer turn: 0.15 on average across the unstated arm and 0.12 across the
+  implicit one, against a floor of 0.11 for the same measure taken against a DIFFERENT session.
+  There is nothing to rephrase. The stated arm sits at 0.47, which is roughly what tier 1
+  measured (0.46 on its own hard-never arm), and that is the point of keeping the arms apart.
+- **The filler states no rule - and that is weaker than "teaches nothing", which is the honest
+  version.** The first draft of it filled the sessions with substantial engineering exchanges - a
+  duplicate-delivery bug traced through log timestamps, a flaky test traced to a module-scope
+  counter in a shared fixture - and a pilot run over nine sessions showed the harvest proposing
+  exactly those: of the seven sessions that returned anything, all seven proposed filler-derived
+  lessons, and in two the planted lesson did not come back at all. (Whether the filler displaced
+  it cannot be read off that run: nothing was dropped by the sieve, so the model simply never
+  emitted it.) The filler was rewritten as bulk without a mechanism, which cut its own yield to
+  one or two items a session and did not remove it: the measured runs kept 86 filler-derived
+  items. `corpus.test.ts` asserts that no filler turn states a rule in the developer's voice,
+  which is what would make it indistinguishable from a planted label; it cannot assert that a
+  dense session contains nothing else worth keeping, because it does.
+- **Each label declares which evidence path carries it**, and the test asserts the declaration
+  against what the product's own recorder and slicer do. One label is stated inside a turn
+  longer than 600 characters, so it reaches the model through the slice alone - which is the
+  production mix rather than a defect, and it is declared rather than discovered afterwards.
+
+## Running it
+
+    npx vite-node evals/hasat/run.ts -- --tier 2 --dry-run
+    npx vite-node evals/hasat/run.ts -- --tier 2 --runs 3
+
+`--tier` has no default: the two tiers are never pooled and they cost differently, so an
+invocation that ran both by accident would spend twice what its command line says. The grader
+is checked against its own tier's hand-labelled pairs - agreement on ten pairs about voiced
+rules says nothing about a grader reading an item against a sentence nobody in the session ever
+said.

@@ -6,9 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readTranscriptTexts } from "../../src/lib/transcript.js";
-import { SESSIONS } from "./corpus.js";
+import { MAX_CORRECTIONS } from "../../src/lib/corrections.js";
+import { SESSIONS, TIER1_SESSIONS, sessionsInTier } from "./corpus.js";
 import { buildSession, writeTranscript } from "./session.js";
 import { shuffledLabels } from "./corpus.js";
+import { noiseTurns, THEMES } from "./noise.js";
+import { median, overlapRows } from "./overlap.js";
 import { controlYesRate } from "./metrics.js";
 import type { SessionRun } from "./metrics.js";
 import { classifyRefusal } from "./tiers.js";
@@ -28,17 +31,21 @@ const ALL_LABELS = SESSIONS.flatMap((s) => s.labels.map((l) => ({ session: s, la
 
 describe("the corpus is a measurement instrument", () => {
   it("has the spread the package claims: kinds, languages, positions, forms, and one session with no lesson", () => {
-    expect(SESSIONS.length).toBeGreaterThanOrEqual(20);
-    expect(SESSIONS.length).toBeLessThanOrEqual(30);
-    expect(SESSIONS.filter((s) => s.labels.length === 0)).toHaveLength(1);
+    // Tier 1's own shape, asserted on tier 1 rather than on the union: tier 2 doubles the
+    // session count and adds a fourth form, and an assertion over both would stop saying
+    // anything about either.
+    expect(TIER1_SESSIONS.length).toBeGreaterThanOrEqual(20);
+    expect(TIER1_SESSIONS.length).toBeLessThanOrEqual(30);
+    expect(TIER1_SESSIONS.filter((s) => s.labels.length === 0)).toHaveLength(1);
+    const tier1Labels = TIER1_SESSIONS.flatMap((s) => s.labels);
     for (const kind of ["correction", "procedure", "error-fix"] as const) {
-      expect(ALL_LABELS.filter((e) => e.label.kind === kind).length, kind).toBeGreaterThanOrEqual(3);
+      expect(tier1Labels.filter((l) => l.kind === kind).length, kind).toBeGreaterThanOrEqual(3);
     }
     for (const position of ["opening", "middle", "closing", "repeated"] as const) {
-      expect(ALL_LABELS.filter((e) => e.label.position === position).length, position).toBeGreaterThanOrEqual(1);
+      expect(tier1Labels.filter((l) => l.position === position).length, position).toBeGreaterThanOrEqual(1);
     }
     for (const form of ["hard-never", "soft-henceforth", "implicit"] as const) {
-      expect(ALL_LABELS.filter((e) => e.label.form === form).length, form).toBeGreaterThanOrEqual(3);
+      expect(tier1Labels.filter((l) => l.form === form).length, form).toBeGreaterThanOrEqual(3);
     }
     // Most sessions are in English; a few carry the developer's own language, because the
     // correction detectors carry it as data and the harvest prompt has to as well.
@@ -179,8 +186,9 @@ describe("the corpus is a measurement instrument", () => {
     expect(cappedOut.inCorrections, "the prompt-ceiling fixture no longer loses its lesson to the 40-prompt ceiling").toBe(false);
     expect(cappedOut.inSlice, "the prompt-ceiling fixture must still reach the model through the slice").toBe(true);
 
-    // And nowhere else, so a recall miss elsewhere is the model's or the sieve's.
-    for (const session of SESSIONS) {
+    // And nowhere else in tier 1, so a recall miss there is the model's or the sieve's.
+    // Tier 2 declares its own expected evidence paths per label and is asserted below.
+    for (const session of TIER1_SESSIONS) {
       if (session.id === "configuration-is-read-once-into-a-shape") continue;
       if (session.id === "a-flag-is-removed-by-the-person-who-added-it") continue;
       const home = mkdtempSync(join(tmpdir(), "th-hasat-home-full-"));
@@ -270,5 +278,202 @@ describe("the corpus is a measurement instrument", () => {
         expect(ownDomains.has(label.domain), `${session.id} was handed a same-subject label`).toBe(false);
       }
     }
+  });
+});
+
+/**
+ * Tier 2 claims three things tier 1 did not, and each of them is a number rather than an
+ * intention: the session is dense, the lesson is not stated, and the model is told what
+ * already exists. Every assertion here is one of those claims, and every one of them was a
+ * way this corpus could have quietly stopped being harder than tier 1 while looking harder.
+ */
+describe("tier 2 is dense, unstated, and told what already exists", () => {
+  const TIER2 = sessionsInTier(2);
+  const CAP = 40_000;
+
+  function built(session: (typeof TIER2)[number]) {
+    const home = mkdtempSync(join(tmpdir(), "th-hasat-t2-"));
+    try {
+      return buildSession(session, home);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it("is twenty to thirty sessions with one that carries no lesson", () => {
+    expect(TIER2.length).toBeGreaterThanOrEqual(20);
+    expect(TIER2.length).toBeLessThanOrEqual(30);
+    expect(TIER2.filter((s) => s.labels.length === 0)).toHaveLength(1);
+    for (const session of TIER2) expect(session.tier, session.id).toBe(2);
+  });
+
+  it("fills the slice, buries the lesson, and leaves most of what was typed unrecorded", () => {
+    // The three numbers the tier exists for, measured through the product's own slicer and
+    // prompt recorder rather than estimated from the fixture text. The bars are the ones the
+    // card set against the independent review of tier 1, which measured a median slice of
+    // 824 characters (2.1% of the cap), a median of three developer turns, and a lesson turn
+    // that was a median of 70% of everything the developer said.
+    const rows = TIER2.map((session) => {
+      const b = built(session);
+      const users = session.turns.filter((t) => t.role === "user" && !t.meta && !t.sidechain);
+      const userChars = users.reduce((n, t) => n + t.text.length, 0);
+      const carriers = session.labels.map((label) =>
+        users
+          .filter((t) => fold(t.text).includes(fold(label.anchor)))
+          .reduce((n, t) => n + t.text.length, 0),
+      );
+      return {
+        id: session.id,
+        slice: b.slice.length,
+        users: users.length,
+        prompts: b.correctionsKept,
+        lessonShare: carriers.length > 0 ? Math.max(...carriers) / userChars : 0,
+      };
+    });
+    expect(median(rows.map((r) => r.slice))).toBeGreaterThanOrEqual(0.6 * CAP);
+    expect(median(rows.map((r) => r.users))).toBeGreaterThanOrEqual(12);
+    for (const row of rows) {
+      expect(row.lessonShare, `${row.id} lesson turn share of developer text`).toBeLessThan(0.1);
+      // Production's evidence mix: most of what a developer types is a brief the recorder
+      // ignores. Tier 1's median session had three prompts and one of them was the rule.
+      expect(row.prompts, `${row.id} recorded prompts`).toBeLessThan(row.users);
+      expect(row.prompts, `${row.id} recorded prompts`).toBeLessThanOrEqual(MAX_CORRECTIONS);
+    }
+  });
+
+  it("fills the cells tier 1 left empty and adds the unstated form", () => {
+    const labels = TIER2.flatMap((s) => s.labels);
+    // The five cells whose emptiness made tier 1 unable to say which of two nested
+    // attributes its misses belonged to.
+    for (const cell of [
+      "error-fix/hard-never",
+      "error-fix/soft-henceforth",
+      "procedure/hard-never",
+      "procedure/implicit",
+      "correction/implicit",
+    ]) {
+      expect(
+        labels.filter((l) => `${l.kind}/${l.form}` === cell).length,
+        `cell ${cell} is empty again`,
+      ).toBeGreaterThanOrEqual(1);
+    }
+    // The card asked for the unstated arm to be the bulk of this tier, because tier 1's
+    // implicit arm was six labels wide against a band of eight points.
+    expect(labels.filter((l) => l.form === "unstated").length).toBeGreaterThanOrEqual(8);
+    for (const kind of ["correction", "procedure", "error-fix"] as const) {
+      expect(
+        labels.filter((l) => l.form === "unstated" && l.kind === kind).length,
+        `no unstated ${kind}`,
+      ).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("states the unstated lessons nowhere: not as a phrase, and barely as vocabulary", () => {
+    const labels = TIER2.flatMap((session) => session.labels.map((label) => ({ session, label })));
+    for (const { session, label } of labels) {
+      if (label.form !== "unstated" && label.form !== "implicit") continue;
+      // Tighter than the tier-1 ban, and in both roles: for a lesson nobody stated there is
+      // no legitimate reason for four words of the canonical sentence to run together
+      // anywhere in the session, in the developer's turns either.
+      const reference = ngrams(label.lesson, 4);
+      for (const turn of session.turns) {
+        const overlap = [...ngrams(turn.text, 4)].filter((g) => reference.has(g));
+        expect(overlap, `${label.id} wording appears in a ${turn.role} turn`).toEqual([]);
+      }
+    }
+    // And as vocabulary: the content-word overlap of the canonical sentence against the best
+    // single developer turn stays near the floor the same measure produces against a
+    // DIFFERENT session. Reported in full by the runner; the bar here is only that an
+    // unstated lesson is not sitting in one turn waiting to be rephrased.
+    const unstated = overlapRows(TIER2).filter((r) => r.form === "unstated" || r.form === "implicit");
+    expect(unstated.length).toBeGreaterThanOrEqual(10);
+    for (const row of unstated) {
+      expect(row.bestTurn, `${row.labelId} overlap with one developer turn`).toBeLessThan(0.4);
+    }
+  });
+
+  it("injects three to five existing skills, and exactly three lessons one of them covers", () => {
+    for (const session of TIER2) {
+      const names = (session.existingSkills ?? []).map((s) => s.name);
+      expect(names.length, `${session.id} existing skills`).toBeGreaterThanOrEqual(3);
+      expect(names.length, `${session.id} existing skills`).toBeLessThanOrEqual(5);
+      expect(new Set(names).size, `${session.id} repeats a skill`).toBe(names.length);
+      for (const skill of session.existingSkills ?? []) {
+        // The model is shown the name and the description and decides overlap on that pair,
+        // so a skill with no description would be a list entry the prompt cannot use.
+        expect(skill.description.length, `${skill.name} description`).toBeGreaterThan(40);
+      }
+      for (const label of session.labels) {
+        if (!label.coveredBy) continue;
+        expect(names, `${label.id} names a covering skill that is not in its own list`).toContain(
+          label.coveredBy,
+        );
+      }
+    }
+    const covered = TIER2.flatMap((s) => s.labels).filter((l) => l.coveredBy);
+    expect(covered).toHaveLength(3);
+    // Each covered label sits alone in its session, so "nothing came back for this session"
+    // is a readable outcome rather than one mixed with a lesson that should have come back.
+    for (const label of covered) {
+      const session = TIER2.find((s) => s.labels.some((l) => l.id === label.id))!;
+      expect(session.labels, `${session.id} mixes a covered lesson with an uncovered one`).toHaveLength(1);
+    }
+  });
+
+  it("carries the evidence path each label declares, and no other", () => {
+    // Tier 1 proved that the slice and the recorded prompts rescue each other. Tier 2 is
+    // where that stops being automatic: a rule stated inside a 600-character turn is never
+    // recorded, which is the production mix. Declared per label, and measured here, so a
+    // miss can be attributed rather than guessed at.
+    for (const session of TIER2) {
+      for (const presence of built(session).presence) {
+        const label = session.labels.find((l) => l.id === presence.labelId)!;
+        expect(presence.inSlice, `${session.id}/${label.id} in the slice`).toBe(
+          label.presence?.slice ?? true,
+        );
+        expect(presence.inCorrections, `${session.id}/${label.id} in the recorded prompts`).toBe(
+          label.presence?.corrections ?? true,
+        );
+      }
+    }
+  });
+
+  it("keeps the filler free of a rule stated in the developer's voice", () => {
+    // What this can and cannot prove, because the difference was measured: it proves the
+    // filler never STATES a rule, which is what would make it indistinguishable from a
+    // planted label. It does not prove the filler is unharvestable - the measured runs kept 86
+    // items generalised from the chores themselves, and the report classifies every one of
+    // them by hand. A dense session contains more lessons than a corpus can label, and no
+    // assertion here can change that.
+    // The constructions a rule is STATED in, not the words it happens to use. A first
+    // version of this list banned "never", "always" and "rule" outright and failed on
+    // ordinary prose - "rows that were never given a status", "the run never catches up",
+    // and a theme whose domain object is literally a price rule. A pattern that fires on
+    // prose nobody would harvest does not measure the thing it was written for.
+    const RULE_SHAPED = [
+      /\b(?:we|you) (?:never|always)\b/i,
+      /\bnever\s+(?:do|use|write|merge|commit|patch|mock|delete|touch|edit|add|put)\b/i,
+      /\balways\s+(?:do|use|write|run|check|start|keep)\b/i,
+      /\bfrom (?:now|here) on\b/i,
+      /\bgoing forward\b/i,
+      /\bwe do not\b/i,
+      /\bwe don't\b/i,
+      /\bmake sure (?:you|to)\b/i,
+      /\bthe rule (?:is|here)\b/i,
+      /\bas a rule\b/i,
+      /\bin this (?:project|repository|repo|codebase) we\b/i,
+    ];
+    for (const theme of THEMES) {
+      for (const turn of noiseTurns({ theme: theme.key, exchanges: 12 })) {
+        for (const pattern of RULE_SHAPED) {
+          expect(pattern.test(turn.text), `${theme.key}: filler turn reads as a teaching: ${pattern}`).toBe(false);
+        }
+      }
+    }
+    // And the lesson-free session of this tier is filler alone, so anything kept there is
+    // noise by construction exactly as in tier 1.
+    const free = TIER2.find((s) => s.labels.length === 0)!;
+    expect(free.distractors.length).toBeGreaterThanOrEqual(1);
+    expect(built(free).substance, "the dense lesson-free session would be skipped as trivial").toBe(true);
   });
 });

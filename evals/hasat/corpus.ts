@@ -16,15 +16,26 @@
 //     a grader that says yes there is saying yes to nothing; two labels from the same
 //     domain would make that answer legitimately hard rather than wrong.
 
+import type { SkillSummary } from "../../src/lib/skill-index.js";
+import { TIER2_SESSIONS } from "./corpus-tier2.js";
+
 export type LabelKind = "correction" | "procedure" | "error-fix";
 
 /** Where in the conversation the lesson is stated. The slicer spends its budget
  * newest-first, so an early lesson in a long session is the one it can drop. */
 export type Position = "opening" | "middle" | "closing" | "repeated";
 
-/** How the lesson is stated. `implicit` is the hard case: no rule sentence at all,
- * only a developer pushing back twice until the assistant does it their way. */
-export type Form = "hard-never" | "soft-henceforth" | "implicit";
+/**
+ * How the lesson is stated.
+ *
+ * `implicit` is a developer pushing back until the assistant does it their way: no rule
+ * sentence, but the pushback is about the general case ("not that way, the other way").
+ * `unstated` is the harder one tier 2 adds: nobody ever generalises at all. The same
+ * mistake is corrected twice on its own terms, or a procedure is simply carried out in
+ * order, and the lesson exists only in what the session DID. There is no sentence to
+ * quote, which is also what makes it the case a real session is usually made of.
+ */
+export type Form = "hard-never" | "soft-henceforth" | "implicit" | "unstated";
 
 export interface Label {
   id: string;
@@ -51,6 +62,23 @@ export interface Label {
   domain: string;
   position: Position;
   form: Form;
+  /**
+   * An existing skill in this session's injected list ALREADY covers this lesson, named
+   * here by its slug. The prompt tells the model to produce nothing that overlaps an
+   * existing skill, so the right outcome is that nothing comes back for this label - which
+   * makes it the opposite of a recall case. It leaves every recall denominator and is
+   * counted as suppression instead, and an item that comes back for it anyway is reported
+   * whether the sieve's duplicate rule caught it or not.
+   */
+  coveredBy?: string;
+  /**
+   * Which evidence path is EXPECTED to carry this lesson, measured rather than assumed and
+   * asserted by `corpus.test.ts`. Both default to true. A tier-2 lesson stated inside a
+   * turn longer than the recorder's 600-character line reaches the model through the slice
+   * only, which is the production mix and not a defect - but it has to be declared, or a
+   * recall miss cannot be told from a lesson the model never saw.
+   */
+  presence?: { slice?: boolean; corrections?: boolean };
 }
 
 /** A true fact about ONE system. A good harvest may mention it; it must not propose it
@@ -89,6 +117,21 @@ export interface WorkEvent {
 
 export interface CorpusSession {
   id: string;
+  /**
+   * Which measurement this session belongs to. 1 is the legible corpus the headline band
+   * was taken on; 2 is the dense one, where the slice fills, the lesson is one turn among
+   * twenty, and a full existing-skill list is injected. They are reported apart and never
+   * pooled: a mean over both would be a number describing a corpus nobody designed.
+   */
+  tier: 1 | 2;
+  /**
+   * The existing-skill list the harvest prompt is shown, as `listSkills` would have
+   * returned it. Tier 1 injects an empty one, which is why its precision can only be
+   * higher than production's and why the sieve's duplicate rule was never exercised
+   * there. Tier 2 injects three to five, and in three sessions one of them covers the
+   * session's own lesson.
+   */
+  existingSkills?: SkillSummary[];
   /** the language of the USER's turns. The detectors carry other languages as data, so
    * the harvest prompt has to as well. */
   language: "en" | "tr" | "mixed";
@@ -183,7 +226,7 @@ function longErrandTurns(lengths: number[], startAt = 0): Turn[] {
 
 // ── the corpus ──────────────────────────────────────────────────────────────
 
-export const SESSIONS: CorpusSession[] = [
+const TIER1: Omit<CorpusSession, "tier">[] = [
   {
     id: "clock-injected-not-mocked",
     language: "en",
@@ -1588,6 +1631,24 @@ export const SESSIONS: CorpusSession[] = [
     ],
   },
 ];
+
+/** The legible corpus the headline band was taken on: the rule is stated outright, the
+ * slice fills 2% of its cap, and the existing-skill list is empty. */
+export const TIER1_SESSIONS: CorpusSession[] = TIER1.map((s) => ({ ...s, tier: 1 }));
+
+/**
+ * Both tiers, in one list, because everything downstream looks a session up by id: the
+ * metrics, the grader's donor map and the runner's selection. They are never POOLED -
+ * `run.ts` bands each tier on its own - but they do share one namespace, and
+ * `corpus.test.ts` asserts that ids and domains are unique across it. A tier-2 label that
+ * reused a tier-1 domain would quietly make the shuffled-label control a hard question
+ * instead of a wrong one.
+ */
+export const SESSIONS: CorpusSession[] = [...TIER1_SESSIONS, ...TIER2_SESSIONS];
+
+export function sessionsInTier(tier: 1 | 2): CorpusSession[] {
+  return SESSIONS.filter((s) => s.tier === tier);
+}
 
 /**
  * A derangement of the corpus that never pairs two lessons about the same subject. The

@@ -201,10 +201,10 @@ session produced. `evals/hasat/` measures that one, and it is a different kind o
 package - it calls `harvestSession` through the real `runClaudeCli` directly rather than
 running the plugin, because the subject is the harvest and not a routing decision.
 
-    npx vite-node evals/hasat/run.ts -- --dry-run              # preflight and cost projection
-    npx vite-node evals/hasat/run.ts -- --grader-check-only    # measure the grader, nothing else
-    npx vite-node evals/hasat/run.ts -- --runs 3               # the measurement
-    npx vitest run evals/hasat/corpus.test.ts                  # free, deterministic, in the suite
+    npx vite-node evals/hasat/run.ts -- --tier 1 --dry-run            # preflight and cost projection
+    npx vite-node evals/hasat/run.ts -- --tier 1 --grader-check-only  # measure the grader, nothing else
+    npx vite-node evals/hasat/run.ts -- --tier 1 --runs 3             # the measurement
+    npx vitest run evals/hasat/corpus.test.ts                         # free, deterministic, in the suite
 
 Run the grader check first, for the same reason the routing suite runs its control first:
 the recall number is a grader's verdicts, and a grader nobody measured produces an
@@ -292,3 +292,58 @@ runner batches per session, so a run's grading outlasts its harvest.
   `implicit 15/18` row report the same two labels, and which attribute the misses belong
   to cannot be read off this corpus. A harder tier that crosses them is the next
   measurement.
+
+## The second tier: the same question at production's density
+
+The baseline above is a ceiling, and the paragraph under it says why. `evals/hasat/` now carries
+a second corpus that removes the three reasons it was one, and reports apart from the first:
+
+    npx vite-node evals/hasat/run.ts -- --tier 2 --runs 3
+
+Twenty-three sessions where the slice fills to 82% of its cap instead of 2%, the developer takes
+26 turns instead of 3, the turn carrying the lesson is 1% of what they typed instead of 70%,
+three to five existing skills are injected instead of none - and in nine of the twenty-two
+labelled lessons nobody ever states the rule at all. It is measured the same way, with its own
+hand-labelled grader pairs, because agreement on pairs about voiced rules says nothing about a
+grader reading an item against a sentence that appears nowhere in the session.
+
+Measured 2026-09-26, harvest model `claude-sonnet-5`, grader `haiku`, three runs:
+
+| | run 1 | run 2 | run 3 | mean | 2 sd band |
+|---|---:|---:|---:|---:|---:|
+| recall | 0.7368 | 0.7368 | 0.7778 | 0.7505 | [0.7032 ; 0.7978] |
+| precision | 0.2593 | 0.3684 | 0.3333 | 0.3203 | [0.2089 ; 0.4318] |
+
+**A rule the developer states still comes back every time: 18 of 18, at this density.** Twelve
+flat prohibitions and six "from here on"s, found in every run. That extends the first tier's
+57-of-57 rather than replacing it.
+
+**All of the drop is in the lessons that were not stated as rules** - 12 of the 26 unstated
+label-runs and 2 of the 12 implicit ones - and it is systematic rather than noisy: thirteen of the
+nineteen labels came back in all three runs, one in two, one in one, and **four in none at all**.
+Three of those four are the same case: the developer quietly fixing the same thing twice without
+ever saying the rule.
+
+**Nothing was competing for the slot.** In six of the twelve runs of those four sessions the
+harvest kept fewer than the three items it was allowed, and in two it returned nothing at all; the
+sieve's over-cap rule never fired in any run of any session. So the model had room to propose the
+quiet correction and did not - which points at what it treats as a correction, not at the quota.
+
+**Read the precision band as a property of the corpus, not of the product.** A dense session
+contains more lessons than a corpus can label: of 134 kept items, 42 sat on a planted label and
+92 did not, and all 92 were read one by one. Six are a planted lesson split or re-framed; **none
+is an invented claim and none is a bare fact about one system** (the distractor question agrees:
+0 of 54, with its positive control at 4/4). The other 86 are real lessons the corpus simply had
+not labelled.
+
+**What they are says something about the corpus.** Eighty-four of those 86 items are seven
+lessons - the filler's own chores, generalised - wearing 72 different names across the three runs.
+That number is a property of this corpus and of how it was run, not a measurement of production:
+twenty-three sessions share the same chores, every session runs against a fresh home, and the
+existing-skill list is empty, so nothing could have suppressed a re-proposal and nothing about the
+sieve's slug comparison was exercised. Whether duplicates of one lesson accumulate in a real queue
+is **unmeasured**, and on the machine that produced this package they have not: its 86 real
+candidates are 86 distinct topics, with no two names sharing a three-word prefix.
+
+The suppression that WAS measured points the other way: where an existing skill already covered the
+session's lesson, the model proposed nothing for it in any run, 0 of 9.
