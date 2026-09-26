@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.4] - 2026-09-26
+
+- **The claim this product leads with, that it finds the lesson a session gave, now has a
+  measurement of its own.** The sessions it is measured against and the band the result
+  sits in are in `evals/`, stated with what they do and do not cover, for anyone to read
+  and run. Nothing that reaches an installed copy changed.
+
 ## [0.13.3] - 2026-09-26
 
 - **The one model call made while reading a session now runs with nothing of your machine
