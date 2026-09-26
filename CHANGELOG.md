@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.3] - 2026-09-26
+
+- **The one model call made while reading a session now runs with nothing of your machine
+  within reach.** It used to inherit the session it came from: every tool, every MCP server
+  you have configured, your repository as its working directory, and your whole environment.
+  It now starts with no tools, no servers, an empty directory of its own, and only the
+  settings it needs to reach the model, so nothing it reads out of a session can act on
+  anything. It also costs a fraction of what it did.
+- **A harvest comes back empty less often.** Reading a session from inside a repository
+  could start the plugin's own session notice inside that call and talk over the answer;
+  the isolated call has nothing to trigger it.
+- **The fence that keeps the text a session captured from being read as an instruction
+  holds in more spellings.** A line break in one of the less common forms, and a closing
+  marker written with invisible or look-alike characters, no longer get past it. The text
+  itself is left as it was.
+
 ## [0.13.2] - 2026-09-26
 
 - **The detector recognizes more of the credential families a real session produces, and
