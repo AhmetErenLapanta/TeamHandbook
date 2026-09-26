@@ -511,6 +511,34 @@ describe("auditSkillDir", () => {
     expect(audit.files).toEqual(["references/queries.sql", "scripts/run.sh", "SKILL.md"]);
   });
 
+  // The screen runs `detectSecret` over every file, so a rule that reads ordinary prose as a
+  // credential does not merely lose a harvest - it refuses a skill someone wrote by hand and
+  // tells them it held a secret. Both sentences below were shareable before the field-name
+  // rules landed and have to stay shareable.
+  it("given a skill whose prose says machine, login and password in netrc order, when it is audited, then it is still shareable", () => {
+    const dir = handWrittenSkill("rotate-deploy-credentials", {
+      "references/notes.md":
+        "Each machine needs login and password set before the first deploy.\n" +
+        "The machine used login and password from the netrc file, not the keychain.\n",
+    });
+
+    const audit = auditSkillDir(dir);
+
+    expect(audit.shareable).toBe(true);
+  });
+
+  it("given a skill documenting BuildKit's own --secret flag, when it is audited, then it is still shareable", () => {
+    const dir = handWrittenSkill("build-with-buildkit-secrets", {
+      "references/commands.md":
+        "docker build --secret id=aws,src=/etc/acme/credentials.ini .\n" +
+        "docker buildx build --secret id=npmrc,src=/home/build/.npmrc .\n",
+    });
+
+    const audit = auditSkillDir(dir);
+
+    expect(audit.shareable).toBe(true);
+  });
+
   it("given a credential in a file beside SKILL.md, when it is audited, then the whole skill is refused and the file named", () => {
     const dir = handWrittenSkill("rebuild-nightly-report", {
       "scripts/seed.sh": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",

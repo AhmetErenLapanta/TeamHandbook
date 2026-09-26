@@ -16,8 +16,8 @@ This document states exactly what it reads, what it writes, and where data goes.
   which sentence states a rule is something the model does in any language and a phrase
   list only ever did it in one. **The practical effect is that more of your prompts are
   written to local state than before** - bounded to the 40 most recent per session, and
-  a prompt containing a secret is still dropped and never stored. Nothing is sent
-  anywhere by this hook.
+  a prompt carrying a secret the detector recognizes is still dropped and never
+  stored. Nothing is sent anywhere by this hook.
 - **`SessionEnd`: the session id, the working directory, and the path to Claude
   Code's transcript file for that session.** If the session did real work, that path
   and the captured evidence are queued as a harvest job; the background runner then
@@ -33,8 +33,8 @@ This document states exactly what it reads, what it writes, and where data goes.
   directory names, `SKILL.md` frontmatter and file contents under `~/.claude/skills` and
   this project's `.claude/skills`, so the list can say which of them could travel. Nothing
   there is modified, moved or deleted, and the contents are read in order to screen them:
-  a skill carrying a credential in any of its files is refused rather than shared, and the
-  whole skill is refused rather than redacted, because a skill with a blanked-out script
+  a skill carrying a recognized credential in any of its files is refused rather than
+  shared, and the whole skill is refused rather than redacted, because a blanked-out script
   installs and then fails. The screening happens before any git command runs, so a refused
   skill never reaches a clone. If you hand it a skill directory by path (`--skill-path`,
   for a skill you are writing somewhere the client does not load from) it reads that
@@ -97,17 +97,29 @@ Approved skills are written **outside** `~/.teamhandbook/`, where Claude Code lo
 them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
 (project), or the team repo via a pull request.
 
-- **Secrets are redacted before anything is written - the session files included.**
-  A captured command, error, or edit that matches a secret pattern is dropped
-  entirely and reduced to a content-free fingerprint (only a redaction counter is
-  kept). For transcript slices the mechanism differs by necessity: a matching line is
-  replaced in place with `[redacted:<type>]` rather than dropping the whole slice, and
-  a multi-line secret whose value spans following lines - a PEM private-key block - is
-  consumed as a whole unit (if its END marker is missing, the rest of the slice is
-  dropped rather than risk leaking the key). The number of redacted lines is recorded
-  in `pipeline.log`. Either way the raw text reaches neither disk nor the model. Detection is best-effort pattern matching
-  (see `src/lib/secrets.ts`); a secret in an unrecognized format can slip through, so
-  review a candidate before approving it.
+- **A secret in a format the detector recognizes is redacted before anything is
+  written - the session files included.** A captured command, error, or edit that
+  matches a secret pattern is dropped entirely and reduced to a content-free
+  fingerprint (only a redaction counter is kept). For transcript slices the mechanism
+  differs by necessity: a matching line is replaced in place with `[redacted:<type>]`
+  rather than dropping the whole slice, and above that sits a coarser rule - a message
+  carrying key material is dropped whole, because a per-line pass cannot follow a key
+  body across the lines a paste, a narrow terminal or a `git diff` prefix breaks it
+  into. Key material here means armor (PEM, armored PGP, PuTTY) or a long base64 run,
+  including one wrapped across short lines. Two kinds of long base64 run are exempt, and
+  neither is a shape a pasted key falls into by accident: a Subresource Integrity digest of
+  exactly the length its hash produces, and a `data:image/…;base64` URI opening with a real
+  image format's first bytes. Without those exemptions one lockfile line cost the whole
+  message, and a lockfile is nothing but those lines. The number of redacted lines is
+  recorded in `pipeline.log`. Either way the raw secret text reaches neither disk nor the
+  model. Detection is best-effort pattern matching (see `src/lib/secrets.ts`); a secret in
+  an unrecognized format can slip through, so review a candidate before approving it. What
+  bounds that best effort is a corpus: the detector is measured against secret families in
+  the contexts a session actually sees - a command line, stderr, a diff, a config file, a
+  header - and the corpus lives in the test suite, so a family IN IT that the detector
+  cannot name in any of those contexts fails the build; a shape it names nowhere, held only
+  by the message-level drop, is asserted there instead. A format the corpus does not carry
+  is covered by the sentence above and by nothing else.
 - **Raw hook payloads are never written unless you opt in** with `TEAMHANDBOOK_DEBUG=1`
   (a diagnostics aid for confirming the payload schema). Raw payloads can contain
   secrets, so this is off by default.

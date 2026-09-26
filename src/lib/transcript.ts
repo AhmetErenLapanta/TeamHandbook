@@ -100,8 +100,12 @@ function neutralizeRoleLabels(text: string): string {
 // ssh.com/SSH2 (`---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----`: four dashes, spaces).
 const PEM_BEGIN = /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/;
 const PEM_END = /-{4,5}\s?END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/;
-// PuTTY keys are not PEM-armored: the body follows a `Private-Lines: N` header.
-const PPK_BEGIN = /^\s*(?:PuTTY-User-Key-File-\d+|Private-Lines):/im;
+// PuTTY keys are not PEM-armored: the body follows a line-count header. Not anchored to the
+// start of a line - a diff of a .ppk prefixes every line with `+`, and `cat -n` prefixes it
+// with a number, which is how a key file actually appears in a session - but it does ask for
+// the rest of the format, so that prose naming the header (this file's own comment included)
+// is not read as key material.
+const PPK_BEGIN = /PuTTY-User-Key-File-\d+:[ \t]*\S|Private-Lines:[ \t]*\d/i;
 
 /**
  * Does this message carry key material at all? Line-by-line redaction of pasted
@@ -116,6 +120,88 @@ const PPK_BEGIN = /^\s*(?:PuTTY-User-Key-File-\d+|Private-Lines):/im;
  * NOT trip it. A message quoting a public certificate does - its body is a base64
  * blob - which loses that message from the harvest but leaks nothing.
  */
+/**
+ * The two long base64 runs a coding session prints that are never key material. Each is
+ * bound to the EXACT base64 length its hash produces (sha256 43 + `=`, sha384 64, sha512
+ * 86 + `==`) and to the file format's own magic bytes, so a key body hidden behind a
+ * `sha512-` prefix fails the length test and is dropped as before.
+ *
+ * Measured: without this, a lockfile is nothing but integrity lines and a message quoting
+ * one was dropped from the harvest whole - so every dependency-upgrade session lost its
+ * lessons, which is the most common session there is after a feature.
+ */
+const SRI_DIGEST =
+  /\bsha(?:256-[A-Za-z0-9+/]{43}=|384-[A-Za-z0-9+/]{64}|512-[A-Za-z0-9+/]{86}==)(?![A-Za-z0-9+/=])/g;
+const IMAGE_DATA_URI =
+  /\bdata:image\/[a-z.+-]+;base64,(?:iVBORw0KGgo|\/9j\/4|R0lGOD|UklGR)[A-Za-z0-9+/]*={0,2}/g;
+
+/**
+ * Per MATCH, never per text: a message that quotes a lockfile line AND pastes a key has to
+ * keep being dropped, so only the exempt run leaves the text the run scanner sees.
+ */
+function withoutExemptRuns(text: string): string {
+  return text.replace(SRI_DIGEST, " ").replace(IMAGE_DATA_URI, " ");
+}
+
+/**
+ * A body wrapped below the single-run bar is still a key: twenty consecutive 28-character
+ * lines carry the same bytes as one 560-character run, and neither the run thresholds below
+ * nor `redactSlice`'s per-line pass can see it.
+ *
+ * The floor is 24 characters and the run is four lines, measured against the columns a
+ * session actually prints: a 20-character id column, a single-case hex column and an aligned
+ * table all pass, and so does wrapped prose. A column of 28-character MIXED-CASE ids does
+ * not - it is the same bytes as a body wrapped at 28, which is exactly the wrap the run
+ * thresholds below miss - so that trade is taken in this direction. It fails closed: the cost
+ * is one message that was nothing but a bare id column, and the alternative reopens the gap.
+ */
+const WRAPPED_LINE_MIN = 24;
+const WRAPPED_LINE_RUN = 4;
+
+const BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
+// What a paste puts in front of every line: a diff sign, `cat -n`'s number, and the three
+// markdown shapes a pasted block arrives in - a quote, a bullet, a table cell.
+const LINE_PREFIX = /^\s*\d+\t|^[>|*+-][ \t]?/;
+
+/**
+ * One base64 STREAM broken across lines, as against a ragged list of identifiers.
+ *
+ * A wrap is deterministic: every line but the last is the wrap width, while a list of names
+ * is uneven. That is the whole signature, and it is deliberately the only one. What it buys
+ * is measured by `prose-around-an-identifier-list` in the corpus - four long CamelCase names
+ * with a lesson around them, which this rule lets through and which drops without it.
+ *
+ * It is NOT what holds a secret dump; the run count below does that. See the note there
+ * before adding a condition here, because the one that was tried made exactly that mistake.
+ */
+function isOneStream(lines: string[]): boolean {
+  if (lines.length < WRAPPED_LINE_RUN) return false;
+  return new Set(lines.slice(0, -1).map((line) => line.length)).size === 1;
+}
+
+function scanForWrappedBody(lines: string[]): boolean {
+  let run: string[] = [];
+  for (const line of lines) {
+    if (BLOB_LINE.test(line) && isBlobRun(line, WRAPPED_LINE_MIN)) {
+      run.push(line);
+      continue;
+    }
+    if (isOneStream(run)) return true;
+    run = [];
+  }
+  return isOneStream(run);
+}
+
+function hasWrappedBlob(text: string): boolean {
+  const lines = text.split("\n");
+  // Each reading is scanned WHOLE rather than line by line: `+` is itself a base64
+  // character, so stripping unconditionally eats the first byte of a body line that starts
+  // with one, and mixing the two readings across a run makes the equal-length test meaningless.
+  const raw = lines.map((line) => line.trim());
+  const stripped = lines.map((line) => line.replace(LINE_PREFIX, "").replace(/\s*\|$/, "").trim());
+  return scanForWrappedBody(raw) || scanForWrappedBody(stripped);
+}
+
 /** Is this run actual base64 blob, or just a long path/URL/identifier? */
 function isBlobRun(run: string, minLength: number): boolean {
   if (run.length < minLength) return false;
@@ -132,11 +218,23 @@ function isBlobRun(run: string, minLength: number): boolean {
 
 export function looksKeyBearing(text: string): boolean {
   if (PEM_BEGIN.test(text) || PEM_END.test(text) || PPK_BEGIN.test(text)) return true;
-  const runs = [...text.matchAll(/[A-Za-z0-9+/]{30,}={0,2}/g)].map((m) => m[0]);
+  const scanned = withoutExemptRuns(text);
+  if (hasWrappedBlob(scanned)) return true;
+  const runs = [...scanned.matchAll(/[A-Za-z0-9+/]{30,}={0,2}/g)].map((m) => m[0]);
   // one long blob is enough…
   if (runs.some((run) => isBlobRun(run, 50))) return true;
-  // …and so are several medium ones, which is what a key looks like once a narrow
-  // terminal (or a paste) has wrapped it below the single-run bar
+  // …and so are several medium ones, which is what a key looks like once a narrow terminal
+  // (or a paste) has wrapped it below the single-run bar - and also what a SECRET DUMP looks
+  // like, which is why this counts runs and asks nothing else about them.
+  //
+  // This line is the one holding a dump, measured three ways: `kubectl get secret -o yaml`
+  // with three key fields, the same three keys as `SIGNING_KEY=` lines, and three keys pasted
+  // under a sentence. 32 bytes is the commonest secret size and its base64 is 43 characters
+  // plus one `=`, so a dump is three padded runs of equal length - and a condition that read
+  // padding as "separate values, so not key material" handed all three to the model. Nothing
+  // else was holding them: `signing-key:` is in no keyword list. A digest column is dropped
+  // along with them, and that is the cost, taken on the side that loses a lesson rather than
+  // the side that ships a key.
   return runs.filter((run) => isBlobRun(run, 30)).length >= 3;
 }
 
