@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.2] - 2026-09-26
+
+- **The detector recognizes more of the credential families a real session produces, and
+  drops fewer messages that only looked like they carried one.** Tokens issued by managed
+  secret stores, deploy and runner tokens, cloud storage signatures and account keys,
+  messaging, telephony and model-host keys, and the credential files a terminal prints -
+  a `.netrc`, a container registry login, a cluster config - are now named where a command
+  line, an error, a diff or a config file shows them. In the other direction, a column of
+  lockfile digests and an embedded image no longer cost the message they sit in. What
+  bounds this is written down and measured rather than asserted: the families the detector
+  is measured against live in the test suite, and one it cannot name in any of those
+  contexts fails the build. A credential in a format it has never seen can still slip
+  through, so a candidate is still worth reading before you approve it.
+
 ## [0.13.1] - 2026-09-25
 
 - **What the product tells you after a forge turns your push down is now checked against
