@@ -204,8 +204,8 @@ The corpus is read by the model under measurement and by whoever is reading the 
 
 ## Baseline
 
-Taken 2026-09-26 against product commit `eb589b0` (v0.13.3), harvest model
-`claude-sonnet-5`, grader `haiku`, 24 sessions and 25 labels, three runs.
+Measured 2026-09-26 at `014f984` (the evals commit) against product `eb589b0` (v0.13.3),
+harvest model `claude-sonnet-5`, grader `haiku`, 24 sessions and 25 labels, three runs.
 
 ```
 recall     0.9200 / 0.9600 / 1.0000   mean 0.9600  sd 0.0400  band [0.8800 ; 1.0400]
@@ -229,7 +229,7 @@ Beside those two, over the same three runs:
 ```
 recall by label kind      correction 45/45   procedure 15/15   error-fix 12/15
 recall by lesson FORM     hard-never 27/27   soft-henceforth 30/30   implicit 15/18
-distractor capture        0/77, against a positive control of 4/4 (run separately, same grader)
+distractor capture        0 of 77 kept items (39 such facts planted), positive control 4/4
 discovery share of kept   8.0% / 11.5% / 3.8%
 model returned nothing    0/23 sessions that had a lesson to find, in every run
 lesson-free session       0 items kept, in every run
@@ -238,7 +238,13 @@ parser refusals           1 of 78 elements, for a quote stitched from two separa
 grader agreement          10/10 on each of three repeats over the ten hand-labelled pairs
 shuffled-label YES rate   0/27
 cost                      $3.18 metered plus $3.04 estimated for the 72 harvest calls
+duration                  harvest calls sum to 963s; runs 2 and 3 took 14m26s end to end
 ```
+
+Precision is a **lower bound** as well as a ceiling-side figure: of the five kept items that
+sat on no label, three are one lesson the model split across two skills and two were judged by
+an independent review to be real lessons the corpus had not labelled. And because the runner
+injects an empty existing-skill list, the sieve's duplicate rule is never exercised here.
 
 **A rule the developer actually states comes back every time**, 57 out of 57, wherever in the
 session it sits and whichever language it is in. All three misses across all three runs belong

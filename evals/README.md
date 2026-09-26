@@ -212,8 +212,9 @@ unreadable number in exactly the way a plugin that never loaded does.
 
 ## The baseline
 
-Taken 2026-09-26 at commit `014f984`, harvest model `claude-sonnet-5`, grader `haiku`,
-24 synthetic sessions carrying 25 labelled lessons, three runs. `evals/hasat/README.md`
+Measured 2026-09-26 at `014f984` (the evals commit) against product `eb589b0` (v0.13.3),
+harvest model `claude-sonnet-5`, grader `haiku`, 24 synthetic sessions carrying 25 labelled
+lessons, three runs. `evals/hasat/README.md`
 describes the corpus and the method; what follows is only the number.
 
 | | run 1 | run 2 | run 3 | mean | 2 sd band |
@@ -239,14 +240,21 @@ And four numbers that did not move across the three runs:
 
 | | |
 |---|---|
-| distractor capture | 0/77 kept items had a one-system fact as their central claim |
+| distractor capture | 0 of the 77 kept items had a one-system fact as its central claim (the corpus plants 39 such facts) |
 | empty returns | 0/23 sessions that had a lesson to find got nothing proposed |
 | the lesson-free session | 0 items kept, every run |
 | the sieve | dropped nothing, any run; the score floor never bound |
 
 Cost: $3.18 metered for grading and calibration, plus $3.04 estimated for the 72 harvest
 calls, which are not metered because the product path reads plain text and asking the CLI
-for JSON would price a call the product does not make. About 75 minutes of wall clock.
+for JSON would price a call the product does not make.
+
+Duration, only as far as the results support it: the harvest calls sum to 963 seconds over
+the three runs (307 / 315 / 341), and runs 2 and 3 took 14 minutes 26 seconds end to end
+including their grading, from the timestamps the two result files carry. Run 1 also carried
+the grader check and the shuffled-label control and the data holds no start timestamp to
+bound it, so no figure for the whole invocation is quoted here. Grading dominates: the
+runner batches per session, so a run's grading outlasts its harvest.
 
 ## Reading a number from here
 
@@ -262,7 +270,12 @@ for JSON would price a call the product does not make. About 75 minutes of wall 
 - **Precision here can only be higher than in production.** The runner injects an empty
   list of existing skills. In production that list goes into the prompt as "do not
   propose anything these already cover", and the harvest has something to be suppressed
-  by. There is no such pressure here.
+  by. There is no such pressure here, and the sieve's duplicate rule - which drops an item
+  whose slug already exists - is therefore never exercised by this package at all.
+- **Precision is also a lower bound, for the opposite reason.** Of 77 kept items, five sat
+  on no label: three are one lesson the model split across two skills, and the other two an
+  independent review read and judged to be real, reusable lessons the corpus simply had not
+  labelled. A harvest that finds a 26th lesson is scored as noise for finding it.
 - **The grader is not independent of the labels.** Its rubric, the reference sentences and
   the ten hand-labelled pairs it is checked against all come from the same hand. Its
   agreement is 10/10 on each of three repeats and its shuffled-label rate is 0/27, so the
