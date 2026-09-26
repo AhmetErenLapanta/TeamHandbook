@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # No lockfile is committed, on purpose (CONTRIBUTING.md: Claude Code would
       # install every devDependency into each copy of the plugin). That rules out

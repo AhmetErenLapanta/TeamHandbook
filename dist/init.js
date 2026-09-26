@@ -440,7 +440,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: node scripts/bump-version.mjs
       - run: |
           git config user.name "handbook-ci"
@@ -453,7 +453,7 @@ var gitlabCi = (bump) => `# Bumps the plugin version on every merge to the defau
 # Requires a project access token with write_repository scope stored in the
 # TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
 version-bump:
-  image: node:20
+  image: node:22
   rules:
     # only run when the CI token exists - otherwise skip (don't fail the pipeline)
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'

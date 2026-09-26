@@ -992,7 +992,7 @@ var STOPWORDS = /* @__PURE__ */ new Set([
 var FUZZY_MIN_CHARS = 5;
 var FUZZY_OVERLAP = 0.8;
 function fold(text) {
-  return text.normalize("NFD").replace(new RegExp("\\p{M}+", "gu"), "").toLowerCase().replace(/ı/g, "i");
+  return text.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/ı/g, "i");
 }
 function matchTokens(text) {
   const words = fold(text).replace(/['’]/g, "").replace(/[^\p{L}\p{N}\s-]/gu, " ").split(/\s+/).filter((w) => w.length > 2 && !STOPWORDS.has(w)).map(stem).filter((w) => w.length > 2 && !STOPWORDS.has(w));
