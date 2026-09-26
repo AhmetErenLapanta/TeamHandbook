@@ -181,6 +181,13 @@ What the grader cannot do: it reads one item against one sentence. It cannot tel
 skill is well written, whether its body is correct, or whether anyone would want it. It
 answers one question, and the numbers here mean exactly that question and nothing wider.
 
+**And it is not independent of what it grades.** The rubric, the reference sentences and the
+ten hand-labelled pairs the grader is checked against all come from the same hand, so 10/10 is
+agreement with its own test set: the direction is right, the opinion is not an outside one. An
+independent review wrote five harder near-miss pairs against this rubric without seeing the
+existing cases, and the grader answered all fifteen trials correctly - which narrows the
+objection rather than removing it.
+
 Every verdict is written to `decisions-<run>.jsonl` beside the results, so a rate in the
 report can be argued with rather than only read.
 
@@ -208,6 +215,14 @@ precision  0.9200 / 0.9231 / 0.9615   mean 0.9349  sd 0.0231  band [0.8886 ; 0.9
 Read the band, not a run inside it. The recall band's upper edge sits above 1.0, which is an
 artefact of an empirical two-sigma band measured near a ceiling rather than a real
 possibility.
+
+**This number is taken at the density ceiling.** The corpus is legible by construction, and
+measurably so: the slice that reaches the model is a median of 824 characters against the
+product's 40,000-character cap (2.1% of it), 21 of 24 sessions are under 1,200 characters in
+total, the median session has three user turns, and in 23 of the 24 the rule is stated outright
+in the developer's own words. In production the slice fills and the lesson sits somewhere inside
+hundreds of turns. Treat this as the ceiling of production recall, not an estimate of it. A
+harder tier - longer sessions, lessons that are never stated - is the next measurement.
 
 Beside those two, over the same three runs:
 

@@ -591,7 +591,6 @@ async function main(): Promise<void> {
   // as a measurement.
   const estimatedHarvestUsd = perHarvest === null ? null : perHarvest * sessions.length * options.runs;
   const runs: Array<{ index: number; rates: Rates; sessions: SessionRun[] }> = [];
-  let controlRates: Rates | null = null;
   let controlRows1: SessionRun[] | null = null;
   let totalCost = (shortCost ?? 0) + (longCost ?? 0) + (graderCheck?.costUsd ?? 0) + (distractorControl?.costUsd ?? 0);
 
@@ -639,10 +638,7 @@ async function main(): Promise<void> {
     );
     const rates = pool(rows);
     runs.push({ index: index + 1, rates, sessions: rows });
-    if (index === 0 && controlRows.length > 0) {
-      controlRates = pool(controlRows);
-      controlRows1 = controlRows;
-    }
+    if (index === 0 && controlRows.length > 0) controlRows1 = controlRows;
     printRates(`run ${index + 1}`, rates);
     writeFileSync(
       join(options.outDir, `run-${index + 1}.json`),
@@ -698,7 +694,10 @@ async function main(): Promise<void> {
         graderModel: GRADER_MODEL,
         sessions: sessions.map((s) => s.id),
         runs: runs.map((r) => ({ index: r.index, rates: r.rates })),
-        control: controlRates,
+        // The pooled table for the control rows is deliberately NOT written: `pool` only
+        // counts a match against a label of the item's own session, so a control row scores
+        // zero there whatever the grader said. Keeping it in the summary meant an
+        // unfalsifiable zero sat in the artifact next to the number that can actually move.
         controlYesRate: control,
         estimatedHarvestUsd,
         graderCheck,

@@ -190,3 +190,92 @@ baseline was measured with that pattern, and a retired name cannot be reached an
 
 `evals/results/` is not committed: `aggregate-result.json` carries absolute paths and the
 machine's user name, and the HTML report embeds every prompt and transcript.
+
+---
+
+# Does the harvest find the lesson a session gave?
+
+The suite above measures routing: a sentence in, the right command out. It says nothing
+about the sentence this product leads with, which is that it harvests the lessons a
+session produced. `evals/hasat/` measures that one, and it is a different kind of
+package - it calls `harvestSession` through the real `runClaudeCli` directly rather than
+running the plugin, because the subject is the harvest and not a routing decision.
+
+    npx vite-node evals/hasat/run.ts -- --dry-run              # preflight and cost projection
+    npx vite-node evals/hasat/run.ts -- --grader-check-only    # measure the grader, nothing else
+    npx vite-node evals/hasat/run.ts -- --runs 3               # the measurement
+    npx vitest run evals/hasat/corpus.test.ts                  # free, deterministic, in the suite
+
+Run the grader check first, for the same reason the routing suite runs its control first:
+the recall number is a grader's verdicts, and a grader nobody measured produces an
+unreadable number in exactly the way a plugin that never loaded does.
+
+## The baseline
+
+Taken 2026-09-26 at commit `014f984`, harvest model `claude-sonnet-5`, grader `haiku`,
+24 synthetic sessions carrying 25 labelled lessons, three runs. `evals/hasat/README.md`
+describes the corpus and the method; what follows is only the number.
+
+| | run 1 | run 2 | run 3 | mean | 2 sd band |
+|---|---:|---:|---:|---:|---:|
+| recall | 0.9200 | 0.9600 | 1.0000 | 0.9600 | [0.8800 ; 1.0400] |
+| precision | 0.9200 | 0.9231 | 0.9615 | 0.9349 | [0.8886 ; 0.9812] |
+
+Recall is labelled lessons the product kept something for; precision is kept items that
+sit on a labelled lesson. Both pooled within a run, then banded across runs at two
+sample standard deviations, the same arithmetic as the routing baseline. The recall
+band's upper edge sits above 1.0, which is what an empirical band does near a ceiling
+rather than a real possibility.
+
+By the kind of lesson, summed over the three runs:
+
+| label kind | found / labels | |
+|---|---:|---|
+| correction | 45/45 | a rule the developer stated |
+| procedure | 15/15 | a completed task worth repeating |
+| error-fix | 12/15 | a lesson from an error that got fixed |
+
+And four numbers that did not move across the three runs:
+
+| | |
+|---|---|
+| distractor capture | 0/77 kept items had a one-system fact as their central claim |
+| empty returns | 0/23 sessions that had a lesson to find got nothing proposed |
+| the lesson-free session | 0 items kept, every run |
+| the sieve | dropped nothing, any run; the score floor never bound |
+
+Cost: $3.18 metered for grading and calibration, plus $3.04 estimated for the 72 harvest
+calls, which are not metered because the product path reads plain text and asking the CLI
+for JSON would price a call the product does not make. About 75 minutes of wall clock.
+
+## Reading a number from here
+
+- **This is a ceiling, not an estimate.** The corpus is deliberately legible, and
+  measurably so: the slice that reaches the model is a median of 824 characters against
+  the product's 40,000-character cap, 21 of 24 sessions are under 1,200 characters in
+  total, the median session has 3 user turns, and in 23 of 24 the rule is stated outright
+  in the user's own words. In production the slice fills, and the lesson sits somewhere
+  inside hundreds of turns. Treat 0.96 as the ceiling of production recall, not a
+  prediction of it.
+- **The band is ±0.08.** An adjustment whose effect is smaller than that cannot be
+  distinguished from noise by this package, at this size, at three runs.
+- **Precision here can only be higher than in production.** The runner injects an empty
+  list of existing skills. In production that list goes into the prompt as "do not
+  propose anything these already cover", and the harvest has something to be suppressed
+  by. There is no such pressure here.
+- **The grader is not independent of the labels.** Its rubric, the reference sentences and
+  the ten hand-labelled pairs it is checked against all come from the same hand. Its
+  agreement is 10/10 on each of three repeats and its shuffled-label rate is 0/27, so the
+  direction is right; it is not an outside opinion. An independent review wrote five
+  harder near-miss pairs against the same rubric and the grader answered all fifteen
+  trials correctly, which narrows the objection without removing it.
+- **Do not read a candidate queue's kind distribution against these rows.** Of 77 kept
+  items 68 came back as `correction`, including every procedure label - which is the
+  prompt being obeyed, since its first kind is an explicit teaching the user gave and
+  nearly every lesson here is stated as one. Whether the kinds discriminate when a lesson
+  is *not* stated is unmeasured.
+- **The corpus nests two attributes it should have crossed.** All five error-fix labels
+  are also the implicit ones, so the `error-fix 12/15` row and an equivalent
+  `implicit 15/18` row report the same two labels, and which attribute the misses belong
+  to cannot be read off this corpus. A harder tier that crosses them is the next
+  measurement.
