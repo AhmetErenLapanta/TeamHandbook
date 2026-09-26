@@ -202,17 +202,21 @@ function incrementRedactionBlocked(home = handbookHome(), by = 1) {
 
 // src/lib/init.ts
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join5 } from "node:path";
+import { dirname as dirname2, join as join6 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-function gateAutoEnabled(home = handbookHome()) {
-  if (configIsBroken(home)) return false;
-  const gate = readConfigFile(home).gate;
-  return gate?.auto !== false;
-}
+
+// src/lib/prompt-safety.ts
+var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+
+// src/lib/queue.ts
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "node:fs";
+import { basename, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
 import { readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
@@ -466,44 +470,15 @@ function signalSecret(fields) {
   );
 }
 
-// src/lib/init.ts
-function loadTeamConfig(home = handbookHome()) {
-  const team = readConfigFile(home).team;
-  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
-    return team;
-  }
-  return null;
-}
-var CONSUMER_NOTICE_HOOKS = JSON.stringify(
-  {
-    hooks: {
-      SessionStart: [
-        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
-      ]
-    }
-  },
-  null,
-  2
-);
-function marketplacesRoot() {
-  return join5(homedir2(), ".claude", "plugins", "marketplaces");
-}
-function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
-  const team = loadTeamConfig(home);
-  return team ? join5(root, team.marketplaceName, "skills") : null;
-}
-
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "node:fs";
-import { basename, join as join6 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
-  return join6(dir, "candidate.json");
+  return join5(dir, "candidate.json");
 }
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync5(join6(dir, "SKILL.md"), "utf8");
+    md = readFileSync5(join5(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -511,7 +486,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync5(join6(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync5(join5(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -548,11 +523,46 @@ function listCandidates(home = handbookHome(), status) {
   } catch {
     return [];
   }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join6(base, e.name))).filter((m) => m !== null);
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join5(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
   );
+}
+
+// src/lib/score.ts
+var execFileAsync = promisify(execFile);
+function gateAutoEnabled(home = handbookHome()) {
+  if (configIsBroken(home)) return false;
+  const gate = readConfigFile(home).gate;
+  return gate?.auto !== false;
+}
+
+// src/lib/init.ts
+function loadTeamConfig(home = handbookHome()) {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
+  }
+  return null;
+}
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
+function marketplacesRoot() {
+  return join6(homedir2(), ".claude", "plugins", "marketplaces");
+}
+function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  return team ? join6(root, team.marketplaceName, "skills") : null;
 }
 
 // src/lib/usage.ts
@@ -998,6 +1008,7 @@ import {
 import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/transcript.ts
+var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
 var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
 

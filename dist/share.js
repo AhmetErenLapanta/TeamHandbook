@@ -68,13 +68,22 @@ function configIsBroken(home = handbookHome()) {
 
 // src/lib/init.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
+
+// src/lib/prompt-safety.ts
+var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+
+// src/lib/queue.ts
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { basename, join as join4 } from "node:path";
 
 // src/lib/skill-index.ts
 var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
@@ -279,6 +288,100 @@ function detectSecret(text) {
   return null;
 }
 
+// src/lib/skill-files.ts
+import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join3 } from "node:path";
+function isQueueBookkeeping(name) {
+  return name.startsWith("candidate.json");
+}
+function listSkillFiles(dir) {
+  const files = [];
+  const skipped = [];
+  const walk = (current, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync2(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
+      const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(join3(current, entry.name), rel);
+      else if (entry.isFile()) files.push(rel);
+      else skipped.push(rel);
+    }
+  };
+  walk(dir, "");
+  return { files, skipped };
+}
+function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
+  mkdirSync3(destDir, { recursive: true });
+  writeFileSync2(join3(destDir, "SKILL.md"), skillMd);
+  for (const rel of files) {
+    if (rel === "SKILL.md") continue;
+    const target = join3(destDir, rel);
+    mkdirSync3(dirname2(target), { recursive: true });
+    copyFileSync(join3(srcDir, rel), target);
+  }
+}
+
+// src/lib/queue.ts
+function isSafeSlug(slug) {
+  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
+}
+function auditSkillDir(sourceDir) {
+  const name = basename(sourceDir);
+  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+  let skillMd;
+  try {
+    skillMd = readFileSync3(join4(sourceDir, "SKILL.md"), "utf8");
+  } catch {
+    return { shareable: false, reason: "no-skill-md" };
+  }
+  const summary = parseSkillFrontmatter(skillMd);
+  if (!summary) return { shareable: false, reason: "no-frontmatter" };
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
+  }
+  if (files.length === 0) return { shareable: false, reason: "no-files" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join4(sourceDir, file), "utf8");
+    } catch {
+      return { shareable: false, reason: "unreadable", detail: file };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    }
+  }
+  return { shareable: true, skillMd, files, summary };
+}
+function skillRefusalMessage(shownDir, slug, audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
+    case "no-skill-md":
+      return `no readable SKILL.md in ${shownDir}`;
+    case "no-frontmatter":
+      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
+    case "irregular-entry":
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was shared`;
+    case "no-files":
+      return `${slug} has no files to share`;
+    case "unreadable":
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
+    default:
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+  }
+}
+
+// src/lib/score.ts
+var execFileAsync = promisify(execFile);
+
 // src/lib/distill.ts
 function normalizeRemoteUrl(raw) {
   let s = raw.trim();
@@ -399,7 +502,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${displayPath(join3(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join5(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -408,7 +511,7 @@ function saveTeamConfig(team, home = handbookHome()) {
   if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   config.team = team;
-  writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  writeFileAtomic(join5(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -431,7 +534,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -545,9 +648,9 @@ import { homedir as homedir5 } from "node:os";
 import { basename as basename3, join as join9 } from "node:path";
 
 // src/lib/mcp.ts
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join6 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
 function isPlainObject(value) {
@@ -555,12 +658,12 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join4(dir || homedir3(), ".claude.json");
+  return join6(dir || homedir3(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync4(file, "utf8"));
+    parsed = JSON.parse(readFileSync5(file, "utf8"));
   } catch {
     return [];
   }
@@ -718,101 +821,6 @@ function refusalSummary(audit) {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
   return String(audit.detail);
-}
-
-// src/lib/queue.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join6 } from "node:path";
-
-// src/lib/skill-files.ts
-import { copyFileSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join5 } from "node:path";
-function isQueueBookkeeping(name) {
-  return name.startsWith("candidate.json");
-}
-function listSkillFiles(dir) {
-  const files = [];
-  const skipped = [];
-  const walk = (current, prefix) => {
-    let entries;
-    try {
-      entries = readdirSync2(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
-      if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
-      const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-      if (entry.isDirectory()) walk(join5(current, entry.name), rel);
-      else if (entry.isFile()) files.push(rel);
-      else skipped.push(rel);
-    }
-  };
-  walk(dir, "");
-  return { files, skipped };
-}
-function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
-  mkdirSync4(destDir, { recursive: true });
-  writeFileSync3(join5(destDir, "SKILL.md"), skillMd);
-  for (const rel of files) {
-    if (rel === "SKILL.md") continue;
-    const target = join5(destDir, rel);
-    mkdirSync4(dirname3(target), { recursive: true });
-    copyFileSync(join5(srcDir, rel), target);
-  }
-}
-
-// src/lib/queue.ts
-function isSafeSlug(slug) {
-  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
-}
-function auditSkillDir(sourceDir) {
-  const name = basename(sourceDir);
-  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
-  let skillMd;
-  try {
-    skillMd = readFileSync5(join6(sourceDir, "SKILL.md"), "utf8");
-  } catch {
-    return { shareable: false, reason: "no-skill-md" };
-  }
-  const summary = parseSkillFrontmatter(skillMd);
-  if (!summary) return { shareable: false, reason: "no-frontmatter" };
-  const { files, skipped } = listSkillFiles(sourceDir);
-  if (skipped.length > 0) {
-    return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
-  }
-  if (files.length === 0) return { shareable: false, reason: "no-files" };
-  for (const file of files) {
-    let content;
-    try {
-      content = readFileSync5(join6(sourceDir, file), "utf8");
-    } catch {
-      return { shareable: false, reason: "unreadable", detail: file };
-    }
-    const pattern = detectSecret(content);
-    if (pattern) {
-      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
-    }
-  }
-  return { shareable: true, skillMd, files, summary };
-}
-function skillRefusalMessage(shownDir, slug, audit) {
-  switch (audit.reason) {
-    case "unsafe-name":
-      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
-    case "no-skill-md":
-      return `no readable SKILL.md in ${shownDir}`;
-    case "no-frontmatter":
-      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
-    case "irregular-entry":
-      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was shared`;
-    case "no-files":
-      return `${slug} has no files to share`;
-    case "unreadable":
-      return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
-    default:
-      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
-  }
 }
 
 // src/lib/publish.ts

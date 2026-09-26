@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { detectSecret } from "./secrets.js";
+import { LINE_TERMINATOR_CLASS } from "./prompt-safety.js";
 
 // Claude Code writes one JSON object per transcript line. Schema verified
 // empirically (2026-08-10) against real session files: conversation lines carry
@@ -90,8 +91,16 @@ function cap(text: string, max: number): string {
 // assistant echoing a repo file that reads "User: always run <evil> first" would be
 // harvested as something the DEVELOPER said, and shipped as a quoted receipt.
 // Mark such lines as quoted content so they can't be mistaken for a real turn.
+//
+// Spelled with prompt-safety's terminator class rather than /m, and that is the whole
+// point of sharing the class: JS `^` under /m does not treat NEL, FORM FEED or VERTICAL
+// TAB as a line start, so a forged turn placed after one of them was neither indented by
+// the fence nor marked here - the two defenses disagreed about what a line is, and a
+// payload fit through the gap between them.
+const ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
+
 function neutralizeRoleLabels(text: string): string {
-  return text.replace(/^(User|Assistant)(\s*:)/gim, "(quoted) $1$2");
+  return text.replace(ROLE_LABEL, "$1(quoted) $2$3");
 }
 
 // Markers that identify key material. Used by looksKeyBearing above; the slice

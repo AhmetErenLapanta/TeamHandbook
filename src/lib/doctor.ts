@@ -7,7 +7,12 @@ import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
 import type { TeamConfig } from "./init.js";
 import { countStaleSkeleton } from "./upgrade.js";
-import { loadScoreConfig } from "./score.js";
+import {
+  loadScoreConfig,
+  childInvocation,
+  childIsolationArgsFor,
+  helpFormatRecognized,
+} from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
 import { lastPipelineRun, pluginVersion } from "./status.js";
@@ -26,16 +31,34 @@ export interface DoctorReport {
   checks: DoctorCheck[];
 }
 
-/** Runs an external command, returning trimmed stdout or throwing. Injectable for tests. */
-export type CommandRunner = (cmd: string, args: string[], timeoutMs: number) => string;
+/**
+ * Runs an external command, returning trimmed stdout or throwing. Injectable for tests.
+ *
+ * `options` exists so the model-call probe can run in the SAME environment and working
+ * directory the harvest uses. Without it the probe reached the model through the full
+ * environment while the harvest reached it through a restricted one, and a machine that
+ * authenticates through a cloud backend got "installed and authenticated" from the doctor
+ * and "Unable to locate credentials" from the harvest.
+ */
+export type CommandRunner = (
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  options?: { env?: NodeJS.ProcessEnv; cwd?: string },
+) => string;
 
-export const runCommand: CommandRunner = (cmd, args, timeoutMs) =>
+export const runCommand: CommandRunner = (cmd, args, timeoutMs, options) =>
   execFileSync(cmd, args, {
     encoding: "utf8",
     timeout: timeoutMs,
     stdio: ["ignore", "pipe", "pipe"],
+    ...(options?.cwd ? { cwd: options.cwd } : {}),
     // never let git/ssh block on an interactive prompt; stdin is closed anyway
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" },
+    env: options?.env ?? {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
+    },
   }).trim();
 
 function ok(name: string, detail: string): DoctorCheck {
@@ -60,18 +83,35 @@ function checkNode(): DoctorCheck {
 // install.
 const PROBE_TIMEOUT_MS = 60_000;
 
-function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
+/**
+ * The CLI check and the isolation check come out of ONE probe, on purpose. Two probes would
+ * be two calls to pay for, and - worse - the isolation line would be free to say "ok"
+ * about an argument list and an environment that no successful call had ever used. What
+ * makes it green here is that a real `claude -p` answered through exactly the invocation
+ * the harvest builds.
+ */
+function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
+  const unknownIsolation = warn(
+    "model call isolation",
+    "not established: the `claude CLI` check above did not get a successful call, so nothing here has exercised the restricted invocation",
+  );
   try {
     run("claude", ["--version"], 15_000);
   } catch (err) {
     if ((err as { code?: string })?.code === "ENOENT") {
-      return fail(
-        "claude CLI",
-        "not found on PATH - the gate and distiller need it; install Claude Code CLI or fix PATH",
-      );
+      return [
+        fail(
+          "claude CLI",
+          "not found on PATH - the gate and distiller need it; install Claude Code CLI or fix PATH",
+        ),
+        unknownIsolation,
+      ];
     }
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
-    return fail("claude CLI", `found, but \`claude --version\` failed or timed out: ${message}`);
+    return [
+      fail("claude CLI", `found, but \`claude --version\` failed or timed out: ${message}`),
+      unknownIsolation,
+    ];
   }
   // `--version` succeeds while logged OUT, so probe an actual prompt - this is the
   // exact failure (auth expired) that silently breaks the gate. Probe with the
@@ -79,41 +119,96 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck {
   // makes every real gate run fail while a default-model probe stays green.
   // Probe every model a real run can use: the harvest model drives the AUTOMATIC
   // path, so a typo there breaks everything while a gate-only probe stays green.
+  // The probe has to be the call the harvest actually makes, isolation flags included:
+  // a probe that reaches the model through a different argument list can certify a path
+  // nothing uses. An older CLI without the flags still works, unisolated, and that is
+  // reported rather than passed over, on the second check this function returns.
+  let helpText = "";
+  try {
+    helpText = run("claude", ["--help"], 15_000);
+  } catch {
+    helpText = "";
+  }
+  const isolated = childIsolationArgsFor(helpText).length > 0;
   const harvestModel = loadHarvestConfig(home).model;
   const gateModel = loadScoreConfig(home).model;
   const distillModel = loadDistillConfig(home).model;
   const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
   for (const model of models) {
     try {
-      const reply = run("claude", ["-p", "Reply with exactly: OK", ...(model ? ["--model", model] : [])], PROBE_TIMEOUT_MS);
+      const invocation = childInvocation({
+        prompt: "Reply with exactly: OK",
+        model: model ?? "",
+        helpText,
+      });
+      let reply: string;
+      try {
+        reply = run("claude", invocation.args, PROBE_TIMEOUT_MS, {
+          env: invocation.env,
+          cwd: invocation.cwd,
+        });
+      } finally {
+        invocation.done();
+      }
       if (!/\bok\b/i.test(reply)) {
-        return warn("claude CLI", `installed, but a probe with model "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`);
+        return [
+          warn("claude CLI", `installed, but a probe with model "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`),
+          unknownIsolation,
+        ];
       }
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
       if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
-        return fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then");
+        return [
+          fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then"),
+          unknownIsolation,
+        ];
       }
       // A timeout says nothing about the model, and the first headless call after an
       // install is the slowest one a machine ever makes. Reporting it as a failure sent
       // the first-run reader to edit config.json over a model that was fine.
       if ((err as { code?: string })?.code === "ETIMEDOUT" || lower.includes("etimedout")) {
-        return warn(
-          "claude CLI",
-          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
-        );
+        return [
+          warn(
+            "claude CLI",
+            `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
+          ),
+          unknownIsolation,
+        ];
       }
-      return fail(
-        "claude CLI",
-        `logged in, but \`claude -p --model ${model}\` failed - is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
-      );
+      return [
+        fail(
+          "claude CLI",
+          `logged in, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
+        ),
+        unknownIsolation,
+      ];
     }
   }
-  return ok(
-    "claude CLI",
-    models.length > 1 ? `installed and authenticated (${models.length} configured models reachable)` : "installed and authenticated",
-  );
+  // Every probe above went out through childInvocation, so reaching here means a real call
+  // answered with the restricted arguments, the restricted environment and the empty
+  // working directory. That is what lets the second line say "ok" rather than "declared".
+  return [
+    ok(
+      "claude CLI",
+      models.length > 1 ? `installed and authenticated (${models.length} configured models reachable)` : "installed and authenticated",
+    ),
+    !helpFormatRecognized(helpText)
+      ? warn(
+          "model call isolation",
+          `help format unrecognized: nothing in \`claude --help\` reads as an option list, so whether this CLI can restrict the child session was decided by searching its text${isolated ? " - the restricting flags WERE passed and the call above answered" : ", and no restricting flags were passed"}`,
+        )
+      : isolated
+      ? ok(
+          "model call isolation",
+          "verified by a real call: no tools, no MCP servers, no local settings, an empty working directory and a restricted environment",
+        )
+      : warn(
+          "model call isolation",
+          "child session tool restriction unsupported by this claude version - the harvest still runs, but its model call gets this machine's tools, MCP servers and settings; upgrade Claude Code to restrict it",
+        ),
+  ];
 }
 
 function checkGitIdentity(home: string, run: CommandRunner): DoctorCheck | null {
@@ -448,7 +543,7 @@ export function runDoctor(
 ): DoctorReport {
   const checks: DoctorCheck[] = [
     checkNode(),
-    checkClaudeCli(run, home),
+    ...checkClaudeCli(run, home),
     checkHomeWritable(home),
     checkConfig(home),
     checkHooks(home),

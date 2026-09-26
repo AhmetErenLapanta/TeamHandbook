@@ -205,7 +205,7 @@ import { basename as basename2, join as join8 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir3 } from "node:os";
-import { dirname, join as join6 } from "node:path";
+import { dirname, join as join7 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync2 } from "node:fs";
@@ -235,20 +235,16 @@ function configIsBroken(home = handbookHome()) {
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-var defaultScoreConfig = {
-  model: "haiku",
-  threshold: 7,
-  timeoutMs: 6e4
-};
-function loadScoreConfig(home = handbookHome()) {
-  const gate = readConfigFile(home).gate;
-  return {
-    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
-    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
-    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
-  };
-}
+
+// src/lib/prompt-safety.ts
+var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+
+// src/lib/queue.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { basename, join as join6 } from "node:path";
 
 // src/lib/skill-index.ts
 import { readdirSync as readdirSync2, readFileSync as readFileSync3 } from "node:fs";
@@ -330,55 +326,15 @@ function listExistingSkills(dirs) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// src/lib/display-path.ts
-import { homedir as homedir2 } from "node:os";
-import { sep } from "node:path";
-function displayPath(path, userHome = homedir2()) {
-  if (typeof path !== "string") return String(path);
-  if (!userHome) return path;
-  if (path === userHome) return "~";
-  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
-  return path;
-}
-
-// src/lib/init.ts
-function loadTeamConfig(home = handbookHome()) {
-  const team = readConfigFile(home).team;
-  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
-    return team;
-  }
-  return null;
-}
-var CONSUMER_NOTICE_HOOKS = JSON.stringify(
-  {
-    hooks: {
-      SessionStart: [
-        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
-      ]
-    }
-  },
-  null,
-  2
-);
-function marketplacesRoot() {
-  return join6(homedir3(), ".claude", "plugins", "marketplaces");
-}
-function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
-  const team = loadTeamConfig(home);
-  return team ? join6(root, team.marketplaceName, "skills") : null;
-}
-
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join7 } from "node:path";
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
-  return join7(dir, "candidate.json");
+  return join6(dir, "candidate.json");
 }
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync4(join7(dir, "SKILL.md"), "utf8");
+    md = readFileSync4(join6(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -386,7 +342,7 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync4(join7(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync4(join6(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
@@ -423,7 +379,7 @@ function listCandidates(home = handbookHome(), status) {
   } catch {
     return [];
   }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join7(base, e.name))).filter((m) => m !== null);
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join6(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
@@ -443,7 +399,7 @@ function unreadableCandidates(home = handbookHome()) {
   const broken = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const dir = join7(base, entry.name);
+    const dir = join6(base, entry.name);
     let raw = null;
     try {
       raw = readFileSync4(candidateMetaFile(dir), "utf8");
@@ -484,6 +440,60 @@ function unreadableCandidates(home = handbookHome()) {
     }
   }
   return broken.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+// src/lib/score.ts
+var execFileAsync = promisify(execFile);
+var defaultScoreConfig = {
+  model: "haiku",
+  threshold: 7,
+  timeoutMs: 6e4
+};
+function loadScoreConfig(home = handbookHome()) {
+  const gate = readConfigFile(home).gate;
+  return {
+    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
+    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
+    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
+  };
+}
+
+// src/lib/display-path.ts
+import { homedir as homedir2 } from "node:os";
+import { sep } from "node:path";
+function displayPath(path, userHome = homedir2()) {
+  if (typeof path !== "string") return String(path);
+  if (!userHome) return path;
+  if (path === userHome) return "~";
+  if (path.startsWith(userHome + sep)) return `~${path.slice(userHome.length)}`;
+  return path;
+}
+
+// src/lib/init.ts
+function loadTeamConfig(home = handbookHome()) {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
+  }
+  return null;
+}
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
+function marketplacesRoot() {
+  return join7(homedir3(), ".claude", "plugins", "marketplaces");
+}
+function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  return team ? join7(root, team.marketplaceName, "skills") : null;
 }
 
 // src/lib/usage.ts
@@ -550,6 +560,7 @@ function pendingHarvestCount(home = handbookHome()) {
 }
 
 // src/lib/transcript.ts
+var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
 var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
 

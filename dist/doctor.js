@@ -1,7 +1,7 @@
 // src/lib/doctor.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -57,7 +57,7 @@ function readCounters(home = handbookHome()) {
 // src/lib/init.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname, join as join4 } from "node:path";
+import { dirname, join as join5 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync3 } from "node:fs";
@@ -86,21 +86,16 @@ function configIsBroken(home = handbookHome()) {
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join4 } from "node:path";
 import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-var defaultScoreConfig = {
-  model: "haiku",
-  threshold: 7,
-  timeoutMs: 6e4
-};
-function loadScoreConfig(home = handbookHome()) {
-  const gate = readConfigFile(home).gate;
-  return {
-    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
-    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
-    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
-  };
-}
+
+// src/lib/prompt-safety.ts
+var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/secrets.ts
 var PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
@@ -248,6 +243,167 @@ var GLOBAL_TWIN = new Map(
     new RegExp(p.re.source, p.re.flags + "g")
   ])
 );
+
+// src/lib/score.ts
+var execFileAsync = promisify(execFile);
+var defaultScoreConfig = {
+  model: "haiku",
+  threshold: 7,
+  timeoutMs: 6e4
+};
+function loadScoreConfig(home = handbookHome()) {
+  const gate = readConfigFile(home).gate;
+  return {
+    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
+    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
+    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
+  };
+}
+var CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
+var CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
+function declaredOptions(helpText) {
+  const rows = [];
+  for (const line of helpText.split("\n")) {
+    const match = /^(\s*)-\S/.exec(line);
+    if (match) rows.push({ indent: match[1].length, text: line });
+  }
+  if (rows.length === 0) return /* @__PURE__ */ new Set();
+  const column = Math.min(...rows.map((r) => r.indent));
+  const options = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    if (row.indent > column + 1) continue;
+    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
+    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
+  }
+  return options;
+}
+function childIsolationArgsFor(helpText) {
+  const declared = declaredOptions(helpText);
+  if (declared.size === 0) {
+    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
+  }
+  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
+}
+function helpFormatRecognized(helpText) {
+  return declaredOptions(helpText).size > 0;
+}
+var CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
+  // where the CLI, node and its config live
+  "PATH",
+  "HOME",
+  "USER",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "TZ",
+  // the Windows spelling of the same things
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "SystemRoot",
+  "SystemDrive",
+  "COMSPEC",
+  "PATHEXT",
+  // Windows spells the temp directory with these, not TMPDIR
+  "TEMP",
+  "TMP",
+  // how it reaches the network at all, on a machine behind a proxy
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  // how it trusts that network, where TLS is intercepted by a corporate CA
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "REQUESTS_CA_BUNDLE",
+  // which region a Vertex deployment answers on
+  "CLOUD_ML_REGION",
+  // which handbook home this call belongs to
+  "TEAMHANDBOOK_HOME"
+]);
+var CHILD_ENV_PREFIXES = [
+  "LC_",
+  "ANTHROPIC_",
+  "AWS_",
+  "GOOGLE_",
+  "GCLOUD_",
+  "CLOUDSDK_",
+  "AZURE_"
+];
+var CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
+  // which backend answers at all
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  // where the CLI's own config lives
+  "CLAUDE_CONFIG_DIR",
+  // the credentials it presents
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+  "CLAUDE_CODE_CLIENT_KEY",
+  "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+  "CLAUDE_CODE_HOST_CREDS_FILE",
+  // names ANOTHER variable that holds the credential; the name it points at is allowed
+  // too, below, because the CLI itself designates it
+  "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+  // a gateway in front of the backend: the token it wants, and the six switches that say
+  // "do not sign this request yourself, the gateway did". Without these a gateway install
+  // tries to sign with SigV4 it does not have and the call fails - measured as the failure
+  // mode of the previous, shorter list.
+  "CLAUDE_CODE_GATEWAY_TOKEN",
+  "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+  "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+  "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+  "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+  "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+  "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+  // which endpoint, and how to get through the proxy in front of it
+  "CLAUDE_CODE_API_BASE_URL",
+  "CLAUDE_CODE_HTTP_PROXY",
+  "CLAUDE_CODE_HTTPS_PROXY",
+  "CLAUDE_CODE_PROXY_AUTHENTICATE",
+  "CLAUDE_CODE_ENABLE_PROXY_AUTH_HELPER"
+]);
+var CHILD_ENV_NEVER = [
+  "NODE_OPTIONS",
+  "NODE_TLS_REJECT_UNAUTHORIZED"
+];
+function childEnv(source = process.env) {
+  const env = {};
+  const designated = source.CLAUDE_CODE_HOST_AUTH_ENV_VAR;
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    if (CHILD_ENV_NEVER.includes(name)) continue;
+    if (name.startsWith("CLAUDE_")) {
+      if (CHILD_ENV_CLAUDE_ALLOW.has(name)) env[name] = value;
+      continue;
+    }
+    if (CHILD_ENV_EXACT.has(name) || name === designated || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p))) {
+      env[name] = value;
+    }
+  }
+  return env;
+}
+function childInvocation(input) {
+  const args = ["-p", input.prompt];
+  if (input.model) args.push("--model", input.model);
+  args.push(...childIsolationArgsFor(input.helpText));
+  const cwd = mkdtempSync2(join4(tmpdir2(), "teamhandbook-child-"));
+  return {
+    args,
+    env: childEnv(),
+    cwd,
+    done: () => rmSync2(cwd, { recursive: true, force: true })
+  };
+}
 
 // src/lib/distill.ts
 var defaultDistillConfig = {
@@ -513,7 +669,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync4(join4(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -577,12 +733,12 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
   return files;
 }
 function marketplacesRoot() {
-  return join4(homedir3(), ".claude", "plugins", "marketplaces");
+  return join5(homedir3(), ".claude", "plugins", "marketplaces");
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname2, join as join5, relative } from "node:path";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2, join as join6, relative } from "node:path";
 var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
 var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
 var CI_MARKER = "scripts/bump-version.mjs";
@@ -601,7 +757,7 @@ function readIfPresent(file) {
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
   for (const part of path.split("/")) {
-    current = join5(current, part);
+    current = join6(current, part);
     let stat;
     try {
       stat = lstatSync(current);
@@ -664,7 +820,7 @@ function prefixDependentPaths(team, withCi) {
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
 function upgradeCandidates(repoDir, team) {
-  const withCi = existsSync3(join5(repoDir, CI_MARKER));
+  const withCi = existsSync3(join6(repoDir, CI_MARKER));
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi);
@@ -690,14 +846,14 @@ function upgradeCandidates(repoDir, team) {
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join5(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join5(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join6(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join6(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
 }
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
-    const existing = readIfPresent(join5(repoDir, path));
+    const existing = readIfPresent(join6(repoDir, path));
     if (existing === null) return { path, state: "absent" };
     return { path, state: existing === content ? "current" : "differs" };
   });
@@ -711,6 +867,7 @@ function countStaleSkeleton(repoDir, team) {
 }
 
 // src/lib/transcript.ts
+var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
 var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
 
@@ -751,17 +908,17 @@ function loadHarvestConfig(home = handbookHome()) {
 
 // src/lib/status.ts
 import { readFileSync as readFileSync6 } from "node:fs";
-import { dirname as dirname3, join as join7 } from "node:path";
+import { dirname as dirname3, join as join8 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/notify.ts
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/pipeline.ts
-import { basename, join as join6 } from "node:path";
+import { basename, join as join7 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join6(home, "pipeline.log");
+  return join7(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -772,7 +929,7 @@ function pluginVersion() {
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(
-        readFileSync6(join7(here, up, ".claude-plugin", "plugin.json"), "utf8")
+        readFileSync6(join8(here, up, ".claude-plugin", "plugin.json"), "utf8")
       );
       if (typeof parsed?.version === "string") return parsed.version;
     } catch {
@@ -799,12 +956,17 @@ function lastPipelineRun(home = handbookHome()) {
 }
 
 // src/lib/doctor.ts
-var runCommand = (cmd, args, timeoutMs) => execFileSync(cmd, args, {
+var runCommand = (cmd, args, timeoutMs, options) => execFileSync(cmd, args, {
   encoding: "utf8",
   timeout: timeoutMs,
   stdio: ["ignore", "pipe", "pipe"],
+  ...options?.cwd ? { cwd: options.cwd } : {},
   // never let git/ssh block on an interactive prompt; stdin is closed anyway
-  env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" }
+  env: options?.env ?? {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_SSH_COMMAND: "ssh -oBatchMode=yes"
+  }
 }).trim();
 function ok(name, detail) {
   return { name, level: "ok", detail };
@@ -821,50 +983,104 @@ function checkNode() {
 }
 var PROBE_TIMEOUT_MS = 6e4;
 function checkClaudeCli(run, home) {
+  const unknownIsolation = warn(
+    "model call isolation",
+    "not established: the `claude CLI` check above did not get a successful call, so nothing here has exercised the restricted invocation"
+  );
   try {
     run("claude", ["--version"], 15e3);
   } catch (err) {
     if (err?.code === "ENOENT") {
-      return fail(
-        "claude CLI",
-        "not found on PATH - the gate and distiller need it; install Claude Code CLI or fix PATH"
-      );
+      return [
+        fail(
+          "claude CLI",
+          "not found on PATH - the gate and distiller need it; install Claude Code CLI or fix PATH"
+        ),
+        unknownIsolation
+      ];
     }
     const message = String(err instanceof Error ? err.message : err).split("\n")[0];
-    return fail("claude CLI", `found, but \`claude --version\` failed or timed out: ${message}`);
+    return [
+      fail("claude CLI", `found, but \`claude --version\` failed or timed out: ${message}`),
+      unknownIsolation
+    ];
   }
+  let helpText = "";
+  try {
+    helpText = run("claude", ["--help"], 15e3);
+  } catch {
+    helpText = "";
+  }
+  const isolated = childIsolationArgsFor(helpText).length > 0;
   const harvestModel = loadHarvestConfig(home).model;
   const gateModel = loadScoreConfig(home).model;
   const distillModel = loadDistillConfig(home).model;
   const models = [...new Set([harvestModel, gateModel, distillModel].filter(Boolean))];
   for (const model of models) {
     try {
-      const reply = run("claude", ["-p", "Reply with exactly: OK", ...model ? ["--model", model] : []], PROBE_TIMEOUT_MS);
+      const invocation = childInvocation({
+        prompt: "Reply with exactly: OK",
+        model: model ?? "",
+        helpText
+      });
+      let reply;
+      try {
+        reply = run("claude", invocation.args, PROBE_TIMEOUT_MS, {
+          env: invocation.env,
+          cwd: invocation.cwd
+        });
+      } finally {
+        invocation.done();
+      }
       if (!/\bok\b/i.test(reply)) {
-        return warn("claude CLI", `installed, but a probe with model "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`);
+        return [
+          warn("claude CLI", `installed, but a probe with model "${model}" returned an unexpected reply: ${reply.slice(0, 60)}`),
+          unknownIsolation
+        ];
       }
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
       if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
-        return fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then");
+        return [
+          fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then"),
+          unknownIsolation
+        ];
       }
       if (err?.code === "ETIMEDOUT" || lower.includes("etimedout")) {
-        return warn(
-          "claude CLI",
-          `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s - usually a cold start; re-run this check`
-        );
+        return [
+          warn(
+            "claude CLI",
+            `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s - usually a cold start; re-run this check`
+          ),
+          unknownIsolation
+        ];
       }
-      return fail(
-        "claude CLI",
-        `logged in, but \`claude -p --model ${model}\` failed - is that model valid? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
-      );
+      return [
+        fail(
+          "claude CLI",
+          `logged in, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
+        ),
+        unknownIsolation
+      ];
     }
   }
-  return ok(
-    "claude CLI",
-    models.length > 1 ? `installed and authenticated (${models.length} configured models reachable)` : "installed and authenticated"
-  );
+  return [
+    ok(
+      "claude CLI",
+      models.length > 1 ? `installed and authenticated (${models.length} configured models reachable)` : "installed and authenticated"
+    ),
+    !helpFormatRecognized(helpText) ? warn(
+      "model call isolation",
+      `help format unrecognized: nothing in \`claude --help\` reads as an option list, so whether this CLI can restrict the child session was decided by searching its text${isolated ? " - the restricting flags WERE passed and the call above answered" : ", and no restricting flags were passed"}`
+    ) : isolated ? ok(
+      "model call isolation",
+      "verified by a real call: no tools, no MCP servers, no local settings, an empty working directory and a restricted environment"
+    ) : warn(
+      "model call isolation",
+      "child session tool restriction unsupported by this claude version - the harvest still runs, but its model call gets this machine's tools, MCP servers and settings; upgrade Claude Code to restrict it"
+    )
+  ];
 }
 function checkGitIdentity(home, run) {
   if (!loadTeamConfig(home)) return null;
@@ -887,18 +1103,18 @@ function checkGitIdentity(home, run) {
   );
 }
 function checkHomeWritable(home) {
-  const probe = join8(home, `.doctor-probe-${process.pid}`);
+  const probe = join9(home, `.doctor-probe-${process.pid}`);
   try {
     mkdirSync5(home, { recursive: true });
     writeFileSync4(probe, "ok");
-    rmSync3(probe, { force: true });
+    rmSync4(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 function checkConfig(home) {
-  const file = join8(home, "config.json");
+  const file = join9(home, "config.json");
   if (!existsSync4(file)) return ok("config", "no config.json (defaults apply)");
   try {
     const parsed = JSON.parse(readFileSync7(file, "utf8"));
@@ -933,10 +1149,10 @@ function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync7(join8(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync7(join9(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync3(join8(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync3(join9(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
@@ -944,7 +1160,7 @@ function remoteDistributionState(team, run) {
   } catch {
     return null;
   } finally {
-    rmSync3(dir, { recursive: true, force: true });
+    rmSync4(dir, { recursive: true, force: true });
   }
 }
 function checkTeamRepo(home, run) {
@@ -1028,7 +1244,7 @@ function parseMcpListing(output) {
 function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const mcpFile = join8(marketRoot, team.marketplaceName, ".mcp.json");
+  const mcpFile = join9(marketRoot, team.marketplaceName, ".mcp.json");
   if (!existsSync4(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
@@ -1078,7 +1294,7 @@ function checkLastRun(home) {
     const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join8(home, "pipeline.log"))})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join9(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -1088,13 +1304,13 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join8(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join9(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot()) {
   const checks = [
     checkNode(),
-    checkClaudeCli(run, home),
+    ...checkClaudeCli(run, home),
     checkHomeWritable(home),
     checkConfig(home),
     checkHooks(home),

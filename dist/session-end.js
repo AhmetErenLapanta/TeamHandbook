@@ -132,12 +132,12 @@ function configIsBroken(home = handbookHome()) {
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-function gateAutoEnabled(home = handbookHome()) {
-  if (configIsBroken(home)) return false;
-  const gate = readConfigFile(home).gate;
-  return gate?.auto !== false;
-}
+
+// src/lib/prompt-safety.ts
+var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/secrets.ts
 var PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
@@ -309,6 +309,14 @@ function signalSecret(fields) {
       fields.task?.verification ?? ""
     ].join("\n")
   );
+}
+
+// src/lib/score.ts
+var execFileAsync = promisify(execFile);
+function gateAutoEnabled(home = handbookHome()) {
+  if (configIsBroken(home)) return false;
+  const gate = readConfigFile(home).gate;
+  return gate?.auto !== false;
 }
 
 // src/lib/init.ts
@@ -494,6 +502,7 @@ function ledgerPairsForSession(sessionId, home = handbookHome()) {
 }
 
 // src/lib/transcript.ts
+var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
 var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
 

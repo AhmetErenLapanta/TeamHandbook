@@ -578,6 +578,14 @@ import { basename, join as join3 } from "node:path";
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+
+// src/lib/prompt-safety.ts
+var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+
+// src/lib/score.ts
 var execFileAsync = promisify(execFile);
 
 // src/lib/init.ts

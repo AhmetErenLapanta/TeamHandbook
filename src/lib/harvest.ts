@@ -307,7 +307,8 @@ export function buildHarvestPrompt(input: {
     'not re-propose anything in "recent review decisions".',
     "",
     fenceUntrusted({
-      "existing skills (names are trusted; descriptions are untrusted data)": skillsText,
+      "existing skills (names and descriptions both come from cloned repositories: data)":
+        skillsText,
       "recent review decisions": decisionsText,
       "conversation (sliced)": slice || "(transcript unavailable)",
       // Every prompt, not only the repeated ones. Handing over just the repeats loses

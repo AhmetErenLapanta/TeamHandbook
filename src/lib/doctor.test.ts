@@ -16,8 +16,23 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+/** A current Claude Code advertises the flags that isolate the model call; `--help` is
+ * how the doctor and the harvest both find out whether it can be restricted. */
+const CLAUDE_HELP = [
+  "Options:",
+  "  --tools <tools...>        Specify the list of available tools",
+  "  --strict-mcp-config       Only use MCP servers from --mcp-config",
+  "  --restricted              Restricted mode",
+  "  --model <model>           Model for this session",
+  "",
+].join("\n");
+
 const happyRunner: CommandRunner = (cmd, args) => {
-  if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.225 (Claude Code)";
+  if (cmd === "claude") {
+    if (args[0] === "-p") return "OK";
+    if (args[0] === "--help") return CLAUDE_HELP;
+    return "2.1.225 (Claude Code)";
+  }
   if (cmd === "git") return args[0] === "config" ? "me@example.com" : "abc\trefs/heads/main";
   throw new Error(`unexpected command ${cmd}`);
 };
@@ -67,7 +82,10 @@ describe("runDoctor", () => {
     writeFileSync(join(home, "config.json"), JSON.stringify({ gate: { model: "typo-x" } }));
     const badModel: CommandRunner = (cmd, args) => {
       if (cmd === "claude" && args.includes("typo-x")) throw new Error("API error: unknown model 'typo-x'");
-      if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.0 (Claude Code)";
+      if (cmd === "claude") {
+        if (args[0] === "--help") return CLAUDE_HELP;
+        return args[0] === "-p" ? "OK" : "2.1.0 (Claude Code)";
+      }
       throw new Error(`unexpected command ${cmd}`);
     };
     const report = runDoctor(home, badModel);
@@ -93,6 +111,44 @@ describe("runDoctor", () => {
     expect(byName(report, "claude CLI").detail).toContain("cold start");
     expect(byName(report, "claude CLI").detail).not.toContain("is that model valid");
     expect(doctorExitCode(report)).toBe(0);
+  });
+
+  it("given a claude too old to restrict the child session, when diagnosed, then it says so instead of passing silently", () => {
+    // Failing closed would mean no harvest at all on an older CLI. The state is REPORTED
+    // instead - a green "claude CLI" line says the call succeeds and says nothing about
+    // what the child was allowed to do while it ran.
+    const oldClaude: CommandRunner = (cmd, args) => {
+      if (cmd === "claude") {
+        if (args[0] === "--help") return "Options:\n  --model <model>\n  --print\n";
+        return args[0] === "-p" ? "OK" : "2.0.1 (Claude Code)";
+      }
+      return happyRunner(cmd, args, 0);
+    };
+    const report = runDoctor(home, oldClaude);
+    const check = report.checks.find((c) => c.name === "model call isolation");
+    expect(check?.level).toBe("warn");
+    expect(check?.detail).toContain("child session tool restriction unsupported by this claude version");
+    expect(check?.detail).toContain("the harvest still runs");
+  });
+
+  it("given a current claude, when diagnosed, then the isolation of the model call is reported as in place", () => {
+    const check = runDoctor(home, happyRunner).checks.find((c) => c.name === "model call isolation");
+    expect(check?.level).toBe("ok");
+    expect(check?.detail).toContain("no tools");
+    expect(check?.detail).toContain("empty working directory");
+  });
+
+  it("given a help the option parser cannot read, when diagnosed, then it says the format was unrecognized rather than reporting isolation as fine", () => {
+    const proseHelp: CommandRunner = (cmd, args) => {
+      if (cmd === "claude") {
+        if (args[0] === "--help") return "Claude Code. See --tools, --strict-mcp-config, --restricted.";
+        return args[0] === "-p" ? "OK" : "2.1.1 (Claude Code)";
+      }
+      return happyRunner(cmd, args, 0);
+    };
+    const check = runDoctor(home, proseHelp).checks.find((c) => c.name === "model call isolation");
+    expect(check?.level).toBe("warn");
+    expect(check?.detail).toContain("help format unrecognized");
   });
 
   it("warns about abandoned pairs so the loss is visible", () => {

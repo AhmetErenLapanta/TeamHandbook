@@ -183,10 +183,75 @@ repo like any other commit.
 
 Plugin hooks execute with your user privileges and run automatically once installed.
 Everything captured from a session - stderr, commands, and the transcript slice - is
-fenced as untrusted data inside every model prompt, so text that looks like an
-instruction can never steer the harvest. Review the source before installing, as you
-would any plugin. TeamHandbook is open source (Apache-2.0) specifically so this is
+fenced as untrusted data inside every model prompt, and the prompt names the delimiter
+exactly, so text that imitates one is read as data. Review the source before installing,
+as you would any plugin. TeamHandbook is open source (Apache-2.0) specifically so this is
 auditable.
+
+### The model call
+
+Fencing decides what the prompt says. It does not decide what the process reading that
+prompt is able to do, and the whole input to that process is text a session could have
+been talked into producing. So the child session is given nothing to do it with:
+
+- **no tools and no MCP servers** - not Bash, not a file writer, not a network fetcher;
+- **an empty working directory**, created for the call and removed after it, so your
+  project's files, its `CLAUDE.md` and its hooks are all out of scope;
+- **your machine's settings files ignored** - user, project and local - so no hook,
+  permission or tool configured here applies to it. The CLI's own config directory is
+  still pointed at, because that is where it finds how to authenticate;
+- **a restricted environment**, passed as an explicit list rather than inherited.
+
+Everything the harvest needs is already in the prompt, assembled by the plugin before the
+call, so the child has no reason to read anything.
+
+What the environment list carries, and why each part of it has to:
+
+- where the CLI, Node and its own config live, on Unix and on Windows;
+- how it reaches the network on a machine behind a proxy, and how it trusts that network
+  where a corporate CA intercepts TLS;
+- how it **authenticates** - the variable families belonging to each backend Claude Code
+  can use (Anthropic directly, or Bedrock, Vertex or Foundry), the credentials themselves,
+  and where its own configuration lives. These carry secrets deliberately: the call cannot
+  happen without them, and the child has no tool with which to send them anywhere. Leaving
+  them out is not a safer choice, it is a broken one - an earlier version of this list
+  omitted them and the harvest simply failed on any machine that authenticates through a
+  cloud backend;
+- how it reaches a **gateway**, where one sits in front of the backend: the token it
+  presents, the endpoint it talks to, and the switches that tell it the gateway has already
+  signed the request. A shorter list refused those switches, and the child then tried to
+  sign requests with a key such an install does not have;
+- which handbook home the call belongs to.
+
+The names were read out of the installed CLI rather than remembered, and each one is in the
+source next to the reason it is there.
+
+Two variables are refused even though they would plausibly help, and for the same reason
+the rest of this exists: `NODE_OPTIONS` can load code into the child before it runs, and
+`NODE_TLS_REJECT_UNAUTHORIZED` would switch certificate checking off. A machine that needs a
+private certificate authority says so by adding trust, not by removing verification.
+
+What it refuses next, and this is the part worth naming: **the handles of the session that
+started the call**. The parent is usually an interactive Claude Code session, and that
+session puts its own message socket, message token, session id and settings into the
+environment. Forwarding those would wire the isolated child back into the very session
+whose text is the untrusted input. So variables belonging to Claude Code are refused by
+default and allowed only by name, one at a time, each because the call cannot reach a model
+without it. Anything unrelated to reaching a model - your shell agent, your forge tokens -
+is not on the list at all.
+
+The exact names are in `src/lib/score.ts`, next to the reason each one is there, and
+`/handbook:doctor` runs its own check through the same list, so a green report and a
+working harvest cannot come apart.
+
+This depends on flags your Claude Code CLI has to support (`--tools`,
+`--strict-mcp-config`, `--restricted`). TeamHandbook reads your CLI's own `--help` at each
+call and uses them only if it declares them, rather than assuming them or assuming their
+absence. If your CLI is older than they are, **the harvest still runs and its model call is
+not restricted** - it gets this machine's tools, MCP servers and settings, which is what
+every version before this one did. `/handbook:doctor` reports which of the two you are on,
+under `model call isolation`, and says so only after a real call has answered through the
+restricted invocation; upgrading Claude Code is the fix.
 
 ### A team repository you joined
 
@@ -212,7 +277,11 @@ and an escape sequence would rewrite what you are shown. A prefix that fails eit
 is refused with the reason and nothing is recorded, exactly as a bad marketplace name is.
 It is never used to name a file, run a command, or reach the network.
 
-That is the whole of what is checked, because those two are the whole of what is read.
+Those two are what `/handbook:join` itself reads. A repository you have joined also ships
+skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what
+you already have - including into the prompt that decides whether a new candidate
+duplicates one. A name is therefore screened too, at the point it would otherwise become
+part of that prompt's structure rather than part of its data.
 Skills, servers and commands merged into that repository arrive on this machine through
 Claude Code's own marketplace subscription. TeamHandbook does not screen them: nothing
 here reads them, and nothing here approves them - `/handbook:review` and
