@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.5] - 2026-09-26
+
+- **The measurement of whether the harvest finds a session's lesson now covers the harder
+  sessions too**: ones busy enough that the reading has to choose what to keep, and ones
+  whose lesson the developer never actually stated, where coming back with nothing is the
+  right answer. The sessions, what they cover and where the result stops being readable are
+  in `evals/`. Nothing that reaches an installed copy changed.
+
 ## [0.13.4] - 2026-09-26
 
 - **The claim this product leads with, that it finds the lesson a session gave, now has a
