@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.13.6] - 2026-09-27
+
+- **A rule you state at the end of a long message is no longer lost.** A turn too long to
+  pass on whole used to be cut after its opening, so anything said near the end never
+  reached the reading that looks for lessons. The end of a long turn is now kept as well,
+  and a long turn is no longer skipped when corrections are counted.
+- **Correcting the same thing twice now counts as a lesson, even when you never state the
+  rule.** A correction used to have to be phrased as a rule to be noticed at all; the
+  second correction is now quoted as the evidence for it.
+- **Redaction holds at the point where a turn is trimmed.** A credential that straddled
+  the cut could lose the half that made it recognizable, and what was left of it read as
+  ordinary text. A cut now falls on whitespace, and a line a detector marked is carried
+  whole or not at all.
+
 ## [0.13.5] - 2026-09-26
 
 - **The measurement of whether the harvest finds a session's lesson now covers the harder
