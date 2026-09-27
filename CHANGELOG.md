@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.14.0] - 2026-09-27
+
+- **TeamHandbook now requires Node 22.** Node 18 and Node 20 are both past their end of
+  life, so the floor moves up: the plugin, its build and its CI all ask for Node 22, and
+  the health check says so when an older one is found. Contributed by @ozers.
+
 ## [0.13.6] - 2026-09-27
 
 - **A rule you state at the end of a long message is no longer lost.** A turn too long to
