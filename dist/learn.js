@@ -287,7 +287,7 @@ import { promisify } from "node:util";
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
 var UNTRUSTED_CLOSE = "<<<END_UNTRUSTED_SESSION_DATA>>>";
 var SENTINEL_RE = /<<<\/?[A-Z_]*UNTRUSTED[A-Z_]*>>>/gi;
-var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var INVISIBLE_FOR_MATCH = /\p{Default_Ignorable_Code_Point}/u;
 var CONFUSABLE_FOR_MATCH = {
   "\u0410": "A",
   "\u0412": "B",

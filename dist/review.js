@@ -86,7 +86,7 @@ import { promisify } from "node:util";
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
 var UNTRUSTED_CLOSE = "<<<END_UNTRUSTED_SESSION_DATA>>>";
 var SENTINEL_RE = /<<<\/?[A-Z_]*UNTRUSTED[A-Z_]*>>>/gi;
-var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var INVISIBLE_FOR_MATCH = /\p{Default_Ignorable_Code_Point}/u;
 var CONFUSABLE_FOR_MATCH = {
   "\u0410": "A",
   "\u0412": "B",
@@ -1056,7 +1056,7 @@ var TEAM_PREFIX_FILE = ".teamhandbook.json";
 var COMMIT_PREFIX_MAX = 64;
 function commitPrefixProblem(value) {
   if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
-  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  if (/\p{C}/u.test(value)) return "carrying a control character";
   return null;
 }
 function readTeamCommitPrefix(repoDir) {

@@ -18,7 +18,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node18",
+  target: "node22",
   sourcemap: false,
   minify: false,
 });

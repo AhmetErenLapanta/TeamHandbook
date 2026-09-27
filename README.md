@@ -1,6 +1,6 @@
 # TeamHandbook
 
-[![CI](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Node: >= 18](https://img.shields.io/badge/node-%3E%3D%2018-brightgreen)](package.json)
+[![CI](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Node: >= 22](https://img.shields.io/badge/node-%3E%3D%2022-brightgreen)](package.json)
 
 **Your team's Claude Code setup, in one git repository.** One person creates it, everyone
 else connects once, and every skill, MCP server, or slash command the team approves shows
@@ -50,7 +50,7 @@ working: there is no lock-in.
 
 ## Install
 
-**Requires** Claude Code >= 2.1 and Node.js >= 18.
+**Requires** Claude Code >= 2.1 and Node.js >= 22.
 
 ### Setting it up for your team
 

@@ -73,7 +73,6 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 // src/lib/prompt-safety.ts
-var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
 var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
 var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
@@ -440,7 +439,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: node scripts/bump-version.mjs
       - run: |
           git config user.name "handbook-ci"
@@ -453,7 +452,7 @@ var gitlabCi = (bump) => `# Bumps the plugin version on every merge to the defau
 # Requires a project access token with write_repository scope stored in the
 # TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
 version-bump:
-  image: node:20
+  image: node:22
   rules:
     # only run when the CI token exists - otherwise skip (don't fail the pipeline)
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
@@ -609,7 +608,7 @@ var TEAM_PREFIX_FILE = ".teamhandbook.json";
 var COMMIT_PREFIX_MAX = 64;
 function commitPrefixProblem(value) {
   if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
-  if (new RegExp("\\p{C}", "u").test(value)) return "carrying a control character";
+  if (/\p{C}/u.test(value)) return "carrying a control character";
   return null;
 }
 function readTeamCommitPrefix(repoDir) {

@@ -73,9 +73,9 @@ function fail(name: string, detail: string): DoctorCheck {
 
 function checkNode(): DoctorCheck {
   const major = Number(process.versions.node.split(".")[0]);
-  return major >= 18
-    ? ok("node", `${process.version} (≥ 18 required)`)
-    : fail("node", `${process.version} - TeamHandbook needs Node ≥ 18`);
+  return major >= 22
+    ? ok("node", `${process.version} (≥ 22 required)`)
+    : fail("node", `${process.version} - TeamHandbook needs Node ≥ 22`);
 }
 
 // The harvest itself allows 180s. This probe only asks for "OK", but it is often the

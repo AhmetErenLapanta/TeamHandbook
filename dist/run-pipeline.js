@@ -85,7 +85,7 @@ import { promisify } from "node:util";
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
 var UNTRUSTED_CLOSE = "<<<END_UNTRUSTED_SESSION_DATA>>>";
 var SENTINEL_RE = /<<<\/?[A-Z_]*UNTRUSTED[A-Z_]*>>>/gi;
-var INVISIBLE_FOR_MATCH = new RegExp("\\p{Default_Ignorable_Code_Point}", "u");
+var INVISIBLE_FOR_MATCH = /\p{Default_Ignorable_Code_Point}/u;
 var CONFUSABLE_FOR_MATCH = {
   "\u0410": "A",
   "\u0412": "B",
@@ -992,7 +992,7 @@ var STOPWORDS = /* @__PURE__ */ new Set([
 var FUZZY_MIN_CHARS = 5;
 var FUZZY_OVERLAP = 0.8;
 function fold(text) {
-  return text.normalize("NFD").replace(new RegExp("\\p{M}+", "gu"), "").toLowerCase().replace(/ı/g, "i");
+  return text.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/ı/g, "i");
 }
 function matchTokens(text) {
   const words = fold(text).replace(/['’]/g, "").replace(/[^\p{L}\p{N}\s-]/gu, " ").split(/\s+/).filter((w) => w.length > 2 && !STOPWORDS.has(w)).map(stem).filter((w) => w.length > 2 && !STOPWORDS.has(w));
