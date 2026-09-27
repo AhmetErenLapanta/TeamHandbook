@@ -125,6 +125,14 @@ export interface CorpusSession {
    */
   tier: 1 | 2;
   /**
+   * A named arm inside a tier, reported apart from the tier's pooled numbers and never
+   * mixed into its band. `long-turn` is the two sessions built for one product question -
+   * does a rule stated inside a turn longer than the per-turn cut reach the model at all -
+   * and they would otherwise move a band that exists to be compared against the runs
+   * before them.
+   */
+  arm?: "long-turn";
+  /**
    * The existing-skill list the harvest prompt is shown, as `listSkills` would have
    * returned it. Tier 1 injects an empty one, which is why its precision can only be
    * higher than production's and why the sieve's duplicate rule was never exercised
@@ -1648,6 +1656,17 @@ export const SESSIONS: CorpusSession[] = [...TIER1_SESSIONS, ...TIER2_SESSIONS];
 
 export function sessionsInTier(tier: 1 | 2): CorpusSession[] {
   return SESSIONS.filter((s) => s.tier === tier);
+}
+
+/** A tier's own sessions: everything in it that is not held apart as an arm. The pooled
+ * rates and the band are taken over these, so adding an arm cannot move a number the
+ * previous measurement is read against. */
+export function pooledInTier(tier: 1 | 2): CorpusSession[] {
+  return sessionsInTier(tier).filter((s) => !s.arm);
+}
+
+export function sessionsInArm(arm: NonNullable<CorpusSession["arm"]>): CorpusSession[] {
+  return SESSIONS.filter((s) => s.arm === arm);
 }
 
 /**

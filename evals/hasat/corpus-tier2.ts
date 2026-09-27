@@ -92,6 +92,139 @@ function around(theme: string, before: number, after: number, lesson: Turn[]): T
   ];
 }
 
+
+// ── the long-turn arm: a rule stated inside a turn the cut truncates ─────────
+//
+// Held apart from everything above (`arm: "long-turn"`), because these two sessions are
+// not here to move a recall band - they are here to answer one product question that a
+// real session asked first. A rule stated at the END of a long brief reached the model
+// through NEITHER evidence path: the recorder ignores a turn over 600 characters as a
+// brief, and the slicer kept a turn's first 1,000 characters, so a sentence past that
+// mark was in nothing the model was shown. Measured on a real session: the sentence sat
+// 219 characters from the end of a 1,569-character turn.
+//
+// Two sessions rather than one, because the two positions have different answers and a
+// single fixture would hide that: the rule at the END of the brief, and the rule in the
+// MIDDLE of it. Each declares which evidence path carries it, `corpus.test.ts` asserts
+// the declaration against what the product's own recorder and slicer actually do, and the
+// declaration is the before-and-after of any change to either.
+
+const LONG_TURN_ARM: CorpusSession[] = [
+  {
+    id: "four-jobs-and-a-rule-at-the-end",
+    tier: 2,
+    arm: "long-turn",
+    language: "en",
+    existingSkills: skills(6),
+    labels: [
+      {
+        id: "flag-carries-its-own-removal",
+        kind: "correction",
+        form: "hard-never",
+        position: "middle",
+        domain: "feature-flag-retirement",
+        anchor: "every flag gets its removal condition written down the day it goes in",
+        lesson:
+          "A flag added to gate a change records what has to be true before it can be taken out at the same moment it is added, and that record lives with the tracked work rather than in anyone's memory, so retiring it is scheduled rather than remembered.",
+        concepts: [
+          "the condition for removing the flag is written when the flag is added",
+          "it is recorded with the tracked work, not left to memory",
+          "removing the flag is planned rather than remembered later",
+        ],
+        // The recorder still ignores the turn as a brief (over 600 characters), so the
+        // slice is the only path this lesson has - and it has it because the cut keeps the
+        // turn's tail. Before that change this read `{ slice: false }`, which is the whole
+        // before-and-after: reverting the cut fails this assertion.
+        presence: { slice: true, corrections: false },
+      },
+    ],
+    distractors: [
+      { id: "carrier-retry-count", fact: "The carrier poll retries five times before it gives up.", concepts: ["five retries", "how many"] },
+      { id: "flag-source", fact: "Flags for this module are read from the settings table.", concepts: ["settings table", "where flags are read from"] },
+    ],
+    turns: around("shipments", 15, 14, [
+      {
+        role: "user",
+        text:
+          "Four things today and please read all of it before you start, because the last one changes how you do the third.\n\n" +
+          "1. The carrier poll is timing out on one carrier and retrying forever, which is why the queue depth chart looks like that. Cap the retries at five, put whatever is still failing after that on the dead letter queue with the carrier code in the payload, and tell me how many are sitting there right now so I can tell support what to expect.\n\n" +
+          "2. The tracking page shows the last known status but not when it was read, and people are reading a two-day-old status as if it were live. Put the read time in the response and on the page in the customer's own zone, and check what the mobile client does with a missing value before you make the field required, because the older build is still out there.\n\n" +
+          "3. The new estimate goes behind a flag for the pilot accounts. It reads from the settings table like the other two. The old path has to behave exactly as it does today when the flag is off - same query, same rounding, same response shape - and the pilot accounts come from the seed file rather than being typed in by hand, because we will need the same list again for the next one.\n\n" +
+          "4. While you are in there: the shipment list query selects every column and the page uses four of them. Narrow it to those four and leave a comment saying which four, so the next person does not widen it again to be safe.\n\n" +
+          "Do not start on 3 until the first two are green, and if 1 turns out to be the carrier rather than us, stop and tell me rather than working around it.\n\n" +
+          "And one thing that is not about today: every flag gets its removal condition written down the day it goes in, in the ticket rather than in someone's head. Two from the spring are still on and nobody remembers what we were waiting for.",
+      },
+      {
+        role: "assistant",
+        text:
+          "Working through them in order. The poll now stops after five attempts and everything past that goes to the dead letter queue with the carrier code on it; there are nineteen there this morning and eighteen of them are the same carrier, so this looks like their end rather than ours and I have stopped short of working around it as you asked. The read time is on the response and on the page; the older mobile build renders a missing value as an empty string rather than crashing, so the field can be required in the next release but not in this one.",
+        tool: { name: "Bash", input: { command: "npx vitest run src/shipments" }, result: "Test Files  6 passed (6)\n     Tests  54 passed (54)\n  Duration  9.31s" },
+      },
+    ]),
+    work: [
+      { kind: "edit", file: "src/shipments/poll.ts" },
+      { kind: "edit", file: "src/shipments/tracking.ts" },
+      { kind: "bash-ok", command: "npx vitest run src/shipments" },
+    ],
+  },
+
+  {
+    id: "five-jobs-and-a-rule-in-the-middle",
+    tier: 2,
+    arm: "long-turn",
+    language: "en",
+    existingSkills: skills(8),
+    labels: [
+      {
+        id: "outbound-calls-state-their-timeout",
+        kind: "correction",
+        form: "hard-never",
+        position: "middle",
+        domain: "outbound-call-deadlines",
+        anchor: "no call we make gets to use whatever the library decided the default was",
+        lesson:
+          "Every outbound call names its own deadline at the call site instead of inheriting whatever the client library defaults to, and the deadline is chosen from what the caller can afford to wait rather than from what the remote service usually takes.",
+        concepts: [
+          "the deadline is set explicitly at the call site",
+          "no call relies on the library's default",
+          "the value comes from what the caller can wait for",
+        ],
+        // The same loss, at a position the head-and-tail cut does not reach: the sentence
+        // is in the interior of the turn, so it is in neither the head nor the tail.
+        presence: { slice: false, corrections: false },
+      },
+    ],
+    distractors: [
+      { id: "renewal-window", fact: "Permit renewals open sixty days before expiry.", concepts: ["sixty days", "renewal window"] },
+      { id: "registry-name", fact: "The external registry is reached through a client in src/permits/registry.ts.", concepts: ["src/permits/registry.ts", "which client"] },
+    ],
+    turns: around("permits", 14, 15, [
+      {
+        role: "user",
+        text:
+          "Five things, and the whole list is for this week rather than today, so pick them up in whatever order makes sense once you have read it.\n\n" +
+          "1. The renewal pass is counting permits that were already renewed, so the reminder goes out twice. It reads the expiry date and ignores the renewal that superseded it. Fix the read, and check the two other places that ask the same question before you decide where the fix belongs.\n\n" +
+          "2. The registry lookup blocks the whole renewal pass when the registry is slow. Yesterday it sat there for four minutes on one permit and the rest of the batch never ran. Move it off the critical path if you can, and if you cannot, make the failure cheap.\n\n" +
+          "3. The permit list is sorted by created date and the office wants it by expiry, soonest first, with the already-expired ones at the bottom rather than the top. That is a one-line change in the query and about four in the tests, so do the tests properly rather than asserting the first row.\n\n" +
+          "4. And on the registry, because it is the same shape as the last two of these: no call we make gets to use whatever the library decided the default was. Every outbound call says out loud how long it is prepared to wait, at the place it is made, and the number comes from what we can stand rather than from what the other end usually manages. The registry client has no deadline at all, which is how one permit took four minutes.\n\n" +
+          "5. The renewal notice still says the old office address. It is in the message file twice, once for the letter and once for the email, and there is a third copy in the test fixture that will make the suite fail if you only change the first two.\n\n" +
+          "None of this is urgent enough to interrupt anything you are already in the middle of, but I would like all five before Friday so the office can run the pass themselves next week.",
+      },
+      {
+        role: "assistant",
+        text:
+          "Started with the double reminder since it is the one going out to people. The pass now asks for the current term rather than the latest expiry, and the two other callers were asking the same question in their own way, so the question itself is one function now and all three use it. The list sort is done and the tests assert the whole order rather than the first row, including an expired one at the bottom. The address is changed in all three places, the fixture included.",
+        tool: { name: "Bash", input: { command: "npx vitest run src/permits" }, result: "Test Files  7 passed (7)\n     Tests  61 passed (61)\n  Duration  12.44s" },
+      },
+    ]),
+    work: [
+      { kind: "edit", file: "src/permits/renewal.ts" },
+      { kind: "edit", file: "src/permits/registry.ts" },
+      { kind: "bash-ok", command: "npx vitest run src/permits" },
+    ],
+  },
+];
+
 export const TIER2_SESSIONS: CorpusSession[] = [
   // ── the cross table's empty cells: a lesson the developer DOES state ──────
   //
@@ -1143,7 +1276,7 @@ export const TIER2_SESSIONS: CorpusSession[] = [
       { id: "status-code", fact: "The endpoint answers with a four hundred and twenty-two on a rejected permit.", concepts: ["four hundred and twenty-two", "status code"] },
       { id: "log-key", fact: "The log entry carries the permit reference as its key.", concepts: ["permit reference", "log key"] },
     ],
-    turns: around("permits", 11, 12, [
+    turns: around("permits", 14, 15, [
       {
         role: "user",
         text: "Ruhsat reddedildiğinde dönen mesajı yaz, dört yüz yirmi iki ile dönüyoruz.",
@@ -1440,4 +1573,5 @@ export const TIER2_SESSIONS: CorpusSession[] = [
       { kind: "edit", file: "src/catalog/summary.ts" },
     ],
   },
+  ...LONG_TURN_ARM,
 ];

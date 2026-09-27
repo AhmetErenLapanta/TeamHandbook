@@ -15,8 +15,35 @@ export interface TranscriptEntry {
   text: string;
 }
 
-const PER_USER_CAP = 1_000;
+export const PER_USER_CAP = 1_000;
 const PER_ASSISTANT_CAP = 1_500;
+/**
+ * WHICH 1,000 characters of an over-cap developer turn, not how many.
+ *
+ * Keeping only the head lost every rule stated at the END of a long brief, and the end of a
+ * brief is where a person puts the aside they did not open with. Measured on a real session:
+ * the rule sat 219 characters from the end of a 1,569-character turn, and the recorder had
+ * already dropped that turn whole as a brief (over 600 characters) - so the sentence reached
+ * nothing the model was shown, and the developer had stated it outright.
+ *
+ * The budget is deliberately untouched, and what that buys was measured on the real
+ * cap-filling windows of the same session. Raising the cap to 2,000 instead lost four
+ * developer turns and sixteen assistant turns out of the slice, and a turn dropped for want
+ * of budget loses its lesson whole - the same failure moved rather than fixed. Keeping the
+ * cap and moving the window costs almost nothing: across both corpora not one picked turn
+ * changed and the slice moved by at most 119 characters, and on the real windows every
+ * developer turn was still picked, while the assistant tail shifted by a few turns either way
+ * (worst case seventeen of 141, in the half of the slice that carries the least).
+ *
+ * What it does NOT reach is a rule in the INTERIOR of a long turn. The other candidate for
+ * that - the recorder's filter going per paragraph instead of per turn - does reach it and was
+ * measured too: it turns 15 recorded prompts into 40 and produces up to 94 against a ceiling
+ * of 40, so a rule stated early in a long session is evicted by filler paragraphs from later
+ * ones, which is this same loss in a new place. The corpus carries the interior case as its own
+ * fixture rather than leaving the trade undocumented.
+ */
+export const USER_HEAD = 700;
+export const USER_TAIL = PER_USER_CAP - USER_HEAD;
 // The user's own words carry the highest-value lessons (corrections, "always/never"
 // teachings), so they get the larger share of the slice budget.
 const USER_BUDGET_SHARE = 0.6;
@@ -84,6 +111,71 @@ export function readTranscriptTexts(path: string): TranscriptEntry[] {
 
 function cap(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+/** The bounds of the line a given offset falls inside, as that line stands in the whole turn. */
+function lineAt(text: string, offset: number): { start: number; end: number } {
+  const start = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const end = text.indexOf("\n", offset);
+  return { start, end: end === -1 ? text.length : end };
+}
+
+/**
+ * A developer turn capped to its head and its tail. Two rules hold at both cut points, and
+ * both of them are about `redactSlice`, which reads the slice line by line and knows nothing
+ * of what was cut away:
+ *
+ *   - **a cut never splits a run of non-whitespace.** Cutting through the middle of a token
+ *     leaves a fragment too short for the detector to recognize as what it came from.
+ *   - **a cut never splits a line the detector would flag.** This is the one the tail
+ *     introduced, and it runs the opposite way round: most credential rules are anchored to
+ *     a KEYWORD next to the value (`--password=…`, `PGPASSWORD=…`, `machine … login …
+ *     password …`), so a tail beginning in the middle of `password: hunter2` would put the
+ *     value on a line with no keyword left on it, where no rule can see it. Such a line is
+ *     taken whole or not at all.
+ *
+ * The two windows enforce the first rule differently, and the comment used to claim more for
+ * the head than the code does. `tailWindow` drops a window with no whitespace in it at all -
+ * stripping the partial leading token empties it. `headWindow` does NOT: its `|| cut` fallback
+ * keeps all 700 characters rather than return nothing, so an unbroken run IS split there.
+ * Hundreds of unbroken characters is the shape of key material rather than of a sentence, and
+ * what actually stops that message is a guard one layer up: `looksKeyBearing` drops the whole
+ * message before this function ever sees it (measured on a 1,200-character unbroken run - the
+ * message is dropped, the slice keeps 53 characters of frame and no body). So the head's
+ * fallback is safe because of that guard, not because of this cut, and anyone weakening
+ * `looksKeyBearing` is weakening the head window too.
+ */
+function capUserTurn(text: string): string {
+  if (text.length <= PER_USER_CAP) return text;
+  const head = headWindow(text);
+  const tail = tailWindow(text);
+  return tail ? `${head}…${tail}` : `${head}…`;
+}
+
+function headWindow(text: string): string {
+  const line = lineAt(text, USER_HEAD);
+  const splitsASecretLine =
+    line.start < USER_HEAD && USER_HEAD < line.end && !!detectSecret(text.slice(line.start, line.end));
+  const to = splitsASecretLine ? line.start : USER_HEAD;
+  const cut = text.slice(0, to);
+  // Back off the partial word only when the cut actually lands inside one. A cut that already
+  // sits on whitespace ends on a complete word, and stripping it anyway would throw away the
+  // last thing the developer wrote before the cut - or, on a line the detector needs whole,
+  // the keyword that makes it recognizable.
+  if (/\s/.test(text[to] ?? " ")) return cut.trimEnd();
+  return cut.replace(/\S+$/, "").trimEnd() || cut;
+}
+
+function tailWindow(text: string): string {
+  const from = text.length - USER_TAIL;
+  const line = lineAt(text, from);
+  if (line.start < from && detectSecret(text.slice(line.start, line.end))) {
+    // the line this window opens in the middle of would lose its keyword: start after it
+    return line.end + 1 >= text.length ? "" : text.slice(line.end + 1).trimStart();
+  }
+  const window = text.slice(from);
+  if (/\s/.test(text[from - 1] ?? " ")) return window.trimStart();
+  return window.replace(/^\S+/, "").trimStart();
 }
 
 // The slice labels each turn "User:" / "Assistant:" at the start of a line, so a
@@ -266,7 +358,7 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!;
     if (entry.role !== "user") continue;
-    const text = cap(entry.text, PER_USER_CAP);
+    const text = capUserTurn(entry.text);
     if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;

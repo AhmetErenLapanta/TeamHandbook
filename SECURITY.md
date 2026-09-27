@@ -110,10 +110,15 @@ them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
   neither is a shape a pasted key falls into by accident: a Subresource Integrity digest of
   exactly the length its hash produces, and a `data:image/…;base64` URI opening with a real
   image format's first bytes. Without those exemptions one lockfile line cost the whole
-  message, and a lockfile is nothing but those lines. The number of redacted lines is
-  recorded in `pipeline.log`. Either way the raw secret text reaches neither disk nor the
-  model. Detection is best-effort pattern matching (see `src/lib/secrets.ts`); a secret in
-  an unrecognized format can slip through, so review a candidate before approving it. What
+  message, and a lockfile is nothing but those lines. A per-line pass also needs each line
+  to arrive whole, and the slice cuts an over-long developer turn down to its head and its
+  tail: neither cut splits a line the detector would flag. Most credential rules are
+  anchored to a keyword beside the value, so a cut through `password: ...` would leave the
+  value on a line with no keyword left on it, where no rule can see it; such a line is
+  taken whole or not at all. The number of redacted lines is recorded in `pipeline.log`.
+  Either way the raw secret text reaches neither disk nor the model. Detection is
+  best-effort pattern matching (see `src/lib/secrets.ts`); a secret in an unrecognized
+  format can slip through, so review a candidate before approving it. What
   bounds that best effort is a corpus: the detector is measured against secret families in
   the contexts a session actually sees - a command line, stderr, a diff, a config file, a
   header - and the corpus lives in the test suite, so a family IN IT that the detector

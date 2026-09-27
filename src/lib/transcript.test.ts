@@ -2,7 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildTranscriptSlice, readTranscriptTexts, redactSlice, sliceTranscript } from "./transcript.js";
+import { CORPUS_A } from "./secret-corpus.js";
+import { detectSecret } from "./secrets.js";
+import {
+  buildTranscriptSlice,
+  PER_USER_CAP,
+  readTranscriptTexts,
+  redactSlice,
+  sliceTranscript,
+  USER_HEAD,
+  USER_TAIL,
+} from "./transcript.js";
 import type { TranscriptEntry } from "./transcript.js";
 
 let dir: string;
@@ -131,6 +141,90 @@ describe("sliceTranscript", () => {
     const slice = sliceTranscript(entries, 40_000);
     expect(slice.length).toBeLessThan(1_100);
     expect(slice.endsWith("…")).toBe(true);
+  });
+
+  it("keeps the END of an over-cap developer turn, which is where a brief states its rule", () => {
+    // The loss this closes, as a real session produced it: the rule was the last sentence of
+    // a long brief, and a turn that long is not recorded as a prompt either - so keeping only
+    // the head put it in nothing the model was shown.
+    const words = "and then the other thing ";
+    const text = `OPENING ${words.repeat(80)} and one more thing: THE-RULE-AT-THE-END`;
+    expect(text.length).toBeGreaterThan(PER_USER_CAP);
+    const slice = sliceTranscript([{ role: "user", text }], 40_000);
+    expect(slice).toContain("OPENING");
+    expect(slice).toContain("THE-RULE-AT-THE-END");
+    expect(slice.length).toBeLessThanOrEqual(PER_USER_CAP + "User: …".length);
+  });
+
+  it("cuts only at whitespace, so neither cut can leave a fragment of a token behind", () => {
+    // `redactSlice` reads the slice line by line, so a cut through the middle of a token
+    // would leave a piece too short for the detector to know what it came from. This is the
+    // property that keeps both cut points honest, and the token here straddles the one the
+    // tail introduced.
+    const token = "sk-proj-abcdef1234567890ABCDEFGH";
+    const text = `${"word ".repeat(300)}${token}${" data".repeat(58)}`;
+    const slice = sliceTranscript([{ role: "user", text }], 40_000);
+    expect(slice).not.toContain("sk-proj-");
+    expect(slice).not.toContain(token.slice(22));
+    expect(redactSlice(slice).redacted).toBe(0); // nothing left to redact, rather than a husk
+  });
+
+  it("still redacts a secret line that sits wholly inside the kept tail", () => {
+    const token = "sk-proj-abcdef1234567890ABCDEFGH";
+    const text = `${"word ".repeat(300)}\nthe token is ${token}\nand that is all`;
+    expect(text.length - text.indexOf(token)).toBeLessThan(USER_TAIL);
+    const { clean, redacted } = redactSlice(sliceTranscript([{ role: "user", text }], 40_000));
+    expect(redacted).toBe(1);
+    expect(clean).not.toContain("sk-proj-");
+  });
+
+  it("drops the tail rather than open it in the middle of a line carrying a secret", () => {
+    // The failure this closes runs the opposite way to a split token: most credential rules
+    // are anchored to the KEYWORD beside the value, so a window that begins after the
+    // keyword hands over a value nothing can recognize. The whole line goes or none of it.
+    const text = `${"word ".repeat(200)} the deploy needs --password=hunter2hunter2hunter2 ${"more ".repeat(20)}`;
+    const slice = sliceTranscript([{ role: "user", text }], 40_000);
+    expect(slice).not.toContain("hunter2");
+    expect(slice).not.toContain("password");
+  });
+
+  it("keeps no credential from the secret corpus, wherever a cut falls inside its line", () => {
+    // Every line of the secret corpus that this pass can catch at all, slid through both cut
+    // points one whitespace boundary at a time: the value must never reach the slice, whether
+    // because the line was taken whole and redacted in place or because the cut dropped it.
+    //
+    // Scoped to the lines `detectSecret` flags, which is what this property is about: a cut
+    // must not defeat a detection that would otherwise have happened. The corpus also carries
+    // lines this pass does not flag in the first place - 44 of them, nearly all the `stderr`
+    // context - and that is a limit of the transcript path rather than of the cut, unchanged
+    // in either direction by where the window falls.
+    const cases = CORPUS_A.filter((entry) => entry.line.includes(entry.value) && detectSecret(entry.line));
+    expect(cases.length).toBeGreaterThan(90);
+    let slid = 0;
+    for (const entry of cases) {
+      // ...at the tail cut: choose the suffix length so the window opens at each offset
+      // inside the line, and ...
+      for (let into = 1; into < entry.line.length; into += 7) {
+        const suffix = "tail ".repeat(Math.ceil((USER_TAIL - into) / 5) + 1);
+        const text = `${"word ".repeat(220)}\n${entry.line}\n${suffix}`.slice(
+          0,
+          Math.max(PER_USER_CAP + 1, 220 * 5 + 1 + entry.line.length + 1 + (USER_TAIL - into)),
+        );
+        if (text.length <= PER_USER_CAP) continue;
+        const { clean } = redactSlice(sliceTranscript([{ role: "user", text }], 40_000));
+        expect(clean, `${entry.id} at tail offset ${into}`).not.toContain(entry.value);
+        slid += 1;
+      }
+      // ...at the head cut, where the same line straddles the head boundary instead.
+      for (let into = 1; into < entry.line.length; into += 7) {
+        const text = `${"w ".repeat(Math.max(1, Math.floor((USER_HEAD - into) / 2)))}\n${entry.line}\n${"tail ".repeat(400)}`;
+        if (text.length <= PER_USER_CAP) continue;
+        const { clean } = redactSlice(sliceTranscript([{ role: "user", text }], 40_000));
+        expect(clean, `${entry.id} at head offset ${into}`).not.toContain(entry.value);
+        slid += 1;
+      }
+    }
+    expect(slid).toBeGreaterThan(400);
   });
 });
 

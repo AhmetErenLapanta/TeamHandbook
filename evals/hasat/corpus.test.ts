@@ -5,9 +5,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readTranscriptTexts } from "../../src/lib/transcript.js";
-import { MAX_CORRECTIONS } from "../../src/lib/corrections.js";
-import { SESSIONS, TIER1_SESSIONS, sessionsInTier } from "./corpus.js";
+import { PER_USER_CAP, readTranscriptTexts, USER_HEAD, USER_TAIL } from "../../src/lib/transcript.js";
+import { couldTeach, MAX_CORRECTIONS } from "../../src/lib/corrections.js";
+import { SESSIONS, TIER1_SESSIONS, pooledInTier, sessionsInArm, sessionsInTier } from "./corpus.js";
 import { buildSession, writeTranscript } from "./session.js";
 import { shuffledLabels } from "./corpus.js";
 import { noiseTurns, THEMES } from "./noise.js";
@@ -475,5 +475,51 @@ describe("tier 2 is dense, unstated, and told what already exists", () => {
     const free = TIER2.find((s) => s.labels.length === 0)!;
     expect(free.distractors.length).toBeGreaterThanOrEqual(1);
     expect(built(free).substance, "the dense lesson-free session would be skipped as trivial").toBe(true);
+  });
+});
+
+/**
+ * The long-turn arm, and the one thing it has to keep being: a rule the developer states
+ * inside a turn that BOTH evidence paths truncate. If a later edit shortened either turn
+ * under the recorder's filter, or moved a rule inside the first characters the cut keeps,
+ * the arm would still run and would silently be measuring an ordinary session.
+ */
+describe("the long-turn arm states its rule where both paths cut", () => {
+  const ARM = sessionsInArm("long-turn");
+
+  it("is held out of its tier's own sessions", () => {
+    expect(ARM.length).toBe(2);
+    for (const session of ARM) expect(session.tier).toBe(2);
+    const pooled = new Set(pooledInTier(2).map((s) => s.id));
+    for (const session of ARM) expect(pooled.has(session.id), `${session.id} is in the tier's pool`).toBe(false);
+  });
+
+  it("puts the rule in a turn the recorder refuses and the cut truncates", () => {
+    for (const session of ARM) {
+      for (const label of session.labels) {
+        const carrier = session.turns.find(
+          (t) => t.role === "user" && fold(t.text).includes(fold(label.anchor)),
+        )!;
+        expect(carrier, `${label.id} has no carrier turn`).toBeDefined();
+        // The recorder's own decision, not a copy of its constant: a turn this long is a
+        // brief to it, so the recorded prompts cannot carry this lesson.
+        expect(couldTeach(carrier.text), `${label.id} carrier is short enough to be recorded`).toBe(false);
+        expect(carrier.text.length, `${label.id} carrier is under the cut`).toBeGreaterThan(PER_USER_CAP);
+      }
+    }
+  });
+
+  it("carries both positions: one rule in the turn's tail, one in its interior", () => {
+    const positions = ARM.map((session) => {
+      const label = session.labels[0]!;
+      const carrier = session.turns.find((t) => t.role === "user" && fold(t.text).includes(fold(label.anchor)))!;
+      const at = fold(carrier.text).indexOf(fold(label.anchor));
+      const fromEnd = carrier.text.length - at;
+      return { id: label.id, at, fromEnd, inTail: fromEnd <= USER_TAIL, inHead: at < USER_HEAD };
+    });
+    // One is reachable by keeping the turn's tail; the other is in the part no window
+    // reaches, which is the limit the arm exists to keep measurable rather than forgotten.
+    expect(positions.filter((p) => p.inTail), `no rule sits in the tail`).toHaveLength(1);
+    expect(positions.filter((p) => !p.inTail && !p.inHead), `no rule sits in the interior`).toHaveLength(1);
   });
 });

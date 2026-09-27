@@ -249,6 +249,23 @@ describe("sieveHarvestItems", () => {
     expect(dropped.map((d) => d.reason).sort()).toEqual(["below-floor", "duplicate", "oversized", "secret"]);
   });
 
+  it("given an existing skill that covers the lesson under another name, when sieved, then nothing stops the item", () => {
+    // The limit of this rule, measured rather than assumed: it compares the item's slug to
+    // the names of the skills that exist, so it can only ever catch a re-proposal that
+    // arrives under the SAME name. A developer's own library is full of names that do not
+    // describe the rule inside them, and this is what the harvest then writes a second
+    // candidate for. The prompt's "produce nothing that overlaps an existing skill" is the
+    // only thing standing in front of that case, and it is a model's judgement rather than
+    // a rule of the product.
+    const { kept, dropped } = sieveHarvestItems(
+      [item({ name: "unit-tests-do-not-open-sockets" })],
+      { ...context, existingSkillNames: new Set(["keep-the-fast-suite-offline"]) },
+    );
+
+    expect(kept.map((i) => i.name)).toEqual(["unit-tests-do-not-open-sockets"]);
+    expect(dropped).toEqual([]);
+  });
+
   it("caps at maxPerSession keeping the highest scores", () => {
     const items = [5, 8, 6, 9].map((total, i) =>
       item({

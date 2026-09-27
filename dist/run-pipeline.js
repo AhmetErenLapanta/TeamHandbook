@@ -1080,6 +1080,8 @@ import { existsSync as existsSync3 } from "node:fs";
 import { readFileSync as readFileSync7 } from "node:fs";
 var PER_USER_CAP = 1e3;
 var PER_ASSISTANT_CAP = 1500;
+var USER_HEAD = 700;
+var USER_TAIL = PER_USER_CAP - USER_HEAD;
 var USER_BUDGET_SHARE = 0.6;
 function isNoise(text) {
   const t = text.trimStart();
@@ -1121,6 +1123,35 @@ function readTranscriptTexts(path) {
 }
 function cap(text, max) {
   return text.length <= max ? text : `${text.slice(0, max)}\u2026`;
+}
+function lineAt(text, offset) {
+  const start = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const end = text.indexOf("\n", offset);
+  return { start, end: end === -1 ? text.length : end };
+}
+function capUserTurn(text) {
+  if (text.length <= PER_USER_CAP) return text;
+  const head = headWindow(text);
+  const tail = tailWindow(text);
+  return tail ? `${head}\u2026${tail}` : `${head}\u2026`;
+}
+function headWindow(text) {
+  const line = lineAt(text, USER_HEAD);
+  const splitsASecretLine = line.start < USER_HEAD && USER_HEAD < line.end && !!detectSecret(text.slice(line.start, line.end));
+  const to = splitsASecretLine ? line.start : USER_HEAD;
+  const cut = text.slice(0, to);
+  if (/\s/.test(text[to] ?? " ")) return cut.trimEnd();
+  return cut.replace(/\S+$/, "").trimEnd() || cut;
+}
+function tailWindow(text) {
+  const from = text.length - USER_TAIL;
+  const line = lineAt(text, from);
+  if (line.start < from && detectSecret(text.slice(line.start, line.end))) {
+    return line.end + 1 >= text.length ? "" : text.slice(line.end + 1).trimStart();
+  }
+  const window = text.slice(from);
+  if (/\s/.test(text[from - 1] ?? " ")) return window.trimStart();
+  return window.replace(/^\S+/, "").trimStart();
 }
 var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
 function neutralizeRoleLabels(text) {
@@ -1180,7 +1211,7 @@ function sliceTranscript(entries, budget = 4e4) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (entry.role !== "user") continue;
-    const text = cap(entry.text, PER_USER_CAP);
+    const text = capUserTurn(entry.text);
     if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
@@ -1305,6 +1336,20 @@ function buildHarvestPrompt(input) {
     `   X here", "always run Y first"). Quote the user's own words as evidence, in the`,
     "   language they used. The repeated-prompts block below is the strongest place to",
     "   look, but a rule stated once, anywhere in the conversation, counts too.",
+    // The measured gap this closes. A rule the developer SAYS comes back every time - 57 of
+    // 57 in the legible corpus, 18 of 18 at production density - and the losses were all in
+    // one other place: of the four lessons that never came back in three runs of the dense
+    // corpus, three were the same shape, a developer correcting the same thing twice and
+    // never generalising it. This kind asked for "an explicit teaching" and for a quote, and
+    // a silent correction offers neither, so the model sat on empty slots instead of
+    // proposing one. The quote sentence is measured too: the one element either tier's parser
+    // refused was a correction whose quote joined two of the developer's turns with a slash,
+    // which the grounding check cannot find as one run of their words.
+    "   A rule they never stated is a correction too: if they corrected the same thing twice,",
+    "   or undid the same thing twice, and never generalised it, propose the rule those",
+    "   corrections were asking for, and quote the SECOND of them in their own words. Quote",
+    "   one of their turns; if two are needed, join them with an ellipsis and keep every word",
+    "   of each piece exactly as they typed it.",
     '2. "procedure" - a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
     '3. "discovery" - a repeatable way of working this session uncovered: a convention',

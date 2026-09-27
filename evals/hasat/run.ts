@@ -34,7 +34,7 @@ import type { HarvestItem, SievedItem } from "../../src/lib/harvest.js";
 import { slugifySkillName } from "../../src/lib/distill.js";
 import { childIsolationArgs, childInvocation, claudeHelpText } from "../../src/lib/score.js";
 import { redactSlice } from "../../src/lib/transcript.js";
-import { SESSIONS, sessionsInTier, shuffledLabels } from "./corpus.js";
+import { SESSIONS, pooledInTier, sessionsInArm, sessionsInTier, shuffledLabels } from "./corpus.js";
 import type { CorpusSession, Label } from "./corpus.js";
 import { buildSession } from "./session.js";
 import { askGrader, buildDistractorPrompt, buildSameLessonPrompt, GRADER_MODEL } from "./grader.js";
@@ -71,6 +71,9 @@ interface Options {
   runs: number;
   model: string;
   sessions: string[];
+  /** a named arm inside a tier, run on its own. An arm is never reached by asking for its
+   * tier: it is held apart from the tier's band on purpose, so it has to be asked for. */
+  arm?: "long-turn";
   grade: boolean;
   graderCheck: boolean;
   dryRun: boolean;
@@ -96,6 +99,7 @@ function parseArgs(argv: string[]): Options {
     runs: Number(get("--runs") ?? "3"),
     model: get("--model") ?? defaultHarvestConfig.model,
     sessions: (get("--sessions") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    ...(get("--arm") === "long-turn" ? { arm: "long-turn" as const } : {}),
     grade: !argv.includes("--no-grade"),
     graderCheck: !argv.includes("--no-grader-check"),
     dryRun: argv.includes("--dry-run"),
@@ -106,7 +110,10 @@ function parseArgs(argv: string[]): Options {
 
 function selected(options: Options): CorpusSession[] {
   if (options.sessions.length > 0) return SESSIONS.filter((s) => options.sessions.includes(s.id));
-  return options.tiers.flatMap((tier) => sessionsInTier(tier));
+  if (options.arm) return sessionsInArm(options.arm);
+  // `pooledInTier`, not `sessionsInTier`: an arm inside the tier stays out of the tier's own
+  // numbers, or adding one would move a band that exists to be read against earlier runs.
+  return options.tiers.flatMap((tier) => pooledInTier(tier));
 }
 
 /** A fresh home per session per run. Sharing one would make each fixture the previous
@@ -651,12 +658,12 @@ async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promis
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  if (options.tiers.length === 0 && options.sessions.length === 0) {
+  if (options.tiers.length === 0 && options.sessions.length === 0 && !options.arm) {
     console.error(
       "which tier? --tier 1 is the legible corpus the published band was taken on, --tier 2\n" +
         "the dense one. They are reported apart and never pooled, and they cost differently, so\n" +
-        "there is no default: pass --tier 1, --tier 2, --tier 1,2, or name sessions with\n" +
-        "--sessions.",
+        "there is no default: pass --tier 1, --tier 2, --tier 1,2, an arm with --arm, or name\n" +
+        "sessions with --sessions.",
     );
     process.exit(2);
   }
@@ -889,7 +896,7 @@ async function main(): Promise<void> {
   // lesson is stated and in what the model was told already exists, so one mean over both
   // would describe a corpus nobody built.
   const perTier = tiersOf(sessions).map((tier) => {
-    const ids = new Set(sessions.filter((s) => s.tier === tier).map((s) => s.id));
+    const ids = new Set(sessions.filter((s) => s.tier === tier && !s.arm).map((s) => s.id));
     const tierRuns = runs.map((r) => ({
       index: r.index,
       rates: pool(r.sessions.filter((row) => ids.has(row.sessionId)), sessions),
@@ -906,6 +913,31 @@ async function main(): Promise<void> {
       for (const r of t.tierRuns) printRates(`tier ${t.tier}, run ${r.index}`, r.rates);
     }
   }
+  // An arm is two or three sessions built for one product question, so a band over it would
+  // be a band over three points. What it has to say is per label and per run: did this
+  // lesson come back at all.
+  const armSessions = sessions.filter((s) => s.arm);
+  if (armSessions.length > 0) {
+    console.log(`\n=== arm: ${[...new Set(armSessions.map((s) => s.arm))].join(", ")} (held out of the tier numbers above) ===`);
+    for (const session of armSessions) {
+      for (const label of session.labels) {
+        const perRun = runs.map((r) => {
+          const row = r.sessions.find((x) => x.sessionId === session.id);
+          if (!row) return "-";
+          if (!row.reached) return "(call failed)";
+          return row.items.some((i) => i.kept && i.matchedLabels.includes(label.id)) ? "found" : "no";
+        });
+        const found = perRun.filter((v) => v === "found").length;
+        const reached = perRun.filter((v) => v !== "(call failed)" && v !== "-").length;
+        console.log(`${label.id.padEnd(40)} ${found}/${reached}   ${perRun.join(" / ")}`);
+      }
+      const presence = runs[0]?.sessions.find((x) => x.sessionId === session.id)?.presence ?? [];
+      for (const p of presence) {
+        console.log(`  ${p.labelId}: reached the slice ${p.inSlice}, the recorded prompts ${p.inCorrections}`);
+      }
+    }
+  }
+
   const recalls = perTier[0]!.recalls;
   const precisions = perTier[0]!.precisions;
   const recallBand = perTier[0]!.recallBand;

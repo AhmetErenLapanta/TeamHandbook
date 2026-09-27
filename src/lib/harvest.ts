@@ -241,6 +241,20 @@ export function buildHarvestPrompt(input: {
     '   X here", "always run Y first"). Quote the user\'s own words as evidence, in the',
     "   language they used. The repeated-prompts block below is the strongest place to",
     "   look, but a rule stated once, anywhere in the conversation, counts too.",
+    // The measured gap this closes. A rule the developer SAYS comes back every time - 57 of
+    // 57 in the legible corpus, 18 of 18 at production density - and the losses were all in
+    // one other place: of the four lessons that never came back in three runs of the dense
+    // corpus, three were the same shape, a developer correcting the same thing twice and
+    // never generalising it. This kind asked for "an explicit teaching" and for a quote, and
+    // a silent correction offers neither, so the model sat on empty slots instead of
+    // proposing one. The quote sentence is measured too: the one element either tier's parser
+    // refused was a correction whose quote joined two of the developer's turns with a slash,
+    // which the grounding check cannot find as one run of their words.
+    "   A rule they never stated is a correction too: if they corrected the same thing twice,",
+    "   or undid the same thing twice, and never generalised it, propose the rule those",
+    "   corrections were asking for, and quote the SECOND of them in their own words. Quote",
+    "   one of their turns; if two are needed, join them with an ellipsis and keep every word",
+    "   of each piece exactly as they typed it.",
     '2. "procedure" - a completed task whose repeatable procedure is worth keeping',
     "   (goal, ordered steps, how it was verified).",
     '3. "discovery" - a repeatable way of working this session uncovered: a convention',
@@ -522,6 +536,13 @@ const MAX_BODY_CHARS = 8_000;
  * now asks for a way of working rather than a fact, but asking is not enforcing, and
  * the score hint that was supposed to do the enforcing never dropped anything:
  * 96 of 96 logged runs wrote every item they received (sievedOut: 0).
+ *
+ * WHICH one it keeps is decided by emission order, not by score: the quota below runs before
+ * the sort, so a weak discovery the model wrote first takes the slot and a stronger one later
+ * in the same reply is dropped as `kind-quota`. Nothing in the two measured corpora exercises
+ * that - across six runs, no session-run proposed a second discovery at all - so the cost of
+ * it is unmeasured rather than zero, and anyone adding a veto in front of the quota is
+ * changing which discovery survives as well as how many.
  */
 const MAX_PER_KIND: Partial<Record<HarvestKind, number>> = { discovery: 1 };
 
@@ -681,7 +702,7 @@ export async function harvestSession(
   // and push out the decisions the developer actually made. The honest cost is that an
   // archived lesson can be proposed again - which is right, since archiving is not a
   // verdict and nobody read these. Muting them instead would silence a lesson the
-  // developer never saw, and the discovery bar now drops the weak ones at the source.
+  // developer never saw.
   const recentDecisions = listCandidates(home)
     .filter((c) => c.status !== "archived")
     .slice(0, 20)

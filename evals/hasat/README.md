@@ -105,8 +105,9 @@ the fixtures would be measuring each other.
 are never pooled, and they cost differently.
 
 Flags: `--tier 1|2|1,2`, `--runs N`, `--budget N`, `--model <name>` (written into the temporary home's config, which is the
-product's own override path), `--sessions a,b,c`, `--no-grade`, `--no-grader-check`,
-`--out <dir>`.
+product's own override path), `--sessions a,b,c`, `--arm long-turn`, `--no-grade`,
+`--no-grader-check`, `--out <dir>`. An arm is never reached by asking for the tier it lives
+in - it is held out of that tier's band on purpose, so it has to be asked for by name.
 
 Each run writes, under `--out`: `run-N.json` (every session's row), `decisions-N.jsonl`
 (every grader question and its answer), `material-N/<session>.json` (the redacted reply, the
@@ -244,6 +245,47 @@ cost                      $3.18 metered plus $3.04 estimated for the 72 harvest 
 duration                  harvest calls sum to 963s; runs 2 and 3 took 14m26s end to end
 ```
 
+### Re-measured after the first product change this instrument caused
+
+The baseline above is the last one taken with the product untouched. Three adjustments landed
+afterwards - the slice keeping a long developer turn's tail, a prompt that counts a rule nobody
+stated, and a floor of its own for the anchorless kind - and the same three runs were taken
+again, at instrument `e80ff8c` against product `b14b1c7`:
+
+```
+recall     0.9200 / 0.9600 / 0.9600   mean 0.9467   inside the band above
+precision  1.0000 / 1.0000 / 1.0000   mean 1.0000   ABOVE the band above, which is the floor's doing
+voiced rules  56 of 57 (one soft-voiced correction missed in run 1 only)
+sieve         6 items dropped, all by the kind floor; the baseline above dropped nothing
+duration      1030s summed over harvest calls, against 963s
+```
+
+Read the sieve row beside the recall row rather than after it. Recall BEFORE the sieve was
+24/25, 25/25, 25/25: the floor as it then stood cut a planted lesson in every run, three in
+all, each one a correction or an error-fix the model had typed as a discovery and each scoring
+exactly one below the bar. That is what moved the bar down a step, and it is the reason a sieve
+rule cleared by replay over two corpora is not cleared: a replay can only read the corpora it
+is run over, and neither of those two was this one.
+
+**Measured on runs taken with a scoring floor for `discovery` that shipped in no version.** The
+floor was withdrawn after these runs: the only real preference evidence the product holds ran
+against it. The shipped numbers are derived from the same material by `evals/hasat/derive.ts`,
+which puts every recorded item - kept AND dropped - back through the product's own sieve, so
+the floor's drops are restored:
+
+```
+recall     0.9600 / 1.0000 / 1.0000   mean 0.9867  sd 0.0231  band [0.9405 ; 1.0329]
+precision  1.0000 / 0.9615 / 0.9259   mean 0.9625  sd 0.0370  band [0.8884 ; 1.0366]
+discovery share of kept   8.9% mean over runs, 9.1% pooled
+items restored            6
+```
+
+Both sit inside the baseline bands above. The derivation is checkable rather than asserted:
+run it with `--floor 8`, the setting the runs were taken with, and it has to reproduce their
+kept set item for item - it does, for all six runs across both tiers, and it says so on its
+last line. A card comparing against this has two honest choices: read these, or spend a live
+run of its own.
+
 Precision is a **lower bound** as well as a ceiling-side figure: of the five kept items that
 sat on no label, three are one lesson the model split across two skills and two were judged by
 an independent review to be real lessons the corpus had not labelled. And because the runner
@@ -355,6 +397,53 @@ anything. The gap the first tier's note above describes is narrower now and it i
   longer than 600 characters, so it reaches the model through the slice alone - which is the
   production mix rather than a defect, and it is declared rather than discovered afterwards.
 
+## Tier 2's baseline
+
+Measured 2026-09-26 against product `8cdab63` (v0.13.5, untouched - the instrument moved
+after this run, so only the product side of it is a fixed point), 23 sessions and 22 labels of
+which 3 are covered by an injected skill and out of every denominator:
+
+```
+recall     0.7368 / 0.7368 / 0.7778   mean 0.7505  sd 0.0236  band [0.7032 ; 0.7978]
+precision  0.2593 / 0.3684 / 0.3333   mean 0.3203  sd 0.0557  band [0.2089 ; 0.4318]
+```
+
+And again after the same three adjustments, at instrument `e80ff8c` against product `b14b1c7`:
+
+```
+recall     0.7778 / 0.7778 / 0.8333   mean 0.7963  sd 0.0321  band [0.7321 ; 0.8604]
+precision  0.3684 / 0.5385 / 0.3846   mean 0.4305  sd 0.0938  band [0.2428 ; 0.6182]
+voiced rules       15 of 15; the three cells missing from 18 are calls that hit the product's
+                   own 180s timeout, not lessons the model failed to find
+unstated           18/27, against 14/26
+discovery of kept  12.6%, against 27.6%
+sieve              16 items dropped, all by the kind floor, none of them on a planted lesson;
+                   each one was put to the grader against every label its session carried
+```
+
+As above, that run carried a `discovery` floor that shipped in no version. Derived at the
+shipped setting by `evals/hasat/derive.ts`, with the floor's 16 drops restored: recall is
+unchanged (0.7778 / 0.7778 / 0.8333 - no label's fate turned on the floor here), precision is
+0.3256 / 0.5185 / 0.3061, mean 0.3834, band [0.1486 ; 0.6182], and the discovery share of kept
+is 23.4% mean over runs, 24.4% pooled. Precision stays inside the baseline band above.
+
+The floor is gone from the product, and the section below says what measuring it was worth.
+
+Precision here is a floor and not a measurement, for the reason the section above gives: a dense
+session carries more lessons than the corpus labels. Both bands overlap their predecessors, so
+what these numbers support is "nothing went backwards", not a measured gain - the per-label
+denominator is 3.
+
+## A sieve rule this package measured and the product did not take
+
+A score floor for `discovery` - the one kind with no anchor a parser can check - was measured
+here and withdrawn before shipping. Two corpora cleared it by replay, the legible corpus then
+cut three planted lessons under it live, and the developer's own review decisions turned out
+to run against it: the single candidate of that kind they have ever approved scored below the
+bar, and both the ones they rejected scored above it. It is written down because the shape
+recurs - a rule that looks free on the corpora it was replayed over, and costs something on
+the one it was not - and because the runs in the baselines above were taken with it on.
+
 ## Running it
 
     npx vite-node evals/hasat/run.ts -- --tier 2 --dry-run
@@ -365,3 +454,74 @@ invocation that ran both by accident would spend twice what its command line say
 is checked against its own tier's hand-labelled pairs - agreement on ten pairs about voiced
 rules says nothing about a grader reading an item against a sentence nobody in the session ever
 said.
+
+---
+
+# The long-turn arm
+
+Two sessions inside tier 2 and reported apart from it (`arm: "long-turn"`, selected with
+`--arm long-turn`), because they are not here to move a band. They answer one product
+question a real session asked first: **does a rule stated inside a turn that both evidence
+paths truncate reach the model at all?**
+
+The two paths truncate differently, and between them they left a hole. The prompt recorder
+ignores a turn over 600 characters as a task brief. The slicer's per-turn cut kept a turn's
+first 1,000 characters. So a rule stated past that mark, in a turn long enough to be a brief,
+reached neither - and a long brief is exactly where a developer adds "and from here on, …".
+
+Each session states its rule in a turn of about 1,800 characters, and the two differ only in
+where:
+
+| | the rule sits | reaches the slice |
+|---|---|---|
+| `four-jobs-and-a-rule-at-the-end` | 202 characters from the end | yes, since the cut keeps the turn's tail |
+| `five-jobs-and-a-rule-in-the-middle` | in the interior, past the head and before the tail | **no** |
+
+Both declare their evidence path in the label (`presence`), `corpus.test.ts` asserts the
+declaration against what the product's own recorder and slicer do, and that assertion is the
+before-and-after of any change to either: reverting the cut fails it.
+
+The second row is a limit kept measurable rather than forgotten. Both routes to it were
+measured and both cost more than they buy: raising the per-turn cut drops whole turns out of a
+real cap-filling session, and letting the recorder keep a long turn's paragraphs instead of
+ignoring it produces up to 94 notes against a ceiling of 40, so a rule stated early in a long
+session is evicted by filler from later ones. Either way the same loss reappears somewhere
+else, so the interior case stands open, with a fixture that says so.
+
+# Five measurements beside the corpus
+
+Each answers a question the corpus cannot, and each says in its own header why not.
+
+    npx vite-node evals/hasat/queue-accumulation.ts            # does a full queue suppress a repeat?
+    npx vite-node evals/hasat/duplicate-branch.ts -- --runs 3  # does a renamed skill stop a re-proposal?
+    npx vite-node evals/hasat/sieve-replay.ts -- --results <dir>   # free: what would another sieve rule have cut?
+    npx vite-node evals/hasat/derive.ts -- --results <dir>         # free: what would it have KEPT?
+    npx vite-node evals/hasat/grade-accumulation.ts -- --home <dir> # grade what a shared-home pass wrote
+
+- **`queue-accumulation.ts`** runs tier 2 in ONE shared home, in order, harvest only. The
+  runner next door cannot: it gives every session a fresh home, and it has to, or the
+  fixtures would measure each other. That is also why its "the same lesson came back
+  thirty times" could not be read as a product behaviour - nothing there could have
+  suppressed the second proposal, while production injects the twenty most recent
+  candidates and tells the model not to re-propose them.
+- **`duplicate-branch.ts`** injects a skill that already covers the session's lesson under a
+  name nothing like it, into three sessions whose lesson came back in every run. The corpus
+  names its covering skills the way the harvest would name the lesson itself, to give the
+  sieve's slug comparison a fair chance; this is the opposite case, and the one a real skill
+  library is full of.
+- **`grade-accumulation.ts`** reads the candidates a shared-home pass left on disk and puts
+  the same same-lesson question to them. The pass itself reports volume and names for nothing,
+  which is the right split for what it is for, but "this session wrote one item instead of
+  three" has two readings - the queue suppressed a repeat, or it suppressed the session's own
+  lesson - and only the grader separates them.
+- **`sieve-replay.ts`** costs nothing and asks a finished run what a stricter sieve rule would
+  have cut. Its reach is exactly the runs handed to it: a rule it clears over two corpora can
+  still be cutting a planted lesson in a third, which is what happened to the floor above.
+- **`derive.ts`** answers the other direction, which `sieve-replay.ts` structurally cannot: it
+  reads a run's dropped items as well as its kept ones and puts the whole set back through the
+  product's own sieve, so a rule being WITHDRAWN can be derived from material recorded while it
+  was still on. `--floor N` re-imposes one, which is also its self-check - given the setting a
+  run was taken with it has to reproduce that run's kept set, and it reports whether it did. A rule that only drops items is exactly replayable - it changes nothing
+  about what the model proposed - so a policy question about the sieve needs no new spend. A
+  policy question about the PROMPT does, and the tool says so rather than pretending
+  otherwise.

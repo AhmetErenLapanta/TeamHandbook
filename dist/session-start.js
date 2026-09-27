@@ -1008,6 +1008,9 @@ import {
 import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/transcript.ts
+var PER_USER_CAP = 1e3;
+var USER_HEAD = 700;
+var USER_TAIL = PER_USER_CAP - USER_HEAD;
 var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
 var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
