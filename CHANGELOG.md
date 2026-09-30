@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.15.2] - 2026-10-01
+
+- **The engine that reads a repository's history for the work it repeats now puts the work
+  worth looking at first, and nothing calls it from a command yet.** It ranks what it finds
+  by how far each piece of work spreads across repositories and how often it comes back,
+  rather than by how often alone, so the widest and dullest pairs of files no longer sit on
+  top. Near-duplicate versions of one piece of work are folded together, a ticket that
+  touched most of the codebase no longer counts as having done every kind of work in it,
+  and a file compiled from another beside it, or a roll of contributors, is not read as a
+  step in the work.
+
 ## [0.15.1] - 2026-10-01
 
 - **Nothing that carries your home directory path, your account name or an email address
