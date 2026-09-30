@@ -457,7 +457,11 @@ export function shareSelection(
   // names no single item, so it would otherwise be reported about nothing at all. The ones
   // already turned back keep the reason they were turned back for - and the set is keyed
   // by kind as well as name, because a server and a command may share one.
-  if (!outcome.ok && outcome.error) {
+  // The one whole-request failure that is NOT fanned out: a request stopped for want of a
+  // commit message was not refused item by item, and repeating one four-line sentence
+  // against every name the user picked buries the proposal it is asking them to read.
+  // formatShareResult prints it once instead, and the CLI still exits non-zero for it.
+  if (!outcome.ok && outcome.error && !outcome.proposedMessage) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
     for (const skill of skills) {
       if (!judged.has(`skill:${skill.name}`)) {
@@ -510,6 +514,9 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
     }
     lines.push(
       `  - branch: ${shared.branch}`,
+      // What the commit actually says, not what was offered: the message may be the user's
+      // own wording, and it may have gained the team's prefix on the way in.
+      `  - commit: ${shared.commitMessage}`,
       // manualPrUrl returns null for a remote whose host it does not know how to build a
       // "new merge request" link for. The branch is pushed either way, and printing
       // "undefined" at someone is worse than telling them the link is theirs to find.
@@ -544,6 +551,10 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
         "    this never writes to ~/.claude/commands, so both names keep working.",
       );
     }
+  }
+  // Asked for once, about the whole request, because the request is what it is about.
+  if (shared && !shared.ok && shared.proposedMessage && shared.error) {
+    lines.push(shared.error);
   }
   // Two kinds of refusal, kept apart. One is a fault the user has to fix in their own
   // setup (a credential, an unreadable file); the other is a name the team already uses,

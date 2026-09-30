@@ -4,12 +4,13 @@ import { loadTeamConfig, saveTeamConfig } from "../lib/init.js";
 import { buildInventory, formatInventory, formatShareResult, shareSelection } from "../lib/share.js";
 import type { Inventory, Selection } from "../lib/share.js";
 import { teamAssets } from "../lib/publish.js";
+import type { CommitMessageChoice } from "../lib/init.js";
 
 function usage(): never {
   console.error(
     "usage: share.js [list]\n" +
       "       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... " +
-      "[--command <name>]... [--update <name>]...",
+      "[--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message)",
   );
   process.exit(2);
 }
@@ -48,6 +49,32 @@ const SKILL_PATH = "--skill-path";
  * telling the agent to be careful is not a boundary.
  */
 const UPDATE = "--update";
+
+/**
+ * What the commit on the merge request says.
+ *
+ * `--message` carries the wording the user saw and approved; `--delegate-message` is the
+ * one other answer they can give, "you decide", and it takes no value for the same reason
+ * `--update` takes none. A share with neither is refused before anything is committed:
+ * the message on a request other people read is the user's to write.
+ */
+const MESSAGE = "--message";
+const DELEGATE_MESSAGE = "--delegate-message";
+
+/** Every flag that swallows the argument after it, so the positional reader below knows
+ * which bare words are values and which are the command. A boolean flag is deliberately
+ * absent: treating `--delegate-message` as taking a value would eat the word `share`. */
+const VALUE_FLAGS: readonly string[] = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE];
+
+function parseCommitMessage(args: string[]): CommitMessageChoice {
+  const at = args.indexOf(MESSAGE);
+  const value = at === -1 ? undefined : args[at + 1];
+  if (at !== -1 && (!value || value.startsWith("--"))) usage();
+  return {
+    ...(value !== undefined ? { message: value } : {}),
+    ...(args.includes(DELEGATE_MESSAGE) ? { delegated: true } : {}),
+  };
+}
 
 /** Every `--update <name>`, resolved against what is installed here the same way the
  * selection flags are, so "GitLab" and "gitlab" name the same server in both places. */
@@ -93,11 +120,13 @@ function main(): void {
   const args = process.argv.slice(2);
   const selected = args.some((a) => (FLAGS as readonly string[]).includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
-  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
+  const messaged = args.includes(MESSAGE) || args.includes(DELEGATE_MESSAGE);
+  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
   if (rest.length || (cmd !== "list" && cmd !== "share")) usage();
   // A selection passed to the read-only screen would print the list and silently throw
-  // the selection away, which reads as "I asked for four and got none".
-  if (cmd === "list" && (selected || update)) usage();
+  // the selection away, which reads as "I asked for four and got none". A commit message
+  // is thrown away the same way, and by the screen that shares nothing at all.
+  if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     // The one network call this screen makes, and only when there is a repository to ask.
     // What comes back is a label: buildInventory marks the names the team already has so
@@ -131,7 +160,10 @@ function main(): void {
     return;
   }
   const team = loadTeamConfig();
-  const result = shareSelection(selection, team, {}, undefined, undefined, updates.length ? { update: updates } : {});
+  const result = shareSelection(selection, team, {}, undefined, undefined, {
+    ...(updates.length ? { update: updates } : {}),
+    commitMessage: parseCommitMessage(args),
+  });
   // Two prefixes can come back from one push, and they are written in ONE save: the forge
   // refused the default branch name and the push recovered under the team's own prefix, and
   // the repository turned out to record the commit prefix this machine joined too early to
@@ -144,8 +176,10 @@ function main(): void {
   if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
   // A refusal is not a crash: some of the selection may have travelled. The exit code says
-  // "not everything you asked for happened", and the text above says which part.
-  if (result.refused.length) process.exitCode = 1;
+  // "not everything you asked for happened", and the text above says which part. A request
+  // that stopped for want of a commit message refuses no item by name, so it is read off
+  // the request itself rather than off a list it never added anything to.
+  if (result.refused.length || (result.team && !result.team.ok)) process.exitCode = 1;
 }
 
 main();

@@ -206,6 +206,8 @@ thing: it drops the contribution target and leaves the subscription alone.
 - **One merge request for a whole selection.** Everything you pick travels together,
   skills included, because each one raises the version and two requests opened before
   either is merged claim the same number. One clone, one bump, one request.
+- **The commit says what you said.** TeamHandbook never commits with a message you have not
+  seen; you can delegate the wording only at the moment the merge request is opened.
 - **The version bump is the delivery.** Nothing pushes to your teammates. The raised
   version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
   moved, and refreshing on it is something each copy does for itself.

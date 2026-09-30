@@ -393,6 +393,18 @@ var GLOBAL_TWIN = new Map(
     new RegExp(p.re.source, p.re.flags + "g")
   ])
 );
+function detectSecret(text) {
+  for (const { name, re, reject } of SECRET_PATTERNS) {
+    if (!reject) {
+      if (re.test(text)) return name;
+      continue;
+    }
+    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
+      if (!reject(match[0])) return name;
+    }
+  }
+  return null;
+}
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
@@ -1020,6 +1032,35 @@ function teamCommitPrefix(config) {
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
 }
+var COMMIT_MESSAGE_MAX = 200;
+function commitMessageProblem(value) {
+  if (!value.trim()) return "it is empty";
+  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+function commitSubject(prefix, message) {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+function decideCommitSubject(choice, proposal, prefix, rerun) {
+  if (choice.message !== void 0 && choice.delegated) {
+    return {
+      error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
+    };
+  }
+  if (choice.message !== void 0) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    return { subject: commitSubject(prefix, choice.message) };
+  }
+  if (choice.delegated) return { subject: proposal };
+  return {
+    error: `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it, or with \`--delegate-message\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+  };
+}
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
   if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
@@ -1385,6 +1426,9 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     let learnedBranchPrefix;
     let version = null;
     const title = buildPrTitle(skillSlug, occupied);
+    const proposal = commitSubject(commitPrefix, title);
+    const decided = decideCommitSubject(options.commitMessage ?? {}, proposal, commitPrefix, "approve it again");
+    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
     try {
       git(["checkout", "-b", branch], repoDir);
       if (occupied) rmSync4(join8(repoDir, skillDir), { recursive: true, force: true });
@@ -1395,7 +1439,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       );
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
+      git([...identityArgs, "commit", "-m", decided.subject], repoDir);
       const pushed = pushBranch(git, repoDir, branch, pushTeam.team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
@@ -1416,7 +1460,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       ...learnedBranchPrefix ? { learnedBranchPrefix } : {},
       ...pushTeam.learned !== void 0 ? { learnedCommitPrefix: pushTeam.learned } : {}
     };
-    const named = { skillDir, skillSlug, ...occupied ? { updatedExisting: true } : {} };
+    const named = { skillDir, skillSlug, commitMessage: decided.subject, ...occupied ? { updatedExisting: true } : {} };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
       return { ok: true, branch, ...named, prUrl: pr.url, ...version ? { version } : {}, ...learned };
@@ -1544,7 +1588,8 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
       mode: "team",
       meta,
       error: published.error,
-      ...published.collision ? { collision: published.collision } : {}
+      ...published.collision ? { collision: published.collision } : {},
+      ...published.proposedMessage ? { proposedMessage: published.proposedMessage } : {}
     };
   }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
@@ -1558,6 +1603,7 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
     ...published.skillSlug ? { deliveredSlug: published.skillSlug } : {},
     ...published.updatedExisting ? { updatedExisting: true } : {},
     branch: published.branch,
+    commitMessage: published.commitMessage,
     prUrl: published.prUrl,
     ...published.version ? { version: published.version } : {},
     manualUrl: published.manualUrl,
@@ -1617,6 +1663,7 @@ function formatApproveResult(slug, result) {
     if (result.updatedExisting) {
       lines.push("The merge replaces their copy, so review the removed lines too, not only the added ones.");
     }
+    if (result.commitMessage) lines.push(`The commit says: ${result.commitMessage}`);
     if (result.learnedBranchPrefix) {
       lines.push(
         `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered - later skills use it straight away.`
@@ -1959,7 +2006,7 @@ function lastPipelineRun(home = handbookHome()) {
 // src/cli/review.ts
 function usage() {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>]"
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] [--message <commit message>] [--delegate-message]"
   );
   process.exit(2);
 }
@@ -2107,6 +2154,10 @@ async function main() {
   if (given("--as") && (!as || !isSafeSlug(as))) usage();
   if (args.some((a) => a.startsWith("--update="))) usage();
   const update = args.includes("--update");
+  if (args.some((a) => a.startsWith("--delegate-message="))) usage();
+  const delegateMessage = args.includes("--delegate-message");
+  const message = valueOf("--message");
+  if (given("--message") && !message) usage();
   const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
@@ -2154,8 +2205,15 @@ ${broken}`);
   }
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
-  if ((as || update) && slugs.length > 1) usage();
-  const options = { ...update ? { update } : {}, ...as ? { as } : {} };
+  if ((as || update || message !== void 0 || delegateMessage) && slugs.length > 1) usage();
+  const options = {
+    ...update ? { update } : {},
+    ...as ? { as } : {},
+    commitMessage: {
+      ...message !== void 0 ? { message } : {},
+      ...delegateMessage ? { delegated: true } : {}
+    }
+  };
   for (const slug of slugs) {
     if (cmd === "approve") approveOne(home, slug, to, options);
     else rejectOne(home, slug, never);

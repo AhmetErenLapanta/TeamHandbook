@@ -10,16 +10,49 @@ import {
   buildPrTitle,
   buildSelectionPrBody,
   manualPrUrl,
-  publishCandidate,
-  publishTeamSelection,
+  publishCandidate as publishCandidateDeciding,
+  publishTeamSelection as publishTeamSelectionDeciding,
   retryBranchAfterNameRejection,
 } from "./publish.js";
+import type { PublishOptions } from "./publish.js";
 import { auditServer } from "./mcp.js";
 import type { McpServerEntry } from "./mcp.js";
 import { runGit, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import type { GroundedCase } from "./distill.js";
+
+
+/**
+ * The answer every case below gives about its commit message, because none of them is
+ * about the wording: "use the one you derived". The product refuses to commit without an
+ * answer, so a case that gave none would measure the refusal rather than the thing it is
+ * named after. The cases that ARE about the wording call the *Deciding import directly.
+ */
+const DELEGATED = { delegated: true } as const;
+
+type CandidateArgs = Parameters<typeof publishCandidateDeciding>;
+function publishCandidate(
+  dir: CandidateArgs[0],
+  meta: CandidateArgs[1],
+  team: CandidateArgs[2],
+  git?: CandidateArgs[3],
+  forge?: CandidateArgs[4],
+  options: PublishOptions = {},
+) {
+  return publishCandidateDeciding(dir, meta, team, git, forge, { commitMessage: DELEGATED, ...options });
+}
+
+type SelectionArgs = Parameters<typeof publishTeamSelectionDeciding>;
+function publishTeamSelection(
+  selection: SelectionArgs[0],
+  team: SelectionArgs[1],
+  git?: SelectionArgs[2],
+  forge?: SelectionArgs[3],
+  options: PublishOptions = {},
+) {
+  return publishTeamSelectionDeciding(selection, team, git, forge, { commitMessage: DELEGATED, ...options });
+}
 
 let candidateDir: string;
 let remote: string;

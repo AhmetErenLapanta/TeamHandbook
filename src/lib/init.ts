@@ -11,6 +11,7 @@ import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { displayPath } from "./display-path.js";
+import { detectSecret } from "./secrets.js";
 
 // git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
 // runs arbitrary commands on clone, and a URL starting with `-` is parsed as an
@@ -44,6 +45,10 @@ export interface TeamConfig {
 
 export const DEFAULT_BRANCH_PREFIX = "handbook/";
 
+/** What the scaffold commit proposes to say. A constant rather than a derived sentence,
+ * because /handbook:init makes exactly one commit and it always does the same thing. */
+export const SCAFFOLD_COMMIT_TITLE = "chore: scaffold team skill base";
+
 /** A commit-message prefix is a word in the title, not glue: the separating space belongs
  * here rather than at each call site, one of which forgot it and put
  * "TEAM-1chore: scaffold team skill base" on the first commit of a team's repository. */
@@ -57,6 +62,97 @@ export function teamCommitPrefix(config: TeamConfig | null): string {
 
 export function teamBranchPrefix(config: TeamConfig | null): string {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
+
+/**
+ * What the user decided about the message a commit of theirs will carry.
+ *
+ * Both fields absent is not a default: it is the absence of a decision, and every path in
+ * this product that commits refuses on it rather than writing a sentence the user never
+ * read. The two fields are alternatives, not a pair. `message` is the wording the user
+ * approved or typed; `delegated` is the one other answer they can give, "you decide", and
+ * it is honoured only at the moment the merge request is opened, which is the same moment
+ * the commit is made. Nothing remembers a delegation: a commit prefix is a standing rule
+ * the forge enforces, a commit message is a sentence about one change.
+ */
+export interface CommitMessageChoice {
+  message?: string;
+  delegated?: boolean;
+}
+
+// Long enough for a sentence that says what changed, short enough that a commit title
+// stays a title. git enforces no limit of its own, so the only one that matters is the
+// reader's in a log listing.
+const COMMIT_MESSAGE_MAX = 200;
+
+/** Why this text cannot be the title of a commit, or null when it can. */
+export function commitMessageProblem(value: string): string | null {
+  if (!value.trim()) return "it is empty";
+  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
+  // \p{C} is every control, format and unassigned code point. A newline is the one that
+  // matters most: `git commit -m` ends the title there and turns everything after it into
+  // a body nobody wrote, so the commit would carry a message the user never saw the whole
+  // of - which is the thing this whole path exists to prevent.
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  // The message is free text on its way into a repository other people read, which no
+  // other free-text field here is. The sieve that screens a skill's files screens it too.
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+
+/**
+ * The subject a commit carries, with the team's prefix on it exactly once.
+ *
+ * Idempotent, because the message a user approves is usually the proposal they were just
+ * shown and that proposal already carries the prefix. Prepending a second time would put
+ * "TEAM-1 TEAM-1 chore: ..." on the commit, and a push rule anchored at the front of the
+ * title accepts that happily, so nothing downstream would ever catch it.
+ */
+export function commitSubject(prefix: string, message: string): string {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+
+export type CommitDecision = { subject: string } | { error: string };
+
+/**
+ * The message this commit will be made with, or the refusal that stops it being made.
+ *
+ * Fail-closed at the same boundary the rest of the product fails closed at: silence is
+ * refused, not filled in. The refusal names the proposal so the one extra round trip it
+ * costs also produces the text the user is asked to approve, rather than sending the
+ * caller off to derive that text a second way and get it subtly wrong.
+ *
+ * `proposal` is the prefixed subject this run derived; `rerun` is how this particular
+ * command is run again, since the flags are the same everywhere and the command is not.
+ */
+export function decideCommitSubject(
+  choice: CommitMessageChoice,
+  proposal: string,
+  prefix: string,
+  rerun: string,
+): CommitDecision {
+  if (choice.message !== undefined && choice.delegated) {
+    return {
+      error:
+        "--message and --delegate-message answer the same question in different ways: --message is the " +
+        "wording the user approved, --delegate-message is them saying you decide. Pass one of them.",
+    };
+  }
+  if (choice.message !== undefined) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    return { subject: commitSubject(prefix, choice.message) };
+  }
+  if (choice.delegated) return { subject: proposal };
+  return {
+    error:
+      `commit message required: nothing is committed here with a message the user has not seen. This one ` +
+      `would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they ` +
+      `have approved or edited it, or with \`--delegate-message\` if they answered that you decide. ` +
+      `Nothing was committed and nothing was pushed.`,
+  };
 }
 
 export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null {
@@ -782,6 +878,11 @@ export interface InitResult {
   // files the repository already had, left untouched
   skipped?: string[];
   withCi?: boolean;
+  // the subject the scaffold commit was actually made with, prefix included, so the user
+  // is told what was written rather than what was proposed
+  commitMessage?: string;
+  // the subject this run would have used, set on the refusal that asks for a decision
+  proposedMessage?: string;
 }
 
 export function initTeamRepo(
@@ -794,6 +895,7 @@ export function initTeamRepo(
   branchPrefix: string = DEFAULT_BRANCH_PREFIX,
   commitPrefix = "",
   withCi = false,
+  commitMessage: CommitMessageChoice = {},
 ): InitResult {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   try {
@@ -832,6 +934,12 @@ export function initTeamRepo(
         "and `git config --global user.email you@example.com`, then re-run.",
     };
   }
+  // Before the clone rather than beside the commit, because this proposal needs nothing
+  // the clone would tell us: the scaffold's subject is a constant and the prefix arrived
+  // as a flag. Refusing here leaves no clone, no branch and no config entry behind.
+  const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
+  const decided = decideCommitSubject(commitMessage, proposal, commitMessagePrefix(commitPrefix), "run /handbook:init again");
+  if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
   const workdir = handbookWorkdir("handbook-init-");
   const repoDir = join(workdir, "repo");
   // Clone first, always. Building a fresh history locally and pushing it assumed the
@@ -886,7 +994,7 @@ export function initTeamRepo(
     // because a forge that checks commit authors rejects anything else, and init pushes
     // to the same repository under the same rules. "TeamHandbook@localhost" was an
     // author waiting to be refused.
-    git([...identity, "commit", "-m", `${commitMessagePrefix(commitPrefix)}chore: scaffold team skill base`], repoDir);
+    git([...identity, "commit", "-m", decided.subject], repoDir);
     git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
   } catch (err) {
     return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
@@ -925,6 +1033,7 @@ export function initTeamRepo(
     merged: direct,
     skipped,
     withCi,
+    commitMessage: decided.subject,
     ...(prUrl ? { prUrl } : {}),
     ...(prError ? { prError } : {}),
     ...(!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),

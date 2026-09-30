@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildInventory, formatInventory, formatShareResult, shareSelection } from "./share.js";
+import { buildInventory, formatInventory, formatShareResult, shareSelection as shareSelectionDeciding } from "./share.js";
 import type { InventoryPaths, Selection } from "./share.js";
 import { formatCandidateList, listCandidates, writeCandidateMeta } from "./queue.js";
 import { sessionStartNotice } from "./notify.js";
@@ -12,6 +12,27 @@ import { approveAndDeliver } from "./deliver.js";
 import { candidatesDir } from "./skill-index.js";
 import type { GitRunner } from "./init.js";
 import { teamAssets } from "./publish.js";
+
+
+/**
+ * The answer every case below gives about its commit message, because none of them is
+ * about the wording: "use the one you derived". The product refuses to commit without an
+ * answer, so a case that gave none would measure the refusal rather than the thing it is
+ * named after. The cases that ARE about the wording call shareSelectionDeciding directly.
+ */
+const DELEGATED = { delegated: true } as const;
+
+type ShareArgs = Parameters<typeof shareSelectionDeciding>;
+function shareSelection(
+  selection: ShareArgs[0],
+  team: ShareArgs[1],
+  paths?: ShareArgs[2],
+  git?: ShareArgs[3],
+  forge?: ShareArgs[4],
+  options: NonNullable<ShareArgs[5]> = {},
+) {
+  return shareSelectionDeciding(selection, team, paths, git, forge, { commitMessage: DELEGATED, ...options });
+}
 
 let home: string;
 let userHome: string;
@@ -287,6 +308,54 @@ describe("shareSelection", () => {
       { name: "deploy-runbook", kind: "skill", reason: expect.stringContaining("no team repository is configured") },
     ]);
     expect(listCandidates(home, "pending")).toEqual([]);
+  });
+
+  it("given no decision about the commit message, when several things are selected, then the request is asked about once, not once per name", () => {
+    remote = teamRepo();
+    writeSkill(userHome, "deploy-runbook");
+    writeSkill(userHome, "repo-conventions");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+    const before = gitIn(remote, ["branch", "--list"]);
+
+    // the imported function, not the delegating wrapper: the answer is what is under test
+    const result = shareSelectionDeciding(
+      select({ skills: ["deploy-runbook", "repo-conventions"], servers: ["gitlab"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+    );
+
+    expect(result.team?.ok).toBe(false);
+    expect(result.team?.proposedMessage).toBe("feat(skill,mcp): add deploy-runbook, repo-conventions, gitlab");
+    // One question about one request. Fanning it out would have turned a single four-line
+    // sentence into three, and buried the proposal it is asking the user to read.
+    expect(result.refused).toEqual([]);
+    const printed = formatShareResult(result);
+    expect(printed.match(/commit message required/g)).toHaveLength(1);
+    expect(printed).toContain("feat(skill,mcp): add deploy-runbook, repo-conventions, gitlab");
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
+  it("given the user's own wording, when the selection runs, then the commit carries it and the result says so", () => {
+    remote = teamRepo();
+    writeSkill(userHome, "deploy-runbook");
+
+    const result = shareSelectionDeciding(
+      select({ skills: ["deploy-runbook"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+      { commitMessage: { message: "feat: the deploy runbook, written down at last" } },
+    );
+
+    expect(result.team).toMatchObject({ ok: true, commitMessage: "feat: the deploy runbook, written down at last" });
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["log", "-1", "--format=%s", branch]).trim()).toBe(
+      "feat: the deploy runbook, written down at last",
+    );
+    expect(formatShareResult(result)).toContain("commit: feat: the deploy runbook, written down at last");
   });
 
   it("given a few of each were selected, when the selection runs, then every kind goes out in one request", () => {

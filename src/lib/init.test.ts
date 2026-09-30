@@ -10,7 +10,7 @@ import {
   formatLeaveSuccess,
   teamSkillsDir,
   hostFromUrl,
-  initTeamRepo,
+  initTeamRepo as initTeamRepoDeciding,
   loadTeamConfig,
   nonInteractiveEnv,
   repoNameFromUrl,
@@ -19,8 +19,35 @@ import {
   writeSkeleton,
   pushFailureReason,
   commitMessagePrefix,
+  commitMessageProblem,
+  commitSubject,
+  decideCommitSubject,
   summarizeGitStderr,
 } from "./init.js";
+
+/**
+ * The answer every scaffold below gives about its commit message, because none of them is
+ * about the wording: "use the one you derived". /handbook:init refuses to commit without
+ * an answer, so a case that gave none would measure the refusal rather than the thing it
+ * is named after. The cases that ARE about the wording call initTeamRepoDeciding directly.
+ */
+const DELEGATED = { delegated: true } as const;
+
+type InitArgs = Parameters<typeof initTeamRepoDeciding>;
+function initTeamRepo(
+  url: InitArgs[0],
+  name?: InitArgs[1],
+  home?: InitArgs[2],
+  git?: InitArgs[3],
+  now?: InitArgs[4],
+  forge?: InitArgs[5],
+  branchPrefix?: InitArgs[6],
+  commitPrefix?: InitArgs[7],
+  withCi?: InitArgs[8],
+) {
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, DELEGATED);
+}
+
 
 describe("nonInteractiveEnv", () => {
   it("given a shell that would prompt, when a forge or git call is built, then every prompt is disabled", () => {
@@ -657,6 +684,49 @@ describe("initTeamRepo", () => {
     return dir;
   }
 
+  it("given no decision about the commit message, when a repository is scaffolded, then nothing is pushed and no team is configured", () => {
+    const remote = bareRepo();
+    try {
+      // The imported function, not the delegating wrapper: this case is about the answer
+      // itself, so giving one would measure nothing.
+      const result = initTeamRepoDeciding(remote, "acme-skills", home);
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("commit message required");
+      expect(result.proposedMessage).toBe("chore: scaffold team skill base");
+      // The refusal lands before the clone, so there is no half-scaffolded machine to
+      // recover: no branch on the remote, and nothing pointing this machine at a team.
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe("");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a commit prefix and a message the user wrote, when a repository is scaffolded, then the commit carries both", () => {
+    const remote = bareRepo();
+    try {
+      const result = initTeamRepoDeciding(
+        remote,
+        "acme-skills",
+        home,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "TEAM-1",
+        false,
+        { message: "chore: start the team handbook" },
+      );
+
+      expect(result).toMatchObject({ ok: true, commitMessage: "TEAM-1 chore: start the team handbook" });
+      const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "main"], { encoding: "utf8" });
+      expect(subject.trim()).toBe("TEAM-1 chore: start the team handbook");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
   it("scaffolds, pushes to an empty repo, and records the team config", () => {
     const remote = bareRepo();
     try {
@@ -916,5 +986,91 @@ describe("a broken config.json is never overwritten (it holds the privacy switch
     const result = initTeamRepo("git@x.com:a/b.git", "b", home, () => {});
     expect(result.ok).toBe(false);
     expect(result.error).toContain("not valid JSON");
+  });
+});
+
+describe("the message a commit is allowed to carry", () => {
+  it("given a message with nothing in it, when it is checked, then it is not a commit title", () => {
+    expect(commitMessageProblem("")).toContain("empty");
+    expect(commitMessageProblem("   ")).toContain("empty");
+  });
+
+  it("given a message with a newline in it, when it is checked, then it is refused rather than truncated", () => {
+    // `git commit -m` would take the first line as the title and make the rest a body, so
+    // the user would have approved one sentence and the repository would hold two.
+    const problem = commitMessageProblem("feat: add the runbook\n\nand quietly do something else");
+
+    expect(problem).toContain("control character");
+  });
+
+  it("given a message carrying a credential, when it is checked, then it is refused before it can reach the team's repository", () => {
+    // A commit message is the one free-text field in this product that a user types
+    // straight into a repository their whole team reads, so it goes through the same
+    // sieve every shared file does.
+    const problem = commitMessageProblem("fix: rotate glpat-ABCDEFGHIJKLMNOPQRSTUVWX after the outage");
+
+    expect(problem).toContain("gitlab-token");
+  });
+
+  it("given a message longer than a title, when it is checked, then it is refused", () => {
+    expect(commitMessageProblem(`feat: ${"x".repeat(300)}`)).toContain("longer than");
+  });
+
+  it("given an ordinary sentence, when it is checked, then nothing is wrong with it", () => {
+    expect(commitMessageProblem("feat: share the deploy runbook with the team")).toBeNull();
+  });
+});
+
+describe("the prefix on a commit subject", () => {
+  it("given a message without the team's prefix, when the subject is built, then the prefix is added", () => {
+    expect(commitSubject("TEAM-1 ", "feat: add the runbook")).toBe("TEAM-1 feat: add the runbook");
+  });
+
+  it("given a message that already carries the prefix, when the subject is built, then it is not added twice", () => {
+    // The user approving a proposal by handing it straight back is the commonest answer
+    // there is, and a rule anchored at the front of the title accepts "TEAM-1 TEAM-1 ..."
+    // happily, so nothing downstream would have caught it.
+    expect(commitSubject("TEAM-1 ", "TEAM-1 feat: add the runbook")).toBe("TEAM-1 feat: add the runbook");
+  });
+
+  it("given a team with no prefix at all, when the subject is built, then the message stands as it is", () => {
+    expect(commitSubject("", "feat: add the runbook")).toBe("feat: add the runbook");
+  });
+});
+
+describe("deciding what a commit will say", () => {
+  const RERUN = "run it again";
+
+  it("given no answer at all, when the decision is made, then it refuses and names the sentence to show", () => {
+    const decided = decideCommitSubject({}, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN);
+
+    expect(decided).toEqual({ error: expect.stringContaining("commit message required") });
+    expect("error" in decided && decided.error).toContain("TEAM-1 chore: scaffold");
+    expect("error" in decided && decided.error).toContain(RERUN);
+  });
+
+  it("given both an approved message and a delegation, when the decision is made, then it refuses rather than picking one", () => {
+    // They are two different answers to one question, exactly as --as and --update are two
+    // different answers to one refusal, and a caller that sent both decided nothing.
+    const decided = decideCommitSubject(
+      { message: "feat: mine", delegated: true },
+      "TEAM-1 feat: theirs",
+      "TEAM-1 ",
+      RERUN,
+    );
+
+    expect("error" in decided && decided.error).toContain("answer the same question");
+  });
+
+  it("given a delegation, when the decision is made, then the subject is the proposal exactly as it was shown", () => {
+    expect(decideCommitSubject({ delegated: true }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN)).toEqual({
+      subject: "TEAM-1 chore: scaffold",
+    });
+  });
+
+  it("given an approved message, when the decision is made, then the subject is that message with the prefix on it", () => {
+    expect(decideCommitSubject({ message: "feat: mine" }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN)).toEqual({
+      subject: "TEAM-1 feat: mine",
+    });
   });
 });

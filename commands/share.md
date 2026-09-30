@@ -62,10 +62,13 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    - If the user is naming one single thing and nothing else, still show the list and still
      ask: confirming one entry is one click, and it is what stops a near-miss on a name
      from sharing the wrong server.
-4. Share what they picked, naming each one:
+4. Run it with the names they picked, and only those:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" share --skill <name> --mcp <name> --command <name>`
    Never add a name the user did not choose. With no flags the command shares nothing,
    which is the correct answer to an empty selection.
+   **This first run commits nothing.** It comes back with `commit message required`, the
+   exact message it proposes for the commit, and any refusal or collision the selection
+   hit. That is the screen steps 7 and 8 work from.
 5. **A skill the list does not show** is shared by path instead:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" share --skill-path <directory>`
    If the command was invoked with a directory path ($ARGUMENTS), that path is the
@@ -74,11 +77,7 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    skill that is written but not installed: one being authored inside the repository it
    belongs to, say. It travels exactly like any other skill, through the same audit. Use
    it only when the user points at a directory; do not go looking for skills off the list.
-6. Relay the output verbatim. It names what went out per kind rather than as one total,
-   because a skill somebody reads, a server that connects and a command somebody types are
-   not interchangeable. The team repository got a COPY, so the skill the user already uses
-   is untouched and keeps working.
-7. **If something is refused, relay the reason as-is and stop there.** Each one names what
+6. **If something is refused, relay the reason as-is and stop there.** Each one names what
    to fix, and none of them is worked around:
    - a secret in one of a skill's files, or in a command's body. That one is NOT shared.
      Tell them which file, and that taking the credential out is the fix. Never offer to
@@ -99,11 +98,28 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      (`--update gitlab` updates gitlab and nothing else), so run it with only the names the
      user actually said yes to. Two collisions and one yes means one name on that flag, not
      both. Renaming is the other answer.
-8. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern.
+7. **Then ask about the commit message, and ask about it last.** The proposal changes with
+   the `--update` answers from step 6, so it is only worth showing once those are settled.
+   Show the user the proposed message exactly as the CLI printed it, and let them approve
+   it, edit it, or write their own. Then run the share again with everything from step 4,
+   any `--update` flags from step 6, and their answer:
+   - they approved or wrote a message: `--message "<their wording>"`. If it has no team
+     prefix and the team needs one, the CLI adds it and the result says what was committed.
+   - they said you decide: `--delegate-message`, and nothing else. That is the ONLY way a
+     wording the user did not give reaches a commit, and it is theirs to say, never yours
+     to assume. Do not compose a message and pass it as `--message`: `--message` means
+     "these are the user's words".
+   A run with neither flag is refused and nothing is committed. That is deliberate, and it
+   is not something to work around by picking a message yourself.
+8. Relay the output verbatim. It names what went out per kind rather than as one total,
+   because a skill somebody reads, a server that connects and a command somebody types are
+   not interchangeable, and it names the commit the request carries. The team repository
+   got a COPY, so the skill the user already uses is untouched and keeps working.
+9. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern.
    Handle it exactly as `/handbook:init` does: propose one prefix that satisfies the
    pattern, confirm it with the user, and have them set `branchPrefix` under `team` in
    `~/.teamhandbook/config.json`. A prefix discovered by a successful retry is remembered.
-9. **If it fails because the forge refuses the commit MESSAGE**, the error names both ways
+10. **If it fails because the forge refuses the commit MESSAGE**, the error names both ways
    out and they are not equivalent. Recording the prefix in the team repository (whoever
    ran `/handbook:init` runs `/handbook:init --upgrade` once) fixes it for everyone who
    joins after; setting `commitPrefix` under `team` in `~/.teamhandbook/config.json` fixes

@@ -96,6 +96,11 @@ export interface DeliverResult {
   updatedExisting?: boolean;
   // the destination already has this name and NOTHING was written; the reviewer decides
   collision?: Collision;
+  // the subject the team commit was made with, prefix included
+  commitMessage?: string;
+  // the subject a team delivery would commit with, carried on the refusal that asks the
+  // reviewer to decide the wording; absent on every other refusal
+  proposedMessage?: string;
 }
 
 /** How a reviewer answers a refusal: send it as an update to what is there, or under a
@@ -272,6 +277,7 @@ function deliverToTeam(
       meta,
       error: published.error,
       ...(published.collision ? { collision: published.collision } : {}),
+      ...(published.proposedMessage ? { proposedMessage: published.proposedMessage } : {}),
     };
   }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
@@ -285,6 +291,7 @@ function deliverToTeam(
     ...(published.skillSlug ? { deliveredSlug: published.skillSlug } : {}),
     ...(published.updatedExisting ? { updatedExisting: true } : {}),
     branch: published.branch,
+    commitMessage: published.commitMessage,
     prUrl: published.prUrl,
     ...(published.version ? { version: published.version } : {}),
     manualUrl: published.manualUrl,
@@ -379,6 +386,9 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     if (result.updatedExisting) {
       lines.push("The merge replaces their copy, so review the removed lines too, not only the added ones.");
     }
+    // What the commit says, in the reviewer's own words when they gave any: the request
+    // is theirs, and the sentence on it is the one thing about it they were asked for.
+    if (result.commitMessage) lines.push(`The commit says: ${result.commitMessage}`);
     // The branch is not named what it would normally be named. Say so once, rather than
     // letting the reader find a different name than the one they expected in the forge.
     if (result.learnedBranchPrefix) {

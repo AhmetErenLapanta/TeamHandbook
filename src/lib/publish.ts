@@ -9,6 +9,8 @@ import type { GroundedCase } from "./distill.js";
 import {
   assertSafeGitUrl,
   commitMessagePrefix,
+  commitSubject,
+  decideCommitSubject,
   pushFailureReason,
   pushRuleSubject,
   readTeamCommitPrefix,
@@ -21,7 +23,7 @@ import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
-import type { GitRunner, TeamConfig } from "./init.js";
+import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { auditSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { auditServer, declaredServerNames, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
@@ -135,6 +137,14 @@ export interface PublishOptions {
    */
   update?: boolean | string[];
   as?: string;
+  /**
+   * What the user decided the commit should say. Absent means they were never asked, and
+   * every publisher below refuses on that rather than writing its own proposal into a
+   * repository the team reads. It travels in the options object, not as an argument of
+   * its own, because `DeliveryOptions` is this type and /handbook:review therefore gets
+   * the same decision without a second route to keep in step.
+   */
+  commitMessage?: CommitMessageChoice;
 }
 
 /** Whether this request was told it may replace `name`. */
@@ -183,6 +193,12 @@ export interface PublishOutcome {
   error?: string;
   // why the forge CLI couldn't auto-open the PR (branch is pushed; link is manual)
   prError?: string;
+  // the subject the commit was made with, prefix included: what the user is told went
+  // out, rather than what they were offered
+  commitMessage?: string;
+  // the subject this run would use, carried on the refusal that asks for a decision so
+  // the caller has the exact text to put in front of the user
+  proposedMessage?: string;
 }
 
 /**
@@ -472,6 +488,14 @@ export function publishCandidate(
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
     const title = buildPrTitle(skillSlug, occupied);
+    // After the clone, because the proposal has to carry the prefix this push will really
+    // use - which for a machine that joined before the repository recorded one is read out
+    // of the clone - and after the collision check, so the refusal the reviewer sees first
+    // is the one about the name rather than one about wording they would have to give
+    // twice. Before the checkout, so a run without a decision leaves no branch behind.
+    const proposal = commitSubject(commitPrefix, title);
+    const decided = decideCommitSubject(options.commitMessage ?? {}, proposal, commitPrefix, "approve it again");
+    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
     try {
       git(["checkout", "-b", branch], repoDir);
       // An update replaces the team's copy rather than merging into it: a file the new
@@ -488,7 +512,7 @@ export function publishCandidate(
       );
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
+      git([...identityArgs, "commit", "-m", decided.subject], repoDir);
       const pushed = pushBranch(git, repoDir, branch, pushTeam.team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
@@ -510,7 +534,7 @@ export function publishCandidate(
       ...(learnedBranchPrefix ? { learnedBranchPrefix } : {}),
       ...(pushTeam.learned !== undefined ? { learnedCommitPrefix: pushTeam.learned } : {}),
     };
-    const named = { skillDir, skillSlug, ...(occupied ? { updatedExisting: true } : {}) };
+    const named = { skillDir, skillSlug, commitMessage: decided.subject, ...(occupied ? { updatedExisting: true } : {}) };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
       return { ok: true, branch, ...named, prUrl: pr.url, ...(version ? { version } : {}), ...learned };
@@ -591,6 +615,10 @@ export interface TeamPublishOutcome {
   startsProcess?: boolean;
   error?: string;
   prError?: string;
+  // the subject the commit was made with, prefix included
+  commitMessage?: string;
+  // the subject this run would use, carried on the refusal that asks for a decision
+  proposedMessage?: string;
 }
 
 /** A server that cleared the audit, kept together with the audit that cleared it. */
@@ -1262,6 +1290,13 @@ export function publishTeamSelection(
     let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
+    // Last of the refusals, and deliberately so: the run that asks for a decision is also
+    // the run that reports what was screened out and what collided, so the user reads the
+    // proposal knowing which of the things they picked it actually covers. It sits before
+    // the checkout, so a selection with no decision leaves no branch and no clone state.
+    const proposal = commitSubject(commitPrefix, title);
+    const decided = decideCommitSubject(options.commitMessage ?? {}, proposal, commitPrefix, "share them again");
+    if ("error" in decided) return { ok: false, ...single, refused, error: decided.error, proposedMessage: proposal };
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);
@@ -1280,7 +1315,7 @@ export function publishTeamSelection(
       }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
+      git([...identity.args, "commit", "-m", decided.subject], repoDir);
       const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
@@ -1320,6 +1355,7 @@ export function publishTeamSelection(
       ...(updated.servers.length || updated.commands.length || updated.skills.length ? { updated } : {}),
       ...(refused.length ? { refused } : {}),
       branch,
+      commitMessage: decided.subject,
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...(version ? { version } : {}),

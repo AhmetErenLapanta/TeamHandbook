@@ -491,6 +491,35 @@ function teamCommitPrefix(config) {
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
 }
+var COMMIT_MESSAGE_MAX = 200;
+function commitMessageProblem(value) {
+  if (!value.trim()) return "it is empty";
+  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+function commitSubject(prefix, message) {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+function decideCommitSubject(choice, proposal, prefix, rerun) {
+  if (choice.message !== void 0 && choice.delegated) {
+    return {
+      error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
+    };
+  }
+  if (choice.message !== void 0) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    return { subject: commitSubject(prefix, choice.message) };
+  }
+  if (choice.delegated) return { subject: proposal };
+  return {
+    error: `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it, or with \`--delegate-message\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+  };
+}
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
   if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
@@ -1409,6 +1438,9 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     let learnedBranchPrefix;
     let version = null;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
+    const proposal = commitSubject(commitPrefix, title);
+    const decided = decideCommitSubject(options.commitMessage ?? {}, proposal, commitPrefix, "share them again");
+    if ("error" in decided) return { ok: false, ...single, refused, error: decided.error, proposedMessage: proposal };
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync4(target, merged);
@@ -1423,7 +1455,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
+      git([...identity.args, "commit", "-m", decided.subject], repoDir);
       const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
@@ -1462,6 +1494,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       ...updated.servers.length || updated.commands.length || updated.skills.length ? { updated } : {},
       ...refused.length ? { refused } : {},
       branch,
+      commitMessage: decided.subject,
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...version ? { version } : {},
@@ -1665,7 +1698,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
       ...selector ? { selector } : {}
     });
   }
-  if (!outcome.ok && outcome.error) {
+  if (!outcome.ok && outcome.error && !outcome.proposedMessage) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
     for (const skill of skills) {
       if (!judged.has(`skill:${skill.name}`)) {
@@ -1708,6 +1741,9 @@ function formatShareResult(result, marketplaceName) {
     }
     lines.push(
       `  - branch: ${shared.branch}`,
+      // What the commit actually says, not what was offered: the message may be the user's
+      // own wording, and it may have gained the team's prefix on the way in.
+      `  - commit: ${shared.commitMessage}`,
       // manualPrUrl returns null for a remote whose host it does not know how to build a
       // "new merge request" link for. The branch is pushed either way, and printing
       // "undefined" at someone is worse than telling them the link is theirs to find.
@@ -1738,6 +1774,9 @@ function formatShareResult(result, marketplaceName) {
       );
     }
   }
+  if (shared && !shared.ok && shared.proposedMessage && shared.error) {
+    lines.push(shared.error);
+  }
   const collisions = result.refused.filter((r) => r.collision);
   const faults = result.refused.filter((r) => !r.collision);
   if (faults.length) {
@@ -1761,7 +1800,7 @@ function formatShareResult(result, marketplaceName) {
 // src/cli/share.ts
 function usage() {
   console.error(
-    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]..."
+    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message)"
   );
   process.exit(2);
 }
@@ -1773,6 +1812,18 @@ function resolve(available, wanted) {
 var FLAGS = ["--skill", "--mcp", "--command"];
 var SKILL_PATH = "--skill-path";
 var UPDATE = "--update";
+var MESSAGE = "--message";
+var DELEGATE_MESSAGE = "--delegate-message";
+var VALUE_FLAGS = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE];
+function parseCommitMessage(args) {
+  const at = args.indexOf(MESSAGE);
+  const value = at === -1 ? void 0 : args[at + 1];
+  if (at !== -1 && (!value || value.startsWith("--"))) usage();
+  return {
+    ...value !== void 0 ? { message: value } : {},
+    ...args.includes(DELEGATE_MESSAGE) ? { delegated: true } : {}
+  };
+}
 function parseUpdates(args, inv) {
   const names = [];
   const available = [
@@ -1807,9 +1858,10 @@ function main() {
   const args = process.argv.slice(2);
   const selected = args.some((a) => FLAGS.includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
-  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
+  const messaged = args.includes(MESSAGE) || args.includes(DELEGATE_MESSAGE);
+  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
-  if (cmd === "list" && (selected || update)) usage();
+  if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     const config = loadTeamConfig();
     console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
@@ -1835,13 +1887,16 @@ function main() {
     return;
   }
   const team = loadTeamConfig();
-  const result = shareSelection(selection, team, {}, void 0, void 0, updates.length ? { update: updates } : {});
+  const result = shareSelection(selection, team, {}, void 0, void 0, {
+    ...updates.length ? { update: updates } : {},
+    commitMessage: parseCommitMessage(args)
+  });
   const learned = {
     ...result.team?.learnedBranchPrefix ? { branchPrefix: result.team.learnedBranchPrefix } : {},
     ...result.team?.learnedCommitPrefix !== void 0 ? { commitPrefix: result.team.learnedCommitPrefix } : {}
   };
   if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
-  if (result.refused.length) process.exitCode = 1;
+  if (result.refused.length || result.team && !result.team.ok) process.exitCode = 1;
 }
 main();

@@ -5,6 +5,8 @@ import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import {
   assertSafeGitUrl,
+  commitSubject,
+  decideCommitSubject,
   gitIdentityArgs,
   pushFailureReason,
   readTeamCommitPrefix,
@@ -14,7 +16,7 @@ import {
   teamBranchPrefix,
   teamCommitPrefix,
 } from "./init.js";
-import type { GitRunner, TeamConfig } from "./init.js";
+import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion } from "./publish.js";
 import { handbookWorkdir } from "./session-state.js";
 
@@ -310,6 +312,11 @@ export interface VersionPlan {
   blocked?: string;
 }
 
+/** What the refresh commit proposes to say. Hoisted out of applyUpgrade so the plan can
+ * show the user the same sentence the refresh will commit, rather than a second copy of
+ * it that nothing keeps in step. */
+export const REFRESH_COMMIT_TITLE = "chore: refresh the team handbook scaffold";
+
 export interface UpgradePlan {
   ok: boolean;
   error?: string;
@@ -326,6 +333,9 @@ export interface UpgradePlan {
   withheld?: WithheldFile[];
   /** Paths the team repository's own `.gitignore` keeps out, so the diff under-reports them. */
   ignored?: string[];
+  /** The subject the refresh would commit with, prefix included, shown here so the user
+   * has seen it before the run that writes it. */
+  proposedMessage?: string;
 }
 
 export interface UpgradeResult {
@@ -340,6 +350,10 @@ export interface UpgradeResult {
   prUrl?: string;
   manualUrl?: string;
   prError?: string;
+  /** The subject the refresh commit was made with, prefix included. */
+  commitMessage?: string;
+  /** The subject this run would use, carried on the refusal that asks for a decision. */
+  proposedMessage?: string;
 }
 
 function classify(repoDir: string, candidates: Record<string, string>): SkeletonFileState[] {
@@ -547,6 +561,7 @@ export function planUpgrade(team: TeamConfig, git: GitRunner = runGit): UpgradeP
       files,
       withCi: existsSync(join(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
+      proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
       ...(candidates.linked.length ? { linked: candidates.linked } : {}),
       ...(candidates.withheld.length ? { withheld: candidates.withheld } : {}),
       ...(unreadable.length ? { unreadable } : {}),
@@ -612,6 +627,7 @@ export function applyUpgrade(
   paths: string[],
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
+  commitMessage: CommitMessageChoice = {},
 ): UpgradeResult {
   if (!paths.length) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
@@ -667,7 +683,14 @@ export function applyUpgrade(
     // has nothing to do with this run.
     const taken = remoteBranches(git, repoDir);
     const branch = `${prefix}${uniqueSlug("refresh-scaffold", (slug) => taken.has(`${prefix}${slug}`))}`;
-    const title = "chore: refresh the team handbook scaffold";
+    const title = REFRESH_COMMIT_TITLE;
+    // After the paths are checked, so a run stopped for naming a file this cannot refresh
+    // says that rather than asking for wording the user would then have to give twice, and
+    // before the checkout, so a run with no decision leaves nothing behind.
+    const messagePrefix = teamCommitPrefix(team);
+    const proposal = commitSubject(messagePrefix, title);
+    const decided = decideCommitSubject(commitMessage, proposal, messagePrefix, "run the refresh again");
+    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
     let raised: string | null = null;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -683,7 +706,7 @@ export function applyUpgrade(
       // Before the commit, so a refresh that cannot carry everything it was asked for
       // carries none of it rather than reporting a file it quietly dropped.
       if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
-      git([...identity, "commit", "-m", `${teamCommitPrefix(team)}${title}`], repoDir);
+      git([...identity, "commit", "-m", decided.subject], repoDir);
       git(["push", "-u", "origin", branch], repoDir);
     } catch (err) {
       return {
@@ -721,6 +744,7 @@ export function applyUpgrade(
       url: team.repoUrl,
       refreshed: paths,
       branch,
+      commitMessage: decided.subject,
       ...(raised ? { version: raised } : {}),
       ...(raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {}),
       ...(pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined }),
@@ -792,6 +816,16 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "",
     `  ${paths.map((path) => `--file ${path}`).join(" ")}`,
   );
+  // The message is part of what is being asked for, not a detail of how it is sent: the
+  // refresh refuses to commit until this sentence has been seen, so the screen that asks
+  // which files to send is the screen that shows it.
+  if (plan.proposedMessage) {
+    lines.push(
+      "",
+      `That request commits as "${plan.proposedMessage}". Pass the message you want with`,
+      '--message "<your wording>", or --delegate-message to use the one above as it stands.',
+    );
+  }
   return lines.join("\n");
 }
 
@@ -802,6 +836,7 @@ export function formatUpgradeResult(result: UpgradeResult): string {
     `  repository:  ${result.url}`,
     `  refreshed:   ${result.refreshed?.join(", ")}`,
     `  branch:      ${result.branch}`,
+    ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     ...(result.version ? [`  version:     raised to ${result.version}`] : []),
     ...(result.versionNotRaised ? [`  version:     NOT raised. ${result.versionNotRaised}`] : []),
     result.prUrl

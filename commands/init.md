@@ -24,8 +24,16 @@ exactly what the rule is.
      CLI is installed, ask the user to create an empty repo in their forge's web UI and
      paste its SSH URL.
 2. Confirm the final target URL with the user before touching it.
-3. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" <url>`
+3. Tell the user what the scaffold will commit and let them decide the wording. It is
+   always `chore: scaffold team skill base` (with the team's prefix in front, if one was
+   given), and the command will not commit until they have seen it. They approve it, edit
+   it, or say you decide. Then run:
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" <url> --message "<their wording>"`
+   or, only if they said you decide,
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" <url> --delegate-message`.
    (add `--name <n>` only if the user wants the marketplace named differently than the repo).
+   Never write a message yourself and pass it as `--message`: that flag means the words
+   are the user's. A run with neither flag is refused and nothing is pushed.
 4. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern
    the project requires. Do not hand the user a flag to work out. Read the pattern, propose
    ONE prefix that satisfies it, and ask them to confirm or correct it with a
@@ -58,9 +66,12 @@ re-init. That loses the repository. Refresh it in place instead:
 2. **Relay the plan and the diff, and ask which files to refresh.** A `DIFFERS` file may
    be an old scaffold or an edit the team made on purpose - `hooks/notice.mjs` and
    `README.md` are the likely ones - and nothing records which. Never pick on their behalf.
-3. Send only what they chose:
-   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade --file <path> --file <path>`.
-   It opens one merge request. The team's own skills, commands, agents and `.mcp.json` are
+3. Send only what they chose, with the message they chose:
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade --file <path> --file <path> --message "<their wording>"`
+   (or `--delegate-message` in place of `--message`, if they said you decide). The plan in
+   step 1 printed the message this would otherwise commit, so they have already seen it;
+   ask them at the same time as you ask which files to send. A run with neither flag is
+   refused and nothing is pushed. It opens one merge request. The team's own skills, commands, agents and `.mcp.json` are
    not offered and cannot be written, and inside the two manifests the team's own entries -
    the plugin version, any extra plugins, the marketplace owner - are carried across rather
    than replaced.

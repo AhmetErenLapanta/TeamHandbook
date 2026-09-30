@@ -9,7 +9,7 @@ import {
   PLUGIN_MANIFEST,
   formatUpgradeResult,
   mergeMarketplaceManifest,
-  applyUpgrade,
+  applyUpgrade as applyUpgradeDeciding,
   countStaleSkeleton,
   formatUpgradePlan,
   isTeamOwned,
@@ -18,6 +18,20 @@ import {
   refreshable,
   upgradeCandidates,
 } from "./upgrade.js";
+
+
+/**
+ * The answer every case below gives about its commit message, because none of them is
+ * about the wording: "use the one you derived". The product refuses to commit without an
+ * answer, so a case that gave none would measure the refusal rather than the thing it is
+ * named after. The cases that ARE about the wording call applyUpgradeDeciding directly.
+ */
+const DELEGATED = { delegated: true } as const;
+
+type UpgradeArgs = Parameters<typeof applyUpgradeDeciding>;
+function applyUpgrade(team: UpgradeArgs[0], paths: UpgradeArgs[1], git?: UpgradeArgs[2], forge?: UpgradeArgs[3]) {
+  return applyUpgradeDeciding(team, paths, git, forge, DELEGATED);
+}
 
 // Every case here drives real git against a real bare repository, because the thing under
 // test is what lands in a team's remote and a stubbed runner cannot answer that. Measured
@@ -322,6 +336,30 @@ describe("applyUpgrade", () => {
       ...TEAM_CONTENT,
     });
   }
+
+  it("given no decision about the commit message, when a refresh is sent, then nothing is pushed and the proposal comes back", () => {
+    const remote = staleRepo();
+    const before = heads(remote);
+
+    // The imported function, not the delegating wrapper: the answer is what is under test.
+    const result = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, noForge);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("commit message required");
+    expect(result.proposedMessage).toBe("chore: refresh the team handbook scaffold");
+    expect(heads(remote)).toBe(before);
+  });
+
+  it("given a message the user approved, when a refresh is sent, then the refresh commit carries it", () => {
+    const remote = staleRepo();
+
+    const result = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, noForge, {
+      message: "chore: bring our scaffold up to date",
+    });
+
+    expect(result).toMatchObject({ ok: true, commitMessage: "chore: bring our scaffold up to date" });
+    expect(formatUpgradeResult(result)).toContain("chore: bring our scaffold up to date");
+  });
 
   it("given nothing is named, when a refresh is asked for, then nothing is written and nothing is pushed", () => {
     const remote = staleRepo();
@@ -815,6 +853,10 @@ describe("formatUpgradePlan", () => {
     const text = formatUpgradePlan(planUpgrade(teamFor(remote)));
 
     expect(text).toContain("--file README.md");
+    // The screen that asks which files to send is the screen that shows what the commit
+    // will say, so the refresh never has to ask for the wording in a second round trip.
+    expect(text).toContain('commits as "chore: refresh the team handbook scaffold"');
+    expect(text).toContain("--delegate-message");
     expect(text).toContain("Nothing has been changed");
     expect(text).toContain("skills/, commands/, agents/ and .mcp.json");
     // a difference is never labelled as an upgrade, because nothing records that it is one

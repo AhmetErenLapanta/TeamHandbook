@@ -16,6 +16,14 @@ import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 
+/**
+ * The answer every team delivery below gives about its commit message, because none of
+ * them is about the wording: "use the one you derived". A team approval refuses to commit
+ * without an answer, so a case that gave none would measure the refusal instead of the
+ * thing it is named after. The cases that ARE about the wording pass their own choice.
+ */
+const DELEGATED = { delegated: true } as const;
+
 let home: string;
 let project: string;
 
@@ -240,6 +248,9 @@ describe("approveAndDeliver (team mode)", () => {
       undefined,
       undefined,
       () => "https://gitlab.acme.com/team/skills/-/merge_requests/7\n",
+      undefined,
+      undefined,
+      { commitMessage: DELEGATED },
     );
     expect(result).toMatchObject({
       ok: true,
@@ -283,6 +294,9 @@ describe("approveAndDeliver (team mode)", () => {
       undefined,
       policedGit,
       () => "",
+      undefined,
+      undefined,
+      { commitMessage: DELEGATED },
     );
 
     expect(result).toMatchObject({ ok: true, mode: "team", branch: "HQA-000-fix-npm-test" });
@@ -292,9 +306,20 @@ describe("approveAndDeliver (team mode)", () => {
   it("records the branch as deliveredTo when no PR URL could be obtained", () => {
     saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
     seedCandidate(meta());
-    const result = approveAndDeliver(home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z", undefined, undefined, () => {
-      throw new Error("glab: command not found");
-    });
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => {
+        throw new Error("glab: command not found");
+      },
+      undefined,
+      undefined,
+      { commitMessage: DELEGATED },
+    );
     expect(result).toMatchObject({
       ok: true,
       mode: "team",
@@ -302,6 +327,49 @@ describe("approveAndDeliver (team mode)", () => {
       deliveredTo: `${remote} (branch handbook/fix-npm-test)`,
     });
     expect(result.prUrl).toBeUndefined();
+  });
+
+  it("given no decision about the commit message, when a candidate is approved to the team, then nothing is pushed and the candidate is still waiting", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+    const before = execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" });
+
+    // no commitMessage in the options: the reviewer was never asked
+    const result = approveAndDeliver(home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z");
+
+    expect(result.ok).toBe(false);
+    expect(result.mode).toBe("team");
+    expect(result.error).toContain("commit message required");
+    // the sentence to put in front of the reviewer travels with the refusal
+    expect(result.proposedMessage).toBe("feat(skill): add fix-npm-test");
+    // and the verdict is still theirs to give: a refusal must not spend the candidate
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+    expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe(before);
+  });
+
+  it("given the reviewer's own wording, when a candidate is approved to the team, then the commit says it and they are told so", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => "https://example.com/mr/3",
+      undefined,
+      undefined,
+      { commitMessage: { message: "feat: the npm test fix we all keep hitting" } },
+    );
+
+    expect(result).toMatchObject({ ok: true, commitMessage: "feat: the npm test fix we all keep hitting" });
+    const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "handbook/fix-npm-test"], {
+      encoding: "utf8",
+    });
+    expect(subject.trim()).toBe("feat: the npm test fix we all keep hitting");
+    expect(formatApproveResult("fix-npm-test", result)).toContain("feat: the npm test fix we all keep hitting");
   });
 
   it("keeps the candidate pending when the team repo is unreachable", () => {
@@ -590,7 +658,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
     const result = approveAndDeliver(
       home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
       undefined, undefined, () => "https://example.com/mr/9",
-      undefined, undefined, { update: true },
+      undefined, undefined, { update: true, commitMessage: DELEGATED },
     );
 
     // then it goes out under the contested name, and the reviewer is told it replaces theirs
@@ -614,7 +682,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
     const result = approveAndDeliver(
       home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
       undefined, undefined, () => "https://example.com/mr/9",
-      undefined, undefined, { as: "fix-npm-snapshot" },
+      undefined, undefined, { as: "fix-npm-snapshot", commitMessage: DELEGATED },
     );
 
     expect(result.deliveredSlug).toBe("fix-npm-snapshot");

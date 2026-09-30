@@ -2,12 +2,37 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initTeamRepo, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { initTeamRepo as initTeamRepoDeciding, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner } from "./init.js";
 import { joinTeamRepo } from "./join.js";
 import { publishTeamSelection } from "./publish.js";
 import { createGitLabRepo } from "./gitlab-fixture.js";
 import type { CommitIdentity, GitLabPushRules, GitLabRepo, GitLabRepoOptions } from "./gitlab-fixture.js";
+import type { CommitMessageChoice } from "./init.js";
+
+/**
+ * The answer every scaffold below gives about its commit message, because none of them is
+ * about the wording: "use the one you derived". /handbook:init refuses to commit without
+ * an answer, so a case that gave none would measure the refusal rather than the thing it
+ * is named after. The cases that ARE about the wording call initTeamRepoDeciding directly.
+ */
+const DELEGATED = { delegated: true } as const;
+
+type InitArgs = Parameters<typeof initTeamRepoDeciding>;
+function initTeamRepo(
+  url: InitArgs[0],
+  name?: InitArgs[1],
+  home?: InitArgs[2],
+  git?: InitArgs[3],
+  now?: InitArgs[4],
+  forge?: InitArgs[5],
+  branchPrefix?: InitArgs[6],
+  commitPrefix?: InitArgs[7],
+  withCi?: InitArgs[8],
+) {
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, DELEGATED);
+}
+
 
 // The chain init -> share -> join against a project that refuses a push for real, rather
 // than against a runner that agrees with whatever the product asks it. What these cases
@@ -80,12 +105,13 @@ function localSkill(name: string): string {
   return dir;
 }
 
-function share(identity: CommitIdentity = MEMBER, name = "my-skill") {
+function share(identity: CommitIdentity = MEMBER, name = "my-skill", commitMessage: CommitMessageChoice = DELEGATED) {
   return publishTeamSelection(
     { skills: [{ name, dir: localSkill(name) }] },
     loadTeamConfig(home)!,
     gitAs(identity),
     noForge,
+    { commitMessage },
   );
 }
 
@@ -365,5 +391,74 @@ describe("share by someone who joined a project that was already answered", () =
     expect(outcome).toMatchObject({ ok: true, branch: "TEAM-1-skills-my-skill", learnedBranchPrefix: BRANCH_PREFIX });
     // the refused name is not left behind on the project
     expect(repo.branches()).not.toContain("handbook/skills-my-skill");
+  });
+});
+
+// The message on the commit, against the same project. It belongs in this suite rather
+// than beside the mocked cases because the thing being asserted is what the PROJECT now
+// holds: a runner that agrees with whatever it is asked would record the product's
+// intention, and the intention was never the doubt. The doubt is whether the sentence the
+// user approved is the sentence that ends up in the repository their team reads.
+describe("the commit says what the user approved, not what the product derived", () => {
+  const BRANCH = "TEAM-1-skills-my-skill";
+  const PROPOSAL = "TEAM-1 feat(skill): add my-skill";
+
+  /** A project whose three rules are already answered, so nothing below is refused for a
+   * prefix and every case measures the message and only the message. */
+  function answered(): GitLabRepo {
+    const repo = project({ rules: { branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE, email: EMAIL_RULE } });
+    initTeamRepo(repo.url, "acme-skills", home, gitAs(MEMBER), undefined, noForge, BRANCH_PREFIX, COMMIT_PREFIX);
+    repo.mergeIntoDefault("TEAM-1-scaffold");
+    return repo;
+  }
+
+  it("given no decision about the message, when a share is run, then nothing is committed and the proposal comes back to be shown", () => {
+    const repo = answered();
+
+    const outcome = share(MEMBER, "my-skill", {});
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("commit message required");
+    // The refusal is also the screen: it carries the exact sentence to put in front of
+    // the user, so the round trip it costs is the round trip that asks them.
+    expect(outcome.proposedMessage).toBe(PROPOSAL);
+    expect(repo.branches()).not.toContain(BRANCH);
+  });
+
+  it("given a message the user approved, when it is shared, then the commit the project holds carries that message word for word", () => {
+    const repo = answered();
+
+    const outcome = share(MEMBER, "my-skill", { message: "feat: the deploy runbook everyone keeps asking for" });
+
+    expect(outcome.ok).toBe(true);
+    // Their wording, with the prefix their project demands and nothing else added.
+    expect(repo.subjectOn(BRANCH)).toBe("TEAM-1 feat: the deploy runbook everyone keeps asking for");
+    expect(outcome.commitMessage).toBe("TEAM-1 feat: the deploy runbook everyone keeps asking for");
+  });
+
+  it("given the user answered that you decide, when it is shared, then the commit carries the very sentence the refusal had shown them", () => {
+    const repo = answered();
+    // The two runs are the point: whatever the first one said it would commit is what the
+    // second one commits, so "you decide" delegates the wording the user was shown rather
+    // than a second sentence derived somewhere else.
+    const probe = share(MEMBER, "my-skill", {});
+
+    const outcome = share(MEMBER, "my-skill", { delegated: true });
+
+    expect(outcome.ok).toBe(true);
+    expect(repo.subjectOn(BRANCH)).toBe(probe.proposedMessage);
+  });
+
+  it("given the user hands the proposal straight back, when it is shared, then the prefix is on the commit once", () => {
+    const repo = answered();
+    // Approving by echoing the sentence is the likeliest answer of all, and it is the one
+    // that used to produce "TEAM-1 TEAM-1 ..." - which the project's own rule would have
+    // accepted, since the rule only looks at the front of the title.
+    const probe = share(MEMBER, "my-skill", {});
+
+    const outcome = share(MEMBER, "my-skill", { message: probe.proposedMessage! });
+
+    expect(outcome.ok).toBe(true);
+    expect(repo.subjectOn(BRANCH)).toBe(PROPOSAL);
   });
 });

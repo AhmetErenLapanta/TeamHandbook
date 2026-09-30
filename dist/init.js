@@ -223,6 +223,18 @@ var GLOBAL_TWIN = new Map(
     new RegExp(p.re.source, p.re.flags + "g")
   ])
 );
+function detectSecret(text) {
+  for (const { name, re, reject } of SECRET_PATTERNS) {
+    if (!reject) {
+      if (re.test(text)) return name;
+      continue;
+    }
+    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
+      if (!reject(match[0])) return name;
+    }
+  }
+  return null;
+}
 
 // src/lib/score.ts
 var execFileAsync = promisify(execFile);
@@ -375,6 +387,7 @@ function assertSafeGitUrl(url) {
   }
 }
 var DEFAULT_BRANCH_PREFIX = "handbook/";
+var SCAFFOLD_COMMIT_TITLE = "chore: scaffold team skill base";
 function commitMessagePrefix(prefix) {
   return prefix?.trim() ? `${prefix.trim()} ` : "";
 }
@@ -383,6 +396,35 @@ function teamCommitPrefix(config) {
 }
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
+var COMMIT_MESSAGE_MAX = 200;
+function commitMessageProblem(value) {
+  if (!value.trim()) return "it is empty";
+  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+function commitSubject(prefix, message) {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+function decideCommitSubject(choice, proposal, prefix, rerun) {
+  if (choice.message !== void 0 && choice.delegated) {
+    return {
+      error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
+    };
+  }
+  if (choice.message !== void 0) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    return { subject: commitSubject(prefix, choice.message) };
+  }
+  if (choice.delegated) return { subject: proposal };
+  return {
+    error: `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it, or with \`--delegate-message\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+  };
 }
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -808,7 +850,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
   }
   return `pushing the scaffold to ${branch} on ${url} failed: ${detail}`;
 }
-function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString(), forge = runForge, branchPrefix = DEFAULT_BRANCH_PREFIX, commitPrefix = "", withCi = false) {
+function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString(), forge = runForge, branchPrefix = DEFAULT_BRANCH_PREFIX, commitPrefix = "", withCi = false, commitMessage = {}) {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   try {
     assertSafeGitUrl(url);
@@ -840,6 +882,9 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
       error: 'git user.name/user.email is not set - the scaffold commit would have an author your forge is likely to reject. Run `git config --global user.name "Your Name"` and `git config --global user.email you@example.com`, then re-run.'
     };
   }
+  const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
+  const decided = decideCommitSubject(commitMessage, proposal, commitMessagePrefix(commitPrefix), "run /handbook:init again");
+  if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
   const workdir = handbookWorkdir("handbook-init-");
   const repoDir = join3(workdir, "repo");
   try {
@@ -877,7 +922,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   try {
     if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
     git(["add", "-A"], repoDir);
-    git([...identity, "commit", "-m", `${commitMessagePrefix(commitPrefix)}chore: scaffold team skill base`], repoDir);
+    git([...identity, "commit", "-m", decided.subject], repoDir);
     git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
   } catch (err) {
     return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
@@ -918,6 +963,7 @@ Opened by TeamHandbook.`,
     merged: direct,
     skipped,
     withCi,
+    commitMessage: decided.subject,
     ...prUrl ? { prUrl } : {},
     ...prError ? { prError } : {},
     ...!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
@@ -1114,6 +1160,7 @@ function upgradeCandidates(repoDir, team) {
   }
   return { files, linked, withheld };
 }
+var REFRESH_COMMIT_TITLE = "chore: refresh the team handbook scaffold";
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
     const existing = readIfPresent(join5(repoDir, path));
@@ -1223,6 +1270,7 @@ function planUpgrade(team, git = runGit) {
       files,
       withCi: existsSync4(join5(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
+      proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
       ...candidates.linked.length ? { linked: candidates.linked } : {},
       ...candidates.withheld.length ? { withheld: candidates.withheld } : {},
       ...unreadable.length ? { unreadable } : {}
@@ -1259,7 +1307,7 @@ function remoteBranches(git, repoDir) {
     return /* @__PURE__ */ new Set();
   }
 }
-function applyUpgrade(team, paths, git = runGit, forge = runForge) {
+function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage = {}) {
   if (!paths.length) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
   }
@@ -1299,7 +1347,11 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge) {
     const prefix = teamBranchPrefix(team);
     const taken = remoteBranches(git, repoDir);
     const branch = `${prefix}${uniqueSlug("refresh-scaffold", (slug) => taken.has(`${prefix}${slug}`))}`;
-    const title = "chore: refresh the team handbook scaffold";
+    const title = REFRESH_COMMIT_TITLE;
+    const messagePrefix = teamCommitPrefix(team);
+    const proposal = commitSubject(messagePrefix, title);
+    const decided = decideCommitSubject(commitMessage, proposal, messagePrefix, "run the refresh again");
+    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
     let raised = null;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -1308,7 +1360,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge) {
       if (version.next) raised = bumpPluginVersion(repoDir);
       const { missing } = stage(git, repoDir, paths);
       if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
-      git([...identity, "commit", "-m", `${teamCommitPrefix(team)}${title}`], repoDir);
+      git([...identity, "commit", "-m", decided.subject], repoDir);
       git(["push", "-u", "origin", branch], repoDir);
     } catch (err) {
       return {
@@ -1345,6 +1397,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge) {
       url: team.repoUrl,
       refreshed: paths,
       branch,
+      commitMessage: decided.subject,
       ...raised ? { version: raised } : {},
       ...raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {},
       ...pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0 },
@@ -1408,6 +1461,13 @@ function formatUpgradePlan(plan) {
     "",
     `  ${paths.map((path) => `--file ${path}`).join(" ")}`
   );
+  if (plan.proposedMessage) {
+    lines.push(
+      "",
+      `That request commits as "${plan.proposedMessage}". Pass the message you want with`,
+      '--message "<your wording>", or --delegate-message to use the one above as it stands.'
+    );
+  }
   return lines.join("\n");
 }
 function formatUpgradeResult(result) {
@@ -1417,6 +1477,7 @@ function formatUpgradeResult(result) {
     `  repository:  ${result.url}`,
     `  refreshed:   ${result.refreshed?.join(", ")}`,
     `  branch:      ${result.branch}`,
+    ...result.commitMessage ? [`  commit:      ${result.commitMessage}`] : [],
     ...result.version ? [`  version:     raised to ${result.version}`] : [],
     ...result.versionNotRaised ? [`  version:     NOT raised. ${result.versionNotRaised}`] : [],
     result.prUrl ? `  request:     ${result.prUrl}` : `  request:     open it here - ${result.manualUrl ?? `push ${result.branch} and open a request against the default branch`}`,
@@ -1429,14 +1490,28 @@ function formatUpgradeResult(result) {
 // src/cli/init.ts
 function usage() {
   console.error(
-    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci]\n       init.js --upgrade [--file <scaffold-path>]..."
+    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message]"
   );
   process.exit(2);
 }
+function commitMessageFrom(args) {
+  const at = args.indexOf("--message");
+  const value = at === -1 ? void 0 : args[at + 1];
+  if (at !== -1 && (!value || value.startsWith("--"))) usage();
+  return {
+    ...value !== void 0 ? { message: value } : {},
+    ...args.includes("--delegate-message") ? { delegated: true } : {}
+  };
+}
 function upgrade(args) {
   const files = [];
+  const commitMessage = commitMessageFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--upgrade") continue;
+    if (args[i] === "--upgrade" || args[i] === "--delegate-message") continue;
+    if (args[i] === "--message") {
+      i++;
+      continue;
+    }
     if (args[i] !== "--file") usage();
     const value = args[++i];
     if (!value || value.startsWith("--")) usage();
@@ -1464,7 +1539,7 @@ function upgrade(args) {
     console.log(formatUpgradePlan(plan));
     return;
   }
-  const result = applyUpgrade(team, files);
+  const result = applyUpgrade(team, files, void 0, void 0, commitMessage);
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exit(1);
@@ -1479,8 +1554,12 @@ function main() {
   let branchPrefix;
   let commitPrefix;
   let withCi = false;
+  const commitMessage = commitMessageFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--name") {
+    if (args[i] === "--message") {
+      i++;
+    } else if (args[i] === "--delegate-message") {
+    } else if (args[i] === "--name") {
       name = args[++i];
       if (!name) usage();
     } else if (args[i] === "--branch-prefix") {
@@ -1498,7 +1577,18 @@ function main() {
     }
   }
   if (!url) usage();
-  const result = initTeamRepo(url, name, void 0, void 0, void 0, void 0, branchPrefix, commitPrefix, withCi);
+  const result = initTeamRepo(
+    url,
+    name,
+    void 0,
+    void 0,
+    void 0,
+    void 0,
+    branchPrefix,
+    commitPrefix,
+    withCi,
+    commitMessage
+  );
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exit(1);

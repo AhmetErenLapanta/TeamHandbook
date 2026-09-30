@@ -161,6 +161,10 @@ Two things, and only these:
    single PR you can read before merging. Picking it there is the approval, the same act
    for all three kinds; the harvest proposed none of it, so there is no second verdict to
    give. Nothing is shared with your team before one of these two.
+   - The commit on that request is yours as well: TeamHandbook never commits with a
+     message you have not seen; you can delegate the wording only at the moment the merge
+     request is opened. This holds for every path that commits - `/handbook:review`
+     approving to the team, `/handbook:share`, `/handbook:init` and its `--upgrade`.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
