@@ -13,6 +13,7 @@ import {
   stemSuffix,
   unitKeyOf,
   type MineResult,
+  type Shape,
   type UnitCollection,
   type WorkUnit,
 } from "./mine.js";
@@ -88,17 +89,17 @@ describe("mineShapes on a two-repository history with one hidden workflow", () =
     expect(result.shapes.some((s) => s.coreFiles.some((f) => /package\.json/.test(f.role)))).toBe(false);
   });
 
-  it("lets the noise rise to the top once the filters are off, which is what they are worth", () => {
+  it("lets the noise into the list once the filters are off, which is what they are worth", () => {
     // given the same history
     // when it is mined with the filters off
     const unfiltered = mineShapes(repos, { ...SMALL, filters: false });
 
-    // then the dependency bump outranks the workflow, which is still there below it
-    const [top] = unfiltered.shapes;
-    expect(top!.coreFiles.map((f) => f.role)).toEqual(
+    // then the dependency bump is a shape of its own, more repeated than the workflow it buries
+    const bump = unfiltered.shapes.find((s) => s.coreFiles.some((f) => /package\.json/.test(f.role)));
+    expect(bump!.coreFiles.map((f) => f.role)).toEqual(
       expect.arrayContaining(["acme-app:./*package.json", "acme-app:./*lock.json"]),
     );
-    expect(top!.recurrence).toBeGreaterThan(6);
+    expect(bump!.recurrence).toBeGreaterThan(6);
     expect(unfiltered.shapes.some((s) => s.memberUnits.join() === "TEAM-11,TEAM-12,TEAM-13,TEAM-14,TEAM-15,TEAM-16")).toBe(
       true,
     );
@@ -578,5 +579,207 @@ describe("clusterUnits", () => {
     const withB = clusters.find((c) => c.includes("B-0"))!;
     expect(withA).not.toBe(withB);
     expect(withA.filter((k) => k.startsWith("B-"))).toEqual([]);
+  });
+});
+
+describe("choosing which shapes a reader meets first", () => {
+  let fixture: Fixture;
+  let repos: string[];
+
+  beforeAll(() => {
+    fixture = createFixture();
+    const api = fixture.repo("acme-api");
+    const app = fixture.repo("acme-app");
+    const ops = fixture.repo("acme-ops");
+    api.commit({ files: { "README.md": "# acme-api\n" }, subject: "initial", author: "Ada" });
+    app.commit({ files: { "README.md": "# acme-app\n" }, subject: "initial", author: "Ada" });
+    ops.commit({ files: { "README.md": "# acme-ops\n" }, subject: "initial", author: "Ada" });
+
+    // A narrow workflow done often, in one repository.
+    for (let i = 0; i < 20; i++) {
+      api.commit({
+        files: { [`src/service/Item${i}Service.kt`]: `s${i}\n`, [`src/response/Item${i}Response.kt`]: `r${i}\n`, "db/changelog.xml": `<c>${i}</c>\n` },
+        subject: `TEAM-${100 + i} widen the ${i} response`,
+        author: i % 2 ? "Ada" : "Grace",
+      });
+    }
+    // A wide workflow done rarely, across three repositories.
+    for (let i = 0; i < 6; i++) {
+      api.commit({
+        files: { [`src/controller/Page${i}Controller.kt`]: `c${i}\n`, [`src/service/Page${i}Service.kt`]: `s${i}\n` },
+        subject: `TEAM-${200 + i} add the ${i} page`,
+        author: i % 2 ? "Ada" : "Linus",
+      });
+      app.commit({ files: { [`src/pages/Page${i}Page.tsx`]: `p${i}\n` }, subject: `TEAM-${200 + i} add the ${i} page`, author: i % 2 ? "Ada" : "Linus" });
+      ops.commit({ files: { [`routes/page${i}.routes.json`]: `{"${i}":1}\n` }, subject: `TEAM-${200 + i} add the ${i} page`, author: i % 2 ? "Ada" : "Linus" });
+    }
+    // Ordinary maintenance across a dozen unrelated corners, so that the files it touches are
+    // neither rare enough to be dropped nor alike enough to fold into one role.
+    const CORNERS = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota", "Kappa", "Lambda", "Nu"];
+    const chores = (mark: string) => {
+      const files: Record<string, string> = {};
+      // Every line rewritten, so that a commit touching all of them reads as work and not as a reformat.
+      for (const corner of CORNERS) {
+        files[`src/${corner.toLowerCase()}/Job${corner}.kt`] = Array.from({ length: 8 }, (_, line) => `${corner} ${mark} line ${line}`).join("\n");
+      }
+      return files;
+    };
+    for (let i = 0; i < 4; i++) api.commit({ files: chores(`c${i}`), subject: `TEAM-${300 + i} tidy the jobs`, author: "Grace" });
+
+    // One ticket that rebuilt half the codebase: it touches both workflows' files among a dozen others.
+    api.commit({
+      files: {
+        "src/service/Item0Service.kt": "one\ntwo\nthree\nfour\nfive\n",
+        "src/response/Item0Response.kt": "one\ntwo\nthree\nfour\nfive\n",
+        "db/changelog.xml": "<a/>\n<b/>\n<c/>\n<d/>\n<e/>\n",
+        ...chores("sweep"),
+      },
+      subject: "TEAM-900 move everything onto the new runtime",
+      author: "Linus",
+    });
+
+    repos = [api.path, app.path, ops.path];
+  });
+  afterAll(() => fixture.cleanup());
+
+  const mine = (options = {}) => mineShapes(repos, { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, ...options });
+
+  it("reports the four parts of a shape's score and the number they make", () => {
+    // given the history
+    // when it is mined
+    const [top] = mine().shapes;
+
+    // then the shape says why it is where it is
+    expect(top!.score.support).toBeCloseTo(Math.log2(1 + top!.recurrence), 1);
+    expect(top!.score.repos).toBe(top!.coreRepos.length);
+    expect(top!.score.authors).toBe(top!.authors);
+    expect(top!.score.total).toBeCloseTo(top!.score.support * top!.score.repos, 1);
+  });
+
+  it("puts the workflow that crosses repositories above the one done more often in a single repository", () => {
+    // given a workflow done 6 times across three repositories and one done 20 times in one
+    // when the history is mined
+    const shapes = mine().shapes;
+
+    // then the wide one is met first, although the narrow one has more than three times its support
+    const wide = shapes.findIndex((s) => s.coreRepos.length === 3);
+    const narrow = shapes.findIndex((s) => s.coreRepos.length === 1 && s.recurrence >= 20);
+    expect(wide).toBeGreaterThanOrEqual(0);
+    expect(narrow).toBeGreaterThan(wide);
+  });
+
+  it("does not count a ticket that touched half the codebase as having done a workflow it only brushed", () => {
+    // given the sweep ticket, whose dozen other files dwarf the narrow workflow's three
+    const narrow = (shapes: Shape[]) => shapes.find((s) => s.coreRepos.length === 1 && s.recurrence >= 20)!;
+
+    // when the history is mined with the unit share on, and again with it off
+    const withRule = mine().shapes;
+    const without = mine({ unitShare: 0 }).shapes;
+
+    // then the rule keeps it out of that workflow, and turning the rule off lets it back in
+    expect(narrow(withRule).memberUnits).not.toContain("TEAM-900");
+    expect(narrow(without).memberUnits).toContain("TEAM-900");
+  });
+
+  it("offers the smallest members first, so an example quotes a ticket that did this work and little else", () => {
+    // given a history whose shapes have members of very different sizes
+    // when it is mined with the unit share off, so the sweep ticket is still a member
+    const shape = mine({ unitShare: 0 }).shapes.find((s) => s.coreRepos.length === 1 && s.recurrence >= 20)!;
+
+    // then the ticket that did a dozen other things is last in the list an example would be taken from
+    expect(shape.memberUnits[shape.memberUnits.length - 1]).toBe("TEAM-900");
+  });
+
+  it("merges the same workflow written down twice, once with an extra file", () => {
+    // given a history where a wider version of one workflow forms its own shape
+    const wider = createFixture();
+    const repo = wider.repo("acme-api");
+    repo.commit({ files: { "README.md": "# acme-api\n" }, subject: "initial", author: "Ada" });
+    for (let i = 0; i < 16; i++) {
+      const files: Record<string, string> = {
+        [`src/service/Item${i}Service.kt`]: `s${i}\n`,
+        [`src/response/Item${i}Response.kt`]: `r${i}\n`,
+        "db/changelog.xml": `<c>${i}</c>\n`,
+      };
+      if (i < 6) {
+        files[`src/mapper/Item${i}Mapper.kt`] = `m${i}\n`;
+        files[`src/client/Item${i}Client.kt`] = `c${i}\n`;
+      }
+      repo.commit({ files, subject: `TEAM-${400 + i} widen the ${i} response`, author: i % 2 ? "Ada" : "Grace" });
+    }
+    const mineWider = (variantOverlap: number) =>
+      mineShapes([repo.path], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, similarity: 0.8, unitShare: 0, variantOverlap }).shapes;
+
+    // when it is mined with the merge off, and again with it loose enough to catch the pair
+    const apart = mineWider(0);
+    const merged = mineWider(0.3);
+    wider.cleanup();
+
+    // then both are reported apart, and the merge leaves the one that ranks higher
+    expect(apart).toHaveLength(2);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.recurrence).toBe(16);
+  });
+
+  it("counts a core role that the whole history touches as no evidence, once asked to", () => {
+    // given a floor on core roles that are not files most of the work touches
+    // when the history is mined with it set above what any shape here can meet
+    const shapes = mine({ minDistinctRoles: 20 }).shapes;
+
+    // then nothing survives, and the reason is counted by name
+    expect(shapes).toEqual([]);
+    expect(mine({ minDistinctRoles: 20 }).stats.excludedShapes["below-distinct-roles"]).toBeGreaterThan(0);
+  });
+});
+
+describe("roles that are not work", () => {
+  let fixture: Fixture;
+
+  beforeAll(() => (fixture = createFixture()));
+  afterAll(() => fixture.cleanup());
+
+  const seed = (name: string, compiledContent: string, extra: Record<string, string> = {}) => {
+    const repo = fixture.repo(name);
+    repo.commit({ files: { "README.md": "# acme\n" }, subject: "initial", author: "Ada" });
+    for (let i = 0; i < 8; i++) {
+      repo.commit({
+        files: {
+          [`locale/lang${i}/strings.po`]: `msgid "${i}"\n`,
+          [`locale/lang${i}/strings.mo`]: compiledContent,
+          AUTHORS: `contributor ${i}\n`,
+          ...Object.fromEntries(Object.entries(extra).map(([path, body]) => [path, `${body}${i}\n`])),
+        },
+        subject: `TEAM-${300 + i} add the lang${i} translation`,
+        author: i % 2 ? "Ada" : "Grace",
+      });
+    }
+    return repo;
+  };
+
+  it("drops a compiled file that sits beside its source, and the roll of contributors with it", () => {
+    // given a history whose every unit commits a translation, its compiled form and the contributor roll
+    const repo = seed("acme-i18n", "\u0000\u0001compiled\u0000");
+
+    // when it is mined
+    const result = mineShapes([repo.path], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3 });
+
+    // then neither the compiled twin nor the roll is a role, so what is left is one file and no shape
+    const roles = result.shapes.flatMap((s) => s.coreFiles.map((f) => f.role));
+    expect(roles.some((r) => /\.mo$/.test(r))).toBe(false);
+    expect(roles.some((r) => /AUTHORS/.test(r))).toBe(false);
+    expect(result.shapes).toEqual([]);
+  });
+
+  it("keeps a file that only looks like a compiled twin, which is what tells the two apart", () => {
+    // given the same history, except that the second file is text git reports line counts for
+    const repo = seed("acme-i18n-text", "not compiled at all\n", { "docs/guide.txt": "guide " });
+
+    // when it is mined
+    const result = mineShapes([repo.path], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3 });
+
+    // then it stays a role of its own and the three files make a shape
+    const roles = result.shapes.flatMap((s) => s.coreFiles.map((f) => f.role));
+    expect(roles).toContain("acme-i18n-text:locale/*/strings.mo");
+    expect(result.shapes).not.toEqual([]);
   });
 });

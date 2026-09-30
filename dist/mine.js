@@ -446,14 +446,8 @@ function buildRoleResolver(paths, options = {}) {
       }
     }
   }
-  const filters = options.filters ?? true;
-  const resolve = (path) => {
+  const named = (path) => {
     const segments = path.split("/");
-    if (filters) {
-      if (TEST.test(path)) return "test";
-      if (LOCK.test(path)) return "lock";
-      if (segments.length >= 2 && mirrors.has(segments[0])) return "mirror";
-    }
     if (segments.length >= 3) {
       const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
       const template = templates.get(key) ?? areas.get(areaKey(segments));
@@ -465,6 +459,21 @@ function buildRoleResolver(paths, options = {}) {
     if (localized) return `${parent}/${localized}`;
     const { suffix, ext } = stemSuffix(base);
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
+  };
+  const compiled = compiledRoles(all, named, options.binaryPaths);
+  const filters = options.filters ?? true;
+  const resolve = (path) => {
+    const segments = path.split("/");
+    if (filters) {
+      if (TEST.test(path)) return "test";
+      if (LOCK.test(path)) return "lock";
+      if (CREDITS.test(path)) return "credits";
+      if (segments.length >= 2 && mirrors.has(segments[0])) return "mirror";
+      const role = named(path);
+      if (compiled.has(role)) return "compiled";
+      return role;
+    }
+    return named(path);
   };
   resolve.mirrors = mirrors;
   resolve.templates = templates;
@@ -518,7 +527,27 @@ function areaKey(segments) {
   const { suffix, ext } = stemSuffix(segments[segments.length - 1]);
   return `${segments.slice(0, -2).join("/")}\0${ext ? `*${suffix}.${ext}` : segments[segments.length - 1]}`;
 }
-var IGNORED_ROLES = /* @__PURE__ */ new Set(["test", "lock", "mirror"]);
+var CREDITS = /(^|\/)(AUTHORS|CONTRIBUTORS|MAINTAINERS|CODEOWNERS|THANKS|\.mailmap)(\.[A-Za-z]+)?$/;
+function compiledRoles(paths, named, binary) {
+  const compiled = /* @__PURE__ */ new Set();
+  if (!binary?.size) return compiled;
+  const textual = /* @__PURE__ */ new Set();
+  const byStem = /* @__PURE__ */ new Map();
+  for (const path of paths) {
+    const role = named(path);
+    const stem = role.replace(/\.[A-Za-z0-9]+$/, "");
+    let roles = byStem.get(stem);
+    if (!roles) byStem.set(stem, roles = /* @__PURE__ */ new Set());
+    roles.add(role);
+    if (!binary.has(path)) textual.add(role);
+  }
+  for (const roles of byStem.values()) {
+    if (roles.size < 2 || ![...roles].some((role) => textual.has(role))) continue;
+    for (const role of roles) if (!textual.has(role)) compiled.add(role);
+  }
+  return compiled;
+}
+var IGNORED_ROLES = /* @__PURE__ */ new Set(["test", "lock", "mirror", "credits", "compiled"]);
 function repoLabels(paths) {
   const segments = new Map(paths.map((p) => [p, p.replace(/\/+$/, "").split("/")]));
   const labels = /* @__PURE__ */ new Map();
@@ -568,7 +597,10 @@ var MINE_DEFAULTS = {
   similarity: 0.5,
   hubShare: 0.2,
   dedupeOverlap: 0.5,
+  variantOverlap: 0.4,
   containment: 0.8,
+  unitShare: 0.25,
+  minDistinctRoles: 0,
   minTicketNumbers: 5,
   limit: 200
 };
@@ -602,6 +634,7 @@ function collectUnits(repoPaths, options = {}) {
   const units = /* @__PURE__ */ new Map();
   const allAuthors = /* @__PURE__ */ new Set();
   const allPaths = /* @__PURE__ */ new Set();
+  const textPaths = /* @__PURE__ */ new Set();
   const excludedOnly = /* @__PURE__ */ new Map();
   for (const [repo, commits] of commitsByRepo) {
     for (const { commit, key, cls } of assignUnitKeys(commits, repo, prefixes, options)) {
@@ -614,7 +647,10 @@ function collectUnits(repoPaths, options = {}) {
         classes.set(cls, (classes.get(cls) ?? 0) + 1);
         continue;
       }
-      for (const f of commit.files) allPaths.add(f.path);
+      for (const f of commit.files) {
+        allPaths.add(f.path);
+        if (f.added !== null) textPaths.add(f.path);
+      }
       let unit = units.get(key);
       if (!unit) {
         unit = {
@@ -670,7 +706,7 @@ function collectUnits(repoPaths, options = {}) {
   }
   return {
     units,
-    resolver: buildRoleResolver(allPaths, options),
+    resolver: buildRoleResolver(allPaths, { ...options, binaryPaths: difference(allPaths, textPaths) }),
     families: repoFamilies(labels.values()),
     repos: commitsByRepo.size,
     unreadable,
@@ -682,6 +718,11 @@ function collectUnits(repoPaths, options = {}) {
     excludedUnits,
     readMs: Date.now() - started
   };
+}
+function difference(all, some) {
+  const out = /* @__PURE__ */ new Set();
+  for (const item of all) if (!some.has(item)) out.add(item);
+  return out;
 }
 function shapesFromUnits(collection, options = {}) {
   const started = Date.now();
@@ -705,6 +746,7 @@ function shapesFromUnits(collection, options = {}) {
       roleSets.set(unit.key, roles);
     }
     dropRareRoles(roleSets, o.rareRoleUnits);
+    const hubs = hubRoles(roleSets, o.hubShare);
     const clusters = clusterUnits(roleSets, o);
     largestCluster[view] = clusters.reduce((max, c) => Math.max(max, c.length), 0);
     const unitsByRole = /* @__PURE__ */ new Map();
@@ -717,11 +759,11 @@ function shapesFromUnits(collection, options = {}) {
     }
     const nameOf = (repo) => view === "family" ? families.get(repo) ?? repo : repo;
     for (const cluster of clusters) {
-      const shape = buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, view, o, excludedShapes);
+      const shape = buildShape(cluster, units, roleSets, unitsByRole, hubs, resolver, nameOf, view, o, excludedShapes);
       if (shape) shapes.push(shape);
     }
   }
-  const ranked = dedupeShapes(shapes.sort(compareShapes), o.dedupeOverlap, excludedShapes);
+  const ranked = dedupeShapes(shapes.sort(compareShapes), o, excludedShapes);
   const withheld = redactSubjects(ranked);
   return {
     version: 1,
@@ -854,6 +896,12 @@ function clusterUnits(roleSets, options = {}) {
   }
   return clusters;
 }
+function hubRoles(roleSets, hubShare) {
+  const frequency = /* @__PURE__ */ new Map();
+  for (const roles of roleSets.values()) for (const role of roles) frequency.set(role, (frequency.get(role) ?? 0) + 1);
+  const limit = hubShare * roleSets.size;
+  return new Set([...frequency].filter(([, n]) => n > limit).map(([role]) => role));
+}
 function dropRareRoles(roleSets, minUnits) {
   const frequency = /* @__PURE__ */ new Map();
   for (const roles of roleSets.values()) for (const role of roles) frequency.set(role, (frequency.get(role) ?? 0) + 1);
@@ -876,7 +924,7 @@ function jaccard(a, b) {
   for (const item of small) if (large.has(item)) shared++;
   return shared / (a.size + b.size - shared);
 }
-function buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, view, o, excludedShapes) {
+function buildShape(cluster, units, roleSets, unitsByRole, hubs, resolver, nameOf, view, o, excludedShapes) {
   if (cluster.length < o.minProposers) {
     excludedShapes["too-few-proposers"] = (excludedShapes["too-few-proposers"] ?? 0) + 1;
     return null;
@@ -886,9 +934,10 @@ function buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, vie
     excludedShapes["below-roles"] = (excludedShapes["below-roles"] ?? 0) + 1;
     return null;
   }
-  const memberKeys = supportOf(proposed, unitsByRole, o.containment);
+  const memberKeys = supportOf(proposed, unitsByRole, roleSets, o.containment, o.unitShare);
   if (memberKeys.length < o.minRecurrence) {
-    excludedShapes["below-recurrence"] = (excludedShapes["below-recurrence"] ?? 0) + 1;
+    const reason = supportOf(proposed, unitsByRole, roleSets, o.containment, 0).length >= o.minRecurrence ? "below-recurrence-without-oversized" : "below-recurrence";
+    excludedShapes[reason] = (excludedShapes[reason] ?? 0) + 1;
     return null;
   }
   const core = coreOf(memberKeys, roleSets, o.coreShare).filter((role) => proposed.includes(role));
@@ -896,7 +945,12 @@ function buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, vie
     excludedShapes["below-roles"] = (excludedShapes["below-roles"] ?? 0) + 1;
     return null;
   }
-  const members = memberKeys.map((key) => units.get(key));
+  const distinct = core.filter((role) => !hubs.has(role)).length;
+  if (distinct < o.minDistinctRoles) {
+    excludedShapes["below-distinct-roles"] = (excludedShapes["below-distinct-roles"] ?? 0) + 1;
+    return null;
+  }
+  const members = memberKeys.map((key) => units.get(key)).sort((a, b) => fileCount(a) - fileCount(b) || (a.key < b.key ? -1 : 1));
   const coreRoles = new Set(core);
   const counts = /* @__PURE__ */ new Map();
   for (const key of memberKeys) for (const role of roleSets.get(key)) if (coreRoles.has(role)) counts.set(role, (counts.get(role) ?? 0) + 1);
@@ -925,6 +979,7 @@ function buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, vie
     if (unit.lastAt > lastAt) lastAt = unit.lastAt;
     if (unit.touchesTest) testUnits++;
   }
+  const coreRepos = [...new Set(core.map((role) => role.slice(0, role.indexOf(":"))))].sort();
   const coreFiles = core.map((role) => {
     const n = counts.get(role) ?? 0;
     return { role, units: n, share: Number((n / memberKeys.length).toFixed(2)), examples: examples.get(role) ?? [] };
@@ -934,7 +989,7 @@ function buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, vie
     view,
     coreFiles,
     repos: [...repos].sort(),
-    coreRepos: [...new Set(core.map((role) => role.slice(0, role.indexOf(":"))))].sort(),
+    coreRepos,
     recurrence: memberKeys.length,
     authors: authors.size,
     firstAt,
@@ -943,38 +998,58 @@ function buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, vie
     // unit so that a single chatty ticket cannot fill the list. They are raw user text, and
     // `redactSubjects` is what stands between them and the output file.
     sampleSubjects: [...new Set(members.map((unit) => unit.subjects[0]))],
-    memberUnits: [...memberKeys].sort(),
-    testUnits
+    memberUnits: members.map((unit) => unit.key),
+    testUnits,
+    score: scoreOf(memberKeys.length, coreRepos.length, distinct, authors.size)
   };
+}
+function fileCount(unit) {
+  let n = 0;
+  for (const paths of unit.files.values()) n += paths.size;
+  return n;
 }
 function coreOf(keys, roleSets, share) {
   const counts = /* @__PURE__ */ new Map();
   for (const key of keys) for (const role of roleSets.get(key)) counts.set(role, (counts.get(role) ?? 0) + 1);
   return [...counts].filter(([, n]) => n / keys.length >= share).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([role]) => role);
 }
-function supportOf(roles, unitsByRole, containment) {
+function supportOf(roles, unitsByRole, roleSets, containment, unitShare) {
   const needed = Math.max(1, Math.ceil(containment * roles.length));
   const hits = /* @__PURE__ */ new Map();
   for (const role of roles) for (const key of unitsByRole.get(role) ?? []) hits.set(key, (hits.get(key) ?? 0) + 1);
-  return [...hits].filter(([, n]) => n >= needed).map(([key]) => key);
+  return [...hits].filter(([key, n]) => n >= needed && n / (roleSets.get(key)?.size ?? n) >= unitShare).map(([key]) => key);
+}
+function scoreOf(recurrence, repos, roles, authors) {
+  const support = Number(Math.log2(1 + recurrence).toFixed(2));
+  return { support, repos, roles, authors, total: Number((support * repos).toFixed(2)) };
 }
 function compareShapes(a, b) {
-  const spread = (s) => s.coreRepos.length >= 2 || s.coreFiles.length >= 3 ? 0 : 1;
-  const shared = (s) => s.authors >= 2 ? 0 : 1;
-  return spread(a) - spread(b) || shared(a) - shared(b) || b.recurrence - a.recurrence || (a.id < b.id ? -1 : 1);
+  return b.score.total - a.score.total || b.score.roles - a.score.roles || b.score.authors - a.score.authors || (a.id < b.id ? -1 : 1);
 }
-function dedupeShapes(sorted, overlap, excludedShapes) {
+function dedupeShapes(sorted, o, excludedShapes) {
   const kept = [];
   for (const shape of sorted) {
     const members = new Set(shape.memberUnits);
-    const duplicate = kept.some(({ members: other }) => jaccard(members, other) >= overlap);
+    const core = new Set(shape.coreFiles.map((file) => file.role));
+    const duplicate = kept.some(({ members: other }) => jaccard(members, other) >= o.dedupeOverlap);
     if (duplicate) {
       excludedShapes["duplicate-view"] = (excludedShapes["duplicate-view"] ?? 0) + 1;
       continue;
     }
-    kept.push({ shape, members });
+    const variant = o.variantOverlap > 0 && kept.some(
+      ({ members: others, core: otherCore }) => jaccard(members, others) >= o.variantOverlap && (contains(otherCore, core) || contains(core, otherCore))
+    );
+    if (variant) {
+      excludedShapes["variant"] = (excludedShapes["variant"] ?? 0) + 1;
+      continue;
+    }
+    kept.push({ shape, members, core });
   }
   return kept.map(({ shape }) => shape);
+}
+function contains(outer, inner) {
+  for (const item of inner) if (!outer.has(item)) return false;
+  return true;
 }
 function redactSubjects(shapes) {
   const withheld = { secret: 0, email: 0 };

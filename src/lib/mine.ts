@@ -272,6 +272,11 @@ export interface RoleOptions {
   mirrorShare?: number;
   /** A directory smaller than this is too small for the mirror test to mean anything. */
   mirrorMinFiles?: number;
+  /**
+   * Paths git never reported line counts for. A build artifact checked in beside its source is
+   * binary and its source is not, which is how the two are told apart.
+   */
+  binaryPaths?: ReadonlySet<string>;
 }
 
 /**
@@ -349,14 +354,8 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
     }
   }
 
-  const filters = options.filters ?? true;
-  const resolve = ((path: string): string => {
+  const named = (path: string): string => {
     const segments = path.split("/");
-    if (filters) {
-      if (TEST.test(path)) return "test";
-      if (LOCK.test(path)) return "lock";
-      if (segments.length >= 2 && mirrors.has(segments[0]!)) return "mirror";
-    }
     if (segments.length >= 3) {
       const key = `${segments.slice(0, -2).join("/")}\u0000${segments[segments.length - 1]}`;
       const template = templates.get(key) ?? areas.get(areaKey(segments));
@@ -368,6 +367,23 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
     if (localized) return `${parent}/${localized}`;
     const { suffix, ext } = stemSuffix(base);
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
+  };
+
+  const compiled = compiledRoles(all, named, options.binaryPaths);
+
+  const filters = options.filters ?? true;
+  const resolve = ((path: string): string => {
+    const segments = path.split("/");
+    if (filters) {
+      if (TEST.test(path)) return "test";
+      if (LOCK.test(path)) return "lock";
+      if (CREDITS.test(path)) return "credits";
+      if (segments.length >= 2 && mirrors.has(segments[0]!)) return "mirror";
+      const role = named(path);
+      if (compiled.has(role)) return "compiled";
+      return role;
+    }
+    return named(path);
   }) as RoleResolver;
   resolve.mirrors = mirrors;
   resolve.templates = templates;
@@ -403,8 +419,42 @@ function areaKey(segments: string[]): string {
   return `${segments.slice(0, -2).join("/")}\u0000${ext ? `*${suffix}.${ext}` : segments[segments.length - 1]}`;
 }
 
+/**
+ * A repository's roll of contributors. It changes because someone new appears, not because a piece
+ * of work was done, so every workflow that happened to add a contributor collects it. On the
+ * largest measured open-source history two of the ten most repeated shapes were this file plus a
+ * translation.
+ */
+const CREDITS = /(^|\/)(AUTHORS|CONTRIBUTORS|MAINTAINERS|CODEOWNERS|THANKS|\.mailmap)(\.[A-Za-z]+)?$/;
+
+/**
+ * Roles whose files are a build artifact of another role's: same directory and same name, one
+ * compiled and one not. Committing both is one step, and counting it as two lets a pair of them
+ * clear the three-role floor on its own. On the largest measured open-source history that pair was
+ * the single most repeated shape.
+ */
+function compiledRoles(paths: string[], named: (path: string) => string, binary: ReadonlySet<string> | undefined): Set<string> {
+  const compiled = new Set<string>();
+  if (!binary?.size) return compiled;
+  const textual = new Set<string>();
+  const byStem = new Map<string, Set<string>>();
+  for (const path of paths) {
+    const role = named(path);
+    const stem = role.replace(/\.[A-Za-z0-9]+$/, "");
+    let roles = byStem.get(stem);
+    if (!roles) byStem.set(stem, (roles = new Set()));
+    roles.add(role);
+    if (!binary.has(path)) textual.add(role);
+  }
+  for (const roles of byStem.values()) {
+    if (roles.size < 2 || ![...roles].some((role) => textual.has(role))) continue;
+    for (const role of roles) if (!textual.has(role)) compiled.add(role);
+  }
+  return compiled;
+}
+
 /** Roles that carry no workflow: they are dropped from a shape rather than clustered. */
-const IGNORED_ROLES = new Set(["test", "lock", "mirror"]);
+const IGNORED_ROLES = new Set(["test", "lock", "mirror", "credits", "compiled"]);
 
 // ---------------------------------------------------------------------------
 // Repository naming
@@ -493,6 +543,22 @@ export interface CoreFile {
   examples: string[];
 }
 
+/**
+ * Why a shape sits where it does in the list, as its four measured parts and the number they make.
+ * Kept on the shape so that a reader, or the step that writes a draft from it, can see the reason
+ * rather than only the position.
+ */
+export interface ShapeScore {
+  /** The support, log-scaled: each doubling of how often the work happened counts the same. */
+  support: number;
+  /** How many repositories the core files are in. */
+  repos: number;
+  /** Core roles that are not files most of the history touches. */
+  roles: number;
+  authors: number;
+  total: number;
+}
+
 export interface Shape {
   id: string;
   /** Which repository view found this shape: literal repository names, or repository families. */
@@ -514,6 +580,7 @@ export interface Shape {
   memberUnits: string[];
   /** How many member units changed a test alongside the work: evidence that the workflow is checkable. */
   testUnits: number;
+  score: ShapeScore;
 }
 
 export interface MineStats {
@@ -589,6 +656,26 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
   hubShare?: number;
   /** Two shapes sharing this much of their units are the same workflow seen twice. */
   dedupeOverlap?: number;
+  /**
+   * The same merge, one step looser, for the pair where one core is contained in the other: the
+   * same workflow written down twice, once with an extra file. Sharing this much of their units is
+   * enough, because a subset core already says they are the same steps. 0 turns it off.
+   */
+  variantOverlap?: number;
+  /**
+   * How much of a UNIT's own roles the core has to be before the unit counts as doing the workflow.
+   * `containment` asks the other direction, and on its own a ticket that touched forty files
+   * contains almost every small core and joins almost every shape: measured, one such ticket was a
+   * member of nineteen of the twenty most repeated shapes, and the examples a draft would quote
+   * come from it. 0 turns it off.
+   */
+  unitShare?: number;
+  /**
+   * How many of a shape's core roles have to be files the history does NOT mostly touch. A shape
+   * whose core is a message file and two files half the work touches is a layout coincidence, not
+   * a workflow. 0 turns it off.
+   */
+  minDistinctRoles?: number;
   /** How much of a shape's core a unit must touch to count as doing the workflow. */
   containment?: number;
   /** How many distinct numbers a prefix needs before it counts as this history's ticket key. */
@@ -608,6 +695,15 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
 // which is no file map at all, and cost one of those workflows a third of its tickets. A floor of 8
 // rather than 5: on that workspace both left about the same number of shapes and the same share of
 // non-workflows among the top twenty.
+//
+// The unit share is the largest value at which none of the five known workflows matched a worse
+// shape than before it existed, while the ticket that had been a member of nineteen of the twenty
+// most repeated shapes fell to three. The variant overlap is the lowest that merged repeats without
+// losing one: at 0.3 a known workflow was swallowed by a wider one and fell from sixth to
+// thirty-ninth. Requiring core roles the history does not mostly touch is off because it was
+// measured worthless: at the 0.2 hub share it removed two shapes out of ninety-three and none out
+// of the largest open-source history, and at any share low enough to remove the shapes it was meant
+// for, it cost two of the five known workflows most of their precision.
 const MINE_DEFAULTS = {
   minRecurrence: 8,
   minProposers: 5,
@@ -619,7 +715,10 @@ const MINE_DEFAULTS = {
   similarity: 0.5,
   hubShare: 0.2,
   dedupeOverlap: 0.5,
+  variantOverlap: 0.4,
   containment: 0.8,
+  unitShare: 0.25,
+  minDistinctRoles: 0,
   minTicketNumbers: 5,
   limit: 200,
 };
@@ -691,6 +790,8 @@ export function collectUnits(repoPaths: string[], options: MineOptions = {}): Un
   const units = new Map<string, WorkUnit>();
   const allAuthors = new Set<string>();
   const allPaths = new Set<string>();
+  // A path git reported line counts for at least once is text; one it never did is a binary file.
+  const textPaths = new Set<string>();
   // Keys whose every commit was excluded: the unit never forms, and is counted under the class
   // that excluded most of its commits, so a filter that eats real work shows up by name.
   const excludedOnly = new Map<string, Map<CommitClass, number>>();
@@ -706,7 +807,10 @@ export function collectUnits(repoPaths: string[], options: MineOptions = {}): Un
         classes.set(cls, (classes.get(cls) ?? 0) + 1);
         continue;
       }
-      for (const f of commit.files) allPaths.add(f.path);
+      for (const f of commit.files) {
+        allPaths.add(f.path);
+        if (f.added !== null) textPaths.add(f.path);
+      }
       let unit = units.get(key);
       if (!unit) {
         unit = {
@@ -768,7 +872,7 @@ export function collectUnits(repoPaths: string[], options: MineOptions = {}): Un
 
   return {
     units,
-    resolver: buildRoleResolver(allPaths, options),
+    resolver: buildRoleResolver(allPaths, { ...options, binaryPaths: difference(allPaths, textPaths) }),
     families: repoFamilies(labels.values()),
     repos: commitsByRepo.size,
     unreadable,
@@ -780,6 +884,13 @@ export function collectUnits(repoPaths: string[], options: MineOptions = {}): Un
     excludedUnits,
     readMs: Date.now() - started,
   };
+}
+
+/** The members of `all` that `some` does not hold. */
+function difference(all: Set<string>, some: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const item of all) if (!some.has(item)) out.add(item);
+  return out;
 }
 
 export function shapesFromUnits(collection: UnitCollection, options: MineOptions = {}): MineResult {
@@ -805,6 +916,7 @@ export function shapesFromUnits(collection: UnitCollection, options: MineOptions
       roleSets.set(unit.key, roles);
     }
     dropRareRoles(roleSets, o.rareRoleUnits);
+    const hubs = hubRoles(roleSets, o.hubShare);
     const clusters = clusterUnits(roleSets, o);
     largestCluster[view] = clusters.reduce((max, c) => Math.max(max, c.length), 0);
     const unitsByRole = new Map<string, Set<string>>();
@@ -817,12 +929,12 @@ export function shapesFromUnits(collection: UnitCollection, options: MineOptions
     }
     const nameOf = (repo: string) => (view === "family" ? families.get(repo) ?? repo : repo);
     for (const cluster of clusters) {
-      const shape = buildShape(cluster, units, roleSets, unitsByRole, resolver, nameOf, view, o, excludedShapes);
+      const shape = buildShape(cluster, units, roleSets, unitsByRole, hubs, resolver, nameOf, view, o, excludedShapes);
       if (shape) shapes.push(shape);
     }
   }
 
-  const ranked = dedupeShapes(shapes.sort(compareShapes), o.dedupeOverlap, excludedShapes);
+  const ranked = dedupeShapes(shapes.sort(compareShapes), o, excludedShapes);
   const withheld = redactSubjects(ranked);
 
   return {
@@ -1027,6 +1139,14 @@ export function clusterUnits(
   return clusters;
 }
 
+/** The roles more than `hubShare` of the units touched: files that say nothing about which work this is. */
+function hubRoles(roleSets: Map<string, Set<string>>, hubShare: number): Set<string> {
+  const frequency = new Map<string, number>();
+  for (const roles of roleSets.values()) for (const role of roles) frequency.set(role, (frequency.get(role) ?? 0) + 1);
+  const limit = hubShare * roleSets.size;
+  return new Set([...frequency].filter(([, n]) => n > limit).map(([role]) => role));
+}
+
 /** Removes roles too rare to say which workflow a unit belongs to; `rareRoleUnits` says why. */
 function dropRareRoles(roleSets: Map<string, Set<string>>, minUnits: number): void {
   const frequency = new Map<string, number>();
@@ -1060,6 +1180,7 @@ function buildShape(
   units: Map<string, WorkUnit>,
   roleSets: Map<string, Set<string>>,
   unitsByRole: Map<string, Set<string>>,
+  hubs: Set<string>,
   resolver: RoleResolver,
   nameOf: (repo: string) => string,
   view: "repo" | "family",
@@ -1080,9 +1201,12 @@ function buildShape(
   // workflow done a dozen slightly different ways ends up split across a dozen of them, each too
   // small to show how often the work really happens. Measured on the largest history, this is what
   // held recall on the two biggest known workflows down to a third.
-  const memberKeys = supportOf(proposed, unitsByRole, o.containment);
+  const memberKeys = supportOf(proposed, unitsByRole, roleSets, o.containment, o.unitShare);
   if (memberKeys.length < o.minRecurrence) {
-    excludedShapes["below-recurrence"] = (excludedShapes["below-recurrence"] ?? 0) + 1;
+    // Named apart from `below-recurrence` so that a run says whether the unit-share rule is what
+    // cost a shape its support, rather than leaving the two causes in one number.
+    const reason = supportOf(proposed, unitsByRole, roleSets, o.containment, 0).length >= o.minRecurrence ? "below-recurrence-without-oversized" : "below-recurrence";
+    excludedShapes[reason] = (excludedShapes[reason] ?? 0) + 1;
     return null;
   }
   const core = coreOf(memberKeys, roleSets, o.coreShare).filter((role) => proposed.includes(role));
@@ -1090,8 +1214,18 @@ function buildShape(
     excludedShapes["below-roles"] = (excludedShapes["below-roles"] ?? 0) + 1;
     return null;
   }
+  const distinct = core.filter((role) => !hubs.has(role)).length;
+  if (distinct < o.minDistinctRoles) {
+    excludedShapes["below-distinct-roles"] = (excludedShapes["below-distinct-roles"] ?? 0) + 1;
+    return null;
+  }
 
-  const members = memberKeys.map((key) => units.get(key)!);
+  // Smallest first, on the files the unit touched. Every example a draft can quote comes from this
+  // list, and the ones worth quoting are the units that did this workflow and little else: a
+  // ticket that did four other things at the same time describes all five.
+  const members = memberKeys
+    .map((key) => units.get(key)!)
+    .sort((a, b) => fileCount(a) - fileCount(b) || (a.key < b.key ? -1 : 1));
   const coreRoles = new Set(core);
   const counts = new Map<string, number>();
   for (const key of memberKeys) for (const role of roleSets.get(key)!) if (coreRoles.has(role)) counts.set(role, (counts.get(role) ?? 0) + 1);
@@ -1122,6 +1256,7 @@ function buildShape(
     if (unit.touchesTest) testUnits++;
   }
 
+  const coreRepos = [...new Set(core.map((role) => role.slice(0, role.indexOf(":"))))].sort();
   const coreFiles: CoreFile[] = core.map((role) => {
     const n = counts.get(role) ?? 0;
     return { role, units: n, share: Number((n / memberKeys.length).toFixed(2)), examples: examples.get(role) ?? [] };
@@ -1132,7 +1267,7 @@ function buildShape(
     view,
     coreFiles,
     repos: [...repos].sort(),
-    coreRepos: [...new Set(core.map((role) => role.slice(0, role.indexOf(":"))))].sort(),
+    coreRepos,
     recurrence: memberKeys.length,
     authors: authors.size,
     firstAt,
@@ -1141,9 +1276,16 @@ function buildShape(
     // unit so that a single chatty ticket cannot fill the list. They are raw user text, and
     // `redactSubjects` is what stands between them and the output file.
     sampleSubjects: [...new Set(members.map((unit) => unit.subjects[0]!))],
-    memberUnits: [...memberKeys].sort(),
+    memberUnits: members.map((unit) => unit.key),
     testUnits,
+    score: scoreOf(memberKeys.length, coreRepos.length, distinct, authors.size),
   };
+}
+
+function fileCount(unit: WorkUnit): number {
+  let n = 0;
+  for (const paths of unit.files.values()) n += paths.size;
+  return n;
 }
 
 /** The roles at least `share` of these units touched, most common first. */
@@ -1156,23 +1298,48 @@ function coreOf(keys: string[], roleSets: Map<string, Set<string>>, share: numbe
     .map(([role]) => role);
 }
 
-/** Every unit that touched at least `containment` of these roles: the workflow's support. */
-function supportOf(roles: string[], unitsByRole: Map<string, Set<string>>, containment: number): string[] {
+/**
+ * Every unit that touched at least `containment` of these roles, and for which those roles are at
+ * least `unitShare` of its own: the workflow's support. The second test is what keeps a ticket
+ * that touched half the codebase from being counted as having done every small workflow in it.
+ */
+function supportOf(
+  roles: string[],
+  unitsByRole: Map<string, Set<string>>,
+  roleSets: Map<string, Set<string>>,
+  containment: number,
+  unitShare: number,
+): string[] {
   const needed = Math.max(1, Math.ceil(containment * roles.length));
   const hits = new Map<string, number>();
   for (const role of roles) for (const key of unitsByRole.get(role) ?? []) hits.set(key, (hits.get(key) ?? 0) + 1);
-  return [...hits].filter(([, n]) => n >= needed).map(([key]) => key);
+  return [...hits]
+    .filter(([key, n]) => n >= needed && n / (roleSets.get(key)?.size ?? n) >= unitShare)
+    .map(([key]) => key);
 }
 
 /**
- * The order a reader should meet these in. Support alone is not selective: at the threshold that a
- * real codebase needs, thousands of shapes clear it. What separates a workflow from a coincidence
- * is that it crosses repositories or files, and that more than one person has done it.
+ * How much a shape is worth reading first.
+ *
+ * Support alone is not selective: at the threshold a real codebase needs, thousands of shapes clear
+ * it, and the ones on top are the widest, dullest file pairs. Support is therefore log-scaled, so
+ * that work done three hundred times does not outweigh everything else, and multiplied by how far
+ * the core spreads across repositories, which is what a workflow worth writing down has and a
+ * layout coincidence does not.
+ *
+ * The two remaining parts were measured and left out of the product: weighting the core's role
+ * count pushed the small, file-rich workflows above the common ones a reader recognises, and the
+ * author count moved nothing that the support had not already moved. They are reported because
+ * they are the reason a shape sits where it does, and they break the ties the number leaves.
  */
+export function scoreOf(recurrence: number, repos: number, roles: number, authors: number): ShapeScore {
+  const support = Number(Math.log2(1 + recurrence).toFixed(2));
+  return { support, repos, roles, authors, total: Number((support * repos).toFixed(2)) };
+}
+
+/** The order a reader should meet these in. */
 export function compareShapes(a: Shape, b: Shape): number {
-  const spread = (s: Shape) => (s.coreRepos.length >= 2 || s.coreFiles.length >= 3 ? 0 : 1);
-  const shared = (s: Shape) => (s.authors >= 2 ? 0 : 1);
-  return spread(a) - spread(b) || shared(a) - shared(b) || b.recurrence - a.recurrence || (a.id < b.id ? -1 : 1);
+  return b.score.total - a.score.total || b.score.roles - a.score.roles || b.score.authors - a.score.authors || (a.id < b.id ? -1 : 1);
 }
 
 /**
@@ -1180,18 +1347,37 @@ export function compareShapes(a: Shape, b: Shape): number {
  * They are recognised as one by the units they were built from rather than by the roles they
  * report, because the whole difference between the views is how the roles are named.
  */
-function dedupeShapes(sorted: Shape[], overlap: number, excludedShapes: Record<string, number>): Shape[] {
-  const kept: { shape: Shape; members: Set<string> }[] = [];
+function dedupeShapes(sorted: Shape[], o: typeof MINE_DEFAULTS, excludedShapes: Record<string, number>): Shape[] {
+  const kept: { shape: Shape; members: Set<string>; core: Set<string> }[] = [];
   for (const shape of sorted) {
     const members = new Set(shape.memberUnits);
-    const duplicate = kept.some(({ members: other }) => jaccard(members, other) >= overlap);
+    const core = new Set(shape.coreFiles.map((file) => file.role));
+    const duplicate = kept.some(({ members: other }) => jaccard(members, other) >= o.dedupeOverlap);
     if (duplicate) {
       excludedShapes["duplicate-view"] = (excludedShapes["duplicate-view"] ?? 0) + 1;
       continue;
     }
-    kept.push({ shape, members });
+    // The test is on the role names, so it needs no view of its own: the views name the same file
+    // differently, and where they do, neither core contains the other and the test simply does not
+    // fire.
+    const variant =
+      o.variantOverlap > 0 &&
+      kept.some(
+        ({ members: others, core: otherCore }) =>
+          jaccard(members, others) >= o.variantOverlap && (contains(otherCore, core) || contains(core, otherCore)),
+      );
+    if (variant) {
+      excludedShapes["variant"] = (excludedShapes["variant"] ?? 0) + 1;
+      continue;
+    }
+    kept.push({ shape, members, core });
   }
   return kept.map(({ shape }) => shape);
+}
+
+function contains(outer: Set<string>, inner: Set<string>): boolean {
+  for (const item of inner) if (!outer.has(item)) return false;
+  return true;
 }
 
 /**
