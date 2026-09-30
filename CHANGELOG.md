@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.14.1] - 2026-09-30
+
+- **The engine that reads a repository's history for the work it repeats is now in the
+  tree, and nothing calls it yet.** It groups the files a piece of work touches by the part
+  each one plays, so work done again in different files can be recognised as the same work.
+  It is here so the path that will use it has something measured to build on. Nothing an
+  installed copy does is different.
+
 ## [0.14.0] - 2026-09-27
 
 - **TeamHandbook now requires Node 22.** Node 18 and Node 20 are both past their end of

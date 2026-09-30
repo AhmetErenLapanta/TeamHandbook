@@ -85,10 +85,11 @@ const HOOK_TYPES = ["command", "prompt"];
 const COMMANDS_WITHOUT_ENGINE = new Set(["demo.md"]);
 
 // run-pipeline is spawned from inside a hook bundle and is never typed by a user, so it
-// is the one entrypoint allowed to have no command markdown. The failure message names
-// this set, because the cheapest wrong fix for that failure is inventing a slash command
-// nobody asked for.
-const CLI_WITHOUT_COMMAND = new Set(["run-pipeline"]);
+// has no command markdown. mine is the history miner's measurement entry: its slash command
+// comes with the review path it feeds, and until then a command would put in front of users
+// shapes that nothing yet turns into a skill. The failure message names this set, because
+// the cheapest wrong fix for that failure is inventing a slash command nobody asked for.
+const CLI_WITHOUT_COMMAND = new Set(["run-pipeline", "mine"]);
 
 // Not every shipped bundle is named in a manifest. run-pipeline.js is resolved at runtime
 // from the calling bundle's own location, so a build that stops emitting it breaks the
