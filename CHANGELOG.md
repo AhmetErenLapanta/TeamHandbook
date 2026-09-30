@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.15.1] - 2026-10-01
+
+- **Nothing that carries your home directory path, your account name or an email address
+  goes out to a team or a project any more.** A skill, a slash command or a server
+  definition with one of those in it is refused where it would have travelled before, and
+  the share and review screens name the item and the kind of trace it carries rather than
+  the trace itself. A candidate drawn out of a session is marked the same way, so you see
+  it before you decide. Keeping such an item for yourself still works, and taking the trace
+  out clears the refusal. Documentation domains and role accounts are not counted as
+  anyone's address.
+
 ## [0.15.0] - 2026-09-30
 
 - **TeamHandbook no longer commits with a message you have not seen.** Sharing your setup,
