@@ -1035,7 +1035,6 @@ function teamBranchPrefix(config) {
 var COMMIT_MESSAGE_MAX = 200;
 function commitMessageProblem(value) {
   if (!value.trim()) return "it is empty";
-  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
   if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
   const secret = detectSecret(value);
   if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
@@ -1054,7 +1053,13 @@ function decideCommitSubject(choice, proposal, prefix, rerun) {
   if (choice.message !== void 0) {
     const problem = commitMessageProblem(choice.message);
     if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
-    return { subject: commitSubject(prefix, choice.message) };
+    const subject = commitSubject(prefix, choice.message);
+    if (subject !== proposal && subject.length > COMMIT_MESSAGE_MAX) {
+      return {
+        error: `that commit message cannot be a commit title: it is longer than ${COMMIT_MESSAGE_MAX} characters. Nothing was committed.`
+      };
+    }
+    return { subject };
   }
   if (choice.delegated) return { subject: proposal };
   return {

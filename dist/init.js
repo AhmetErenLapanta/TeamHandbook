@@ -400,7 +400,6 @@ function teamBranchPrefix(config) {
 var COMMIT_MESSAGE_MAX = 200;
 function commitMessageProblem(value) {
   if (!value.trim()) return "it is empty";
-  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
   if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
   const secret = detectSecret(value);
   if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
@@ -419,7 +418,13 @@ function decideCommitSubject(choice, proposal, prefix, rerun) {
   if (choice.message !== void 0) {
     const problem = commitMessageProblem(choice.message);
     if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
-    return { subject: commitSubject(prefix, choice.message) };
+    const subject = commitSubject(prefix, choice.message);
+    if (subject !== proposal && subject.length > COMMIT_MESSAGE_MAX) {
+      return {
+        error: `that commit message cannot be a commit title: it is longer than ${COMMIT_MESSAGE_MAX} characters. Nothing was committed.`
+      };
+    }
+    return { subject };
   }
   if (choice.delegated) return { subject: proposal };
   return {
@@ -991,6 +996,9 @@ function formatInitSuccess(result) {
       "               the handbook README explains how teammates join - if yours was kept,",
       "               copy that section across from skills/README.md or this output."
     ] : [],
+    // What the commit says, for the same reason every other path here prints it: the
+    // wording may be the user's own, and it may have gained the team's prefix on the way.
+    ...result.commitMessage ? [`  commit:      ${result.commitMessage}`] : [],
     `  config:      team repo saved to ${displayPath(join3(result.home ?? "", "config.json"))}`,
     "",
     // A handbook is normally private, and a private repo needs two separate things

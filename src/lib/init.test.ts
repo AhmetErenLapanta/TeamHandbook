@@ -722,6 +722,9 @@ describe("initTeamRepo", () => {
       expect(result).toMatchObject({ ok: true, commitMessage: "TEAM-1 chore: start the team handbook" });
       const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "main"], { encoding: "utf8" });
       expect(subject.trim()).toBe("TEAM-1 chore: start the team handbook");
+      // The prefix was added to their wording, so the line they read has to say so: what
+      // was committed, not what they typed.
+      expect(formatInitSuccess(result)).toContain("commit:      TEAM-1 chore: start the team handbook");
     } finally {
       rmSync(remote, { recursive: true, force: true });
     }
@@ -1012,10 +1015,6 @@ describe("the message a commit is allowed to carry", () => {
     expect(problem).toContain("gitlab-token");
   });
 
-  it("given a message longer than a title, when it is checked, then it is refused", () => {
-    expect(commitMessageProblem(`feat: ${"x".repeat(300)}`)).toContain("longer than");
-  });
-
   it("given an ordinary sentence, when it is checked, then nothing is wrong with it", () => {
     expect(commitMessageProblem("feat: share the deploy runbook with the team")).toBeNull();
   });
@@ -1072,5 +1071,22 @@ describe("deciding what a commit will say", () => {
     expect(decideCommitSubject({ message: "feat: mine" }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN)).toEqual({
       subject: "TEAM-1 feat: mine",
     });
+  });
+
+  it("given a message of their own that runs past a title's length, when the decision is made, then it is refused", () => {
+    const decided = decideCommitSubject({ message: `feat: ${"x".repeat(300)}` }, "chore: scaffold", "", RERUN);
+
+    expect("error" in decided && decided.error).toContain("longer than");
+  });
+
+  it("given a long proposal handed straight back, when the decision is made, then its own length is not held against it", () => {
+    // The share screen exists for someone with a lot of skills, and a selection of a dozen
+    // names every one of them in the title. Refusing that text as too long would refuse
+    // the likeliest answer there is - approval by echo - while --delegate-message committed
+    // the identical sentence.
+    const proposal = `feat(skill): add ${Array.from({ length: 15 }, (_, i) => `team-skill-number-${i + 1}`).join(", ")}`;
+    expect(proposal.length).toBeGreaterThan(200);
+
+    expect(decideCommitSubject({ message: proposal }, proposal, "", RERUN)).toEqual({ subject: proposal });
   });
 });

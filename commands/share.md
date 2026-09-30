@@ -50,7 +50,7 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    - Offer only what the list called shareable. A refusal is the point, not an obstacle.
    - An entry marked **already on the team** is a third state, not a refusal: it can still
      be picked. Picking it alone changes nothing about theirs - the share turns it back and
-     tells you the command that would update it, which you then ask about (step 7).
+     tells you the command that would update it, which you then ask about (step 6).
      Say that where it is offered, because the user is choosing to overwrite something
      other people already use. That mark is absent when the team repository could not be
      read, so its absence never proves the team does not have it - the share itself makes
@@ -68,7 +68,7 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    which is the correct answer to an empty selection.
    **This first run commits nothing.** It comes back with `commit message required`, the
    exact message it proposes for the commit, and any refusal or collision the selection
-   hit. That is the screen steps 7 and 8 work from.
+   hit. That is the screen steps 6 and 7 work from.
 5. **A skill the list does not show** is shared by path instead:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" share --skill-path <directory>`
    If the command was invoked with a directory path ($ARGUMENTS), that path is the
@@ -89,20 +89,26 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    - no SKILL.md in the directory, or a SKILL.md with no name and description frontmatter.
      It is not a skill Claude Code would load either; offer to write the frontmatter.
    - the team repository already has a skill, already declares a server, or already has a
-     command, by that name. Theirs is untouched; the rest of the selection still went. These are listed in
-     their own group, apart from the real faults, and the output prints the exact command
-     for each one. This is the refusal that has a way forward: ask, per name, whether to
-     send that one as an update to the team's copy, and never add the flag on your own
-     initiative. Say the consequence before they pick: after the merge every teammate gets
-     that definition instead of the one they have now. `--update` NAMES what it updates
-     (`--update gitlab` updates gitlab and nothing else), so run it with only the names the
-     user actually said yes to. Two collisions and one yes means one name on that flag, not
-     both. Renaming is the other answer.
+     command, by that name. Theirs is untouched. On the first run nothing else travelled
+     either, because that run stops for the commit message, so the answer goes on the SAME
+     run as the rest of the selection rather than in a command of its own: the output says
+     which. Never split one selection into two requests - two opened before either is
+     merged claim the same plugin version, and the second reaches nobody. These are listed
+     in their own group, apart from the real faults. This is the refusal that has a way
+     forward: ask, per name, whether to send that one as an update to the team's copy, and
+     never add the flag on your own initiative. Say the consequence before they pick: after
+     the merge every teammate gets that definition instead of the one they have now.
+     `--update` NAMES what it updates (`--update gitlab` updates gitlab and nothing else),
+     so run it with only the names the user actually said yes to. Two collisions and one
+     yes means one name on that flag, not both. Renaming is the other answer.
 7. **Then ask about the commit message, and ask about it last.** The proposal changes with
-   the `--update` answers from step 6, so it is only worth showing once those are settled.
-   Show the user the proposed message exactly as the CLI printed it, and let them approve
-   it, edit it, or write their own. Then run the share again with everything from step 4,
-   any `--update` flags from step 6, and their answer:
+   the `--update` answers from step 6: a name sent as an update reads as "update" in it
+   rather than "add". So if step 6 added any `--update`, run the whole selection once more
+   WITH those flags and still no message flag, and use that run's proposal - the first
+   run's is stale and would put a sentence in front of the user that is not the one about
+   to be committed. Show them the proposal exactly as the CLI printed it, and let them
+   approve it, edit it, or write their own. Then run the share again with everything from
+   step 4, any `--update` flags from step 6, and their answer:
    - they approved or wrote a message: `--message "<their wording>"`. If it has no team
      prefix and the team needs one, the CLI adds it and the result says what was committed.
    - they said you decide: `--delegate-message`, and nothing else. That is the ONLY way a

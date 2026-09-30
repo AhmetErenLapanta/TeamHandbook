@@ -569,15 +569,31 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
   }
   if (collisions.length) {
     if (lines.length) lines.push("");
+    // Which retry to print depends on whether the rest of the selection travelled. It did
+    // on a run that committed; it did NOT on a run that stopped for want of a commit
+    // message, and there the one-item command below would split one selection into two
+    // merge requests - two requests opened before either is merged claim the same plugin
+    // version, and the second reaches nobody. That is the defect one request exists to
+    // prevent, so the advice changes rather than the reader being expected to notice.
+    const travelled = !!shared?.ok;
     lines.push(
-      `The team already has these (${collisions.length}) - theirs is untouched:`,
+      `The team already has these (${collisions.length})${travelled ? " - theirs is untouched:" : ":"}`,
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
-      "To send one of them as an update to the team's copy, name that one and only that one:",
-      // The selector the run itself recorded, not one rebuilt from the kind: a skill named
-      // by path is re-named by that path, and printing "--skill <name>" for it would hand
-      // the reader a command that comes back "no skill of that name is installed here".
-      ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`),
+      ...(travelled
+        ? [
+            "To send one of them as an update to the team's copy, name that one and only that one:",
+            // The selector the run itself recorded, not one rebuilt from the kind: a skill
+            // named by path is re-named by that path, and printing "--skill <name>" for it
+            // would hand the reader a command that comes back "no skill of that name is
+            // installed here".
+            ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`),
+          ]
+        : [
+            "Nothing has been shared yet, so these are answered on the same run as the rest:",
+            `add ${collisions.map((r) => `--update ${r.name}`).join(" ")} to the whole selection, for the`,
+            "names the user said yes to and no others, and run it again.",
+          ]),
     );
   }
   if (!lines.length) return "Nothing was selected, so nothing was shared.";

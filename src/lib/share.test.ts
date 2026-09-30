@@ -780,6 +780,56 @@ describe("shareSelection carries commands", () => {
     expect(result.refused[0]!.reason).toContain("deploy.md");
   });
 
+  it("given a collision on the run that stopped for the message, when it is reported, then the answer is put on the whole selection rather than a request of its own", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+
+    const probe = shareSelectionDeciding(
+      select({ commands: ["explain", "fix-tests"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+    );
+
+    // Nothing travelled on this run, so the one-item retry would send explain by itself and
+    // fix-tests in a second request - and two requests opened before either is merged claim
+    // the same plugin version, which is what one request exists to prevent.
+    expect(probe.team?.ok).toBe(false);
+    const printed = formatShareResult(probe);
+    expect(printed).not.toContain("share.js share --command explain --update explain");
+    expect(printed).toContain("--update explain");
+    expect(printed).toContain("the same run as the rest");
+  });
+
+  it("given an update answered on the second run, when the wording is delegated, then the commit carries that run's proposal and not the stale one", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+    const selection = () => select({ commands: ["explain", "fix-tests"] });
+
+    // the first run: explain collides, so the proposal it derives is about fix-tests alone
+    const first = shareSelectionDeciding(selection(), team(), paths(), undefined, forge);
+    // the second: the user said yes to updating explain, so the proposal now says so too
+    const second = shareSelectionDeciding(selection(), team(), paths(), undefined, forge, { update: ["explain"] });
+
+    expect(first.team?.proposedMessage).not.toBe(second.team?.proposedMessage);
+    expect(second.team?.proposedMessage).toBe("feat(commands): add fix-tests; update explain");
+
+    const sent = shareSelectionDeciding(selection(), team(), paths(), undefined, forge, {
+      update: ["explain"],
+      commitMessage: { delegated: true },
+    });
+
+    // what was committed is the sentence the SECOND run showed, which is the one the user
+    // was asked about; delegating the wording must not commit a title nobody saw.
+    expect(sent.team?.commitMessage).toBe(second.team!.proposedMessage);
+    expect(gitIn(remote, ["log", "-1", "--format=%s", sent.team!.branch!]).trim()).toBe(
+      "feat(commands): add fix-tests; update explain",
+    );
+  });
+
   it("given the team already has a command by that name, when it is shared, then theirs is untouched and the rest still go", () => {
     remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
     writeCommand(userHome, "explain", "My explain.\n");

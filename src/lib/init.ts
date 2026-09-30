@@ -82,13 +82,17 @@ export interface CommitMessageChoice {
 
 // Long enough for a sentence that says what changed, short enough that a commit title
 // stays a title. git enforces no limit of its own, so the only one that matters is the
-// reader's in a log listing.
+// reader's in a log listing. It is checked in decideCommitSubject rather than here,
+// because the product's OWN proposal can exceed it - a selection of a dozen skills names
+// every one of them in the title - and the likeliest answer a user gives is that proposal
+// handed straight back. Refusing it as too long would break the case the share screen
+// exists for while `--delegate-message` committed the identical text.
 const COMMIT_MESSAGE_MAX = 200;
 
-/** Why this text cannot be the title of a commit, or null when it can. */
+/** Why this text cannot be the title of a commit, or null when it can. Length is not here:
+ * an empty, multi-line or credential-carrying message is WRONG, a long one is only long. */
 export function commitMessageProblem(value: string): string | null {
   if (!value.trim()) return "it is empty";
-  if (value.trim().length > COMMIT_MESSAGE_MAX) return `it is longer than ${COMMIT_MESSAGE_MAX} characters`;
   // \p{C} is every control, format and unassigned code point. A newline is the one that
   // matters most: `git commit -m` ends the title there and turns everything after it into
   // a body nobody wrote, so the commit would carry a message the user never saw the whole
@@ -143,7 +147,17 @@ export function decideCommitSubject(
   if (choice.message !== undefined) {
     const problem = commitMessageProblem(choice.message);
     if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
-    return { subject: commitSubject(prefix, choice.message) };
+    const subject = commitSubject(prefix, choice.message);
+    // The proposal is exempt from the length: it is this product's own sentence, and the
+    // user handing it back unchanged is an approval, not a message worth arguing about.
+    if (subject !== proposal && subject.length > COMMIT_MESSAGE_MAX) {
+      return {
+        error:
+          `that commit message cannot be a commit title: it is longer than ${COMMIT_MESSAGE_MAX} characters. ` +
+          "Nothing was committed.",
+      };
+    }
+    return { subject };
   }
   if (choice.delegated) return { subject: proposal };
   return {
@@ -1071,6 +1085,9 @@ export function formatInitSuccess(result: InitResult): string {
           "               copy that section across from skills/README.md or this output.",
         ]
       : []),
+    // What the commit says, for the same reason every other path here prints it: the
+    // wording may be the user's own, and it may have gained the team's prefix on the way.
+    ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     `  config:      team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
     "",
     // A handbook is normally private, and a private repo needs two separate things
