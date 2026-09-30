@@ -721,16 +721,20 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
 // rather than 5: on that workspace both left about the same number of shapes and the same share of
 // non-workflows among the top twenty.
 //
-// The unit share is what the examples cost: on that workspace a ticket that changed most of the
-// codebase in one go was a member of most of the shapes at the top of the list, and of a handful
-// once the share was on. It is paid for, and the price was read: a known workflow then matched a
-// slightly worse shape and another a slightly better one, and raising the share further made
-// another workflow pay and then began to move the ranks. The variant overlap is the lowest that
-// merged the repeats without losing one: below it a known workflow was swallowed by a wider shape,
-// and well above it nothing merged at all. Requiring core roles the history does not mostly touch
-// is off because it was measured worthless: at this hub share almost no role in any measured
-// history is common enough to count as one, and at any share low enough to catch the shapes it was
-// meant for, it took known workflows' precision down with them.
+// The unit share is what the examples cost: with it off, a ticket that changed most of a codebase
+// in one go was a member of most of the shapes at the top of the list, and of a handful once it was
+// on. It is calibrated from both sides. Lower, no rank moves, but that ticket doubles the shapes it
+// belongs to, and of the reference workflows one matches a slightly better shape and one a slightly
+// worse. From 0.28 the order starts to move, three of them by a place each; by 0.3 two are matching
+// a less precise shape than they do here; by 0.35 one has fallen several places and lost a tenth of
+// its precision. The variant overlap is the lowest that merged the repeats without losing one: at
+// 0.3 and 0.35 a reference workflow's best shape is folded into a wider one and loses about a fifth
+// of its precision, and with the unit share off the same value drops it from the top ten to the
+// fortieth place, while at 0.45 the merge already misses some of the pairs it is there for and from
+// 0.5 it finds none. Requiring core roles the history does not mostly touch is off because it was
+// measured worthless: at this hub share almost no role in any measured history is common enough to
+// count as one, and at any share low enough to catch the shapes it was meant for, it took reference
+// workflows' precision down with them.
 const MINE_DEFAULTS = {
   minRecurrence: 8,
   minProposers: 5,
@@ -1376,6 +1380,12 @@ function supportOf(
  * rather than over all of them. Both matter: the two views name the same file differently, so a
  * count of names ranks a shape by how its repositories happen to be called, and a count pooled over
  * the members calls a workflow wide when what is wide is the set of places it was ever done.
+ *
+ * Counting it per member has a price, and it was measured rather than assumed: work only ever done
+ * inside one repository at a time scores one however many repositories it has been done in, so a
+ * change made more than a hundred and fifty times, in a dozen of them, ranks below a workflow done
+ * ten times that crosses six repositories at once. That is the intended reading. What the number
+ * asks is how much of a system one piece of this work has to touch, not how far the habit spread.
  *
  * The two remaining parts were measured and left out of the product: weighting the core's role
  * count pushed the small, file-rich workflows above the common ones a reader recognises, and the

@@ -649,6 +649,20 @@ describe("choosing which shapes a reader meets first", () => {
       author: "Grace",
     });
 
+    // And one that did a little more beside it again, so that its own roles are just enough for the
+    // shipped share to keep it and a slightly higher one to drop it. Its own chore mark, or the
+    // files would be identical to the one above and never appear in a diff.
+    api.commit({
+      files: {
+        "src/service/Item2Service.kt": "six\nseven\neight\nnine\nten\n",
+        "src/response/Item2Response.kt": "six\nseven\neight\nnine\nten\n",
+        "db/changelog.xml": "<k/>\n<l/>\n<m/>\n<n/>\n<o/>\n",
+        ...Object.fromEntries(Object.entries(chores("again")).slice(0, 8)),
+      },
+      subject: "TEAM-801 widen the 2 response and tidy rather more of what it touched",
+      author: "Linus",
+    });
+
     // One ticket that rebuilt half the codebase: it touches both workflows' files among a dozen others.
     api.commit({
       files: {
@@ -757,12 +771,18 @@ describe("choosing which shapes a reader meets first", () => {
   });
 
   it("keeps a ticket that did this workflow and a little else, which is the same rule's other side", () => {
-    // given a ticket whose roles are the narrow workflow's three and seven more
+    // given two tickets whose roles are the narrow workflow's three and seven, then eight, more
     // when the history is mined with the shipped unit share
-    const narrow = mine().shapes.find((s) => s.coreRepos.length === 1 && s.recurrence >= 20)!;
+    const narrow = (shapes: Shape[]) => shapes.find((s) => s.coreRepos.length === 1 && s.recurrence >= 20)!;
 
-    // then it is still counted as having done the workflow
-    expect(narrow.memberUnits).toContain("TEAM-800");
+    // then both are still counted as having done the workflow
+    expect(narrow(mine().shapes).memberUnits).toContain("TEAM-800");
+    expect(narrow(mine().shapes).memberUnits).toContain("TEAM-801");
+
+    // and a share only a little higher than the one that ships drops the second of them, which is
+    // what pins the value from above: the measured cost of raising it starts in that gap
+    expect(narrow(mine({ unitShare: 0.3 }).shapes).memberUnits).not.toContain("TEAM-801");
+    expect(narrow(mine({ unitShare: 0.28 }).shapes).memberUnits).not.toContain("TEAM-801");
   });
 
   it("offers the smallest members first, so an example quotes a ticket that did this work and little else", () => {
