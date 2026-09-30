@@ -436,7 +436,7 @@ const CREDITS = /(^|\/)(AUTHORS|CONTRIBUTORS|MAINTAINERS|CODEOWNERS|THANKS|\.mai
  * from is the case this was written for, and on the largest measured open-source history that pair,
  * counted as four roles rather than two, was the single most repeated shape.
  *
- * It reaches further than compilation, and deliberately so: the same test folds an icon's raster
+ * It reaches further than compilation, and it is kept that way: the same test folds an icon's raster
  * copies onto the drawing they came from, and a font's four downloads onto one. It also folds the
  * parts of a dataset that are not derived from each other at all, which is a different relation
  * with the same consequence - one thing, committed together, counted as several steps. The textual
@@ -712,8 +712,8 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
 // The unit share is what the examples cost: on that workspace a ticket that touched ninety-five
 // files across six repositories was a member of eleven of the twenty most repeated shapes and of
 // thirty-one in all, and of four and seven once it was on. It is paid for: one known workflow
-// matched a slightly worse shape (0.81 to 0.76) and another a better one (0.68 to 0.74). Above
-// this value the first cost grows and the ranks start to move. The variant overlap is the lowest
+// matched a slightly worse shape (0.81 to 0.76) and another a better one (0.68 to 0.74). By 0.3 a
+// second workflow starts paying too, and by 0.35 the ranks move. The variant overlap is the lowest
 // that merged the repeats without losing one: at 0.3 and 0.35 a known workflow was swallowed by a
 // wider shape, and above 0.45 nothing merged at all. Requiring core roles the history does not
 // mostly touch is off because it was measured worthless: at this hub share almost no role in three

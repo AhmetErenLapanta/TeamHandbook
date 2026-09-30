@@ -773,6 +773,12 @@ describe("roles that are not work", () => {
     // counted under a reason of its own
     expect(result.stats.compiledRoles).toEqual(["locale/*/strings.mo"]);
     expect(result.stats.creditFiles).toBe(1);
+
+    // and with the filters off both are roles again, and the shape they make comes back
+    const unfiltered = mineShapes([repo.path], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, filters: false });
+    const back = unfiltered.shapes.flatMap((s) => s.coreFiles.map((f) => f.role));
+    expect(back.some((r) => /\.mo$/.test(r))).toBe(true);
+    expect(back.some((r) => /AUTHORS/.test(r))).toBe(true);
   });
 
   it("keeps a file that only looks like a compiled twin, which is what tells the two apart", () => {
