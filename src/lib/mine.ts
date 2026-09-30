@@ -371,9 +371,10 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
   };
 
-  const compiled = compiledRoles(all, named, options.binaryPaths);
-
   const filters = options.filters ?? true;
+  // Nothing is dropped with the filters off, so nothing is reported as dropped either: the two
+  // counts say what this run removed, not what a run with the filters on would have.
+  const compiled = filters ? compiledRoles(all, named, options.binaryPaths) : new Set<string>();
   const resolve = ((path: string): string => {
     const segments = path.split("/");
     if (filters) {
@@ -619,7 +620,11 @@ export interface MineStats {
   /** Candidate subjects withheld, by what they carried. Every candidate is scanned, not only the five kept. */
   subjectsWithheld: { secret: number; email: number };
   mirrors: string[];
-  /** Roles dropped as a build artifact of another role, and files dropped as a roll of contributors. */
+  /**
+   * What the two role filters removed in THIS run: roles dropped as a second form of another
+   * role's artifact, and files dropped as a roll of contributors. Both are empty with the filters
+   * off, because then nothing was dropped.
+   */
   compiledRoles: string[];
   creditFiles: number;
   ticketPrefixes: string[];
@@ -891,7 +896,7 @@ export function collectUnits(repoPaths: string[], options: MineOptions = {}): Un
     units,
     resolver: buildRoleResolver(allPaths, { ...options, binaryPaths: difference(allPaths, textPaths) }),
     families: repoFamilies(labels.values()),
-    creditFiles: [...allPaths].filter((path) => CREDITS.test(path)).length,
+    creditFiles: (options.filters ?? true) ? [...allPaths].filter((path) => CREDITS.test(path)).length : 0,
     repos: commitsByRepo.size,
     unreadable,
     commits: commitCount,

@@ -460,8 +460,8 @@ function buildRoleResolver(paths, options = {}) {
     const { suffix, ext } = stemSuffix(base);
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
   };
-  const compiled = compiledRoles(all, named, options.binaryPaths);
   const filters = options.filters ?? true;
+  const compiled = filters ? compiledRoles(all, named, options.binaryPaths) : /* @__PURE__ */ new Set();
   const resolve = (path) => {
     const segments = path.split("/");
     if (filters) {
@@ -709,7 +709,7 @@ function collectUnits(repoPaths, options = {}) {
     units,
     resolver: buildRoleResolver(allPaths, { ...options, binaryPaths: difference(allPaths, textPaths) }),
     families: repoFamilies(labels.values()),
-    creditFiles: [...allPaths].filter((path) => CREDITS.test(path)).length,
+    creditFiles: options.filters ?? true ? [...allPaths].filter((path) => CREDITS.test(path)).length : 0,
     repos: commitsByRepo.size,
     unreadable,
     commits: commitCount,
