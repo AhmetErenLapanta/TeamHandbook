@@ -20,9 +20,9 @@ import {
   teamCommitPrefix,
   teamCommitPrefixFix,
 } from "./init.js";
-import { delegationNeedsForge, forgeSignInProblem, hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
-export { delegationNeedsForge, manualPrUrl, runForge } from "./forge.js";
+export { manualPrUrl, noRequestPossible, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { auditSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
@@ -498,23 +498,23 @@ export function publishCandidate(
     // twice. Before the checkout, so a run without a decision leaves no branch behind.
     const proposal = commitSubject(commitPrefix, title);
     const choice = options.commitMessage ?? {};
-    const decided = decideCommitSubject(choice, proposal, commitPrefix, "approve it again");
+    // A delegated wording is honoured only if the request it was given for can actually be
+    // opened, and the run that has not been asked yet needs the same answer so it does not
+    // offer a delegation that is going to be refused. Asked before the push, because after
+    // it the commit carrying that wording is already on the team's remote with nothing to
+    // carry it further - and not asked at all when the reviewer gave their own words,
+    // which need no merge request to be legitimate.
+    const unavailable =
+      choice.message === undefined ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
+    const decided = decideCommitSubject(
+      choice,
+      proposal,
+      commitPrefix,
+      "approve it again",
+      unavailable ? noRequestPossible(unavailable) : undefined,
+    );
     if ("error" in decided) {
       return { ok: false, error: decided.error, proposedMessage: proposal, proposalHash: proposalFingerprint(proposal) };
-    }
-    // A delegated wording is honoured only if the request it was given for can actually be
-    // opened. Asked before the push, because after it the commit carrying that wording is
-    // already on the team's remote with nothing to carry it further.
-    if (choice.delegated !== undefined) {
-      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
-      if (blocked) {
-        return {
-          ok: false,
-          error: delegationNeedsForge(blocked, "approve it again"),
-          proposedMessage: proposal,
-          proposalHash: proposalFingerprint(proposal),
-        };
-      }
     }
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -1326,14 +1326,18 @@ export function publishTeamSelection(
       proposedMessage: proposal,
       proposalHash: proposalFingerprint(proposal),
     });
-    const decided = decideCommitSubject(choice, proposal, commitPrefix, "share them again");
+    // See publishCandidate for why this is asked here, and only when the user gave no
+    // wording of their own.
+    const unavailable =
+      choice.message === undefined ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
+    const decided = decideCommitSubject(
+      choice,
+      proposal,
+      commitPrefix,
+      "share them again",
+      unavailable ? noRequestPossible(unavailable) : undefined,
+    );
     if ("error" in decided) return stopped(decided.error);
-    // See publishCandidate: a delegation is for the moment the request is opened, so a
-    // machine that cannot open one has nothing to honour it at.
-    if (choice.delegated !== undefined) {
-      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
-      if (blocked) return stopped(delegationNeedsForge(blocked, "share them again"));
-    }
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);

@@ -63,8 +63,12 @@ const MESSAGE = "--message";
 const DELEGATE_MESSAGE = "--delegate-message";
 
 /** Every flag that swallows the argument after it, so the positional reader below knows
- * which bare words are values and which are the command. A boolean flag is deliberately
- * absent: treating `--delegate-message` as taking a value would eat the word `share`. */
+ * which bare words are values and which are the command. All of them take one, including
+ * `--delegate-message`, whose value is the fingerprint of the proposal the user was shown.
+ * The cost of that is real and it is caught rather than avoided: `--delegate-message share
+ * --skill x` eats the word `share`, the command falls back to `list`, and the guard below
+ * sends a `list` carrying message flags to the usage line rather than silently printing an
+ * inventory. A fingerprint that is not one is refused in the library besides. */
 const VALUE_FLAGS: readonly string[] = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE];
 
 /** The value behind a flag, refused rather than guessed at when it is missing. */

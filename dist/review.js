@@ -1026,8 +1026,8 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     return { url: null, error: reason };
   }
 }
-function delegationNeedsForge(reason, rerun) {
-  return `no merge request can be opened from this machine (${reason}), and "you decide" is an answer about the request, not about a branch. Nothing was committed. Ask the user for the wording and ${rerun} with \`--message "<their wording>"\`, or sign the CLI in and delegate again.`;
+function noRequestPossible(reason) {
+  return `no merge request can be opened from this machine (${reason})`;
 }
 
 // src/lib/display-path.ts
@@ -1074,19 +1074,17 @@ function commitSubject(prefix, message) {
   const subject = message.trim();
   return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
 }
-function decideCommitSubject(choice, proposal, prefix, rerun) {
+function decideCommitSubject(choice, proposal, prefix, rerun, unavailable) {
   if (choice.message !== void 0 && choice.delegated !== void 0) {
     return {
       error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
     };
   }
-  const unusable = commitMessageProblem(proposal);
-  if (unusable) {
+  if (choice.delegated !== void 0 && !/^[0-9a-f]{8}$/.test(choice.delegated)) {
     return {
-      error: `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to delegate, so ${rerun} with \`--message "<the user's wording>"\`. Nothing was committed.`
+      error: `"${choice.delegated}" is not the fingerprint of a proposed message. Delegating names the sentence the user was shown, which the run that asked for it printed beside the proposal, so ${rerun} with no message flag to see both. Nothing was committed.`
     };
   }
-  const fingerprint = proposalFingerprint(proposal);
   if (choice.message !== void 0) {
     const problem = commitMessageProblem(choice.message);
     if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
@@ -1099,15 +1097,31 @@ function decideCommitSubject(choice, proposal, prefix, rerun) {
     }
     return { subject };
   }
-  if (choice.delegated !== void 0) {
-    if (choice.delegated === fingerprint) return { subject: proposal };
+  const unusable = commitMessageProblem(proposal);
+  if (unusable) {
     return {
-      error: `the message you delegated is not the one this would commit any more: it now says "${proposal}" (${fingerprint}), and the answer named ${choice.delegated}. Show the user the new one, then ${rerun}. Nothing was committed.`
+      error: `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to show and nothing to delegate, so ask the user for the wording and ${rerun} with \`--message "<their wording>"\`. Nothing was committed.`
+    };
+  }
+  if (choice.delegated !== void 0) {
+    if (unavailable) return { error: delegationImpossible(unavailable, rerun) };
+    if (choice.delegated === proposalFingerprint(proposal)) return { subject: proposal };
+    return {
+      error: `the message you delegated is not the one this would commit any more: it now says "${proposal}" (${proposalFingerprint(proposal)}), and the answer named ${choice.delegated}. Show the user the new one, then ${rerun}. Nothing was committed.`
+    };
+  }
+  const ask = `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it`;
+  if (unavailable) {
+    return {
+      error: `${ask}. "You decide" is not an answer here, because ${unavailable}. Nothing was committed and nothing was pushed.`
     };
   }
   return {
-    error: `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it, or with \`--delegate-message ${fingerprint}\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+    error: `${ask}, or with \`--delegate-message ${proposalFingerprint(proposal)}\` if they answered that you decide. Nothing was committed and nothing was pushed.`
   };
+}
+function delegationImpossible(unavailable, rerun) {
+  return `"you decide" is an answer about the merge request, and ${unavailable}. Nothing was committed. Ask the user for the wording and ${rerun} with \`--message "<their wording>"\`.`;
 }
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -1476,20 +1490,16 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const title = buildPrTitle(skillSlug, occupied);
     const proposal = commitSubject(commitPrefix, title);
     const choice = options.commitMessage ?? {};
-    const decided = decideCommitSubject(choice, proposal, commitPrefix, "approve it again");
+    const unavailable = choice.message === void 0 ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
+    const decided = decideCommitSubject(
+      choice,
+      proposal,
+      commitPrefix,
+      "approve it again",
+      unavailable ? noRequestPossible(unavailable) : void 0
+    );
     if ("error" in decided) {
       return { ok: false, error: decided.error, proposedMessage: proposal, proposalHash: proposalFingerprint(proposal) };
-    }
-    if (choice.delegated !== void 0) {
-      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
-      if (blocked) {
-        return {
-          ok: false,
-          error: delegationNeedsForge(blocked, "approve it again"),
-          proposedMessage: proposal,
-          proposalHash: proposalFingerprint(proposal)
-        };
-      }
     }
     try {
       git(["checkout", "-b", branch], repoDir);

@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
-import { delegationNeedsForge, forgeSignInProblem, hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
@@ -155,6 +155,7 @@ export function decideCommitSubject(
   proposal: string,
   prefix: string,
   rerun: string,
+  unavailable?: string,
 ): CommitDecision {
   if (choice.message !== undefined && choice.delegated !== undefined) {
     return {
@@ -163,20 +164,18 @@ export function decideCommitSubject(
         "wording the user approved, --delegate-message is them saying you decide. Pass one of them.",
     };
   }
-  // The proposal goes through the same sieve a user's own message does, and it goes
-  // through it FIRST. It is derived from names this machine did not write - an MCP server,
-  // a slash command, a skill directory - so "the product wrote it" is not a reason to
-  // trust it, and a proposal that cannot be committed must be said so while there is still
-  // a person to say it to rather than at the moment it is delegated.
-  const unusable = commitMessageProblem(proposal);
-  if (unusable) {
+  if (choice.delegated !== undefined && !/^[0-9a-f]{8}$/.test(choice.delegated)) {
     return {
       error:
-        `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to ` +
-        `delegate, so ${rerun} with \`--message "<the user's wording>"\`. Nothing was committed.`,
+        `"${choice.delegated}" is not the fingerprint of a proposed message. Delegating names the sentence ` +
+        `the user was shown, which the run that asked for it printed beside the proposal, so ${rerun} ` +
+        "with no message flag to see both. Nothing was committed.",
     };
   }
-  const fingerprint = proposalFingerprint(proposal);
+  // The user's own words never wait on the proposal. They go through their own sieve
+  // below, and the proposal is neither shown nor committed on this branch - screening it
+  // here would refuse a clean message because of a sentence nobody is going to use, and
+  // the only advice the refusal could give is the flag that was already passed.
   if (choice.message !== undefined) {
     const problem = commitMessageProblem(choice.message);
     if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
@@ -195,22 +194,55 @@ export function decideCommitSubject(
     }
     return { subject };
   }
+  // Both branches below either commit the proposal or put it in front of the user, so it
+  // is screened first. It is derived from names this machine did not write - an MCP
+  // server, a slash command, a skill directory - so "the product wrote it" is not a reason
+  // to trust it.
+  const unusable = commitMessageProblem(proposal);
+  if (unusable) {
+    return {
+      error:
+        `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to ` +
+        `show and nothing to delegate, so ask the user for the wording and ${rerun} with ` +
+        '`--message "<their wording>"`. Nothing was committed.',
+    };
+  }
   if (choice.delegated !== undefined) {
-    if (choice.delegated === fingerprint) return { subject: proposal };
+    // Before the fingerprint, because handing someone a fresh fingerprint for a machine
+    // that cannot use it costs them a round trip to be refused a second time.
+    if (unavailable) return { error: delegationImpossible(unavailable, rerun) };
+    if (choice.delegated === proposalFingerprint(proposal)) return { subject: proposal };
     return {
       error:
         `the message you delegated is not the one this would commit any more: it now says "${proposal}" ` +
-        `(${fingerprint}), and the answer named ${choice.delegated}. Show the user the new one, then ` +
-        `${rerun}. Nothing was committed.`,
+        `(${proposalFingerprint(proposal)}), and the answer named ${choice.delegated}. Show the user the ` +
+        `new one, then ${rerun}. Nothing was committed.`,
+    };
+  }
+  const ask =
+    `commit message required: nothing is committed here with a message the user has not seen. This one ` +
+    `would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they ` +
+    "have approved or edited it";
+  // No `--delegate-message` where delegating is going to be refused anyway: offering it
+  // spends the user's next answer on a round trip whose outcome is already known.
+  if (unavailable) {
+    return {
+      error: `${ask}. "You decide" is not an answer here, because ${unavailable}. Nothing was committed and nothing was pushed.`,
     };
   }
   return {
     error:
-      `commit message required: nothing is committed here with a message the user has not seen. This one ` +
-      `would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they ` +
-      `have approved or edited it, or with \`--delegate-message ${fingerprint}\` if they answered that you ` +
-      `decide. Nothing was committed and nothing was pushed.`,
+      `${ask}, or with \`--delegate-message ${proposalFingerprint(proposal)}\` if they answered that you ` +
+      "decide. Nothing was committed and nothing was pushed.",
   };
+}
+
+/** What a delegated run is told when no merge request can be opened for it to be about. */
+export function delegationImpossible(unavailable: string, rerun: string): string {
+  return (
+    `"you decide" is an answer about the merge request, and ${unavailable}. Nothing was committed. Ask the ` +
+    `user for the wording and ${rerun} with \`--message "<their wording>"\`.`
+  );
 }
 
 export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null {
@@ -994,18 +1026,7 @@ export function initTeamRepo(
         "and `git config --global user.email you@example.com`, then re-run.",
     };
   }
-  // Before the clone rather than beside the commit, because this proposal needs nothing
-  // the clone would tell us: the scaffold's subject is a constant and the prefix arrived
-  // as a flag. Refusing here leaves no clone, no branch and no config entry behind.
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const stopped = (error: string): InitResult => ({
-    ok: false,
-    error,
-    proposedMessage: proposal,
-    proposalHash: proposalFingerprint(proposal),
-  });
-  const decided = decideCommitSubject(commitMessage, proposal, commitMessagePrefix(commitPrefix), "run /handbook:init again");
-  if ("error" in decided) return stopped(decided.error);
   const workdir = handbookWorkdir("handbook-init-");
   const repoDir = join(workdir, "repo");
   // Clone first, always. Building a fresh history locally and pushing it assumed the
@@ -1041,24 +1062,35 @@ export function initTeamRepo(
       error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
     };
   }
-  // An empty repository has no branch to open a request against, so the scaffold commit
-  // goes straight to the default branch and no merge request exists at all. "You decide"
-  // is an answer about the merge request; here there is none to give it for, and the
-  // commit would land on the branch the whole team reads carrying a sentence nobody had
-  // seen. The user's own words are the only thing that can be committed here.
-  if (isEmptyRepo && commitMessage.delegated !== undefined) {
-    return stopped(
-      `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge ` +
-        "request to open. Ask the user for the wording and run /handbook:init again with " +
-        '`--message "<their wording>"`. Nothing was committed and nothing was pushed.',
-    );
-  }
-  // Not empty: the scaffold arrives as a request like everything else, so a delegation is
-  // honoured only if this machine can actually open one.
-  if (!isEmptyRepo && commitMessage.delegated !== undefined) {
-    const blocked = forgeSignInProblem(url, repoDir, forge);
-    if (blocked) return stopped(delegationNeedsForge(blocked, "run /handbook:init again"));
-  }
+  // The decision about the message sits HERE, after the clone, because whether "you
+  // decide" can be honoured at all is something only the clone can say. An empty
+  // repository has no branch to open a request against, so the scaffold goes straight to
+  // the default branch and there is no merge request for a delegation to be about; a
+  // repository that is not empty gets one, but only from a machine whose forge CLI is
+  // there and signed in. Refusing here costs the clone - which this command keeps either
+  // way - and still leaves no branch on the remote and nothing on this machine.
+  const stopped = (error: string): InitResult => ({
+    ok: false,
+    error,
+    proposedMessage: proposal,
+    proposalHash: proposalFingerprint(proposal),
+  });
+  const unavailable = isEmptyRepo
+    ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open`
+    : commitMessage.message === undefined
+      ? (() => {
+          const blocked = forgeSignInProblem(url, repoDir, forge);
+          return blocked ? noRequestPossible(blocked) : null;
+        })()
+      : null;
+  const decided = decideCommitSubject(
+    commitMessage,
+    proposal,
+    commitMessagePrefix(commitPrefix),
+    "run /handbook:init again",
+    unavailable ?? undefined,
+  );
+  if ("error" in decided) return stopped(decided.error);
   const { skipped } = writeSkeletonPreserving(
     repoDir,
     skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi),

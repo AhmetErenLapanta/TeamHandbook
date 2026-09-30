@@ -350,6 +350,36 @@ describe("applyUpgrade", () => {
     expect(heads(remote)).toBe(before);
   });
 
+  it("given no way to open a merge request, when a refresh delegates the wording, then nothing is pushed", () => {
+    // Same rule as every other path: "you decide" is an answer about the request, and a
+    // machine that cannot open one has nothing to honour it at. Measured on the remote,
+    // because the check has to run before the push rather than after it.
+    const remote = staleRepo();
+    const before = heads(remote);
+    const probe = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, noForge);
+
+    const result = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, noForge, {
+      delegated: probe.proposalHash!,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no merge request can be opened from this machine");
+    expect(heads(remote)).toBe(before);
+  });
+
+  it("given a machine that is signed in, when a refresh delegates the wording, then it goes out carrying the proposal", () => {
+    const remote = staleRepo();
+    const signedInForge = (_tool: "gh" | "glab", args: string[]) =>
+      args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/mr/2";
+    const probe = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, signedInForge);
+
+    const result = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, signedInForge, {
+      delegated: probe.proposalHash!,
+    });
+
+    expect(result).toMatchObject({ ok: true, commitMessage: probe.proposedMessage });
+  });
+
   it("given a message the user approved, when a refresh is sent, then the refresh commit carries it", () => {
     const remote = staleRepo();
 

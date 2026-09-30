@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { uniqueSlug } from "./distill.js";
-import { forgeSignInProblem, hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import {
   assertSafeGitUrl,
@@ -18,7 +18,7 @@ import {
   teamCommitPrefix,
 } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
-import { bumpPluginVersion, delegationNeedsForge } from "./publish.js";
+import { bumpPluginVersion } from "./publish.js";
 import { handbookWorkdir } from "./session-state.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
@@ -695,20 +695,25 @@ export function applyUpgrade(
     // before the checkout, so a run with no decision leaves nothing behind.
     const messagePrefix = teamCommitPrefix(team);
     const proposal = commitSubject(messagePrefix, title);
-    const decided = decideCommitSubject(commitMessage, proposal, messagePrefix, "run the refresh again");
     const stopped = (error: string): UpgradeResult => ({
       ok: false,
       error,
       proposedMessage: proposal,
       proposalHash: proposalFingerprint(proposal),
     });
-    if ("error" in decided) return stopped(decided.error);
     // See publishCandidate: "you decide" is an answer about the merge request, so a
-    // machine that cannot open one has nothing to honour it at.
-    if (commitMessage.delegated !== undefined) {
-      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
-      if (blocked) return stopped(delegationNeedsForge(blocked, "run the refresh again"));
-    }
+    // machine that cannot open one has nothing to honour it at, and a run that has not
+    // been asked yet must not offer a delegation this machine would refuse.
+    const unavailable =
+      commitMessage.message === undefined ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
+    const decided = decideCommitSubject(
+      commitMessage,
+      proposal,
+      messagePrefix,
+      "run the refresh again",
+      unavailable ? noRequestPossible(unavailable) : undefined,
+    );
+    if ("error" in decided) return stopped(decided.error);
     let raised: string | null = null;
     try {
       git(["checkout", "-b", branch], repoDir);

@@ -18,7 +18,7 @@ import { candidatesDir } from "./skill-index.js";
 
 /**
  * The answer every team delivery below gives about its commit message, because none of
- * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * them is about the wording: a plain sentence of the user's own. It carries no team prefix, so the
  * cases that measure the prefix still measure it. Delegating instead would cost every one
  * of them a second run, since "you decide" has to name the proposal it was shown.
  */
@@ -334,8 +334,18 @@ describe("approveAndDeliver (team mode)", () => {
     seedCandidate(meta());
     const before = execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" });
 
-    // no commitMessage in the options: the reviewer was never asked
-    const result = approveAndDeliver(home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z");
+    // no commitMessage in the options: the reviewer was never asked. The forge stub is
+    // not decoration - a run with no wording asks whether a request could be opened, so
+    // the default runner would reach for the real gh or glab on whatever machine runs this.
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => "Logged in",
+    );
 
     expect(result.ok).toBe(false);
     expect(result.mode).toBe("team");

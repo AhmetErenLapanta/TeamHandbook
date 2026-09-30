@@ -1218,3 +1218,126 @@ describe("a machine that joined before the repository recorded its prefix", () =
     expect(pushes).toBe(2);
   });
 });
+
+// A delegated wording is an answer about the merge request, so it is honoured only where
+// one can really be opened. These sit against a real bare repository rather than a
+// recording runner, because what they measure is that the REMOTE was never written to:
+// the check runs before the push, and a check that ran after it would leave the commit
+// carrying an unread sentence on a branch with nothing to carry it further.
+describe("a delegated wording needs a merge request to be about", () => {
+  /** A machine without the CLI at all, which is what ENOENT means here. */
+  const missingForge = () => {
+    const err = new Error("spawn glab ENOENT") as Error & { code: string };
+    err.code = "ENOENT";
+    throw err;
+  };
+  /** A machine that has it and is signed in: `auth status` answers, and the request comes
+   * back as a link. The control for every case below. */
+  const signedInForge = (_tool: "gh" | "glab", args: string[]) =>
+    args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/mr/1";
+
+  it("given no way to open one, when a candidate is approved to the team with the wording delegated, then nothing reaches the remote", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const before = gitIn(remote, ["branch", "--list"]);
+    const probe = publishCandidateDeciding(candidateDir, meta(), team, undefined, missingForge, { commitMessage: {} });
+
+    const result = publishCandidateDeciding(candidateDir, meta(), team, undefined, missingForge, {
+      commitMessage: { delegated: probe.proposalHash! },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no merge request can be opened from this machine");
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
+  it("given a machine that is signed in, when the same approval is delegated, then it goes out as it always did", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const probe = publishCandidateDeciding(candidateDir, meta(), team, undefined, signedInForge, { commitMessage: {} });
+
+    const result = publishCandidateDeciding(candidateDir, meta(), team, undefined, signedInForge, {
+      commitMessage: { delegated: probe.proposalHash! },
+    });
+
+    expect(result).toMatchObject({ ok: true, branch: "handbook/fix-npm-test" });
+    expect(gitIn(remote, ["log", "-1", "--format=%s", "handbook/fix-npm-test"]).trim()).toBe(probe.proposedMessage);
+  });
+
+  it("given no way to open one, when a selection is shared with the wording delegated, then nothing reaches the remote", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const server: McpServerEntry = {
+      name: "gitlab",
+      scope: "user",
+      config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+    };
+    const before = gitIn(remote, ["branch", "--list"]);
+    const probe = publishTeamSelectionDeciding({ servers: [server] }, team, undefined, missingForge, {
+      commitMessage: {},
+    });
+
+    const result = publishTeamSelectionDeciding({ servers: [server] }, team, undefined, missingForge, {
+      commitMessage: { delegated: probe.proposalHash! },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no merge request can be opened from this machine");
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
+  it("given a machine that cannot open one, when nobody has been asked yet, then the refusal does not offer a delegation it would refuse", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+
+    const probe = publishCandidateDeciding(candidateDir, meta(), team, undefined, missingForge, { commitMessage: {} });
+
+    expect(probe.error).toContain("commit message required");
+    expect(probe.error).toContain("no merge request can be opened from this machine");
+    expect(probe.error).not.toContain("--delegate-message");
+    // the fingerprint still travels: the machine may be signed in by the next run
+    expect(probe.proposalHash).toBeTruthy();
+  });
+
+  it("given a server whose own NAME reads as a credential, when the user gives their own message, then it is committed rather than refused for the proposal", () => {
+    // The title is built from names this machine did not write, and the audit screens a
+    // server's config rather than what it is called, so the proposal really can arrive
+    // unusable. Screening it on this branch too would refuse a clean message and leave
+    // the user with no answer that works.
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const poisoned: McpServerEntry = {
+      name: "glpat-ABCDEFGHIJKLMNOPQRSTUVWX",
+      scope: "user",
+      config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+    };
+
+    const result = publishTeamSelectionDeciding({ servers: [poisoned] }, team, undefined, () => "", {
+      commitMessage: { message: "feat: add the server the team asked for" },
+    });
+
+    expect(result).toMatchObject({ ok: true, commitMessage: "feat: add the server the team asked for" });
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
+      "feat: add the server the team asked for",
+    );
+  });
+
+  it("given a server whose own NAME reads as a credential, when nobody has been asked yet, then the refusal says so and offers no delegation", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const poisoned: McpServerEntry = {
+      name: "glpat-ABCDEFGHIJKLMNOPQRSTUVWX",
+      scope: "user",
+      config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+    };
+
+    const probe = publishTeamSelectionDeciding({ servers: [poisoned] }, team, undefined, () => "", {
+      commitMessage: {},
+    });
+
+    expect(probe.ok).toBe(false);
+    expect(probe.error).toContain("gitlab-token");
+    expect(probe.error).toContain("--message");
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+  });
+});

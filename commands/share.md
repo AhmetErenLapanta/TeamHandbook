@@ -120,10 +120,12 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      new one, which you show them before asking again.
    A run with neither flag is refused and nothing is committed. That is deliberate, and it
    is not something to work around by picking a message yourself.
-   Delegation can also be refused outright, because it is an answer about the merge
-   request: on a machine with no `gh`/`glab` signed in there is no request to open, so
-   nothing is committed and the user's own wording is the only way forward. Relay that as
-   printed rather than retrying.
+   **If the refusal offers no `--delegate-message` at all, delegating is not available
+   here** and the reason is in the same sentence: a machine with no `gh`/`glab` signed in
+   has no merge request to open, and "you decide" is an answer about the request. Ask the
+   user for the wording; do not retry. The same is true when the refusal says the message
+   it would propose cannot be used - a name in the selection reads as a credential - and
+   there the wording has to be theirs too.
 8. Relay the output verbatim. It names what went out per kind rather than as one total,
    because a skill somebody reads, a server that connects and a command somebody types are
    not interchangeable, and it names the commit the request carries. The team repository

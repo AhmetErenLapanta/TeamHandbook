@@ -32,10 +32,11 @@ exactly what the rule is.
    edit it, or say you decide. Then run the same command again with their answer:
    `--message "<their wording>"`, or `--delegate-message <fingerprint>` if they said you
    decide. Never write a message yourself and pass it as `--message`: that flag means the
-   words are the user's. Two cases refuse a delegation outright and the error says which:
-   an empty repository, where the scaffold goes straight to the default branch and there is
-   no merge request for the delegation to be about, and a machine with no `gh`/`glab`
-   signed in. In both, ask the user for the wording.
+   words are the user's. **If that first run offers no `--delegate-message` at all**,
+   delegating is not available here and the same sentence says why: an empty repository,
+   where the scaffold goes straight to the default branch and there is no merge request for
+   the delegation to be about, or a machine with no `gh`/`glab` signed in. In both, ask the
+   user for the wording.
 4. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern
    the project requires. Do not hand the user a flag to work out. Read the pattern, propose
    ONE prefix that satisfies it, and ask them to confirm or correct it with a

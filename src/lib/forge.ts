@@ -63,10 +63,13 @@ export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: Forg
   const tool = forgeTool(repoUrl);
   const host = hostFromUrl(repoUrl);
   // The host is named where the CLI accepts it, so a machine signed in to some other
-  // forge does not read as signed in to this one. `--hostname` is documented for both
-  // tools but only verifiable for the one installed on the machine this was written on,
-  // so an old build that does not know the flag falls back rather than being reported as
-  // a sign-in failure it is not.
+  // forge does not read as signed in to this one. Measured with the gh on the machine this
+  // was written on: `gh auth status --hostname bogus.invalid` exits 1 saying "You are not
+  // logged into any accounts on bogus.invalid", and a host it holds a token for exits 0 -
+  // so a failure throws here rather than returning quietly. glab documents the same flag
+  // but was not installed there and is therefore unverified, which is why an old build
+  // that does not know the flag falls back to the plain command rather than being
+  // reported as a sign-in failure it is not.
   const attempts = host ? [["auth", "status", "--hostname", host], ["auth", "status"]] : [["auth", "status"]];
   let last = "";
   for (const args of attempts) {
@@ -120,17 +123,14 @@ export function openPr(
 }
 
 /**
- * Why a delegated wording cannot be honoured on this machine.
+ * The clause that says no merge request can be opened from this machine.
  *
- * One sentence for every path, because it is one rule: "you decide" is an answer about
- * the merge request, and a machine with no way to open one would turn it into a commit
- * pushed to a branch with nobody told. The way out is the user's own words, which need no
- * merge request to be legitimate.
+ * One phrasing for every path, because it is one rule: "you decide" is an answer about the
+ * merge request, and a machine with no way to open one would turn it into a commit pushed
+ * to a branch with nobody told. The sentence around it is built where the decision is
+ * made, so the same clause serves both the run that delegated and the run that has not
+ * been asked yet.
  */
-export function delegationNeedsForge(reason: string, rerun: string): string {
-  return (
-    `no merge request can be opened from this machine (${reason}), and "you decide" is an answer about the ` +
-    `request, not about a branch. Nothing was committed. Ask the user for the wording and ${rerun} with ` +
-    '`--message "<their wording>"`, or sign the CLI in and delegate again.'
-  );
+export function noRequestPossible(reason: string): string {
+  return `no merge request can be opened from this machine (${reason})`;
 }

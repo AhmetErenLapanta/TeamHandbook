@@ -114,9 +114,10 @@ user clear them in one pass.
      refusal printed beside the proposal, and nothing else. That is the only way a wording
      the user did not give reaches a commit. Do not compose one yourself and pass it as
      `--message`. If the proposal has changed since they were shown it, the run is refused
-     and prints the new one; show them that before asking again. It can also be refused
-     because this machine has no `gh`/`glab` signed in: a delegation is an answer about the
-     merge request, so with no way to open one the wording has to be theirs.
+     and prints the new one; show them that before asking again. **If the refusal offers no
+     `--delegate-message` at all**, delegating is not available here - this machine has no
+     `gh`/`glab` signed in, and a delegation is an answer about the merge request - so ask
+     for the wording rather than retrying.
    Ask it after any `--update` or `--as` answer from step 7, because the proposed message
    says which of the two the request is. The flag is per candidate, like those two: the CLI
    refuses it together with `--all` or with several slugs, because one sentence is not a

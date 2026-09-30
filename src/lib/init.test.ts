@@ -1123,7 +1123,39 @@ describe("deciding what a commit will say", () => {
     const decided = decideCommitSubject({}, "feat(mcp): add glpat-ABCDEFGHIJKLMNOPQRSTUVWX", "", RERUN);
 
     expect("error" in decided && decided.error).toContain("gitlab-token");
-    expect("error" in decided && decided.error).toContain("There is nothing to delegate");
+    // and the way out is named, which is the whole difference between a refusal and a loop
+    expect("error" in decided && decided.error).toContain("There is nothing to show and nothing to delegate");
+    expect("error" in decided && decided.error).toContain("--message");
+  });
+
+  it("given a proposal that could not be a commit title, when the user gives their own message, then it is committed rather than refused for the proposal", () => {
+    // The proposal is never shown and never committed on this branch, so screening it here
+    // would refuse a clean message for a sentence nobody is going to use - and the only
+    // advice such a refusal could give is the flag that had just been passed.
+    const decided = decideCommitSubject(
+      { message: "feat: add the gitlab server" },
+      "feat(mcp): add glpat-ABCDEFGHIJKLMNOPQRSTUVWX",
+      "",
+      RERUN,
+    );
+
+    expect(decided).toEqual({ subject: "feat: add the gitlab server" });
+  });
+
+  it("given a delegation with nothing in it, when the decision is made, then it is refused rather than read as an answer", () => {
+    const decided = decideCommitSubject({ delegated: "" }, "chore: scaffold", "", RERUN);
+
+    expect("error" in decided && decided.error).toContain("is not the fingerprint of a proposed message");
+  });
+
+  it("given no decision on a machine that cannot open a merge request, when it is asked for, then delegating is not offered", () => {
+    // Offering it would spend the user's next answer on a round trip whose outcome is
+    // already known: the delegated run would be refused for the same reason.
+    const decided = decideCommitSubject({}, "chore: scaffold", "", RERUN, "this project has no commits yet");
+
+    expect("error" in decided && decided.error).toContain("commit message required");
+    expect("error" in decided && decided.error).toContain("this project has no commits yet");
+    expect("error" in decided && decided.error).not.toContain("--delegate-message");
   });
 
   it("given an approved message, when the decision is made, then the subject is that message with the prefix on it", () => {
