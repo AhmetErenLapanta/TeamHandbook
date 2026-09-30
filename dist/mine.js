@@ -477,6 +477,7 @@ function buildRoleResolver(paths, options = {}) {
   };
   resolve.mirrors = mirrors;
   resolve.templates = templates;
+  resolve.compiled = compiled;
   return resolve;
 }
 var LOCALES = /* @__PURE__ */ new Set([
@@ -708,6 +709,7 @@ function collectUnits(repoPaths, options = {}) {
     units,
     resolver: buildRoleResolver(allPaths, { ...options, binaryPaths: difference(allPaths, textPaths) }),
     families: repoFamilies(labels.values()),
+    creditFiles: [...allPaths].filter((path) => CREDITS.test(path)).length,
     repos: commitsByRepo.size,
     unreadable,
     commits: commitCount,
@@ -782,6 +784,8 @@ function shapesFromUnits(collection, options = {}) {
       largestCluster,
       subjectsWithheld: withheld,
       mirrors: [...resolver.mirrors].sort(),
+      compiledRoles: [...resolver.compiled].sort(),
+      creditFiles: collection.creditFiles,
       ticketPrefixes: [...collection.prefixes].sort(),
       shapesBeforeLimit: ranked.length,
       elapsedMs: collection.readMs + (Date.now() - started)

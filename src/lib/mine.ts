@@ -256,6 +256,8 @@ export interface RoleResolver {
   mirrors: Set<string>;
   /** Directory layouts where a name repeats across sibling directories, e.g. `middleware/*\/index.ts`. */
   templates: Map<string, string>;
+  /** Roles found to be a build artifact of another role's files. */
+  compiled: Set<string>;
 }
 
 export interface RoleOptions {
@@ -387,6 +389,7 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
   }) as RoleResolver;
   resolve.mirrors = mirrors;
   resolve.templates = templates;
+  resolve.compiled = compiled;
   return resolve;
 }
 
@@ -428,10 +431,17 @@ function areaKey(segments: string[]): string {
 const CREDITS = /(^|\/)(AUTHORS|CONTRIBUTORS|MAINTAINERS|CODEOWNERS|THANKS|\.mailmap)(\.[A-Za-z]+)?$/;
 
 /**
- * Roles whose files are a build artifact of another role's: same directory and same name, one
- * compiled and one not. Committing both is one step, and counting it as two lets a pair of them
- * clear the three-role floor on its own. On the largest measured open-source history that pair was
- * the single most repeated shape.
+ * Roles that are one artifact's second form: same directory and same name as another role, all of
+ * their files binary while the other's are not. A catalogue beside the translation it was compiled
+ * from is the case this was written for, and on the largest measured open-source history that pair,
+ * counted as four roles rather than two, was the single most repeated shape.
+ *
+ * It reaches further than compilation, and deliberately so: the same test folds an icon's raster
+ * copies onto the drawing they came from, and a font's four downloads onto one. It also folds the
+ * parts of a dataset that are not derived from each other at all, which is a different relation
+ * with the same consequence - one thing, committed together, counted as several steps. The textual
+ * role stays either way, so the work keeps a role to be described by. `stats.compiledRoles` lists
+ * every role this removed, because a rule reaching this far has to be readable from the output.
  */
 function compiledRoles(paths: string[], named: (path: string) => string, binary: ReadonlySet<string> | undefined): Set<string> {
   const compiled = new Set<string>();
@@ -609,6 +619,9 @@ export interface MineStats {
   /** Candidate subjects withheld, by what they carried. Every candidate is scanned, not only the five kept. */
   subjectsWithheld: { secret: number; email: number };
   mirrors: string[];
+  /** Roles dropped as a build artifact of another role, and files dropped as a roll of contributors. */
+  compiledRoles: string[];
+  creditFiles: number;
   ticketPrefixes: string[];
   /** Shapes that cleared every filter, before `limit` cut the list. */
   shapesBeforeLimit: number;
@@ -696,14 +709,16 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
 // rather than 5: on that workspace both left about the same number of shapes and the same share of
 // non-workflows among the top twenty.
 //
-// The unit share is the largest value at which none of the five known workflows matched a worse
-// shape than before it existed, while the ticket that had been a member of nineteen of the twenty
-// most repeated shapes fell to three. The variant overlap is the lowest that merged repeats without
-// losing one: at 0.3 a known workflow was swallowed by a wider one and fell from sixth to
-// thirty-ninth. Requiring core roles the history does not mostly touch is off because it was
-// measured worthless: at the 0.2 hub share it removed two shapes out of ninety-three and none out
-// of the largest open-source history, and at any share low enough to remove the shapes it was meant
-// for, it cost two of the five known workflows most of their precision.
+// The unit share is what the examples cost: on that workspace a ticket that touched ninety-five
+// files across six repositories was a member of eleven of the twenty most repeated shapes and of
+// thirty-one in all, and of four and seven once it was on. It is paid for: one known workflow
+// matched a slightly worse shape (0.81 to 0.76) and another a better one (0.68 to 0.74). Above
+// this value the first cost grows and the ranks start to move. The variant overlap is the lowest
+// that merged the repeats without losing one: at 0.3 and 0.35 a known workflow was swallowed by a
+// wider shape, and above 0.45 nothing merged at all. Requiring core roles the history does not
+// mostly touch is off because it was measured worthless: at this hub share almost no role in three
+// measured histories is common enough to count as one, and at any share low enough to catch the
+// shapes it was meant for, it took two known workflows' precision down with them.
 const MINE_DEFAULTS = {
   minRecurrence: 8,
   minProposers: 5,
@@ -740,6 +755,8 @@ export interface UnitCollection {
   families: Map<string, string>;
   /** Repositories that were read. */
   repos: number;
+  /** Files dropped as a roll of contributors rather than as work. */
+  creditFiles: number;
   unreadable: UnreadableRepo[];
   commits: number;
   /** Units of any class, including those whose every commit was excluded. */
@@ -874,6 +891,7 @@ export function collectUnits(repoPaths: string[], options: MineOptions = {}): Un
     units,
     resolver: buildRoleResolver(allPaths, { ...options, binaryPaths: difference(allPaths, textPaths) }),
     families: repoFamilies(labels.values()),
+    creditFiles: [...allPaths].filter((path) => CREDITS.test(path)).length,
     repos: commitsByRepo.size,
     unreadable,
     commits: commitCount,
@@ -954,6 +972,8 @@ export function shapesFromUnits(collection: UnitCollection, options: MineOptions
       largestCluster,
       subjectsWithheld: withheld,
       mirrors: [...resolver.mirrors].sort(),
+      compiledRoles: [...resolver.compiled].sort(),
+      creditFiles: collection.creditFiles,
       ticketPrefixes: [...collection.prefixes].sort(),
       shapesBeforeLimit: ranked.length,
       elapsedMs: collection.readMs + (Date.now() - started),

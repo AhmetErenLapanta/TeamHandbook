@@ -442,6 +442,7 @@ describe("shapesFromUnits", () => {
     units: new Map(list.map((u) => [u.key, u])),
     resolver,
     families: new Map([["acme-api", "acme-api"]]),
+    creditFiles: 0,
     repos: 1,
     unreadable: [],
     commits: list.length,
@@ -768,6 +769,10 @@ describe("roles that are not work", () => {
     expect(roles.some((r) => /\.mo$/.test(r))).toBe(false);
     expect(roles.some((r) => /AUTHORS/.test(r))).toBe(false);
     expect(result.shapes).toEqual([]);
+    // and each drop is counted, because a shape a filter empties never forms and so is never
+    // counted under a reason of its own
+    expect(result.stats.compiledRoles).toEqual(["locale/*/strings.mo"]);
+    expect(result.stats.creditFiles).toBe(1);
   });
 
   it("keeps a file that only looks like a compiled twin, which is what tells the two apart", () => {
