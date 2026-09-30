@@ -677,7 +677,9 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
   /**
    * The same merge, one step looser, for the pair where one core is contained in the other: the
    * same workflow written down twice, once with an extra file. Sharing this much of their units is
-   * enough, because a subset core already says they are the same steps. 0 turns it off.
+   * enough, because a subset core already says they are the same steps. 0 turns it off, and is a
+   * switch rather than a limit: just above it every nested pair merges, so lowering this towards 0
+   * makes the merge more eager, not less, until 0 stops it altogether.
    */
   variantOverlap?: number;
   /**

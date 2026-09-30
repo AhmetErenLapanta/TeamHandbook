@@ -17,7 +17,10 @@ Reads local history only: it never fetches.
   --similarity <x>        average Jaccard a unit needs to join a cluster (default 0.5)
   --hub-share <x>         a role in more than this share of units is not used to find candidates (default 0.2)
   --containment <x>       share of a shape's core a unit must touch to count as doing it (default 0.8)
+  --unit-share <x>        share of a unit's own roles the core must be for it to count (default 0.25, 0 off)
   --dedupe-overlap <x>    two shapes sharing this share of their units are one (default 0.5)
+  --variant-overlap <x>   the same, for the pair whose cores nest (default 0.4, 0 off)
+  --min-distinct-roles <n> core roles a shape needs that are not files most units touch (default 0, off)
   --limit <n>             shapes to print (default 200)
   --no-renames            turn rename detection off, for blobless clones
   --no-filters            keep the noise, to measure what the filters remove
@@ -49,7 +52,10 @@ function main(): void {
         similarity: { type: "string" },
         "hub-share": { type: "string" },
         containment: { type: "string" },
+        "unit-share": { type: "string" },
         "dedupe-overlap": { type: "string" },
+        "variant-overlap": { type: "string" },
+        "min-distinct-roles": { type: "string" },
         limit: { type: "string" },
         "no-renames": { type: "boolean" },
         "no-filters": { type: "boolean" },
@@ -78,7 +84,10 @@ function main(): void {
     similarity: number(values.similarity, "similarity"),
     hubShare: number(values["hub-share"], "hub-share"),
     containment: number(values.containment, "containment"),
+    unitShare: number(values["unit-share"], "unit-share"),
     dedupeOverlap: number(values["dedupe-overlap"], "dedupe-overlap"),
+    variantOverlap: number(values["variant-overlap"], "variant-overlap"),
+    minDistinctRoles: number(values["min-distinct-roles"], "min-distinct-roles"),
     limit: number(values.limit, "limit"),
     noRenames: values["no-renames"],
     filters: values["no-filters"] ? false : undefined,

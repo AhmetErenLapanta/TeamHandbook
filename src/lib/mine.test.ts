@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildRoleResolver,
@@ -19,6 +21,9 @@ import {
 } from "./mine.js";
 import type { CommitFile, RawCommit } from "./git-log.js";
 import { createFixture, HIDDEN_WORKFLOW_ROLES, seedStandardHistory, type Fixture } from "./mine-fixture.js";
+
+/** The repository root, so a test can run the bundle that ships rather than the source it is built from. */
+const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 const modified = (path: string, added = 5, removed = 1): CommitFile => ({ status: "M", path, added, removed });
 // The fixture repeats its workflow six times, below the default floor a real history is mined at.
@@ -583,9 +588,13 @@ describe("clusterUnits", () => {
   });
 });
 
+/** Units in the nested-core history; six of them take the wider shape, which is just over 0.4. */
+const NESTED_UNITS = 14;
+
 describe("choosing which shapes a reader meets first", () => {
   let fixture: Fixture;
   let repos: string[];
+  let nested: string;
 
   beforeAll(() => {
     fixture = createFixture();
@@ -627,6 +636,19 @@ describe("choosing which shapes a reader meets first", () => {
     };
     for (let i = 0; i < 4; i++) api.commit({ files: chores(`c${i}`), subject: `TEAM-${300 + i} tidy the jobs`, author: "Grace" });
 
+    // A ticket that did the narrow workflow and a third as much again beside it: the shipped unit
+    // share has to keep this one, or the rule is cutting ordinary work rather than sweeps.
+    api.commit({
+      files: {
+        "src/service/Item1Service.kt": "one\ntwo\nthree\nfour\nfive\n",
+        "src/response/Item1Response.kt": "one\ntwo\nthree\nfour\nfive\n",
+        "db/changelog.xml": "<f/>\n<g/>\n<h/>\n<i/>\n<j/>\n",
+        ...Object.fromEntries(Object.entries(chores("beside")).slice(0, 7)),
+      },
+      subject: "TEAM-800 widen the 1 response and tidy what it touched",
+      author: "Grace",
+    });
+
     // One ticket that rebuilt half the codebase: it touches both workflows' files among a dozen others.
     api.commit({
       files: {
@@ -640,6 +662,24 @@ describe("choosing which shapes a reader meets first", () => {
     });
 
     repos = [api.path, app.path, ops.path];
+
+    // A second history, for the pair whose cores nest: the wider shape's members are just over
+    // four tenths of the narrower one's, which is the side of the shipped overlap they fall on.
+    const inner = fixture.repo("acme-nested");
+    inner.commit({ files: { "README.md": "# acme-nested\n" }, subject: "initial", author: "Ada" });
+    for (let i = 0; i < NESTED_UNITS; i++) {
+      const files: Record<string, string> = {
+        [`src/service/Item${i}Service.kt`]: `s${i}\n`,
+        [`src/response/Item${i}Response.kt`]: `r${i}\n`,
+        "db/changelog.xml": `<c>${i}</c>\n`,
+      };
+      if (i < 6) {
+        files[`src/mapper/Item${i}Mapper.kt`] = `m${i}\n`;
+        files[`src/client/Item${i}Client.kt`] = `c${i}\n`;
+      }
+      inner.commit({ files, subject: `TEAM-${400 + i} widen the ${i} response`, author: i % 2 ? "Ada" : "Grace" });
+    }
+    nested = inner.path;
   });
   afterAll(() => fixture.cleanup());
 
@@ -682,6 +722,49 @@ describe("choosing which shapes a reader meets first", () => {
     expect(narrow(without).memberUnits).toContain("TEAM-900");
   });
 
+  it("lets an operator running the bundle turn each of the three new rules off", () => {
+    // given the shipped bundle, which is what an operator runs
+    const run = (extra: string[]) =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          [join(repoRoot, "dist", "mine.js"), ...repos, "--min-recurrence", "5", "--min-proposers", "5", "--rare-role-cut", "3", ...extra],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 },
+        ),
+      ) as MineResult;
+
+    // when each rule is turned off from the command line
+    const narrow = (r: MineResult) => r.shapes.find((s) => s.coreRepos.length === 1 && s.recurrence >= 20)!;
+
+    // then the unit share stops excluding the sweep ticket
+    expect(narrow(run([])).memberUnits).not.toContain("TEAM-900");
+    expect(narrow(run(["--unit-share", "0"])).memberUnits).toContain("TEAM-900");
+    // the variant merge stops merging, on the history that has a pair to merge
+    const nestedRun = (extra: string[]) =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          [join(repoRoot, "dist", "mine.js"), nested, "--min-recurrence", "5", "--min-proposers", "5", "--rare-role-cut", "3", "--similarity", "0.8", ...extra],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+        ),
+      ) as MineResult;
+    expect(nestedRun([]).shapes).toHaveLength(1);
+    expect(nestedRun(["--variant-overlap", "0"]).shapes).toHaveLength(2);
+    // and the floor on roles the history does not mostly touch starts excluding
+    const strict = run(["--min-distinct-roles", "20"]);
+    expect(strict.shapes).toEqual([]);
+    expect(strict.stats.excludedShapes["below-distinct-roles"]).toBeGreaterThan(0);
+  });
+
+  it("keeps a ticket that did this workflow and a little else, which is the same rule's other side", () => {
+    // given a ticket whose roles are the narrow workflow's three and seven more
+    // when the history is mined with the shipped unit share
+    const narrow = mine().shapes.find((s) => s.coreRepos.length === 1 && s.recurrence >= 20)!;
+
+    // then it is still counted as having done the workflow
+    expect(narrow.memberUnits).toContain("TEAM-800");
+  });
+
   it("offers the smallest members first, so an example quotes a ticket that did this work and little else", () => {
     // given a history whose shapes have members of very different sizes
     // when it is mined with the unit share off, so the sweep ticket is still a member
@@ -693,33 +776,32 @@ describe("choosing which shapes a reader meets first", () => {
 
   it("merges the same workflow written down twice, once with an extra file", () => {
     // given a history where a wider version of one workflow forms its own shape
-    const wider = createFixture();
-    const repo = wider.repo("acme-api");
-    repo.commit({ files: { "README.md": "# acme-api\n" }, subject: "initial", author: "Ada" });
-    for (let i = 0; i < 16; i++) {
-      const files: Record<string, string> = {
-        [`src/service/Item${i}Service.kt`]: `s${i}\n`,
-        [`src/response/Item${i}Response.kt`]: `r${i}\n`,
-        "db/changelog.xml": `<c>${i}</c>\n`,
-      };
-      if (i < 6) {
-        files[`src/mapper/Item${i}Mapper.kt`] = `m${i}\n`;
-        files[`src/client/Item${i}Client.kt`] = `c${i}\n`;
-      }
-      repo.commit({ files, subject: `TEAM-${400 + i} widen the ${i} response`, author: i % 2 ? "Ada" : "Grace" });
-    }
     const mineWider = (variantOverlap: number) =>
-      mineShapes([repo.path], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, similarity: 0.8, unitShare: 0, variantOverlap }).shapes;
+      mineShapes([nested], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, similarity: 0.8, unitShare: 0, variantOverlap }).shapes;
 
     // when it is mined with the merge off, and again with it loose enough to catch the pair
     const apart = mineWider(0);
     const merged = mineWider(0.3);
-    wider.cleanup();
 
     // then both are reported apart, and the merge leaves the one that ranks higher
     expect(apart).toHaveLength(2);
     expect(merged).toHaveLength(1);
-    expect(merged[0]!.recurrence).toBe(16);
+    expect(merged[0]!.recurrence).toBe(NESTED_UNITS);
+  });
+
+  it("merges that pair at the overlap it ships with, and not at the next value up", () => {
+    // given the same history, whose two shapes share just over four tenths of their units
+    // when it is mined with nothing overridden but the clustering the fixture needs
+    const shipped = mineShapes([nested], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, similarity: 0.8 });
+
+    // then the shipped default merges them, and a looser one does not
+    expect(shipped.shapes).toHaveLength(1);
+    expect(shipped.shapes[0]!.recurrence).toBe(NESTED_UNITS);
+    // Twice, because each view found the wider shape and the merge caught both.
+    expect(shipped.stats.excludedShapes.variant).toBe(2);
+    expect(
+      mineShapes([nested], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, similarity: 0.8, variantOverlap: 0.5 }).shapes,
+    ).toHaveLength(2);
   });
 
   it("counts a core role that the whole history touches as no evidence, once asked to", () => {
