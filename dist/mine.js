@@ -949,7 +949,7 @@ function buildShape(cluster, units, roleSets, unitsByRole, hubs, resolver, nameO
     excludedShapes["below-roles"] = (excludedShapes["below-roles"] ?? 0) + 1;
     return null;
   }
-  const distinct = core.filter((role) => !hubs.has(role)).length;
+  const distinct = o.minDistinctRoles > 0 ? core.filter((role) => !hubs.has(role)).length : core.length;
   if (distinct < o.minDistinctRoles) {
     excludedShapes["below-distinct-roles"] = (excludedShapes["below-distinct-roles"] ?? 0) + 1;
     return null;
@@ -959,17 +959,21 @@ function buildShape(cluster, units, roleSets, unitsByRole, hubs, resolver, nameO
   const counts = /* @__PURE__ */ new Map();
   for (const key of memberKeys) for (const role of roleSets.get(key)) if (coreRoles.has(role)) counts.set(role, (counts.get(role) ?? 0) + 1);
   const examples = /* @__PURE__ */ new Map();
+  const spread = [];
   for (const unit of members) {
+    const reached = /* @__PURE__ */ new Set();
     for (const [repo, paths] of unit.files) {
       for (const path of paths) {
         const role = `${nameOf(repo)}:${resolver(path)}`;
         if (!coreRoles.has(role)) continue;
+        reached.add(repo);
         const seen = examples.get(role) ?? [];
         const example = `${repo}/${path}`;
         if (seen.length < 2 && !seen.includes(example)) seen.push(example);
         examples.set(role, seen);
       }
     }
+    spread.push(reached.size);
   }
   const repos = /* @__PURE__ */ new Set();
   const authors = /* @__PURE__ */ new Set();
@@ -1004,8 +1008,13 @@ function buildShape(cluster, units, roleSets, unitsByRole, hubs, resolver, nameO
     sampleSubjects: [...new Set(members.map((unit) => unit.subjects[0]))],
     memberUnits: members.map((unit) => unit.key),
     testUnits,
-    score: scoreOf(memberKeys.length, coreRepos.length, distinct, authors.size)
+    score: scoreOf(memberKeys.length, median(spread), distinct, authors.size)
   };
+}
+function median(values) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 function fileCount(unit) {
   let n = 0;

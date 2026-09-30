@@ -879,3 +879,119 @@ describe("roles that are not work", () => {
     expect(result.shapes).not.toEqual([]);
   });
 });
+
+describe("what the score counts when the same history has two namings", () => {
+  let fixture: Fixture;
+  let repos: string[];
+
+  beforeAll(() => {
+    fixture = createFixture();
+    const orders = fixture.repo("acme-orders-service");
+    const billing = fixture.repo("acme-billing-service");
+    const shipping = fixture.repo("acme-shipping-service");
+    const gateway = fixture.repo("acme-gateway");
+    for (const repo of [orders, billing, shipping, gateway]) {
+      repo.commit({ files: { "README.md": "# acme\n" }, subject: "initial", author: "Ada" });
+    }
+    // Every ticket does the same work in two of the three services and in the gateway, and which
+    // two rotates. Under the family naming that is one shape; under the literal naming each pair
+    // is too rare to propose one, so only the folded shape survives to be read.
+    const pairs = [[orders, billing], [billing, shipping], [shipping, orders]];
+    for (let i = 0; i < 9; i++) {
+      const ticket = `TEAM-${500 + i}`;
+      const author = i % 2 ? "Ada" : "Grace";
+      for (const service of pairs[i % 3]!) {
+        service.commit({
+          files: { [`src/controller/Item${i}Controller.kt`]: `c${i}\n`, [`src/service/Item${i}Service.kt`]: `s${i}\n` },
+          subject: `${ticket} carry the ${i} item`,
+          author,
+        });
+      }
+      gateway.commit({ files: { [`routes/item${i}.routes.json`]: `{"${i}":1}\n` }, subject: `${ticket} carry the ${i} item`, author });
+    }
+    repos = [orders.path, billing.path, shipping.path, gateway.path];
+  });
+  afterAll(() => fixture.cleanup());
+
+  it("counts repositories, not the names a view gave them", () => {
+    // given the history mined under both namings
+    const shapes = mineShapes(repos, { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3 }).shapes;
+
+    // when the shape the family naming found is read
+    const folded = shapes.find((s) => s.view === "family" && s.coreRepos.some((r) => r.startsWith("*")))!;
+
+    // then its core carries two names, and its score still says three repositories, which is what
+    // a member of it actually touched
+    expect(folded.coreRepos).toHaveLength(2);
+    expect(folded.score.repos).toBe(3);
+    expect(folded.score.total).toBeCloseTo(folded.score.support * 3, 1);
+  });
+});
+
+describe("a core role the whole history touches", () => {
+  let fixture: Fixture;
+  let repo: string;
+
+  beforeAll(() => {
+    fixture = createFixture();
+    const api = fixture.repo("acme-api");
+    api.commit({ files: { "README.md": "# acme-api\n" }, subject: "initial", author: "Ada" });
+    const shared = (i: number) => ({
+      "src/registry/Registry.kt": `r${i}\n`,
+      "src/wiring/Wiring.kt": `w${i}\n`,
+    });
+    // One workflow of four files, two of which nearly every unit here touches.
+    for (let i = 0; i < 6; i++) {
+      api.commit({
+        files: { ...shared(i), [`src/alpha/Thing${i}Alpha.kt`]: `a${i}\n`, [`src/beta/Thing${i}Beta.kt`]: `b${i}\n` },
+        subject: `TEAM-${600 + i} wire the ${i} thing`,
+        author: i % 2 ? "Ada" : "Grace",
+      });
+    }
+    // Another of three files, none of them common, done exactly as often.
+    for (let i = 0; i < 6; i++) {
+      api.commit({
+        files: {
+          [`src/gamma/Thing${i}Gamma.kt`]: `g${i}\n`,
+          [`src/delta/Thing${i}Delta.kt`]: `d${i}\n`,
+          [`src/epsilon/Thing${i}Epsilon.kt`]: `e${i}\n`,
+        },
+        subject: `TEAM-${700 + i} shape the ${i} thing`,
+        author: i % 2 ? "Ada" : "Grace",
+      });
+    }
+    // And enough other work touching the two shared files to make them files the history mostly touches.
+    for (let i = 0; i < 28; i++) {
+      api.commit({
+        files: { ...shared(100 + i), [`src/noise${i % 4}/Job${["Zeta", "Eta", "Theta", "Iota"][i % 4]}.kt`]: `n${i}\n` },
+        subject: `TEAM-${800 + i} adjust the ${i} wiring`,
+        author: i % 3 ? "Ada" : "Linus",
+      });
+    }
+    repo = api.path;
+  });
+  afterAll(() => fixture.cleanup());
+
+  const mine = (minDistinctRoles: number) =>
+    mineShapes([repo], { minRecurrence: 5, minProposers: 5, rareRoleUnits: 3, minDistinctRoles }).shapes;
+  const wired = (shapes: Shape[]) => shapes.findIndex((s) => s.coreFiles.some((f) => /Alpha/.test(f.role)));
+  const shaped = (shapes: Shape[]) => shapes.findIndex((s) => s.coreFiles.some((f) => /Gamma/.test(f.role)));
+
+  it("counts in the score only when the floor asks for it, and then decides the tie", () => {
+    // given two workflows done equally often in one repository, so their scores are equal and the
+    // role count is what separates them, and one of them is two common files wide
+    const off = mine(0);
+    const on = mine(1);
+
+    // when the floor on roles the history does not mostly touch is off, the wider core counts four
+    expect(off[wired(off)]!.score.roles).toBe(4);
+    expect(off[shaped(off)]!.score.roles).toBe(3);
+    expect(off[wired(off)]!.score.total).toBeCloseTo(off[shaped(off)]!.score.total, 5);
+    expect(wired(off)).toBeLessThan(shaped(off));
+
+    // and when it is on, the two common files stop counting and the order turns round
+    expect(on[wired(on)]!.score.roles).toBe(2);
+    expect(on[shaped(on)]!.score.roles).toBe(3);
+    expect(wired(on)).toBeGreaterThan(shaped(on));
+  });
+});

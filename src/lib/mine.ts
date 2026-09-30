@@ -562,9 +562,14 @@ export interface CoreFile {
 export interface ShapeScore {
   /** The support, log-scaled: each doubling of how often the work happened counts the same. */
   support: number;
-  /** How many repositories the core files are in. */
+  /**
+   * How many repositories a typical piece of this work touched: the median, over the members, of
+   * the repositories each one changed a core file in. Counted per member rather than over all of
+   * them, and on real repository names rather than on the names the role abstraction gave them, so
+   * that the number means the same thing whichever view found the shape.
+   */
   repos: number;
-  /** Core roles that are not files most of the history touches. */
+  /** How many core roles, leaving out files most of the history touches when asked to. */
   roles: number;
   authors: number;
   total: number;
@@ -716,16 +721,16 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
 // rather than 5: on that workspace both left about the same number of shapes and the same share of
 // non-workflows among the top twenty.
 //
-// The unit share is what the examples cost: on that workspace a ticket that touched ninety-five
-// files across six repositories was a member of eleven of the twenty most repeated shapes and of
-// thirty-one in all, and of four and seven once it was on. It is paid for: one known workflow
-// matched a slightly worse shape (0.81 to 0.76) and another a better one (0.68 to 0.74). By 0.3 a
-// second workflow starts paying too, and by 0.35 the ranks move. The variant overlap is the lowest
-// that merged the repeats without losing one: at 0.3 and 0.35 a known workflow was swallowed by a
-// wider shape, and above 0.45 nothing merged at all. Requiring core roles the history does not
-// mostly touch is off because it was measured worthless: at this hub share almost no role in three
-// measured histories is common enough to count as one, and at any share low enough to catch the
-// shapes it was meant for, it took two known workflows' precision down with them.
+// The unit share is what the examples cost: on that workspace a ticket that changed most of the
+// codebase in one go was a member of most of the twenty most repeated shapes, and of a handful once
+// the share was on. It is paid for, and the price was read: one known workflow then matched a
+// slightly worse shape and another a slightly better one, and raising the share further made a
+// second workflow pay and then began to move the ranks. The variant overlap is the lowest that
+// merged the repeats without losing one: below it a known workflow was swallowed by a wider shape,
+// and well above it nothing merged at all. Requiring core roles the history does not mostly touch
+// is off because it was measured worthless: at this hub share almost no role in three measured
+// histories is common enough to count as one, and at any share low enough to catch the shapes it
+// was meant for, it took two known workflows' precision down with them.
 const MINE_DEFAULTS = {
   minRecurrence: 8,
   minProposers: 5,
@@ -1241,7 +1246,9 @@ function buildShape(
     excludedShapes["below-roles"] = (excludedShapes["below-roles"] ?? 0) + 1;
     return null;
   }
-  const distinct = core.filter((role) => !hubs.has(role)).length;
+  // Leaving the hubs out is what `minDistinctRoles` asks for, so it is also what the score reports
+  // then: with the floor off, the count a reader sees is simply how many files the workflow has.
+  const distinct = o.minDistinctRoles > 0 ? core.filter((role) => !hubs.has(role)).length : core.length;
   if (distinct < o.minDistinctRoles) {
     excludedShapes["below-distinct-roles"] = (excludedShapes["below-distinct-roles"] ?? 0) + 1;
     return null;
@@ -1257,17 +1264,21 @@ function buildShape(
   const counts = new Map<string, number>();
   for (const key of memberKeys) for (const role of roleSets.get(key)!) if (coreRoles.has(role)) counts.set(role, (counts.get(role) ?? 0) + 1);
   const examples = new Map<string, string[]>();
+  const spread: number[] = [];
   for (const unit of members) {
+    const reached = new Set<string>();
     for (const [repo, paths] of unit.files) {
       for (const path of paths) {
         const role = `${nameOf(repo)}:${resolver(path)}`;
         if (!coreRoles.has(role)) continue;
+        reached.add(repo);
         const seen = examples.get(role) ?? [];
         const example = `${repo}/${path}`;
         if (seen.length < 2 && !seen.includes(example)) seen.push(example);
         examples.set(role, seen);
       }
     }
+    spread.push(reached.size);
   }
 
   const repos = new Set<string>();
@@ -1305,8 +1316,15 @@ function buildShape(
     sampleSubjects: [...new Set(members.map((unit) => unit.subjects[0]!))],
     memberUnits: members.map((unit) => unit.key),
     testUnits,
-    score: scoreOf(memberKeys.length, coreRepos.length, distinct, authors.size),
+    score: scoreOf(memberKeys.length, median(spread), distinct, authors.size),
   };
+}
+
+/** The middle value, on a copy: the caller's array is the order an example is taken in. */
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)]!;
 }
 
 function fileCount(unit: WorkUnit): number {
@@ -1350,9 +1368,14 @@ function supportOf(
  *
  * Support alone is not selective: at the threshold a real codebase needs, thousands of shapes clear
  * it, and the ones on top are the widest, dullest file pairs. Support is therefore log-scaled, so
- * that work done three hundred times does not outweigh everything else, and multiplied by how far
- * the core spreads across repositories, which is what a workflow worth writing down has and a
- * layout coincidence does not.
+ * that work done many times over does not outweigh everything else, and multiplied by how far the
+ * work spreads across repositories, which is what a workflow worth writing down has and a layout
+ * coincidence does not.
+ *
+ * That spread is counted on repositories rather than on the names a view gave them, and per member
+ * rather than over all of them. Both matter: the two views name the same file differently, so a
+ * count of names ranks a shape by how its repositories happen to be called, and a count pooled over
+ * the members calls a workflow wide when what is wide is the set of places it was ever done.
  *
  * The two remaining parts were measured and left out of the product: weighting the core's role
  * count pushed the small, file-rich workflows above the common ones a reader recognises, and the
