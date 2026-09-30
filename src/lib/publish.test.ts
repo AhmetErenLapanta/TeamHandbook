@@ -18,18 +18,18 @@ import type { PublishOptions } from "./publish.js";
 import { auditServer } from "./mcp.js";
 import type { McpServerEntry } from "./mcp.js";
 import { runGit, TEAM_PREFIX_FILE } from "./init.js";
-import type { GitRunner, TeamConfig } from "./init.js";
+import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import type { GroundedCase } from "./distill.js";
 
 
 /**
  * The answer every case below gives about its commit message, because none of them is
- * about the wording: "use the one you derived". The product refuses to commit without an
- * answer, so a case that gave none would measure the refusal rather than the thing it is
- * named after. The cases that ARE about the wording call the *Deciding import directly.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
 
 type CandidateArgs = Parameters<typeof publishCandidateDeciding>;
 function publishCandidate(
@@ -40,7 +40,18 @@ function publishCandidate(
   forge?: CandidateArgs[4],
   options: PublishOptions = {},
 ) {
-  return publishCandidateDeciding(dir, meta, team, git, forge, { commitMessage: DELEGATED, ...options });
+  return publishCandidateDeciding(dir, meta, team, git, forge, { commitMessage: APPROVED, ...options });
+}
+
+/**
+ * The two runs a delegated wording takes, which is what the product requires of anyone who
+ * answers "you decide": the first shows the sentence and commits nothing, the second names
+ * its fingerprint back. The cases below use it where what they measure IS the derived
+ * title reaching the commit; everywhere else a case gives its own message and pays one run.
+ */
+function delegating<T extends { proposalHash?: string }>(run: (choice: CommitMessageChoice) => T): T {
+  const probe = run({});
+  return run({ delegated: probe.proposalHash! });
 }
 
 type SelectionArgs = Parameters<typeof publishTeamSelectionDeciding>;
@@ -51,7 +62,7 @@ function publishTeamSelection(
   forge?: SelectionArgs[3],
   options: PublishOptions = {},
 ) {
-  return publishTeamSelectionDeciding(selection, team, git, forge, { commitMessage: DELEGATED, ...options });
+  return publishTeamSelectionDeciding(selection, team, git, forge, { commitMessage: APPROVED, ...options });
 }
 
 let candidateDir: string;
@@ -776,12 +787,14 @@ describe("a name the destination already has", () => {
     const team = { repoUrl: remote, marketplaceName: "acme" };
 
     // when the selection is sent again as an update
-    const result = publishTeamSelection(
-      { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
-      team,
-      undefined,
-      () => "",
-      { update: ["gitlab", "explain"] },
+    const result = delegating((commitMessage) =>
+      publishTeamSelection(
+        { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
+        team,
+        undefined,
+        () => "",
+        { update: ["gitlab", "explain"], commitMessage },
+      ),
     );
 
     // then both carry the publisher's version, and the request says which names it rewrites
@@ -829,7 +842,9 @@ describe("a name the destination already has", () => {
     const linear: McpServerEntry = { name: "linear", scope: "user", config: { type: "sse", url: "https://mcp.linear.app/sse" } };
 
     // when both travel in one request
-    const result = publishTeamSelection({ servers: [linear, gitlab] }, team, undefined, () => "", { update: true });
+    const result = delegating((commitMessage) =>
+      publishTeamSelection({ servers: [linear, gitlab] }, team, undefined, () => "", { update: true, commitMessage }),
+    );
 
     // then the title keeps the two verbs apart and the body spells out the consequence
     expect(result.ok).toBe(true);
@@ -1088,7 +1103,11 @@ describe("a machine that joined before the repository recorded its prefix", () =
   it("given the repository records that the team needs no prefix, when shared, then that answer is learned rather than looked up again", () => {
     const remote = recordingRepo("");
 
-    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), undefined, () => "https://example.com/mr/11");
+    const result = delegating((commitMessage) =>
+      publishTeamSelection({ servers: [gitlab] }, joiner(remote), undefined, () => "https://example.com/mr/11", {
+        commitMessage,
+      }),
+    );
 
     expect(result.ok).toBe(true);
     expect(result.learnedCommitPrefix).toBe("");

@@ -18,11 +18,11 @@ import { candidatesDir } from "./skill-index.js";
 
 /**
  * The answer every team delivery below gives about its commit message, because none of
- * them is about the wording: "use the one you derived". A team approval refuses to commit
- * without an answer, so a case that gave none would measure the refusal instead of the
- * thing it is named after. The cases that ARE about the wording pass their own choice.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
 
 let home: string;
 let project: string;
@@ -250,7 +250,7 @@ describe("approveAndDeliver (team mode)", () => {
       () => "https://gitlab.acme.com/team/skills/-/merge_requests/7\n",
       undefined,
       undefined,
-      { commitMessage: DELEGATED },
+      { commitMessage: APPROVED },
     );
     expect(result).toMatchObject({
       ok: true,
@@ -296,7 +296,7 @@ describe("approveAndDeliver (team mode)", () => {
       () => "",
       undefined,
       undefined,
-      { commitMessage: DELEGATED },
+      { commitMessage: APPROVED },
     );
 
     expect(result).toMatchObject({ ok: true, mode: "team", branch: "HQA-000-fix-npm-test" });
@@ -318,7 +318,7 @@ describe("approveAndDeliver (team mode)", () => {
       },
       undefined,
       undefined,
-      { commitMessage: DELEGATED },
+      { commitMessage: APPROVED },
     );
     expect(result).toMatchObject({
       ok: true,
@@ -400,6 +400,22 @@ describe("three-way delivery (v2)", () => {
     } finally {
       rmSync(personal, { recursive: true, force: true });
     }
+  });
+
+  it("given a commit message on an approval that installs rather than commits, when it runs, then it says so instead of dropping it", () => {
+    // Nothing is committed on the way to ~/.claude/skills, so a wording given for it has
+    // nowhere to go. Silently dropping it told the reviewer their words had travelled.
+    const dir = seedCandidate(meta({ suggestedTarget: "personal" }));
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, undefined, "personal", undefined,
+      { commitMessage: { message: "feat: mine" } },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no commit message to give");
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
   });
 
   it("an explicit --to project overrides a team config", () => {
@@ -658,7 +674,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
     const result = approveAndDeliver(
       home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
       undefined, undefined, () => "https://example.com/mr/9",
-      undefined, undefined, { update: true, commitMessage: DELEGATED },
+      undefined, undefined, { update: true, commitMessage: APPROVED },
     );
 
     // then it goes out under the contested name, and the reviewer is told it replaces theirs
@@ -682,7 +698,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
     const result = approveAndDeliver(
       home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
       undefined, undefined, () => "https://example.com/mr/9",
-      undefined, undefined, { as: "fix-npm-snapshot", commitMessage: DELEGATED },
+      undefined, undefined, { as: "fix-npm-snapshot", commitMessage: APPROVED },
     );
 
     expect(result.deliveredSlug).toBe("fix-npm-snapshot");

@@ -100,7 +100,8 @@ user clear them in one pass.
    Never choose for them and never re-run with `--update` on your own initiative: an update
    overwrites work somebody else may have done to that skill. Three rules the CLI enforces
    rather than trusting to care here, so do not try to route around them: both flags answer
-   a refusal about ONE skill, so they are taken only with a single slug (never `--all`);
+   a refusal about ONE skill, so they are taken only with a single slug typed out, and never
+   with `--all` even on a queue holding one candidate;
    `--as` and `--update` are alternatives and are refused together, because `--update`
    would land on the name `--as` chose rather than the one that was refused; and `--update`
    takes no value, so write it bare.
@@ -109,13 +110,18 @@ user clear them in one pass.
    the exact message it proposes. Show them that message, let them approve it, edit it or
    write their own, and run the same command again with their answer:
    - they approved or wrote a message: `--message "<their wording>"`.
-   - they said you decide: `--delegate-message`, and nothing else. That is the only way a
-     wording the user did not give reaches a commit. Do not compose one yourself and pass
-     it as `--message`.
+   - they said you decide: `--delegate-message <fingerprint>`, with the fingerprint the
+     refusal printed beside the proposal, and nothing else. That is the only way a wording
+     the user did not give reaches a commit. Do not compose one yourself and pass it as
+     `--message`. If the proposal has changed since they were shown it, the run is refused
+     and prints the new one; show them that before asking again. It can also be refused
+     because this machine has no `gh`/`glab` signed in: a delegation is an answer about the
+     merge request, so with no way to open one the wording has to be theirs.
    Ask it after any `--update` or `--as` answer from step 7, because the proposed message
    says which of the two the request is. The flag is per candidate, like those two: the CLI
-   refuses it with several slugs or `--all`, because one sentence is not a claim about four
-   different skills. A personal or project approval never asks: nothing is committed there.
+   refuses it together with `--all` or with several slugs, because one sentence is not a
+   claim about four different skills. A personal or project approval never takes one and
+   says so rather than dropping it: nothing is committed there.
 9. The name in the CLI's output is the name that was written, and it is not always the one
    in the queue - relay it as printed rather than repeating the slug you asked for.
 10. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and

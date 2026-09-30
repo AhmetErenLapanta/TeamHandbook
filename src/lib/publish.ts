@@ -11,6 +11,7 @@ import {
   commitMessagePrefix,
   commitSubject,
   decideCommitSubject,
+  proposalFingerprint,
   pushFailureReason,
   pushRuleSubject,
   readTeamCommitPrefix,
@@ -19,9 +20,9 @@ import {
   teamCommitPrefix,
   teamCommitPrefixFix,
 } from "./init.js";
-import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import { delegationNeedsForge, forgeSignInProblem, hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
-export { manualPrUrl, runForge } from "./forge.js";
+export { delegationNeedsForge, manualPrUrl, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { auditSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
@@ -199,6 +200,8 @@ export interface PublishOutcome {
   // the subject this run would use, carried on the refusal that asks for a decision so
   // the caller has the exact text to put in front of the user
   proposedMessage?: string;
+  // the fingerprint of that subject, which a delegated run has to name back
+  proposalHash?: string;
 }
 
 /**
@@ -494,8 +497,25 @@ export function publishCandidate(
     // is the one about the name rather than one about wording they would have to give
     // twice. Before the checkout, so a run without a decision leaves no branch behind.
     const proposal = commitSubject(commitPrefix, title);
-    const decided = decideCommitSubject(options.commitMessage ?? {}, proposal, commitPrefix, "approve it again");
-    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
+    const choice = options.commitMessage ?? {};
+    const decided = decideCommitSubject(choice, proposal, commitPrefix, "approve it again");
+    if ("error" in decided) {
+      return { ok: false, error: decided.error, proposedMessage: proposal, proposalHash: proposalFingerprint(proposal) };
+    }
+    // A delegated wording is honoured only if the request it was given for can actually be
+    // opened. Asked before the push, because after it the commit carrying that wording is
+    // already on the team's remote with nothing to carry it further.
+    if (choice.delegated !== undefined) {
+      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
+      if (blocked) {
+        return {
+          ok: false,
+          error: delegationNeedsForge(blocked, "approve it again"),
+          proposedMessage: proposal,
+          proposalHash: proposalFingerprint(proposal),
+        };
+      }
+    }
     try {
       git(["checkout", "-b", branch], repoDir);
       // An update replaces the team's copy rather than merging into it: a file the new
@@ -619,6 +639,8 @@ export interface TeamPublishOutcome {
   commitMessage?: string;
   // the subject this run would use, carried on the refusal that asks for a decision
   proposedMessage?: string;
+  // the fingerprint of that subject, which a delegated run has to name back
+  proposalHash?: string;
 }
 
 /** A server that cleared the audit, kept together with the audit that cleared it. */
@@ -1295,8 +1317,23 @@ export function publishTeamSelection(
     // proposal knowing which of the things they picked it actually covers. It sits before
     // the checkout, so a selection with no decision leaves no branch and no clone state.
     const proposal = commitSubject(commitPrefix, title);
-    const decided = decideCommitSubject(options.commitMessage ?? {}, proposal, commitPrefix, "share them again");
-    if ("error" in decided) return { ok: false, ...single, refused, error: decided.error, proposedMessage: proposal };
+    const choice = options.commitMessage ?? {};
+    const stopped = (error: string): TeamPublishOutcome => ({
+      ok: false,
+      ...single,
+      refused,
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal),
+    });
+    const decided = decideCommitSubject(choice, proposal, commitPrefix, "share them again");
+    if ("error" in decided) return stopped(decided.error);
+    // See publishCandidate: a delegation is for the moment the request is opened, so a
+    // machine that cannot open one has nothing to honour it at.
+    if (choice.delegated !== undefined) {
+      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
+      if (blocked) return stopped(delegationNeedsForge(blocked, "share them again"));
+    }
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);

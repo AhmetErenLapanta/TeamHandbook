@@ -1,12 +1,13 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { uniqueSlug } from "./distill.js";
-import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import {
   assertSafeGitUrl,
   commitSubject,
   decideCommitSubject,
+  proposalFingerprint,
   gitIdentityArgs,
   pushFailureReason,
   readTeamCommitPrefix,
@@ -17,7 +18,7 @@ import {
   teamCommitPrefix,
 } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
-import { bumpPluginVersion } from "./publish.js";
+import { bumpPluginVersion, delegationNeedsForge } from "./publish.js";
 import { handbookWorkdir } from "./session-state.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
@@ -336,6 +337,8 @@ export interface UpgradePlan {
   /** The subject the refresh would commit with, prefix included, shown here so the user
    * has seen it before the run that writes it. */
   proposedMessage?: string;
+  /** Its fingerprint, which a delegated refresh has to name back. */
+  proposalHash?: string;
 }
 
 export interface UpgradeResult {
@@ -354,6 +357,8 @@ export interface UpgradeResult {
   commitMessage?: string;
   /** The subject this run would use, carried on the refusal that asks for a decision. */
   proposedMessage?: string;
+  /** Its fingerprint, which a delegated refresh has to name back. */
+  proposalHash?: string;
 }
 
 function classify(repoDir: string, candidates: Record<string, string>): SkeletonFileState[] {
@@ -562,6 +567,7 @@ export function planUpgrade(team: TeamConfig, git: GitRunner = runGit): UpgradeP
       withCi: existsSync(join(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
       proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
+      proposalHash: proposalFingerprint(commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE)),
       ...(candidates.linked.length ? { linked: candidates.linked } : {}),
       ...(candidates.withheld.length ? { withheld: candidates.withheld } : {}),
       ...(unreadable.length ? { unreadable } : {}),
@@ -690,7 +696,19 @@ export function applyUpgrade(
     const messagePrefix = teamCommitPrefix(team);
     const proposal = commitSubject(messagePrefix, title);
     const decided = decideCommitSubject(commitMessage, proposal, messagePrefix, "run the refresh again");
-    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
+    const stopped = (error: string): UpgradeResult => ({
+      ok: false,
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal),
+    });
+    if ("error" in decided) return stopped(decided.error);
+    // See publishCandidate: "you decide" is an answer about the merge request, so a
+    // machine that cannot open one has nothing to honour it at.
+    if (commitMessage.delegated !== undefined) {
+      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
+      if (blocked) return stopped(delegationNeedsForge(blocked, "run the refresh again"));
+    }
     let raised: string | null = null;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -823,7 +841,8 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     lines.push(
       "",
       `That request commits as "${plan.proposedMessage}". Pass the message you want with`,
-      '--message "<your wording>", or --delegate-message to use the one above as it stands.',
+      `--message "<your wording>", or --delegate-message ${plan.proposalHash} to use the one above as it`,
+      "stands - the fingerprint is what ties that answer to this exact sentence.",
     );
   }
   return lines.join("\n");

@@ -24,16 +24,18 @@ exactly what the rule is.
      CLI is installed, ask the user to create an empty repo in their forge's web UI and
      paste its SSH URL.
 2. Confirm the final target URL with the user before touching it.
-3. Tell the user what the scaffold will commit and let them decide the wording. It is
-   always `chore: scaffold team skill base` (with the team's prefix in front, if one was
-   given), and the command will not commit until they have seen it. They approve it, edit
-   it, or say you decide. Then run:
-   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" <url> --message "<their wording>"`
-   or, only if they said you decide,
-   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" <url> --delegate-message`.
-   (add `--name <n>` only if the user wants the marketplace named differently than the repo).
-   Never write a message yourself and pass it as `--message`: that flag means the words
-   are the user's. A run with neither flag is refused and nothing is pushed.
+3. Run it once with no message flag: `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" <url>`
+   (add `--name <n>` only if the user wants the marketplace named differently than the
+   repo). Nothing is committed or pushed by that run. It prints the message it proposes -
+   `chore: scaffold team skill base`, with the team's prefix in front if one was given -
+   and the fingerprint that goes with it. Show the user that sentence; they approve it,
+   edit it, or say you decide. Then run the same command again with their answer:
+   `--message "<their wording>"`, or `--delegate-message <fingerprint>` if they said you
+   decide. Never write a message yourself and pass it as `--message`: that flag means the
+   words are the user's. Two cases refuse a delegation outright and the error says which:
+   an empty repository, where the scaffold goes straight to the default branch and there is
+   no merge request for the delegation to be about, and a machine with no `gh`/`glab`
+   signed in. In both, ask the user for the wording.
 4. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern
    the project requires. Do not hand the user a flag to work out. Read the pattern, propose
    ONE prefix that satisfies it, and ask them to confirm or correct it with a
@@ -68,9 +70,10 @@ re-init. That loses the repository. Refresh it in place instead:
    `README.md` are the likely ones - and nothing records which. Never pick on their behalf.
 3. Send only what they chose, with the message they chose:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade --file <path> --file <path> --message "<their wording>"`
-   (or `--delegate-message` in place of `--message`, if they said you decide). The plan in
-   step 1 printed the message this would otherwise commit, so they have already seen it;
-   ask them at the same time as you ask which files to send. A run with neither flag is
+   (or `--delegate-message <fingerprint>` in place of `--message`, if they said you decide;
+   the plan printed the fingerprint beside the message). The plan in step 1 printed the
+   message this would otherwise commit, so they have already seen it; ask them at the same
+   time as you ask which files to send. A run with neither flag is
    refused and nothing is pushed. It opens one merge request. The team's own skills, commands, agents and `.mcp.json` are
    not offered and cannot be written, and inside the two manifests the team's own entries -
    the plugin version, any extra plugins, the marketplace owner - are carried across rather

@@ -9,14 +9,15 @@ import { publishTeamSelection } from "./publish.js";
 import { createGitLabRepo } from "./gitlab-fixture.js";
 import type { CommitIdentity, GitLabPushRules, GitLabRepo, GitLabRepoOptions } from "./gitlab-fixture.js";
 import type { CommitMessageChoice } from "./init.js";
+import type { ForgeRunner } from "./forge.js";
 
 /**
  * The answer every scaffold below gives about its commit message, because none of them is
- * about the wording: "use the one you derived". /handbook:init refuses to commit without
- * an answer, so a case that gave none would measure the refusal rather than the thing it
- * is named after. The cases that ARE about the wording call initTeamRepoDeciding directly.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
 
 type InitArgs = Parameters<typeof initTeamRepoDeciding>;
 function initTeamRepo(
@@ -30,7 +31,7 @@ function initTeamRepo(
   commitPrefix?: InitArgs[7],
   withCi?: InitArgs[8],
 ) {
-  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, DELEGATED);
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, APPROVED);
 }
 
 
@@ -92,11 +93,18 @@ function gitAs(identity: CommitIdentity): GitRunner {
 
 // No forge CLI is invoked from a test: the merge request is the one step this harness
 // cannot hold locally, and calling the real glab would reach the network.
-const noForge = () => {
+const noForge = (_tool: "gh" | "glab", _args: string[]) => {
   const err = new Error("spawn glab ENOENT") as Error & { code: string };
   err.code = "ENOENT";
   throw err;
 };
+
+/** A machine that HAS the CLI and is signed in: `auth status` answers, and the request it
+ * would open comes back as a link rather than a network call. Needed because a delegated
+ * wording is refused on a machine that cannot open a merge request, so the cases about
+ * delegation cannot use the runner that stands in for not having one. */
+const signedInForge = (_tool: "gh" | "glab", args: string[]) =>
+  args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/team/skills/-/merge_requests/1";
 
 function localSkill(name: string): string {
   const dir = join(mkdtempSync(join(tmpdir(), "handbook-skill-")), name);
@@ -105,12 +113,17 @@ function localSkill(name: string): string {
   return dir;
 }
 
-function share(identity: CommitIdentity = MEMBER, name = "my-skill", commitMessage: CommitMessageChoice = DELEGATED) {
+function share(
+  identity: CommitIdentity = MEMBER,
+  name = "my-skill",
+  commitMessage: CommitMessageChoice = APPROVED,
+  forge: ForgeRunner = noForge,
+) {
   return publishTeamSelection(
     { skills: [{ name, dir: localSkill(name) }] },
     loadTeamConfig(home)!,
     gitAs(identity),
-    noForge,
+    forge,
     { commitMessage },
   );
 }
@@ -440,13 +453,39 @@ describe("the commit says what the user approved, not what the product derived",
     const repo = answered();
     // The two runs are the point: whatever the first one said it would commit is what the
     // second one commits, so "you decide" delegates the wording the user was shown rather
-    // than a second sentence derived somewhere else.
+    // than a second sentence derived somewhere else. The fingerprint is what ties them.
     const probe = share(MEMBER, "my-skill", {});
 
-    const outcome = share(MEMBER, "my-skill", { delegated: true });
+    const outcome = share(MEMBER, "my-skill", { delegated: probe.proposalHash! }, signedInForge);
 
     expect(outcome.ok).toBe(true);
     expect(repo.subjectOn(BRANCH)).toBe(probe.proposedMessage);
+  });
+
+  it("given a delegation naming a sentence that is no longer the one this would commit, when it is shared, then it is refused with the new one", () => {
+    const repo = answered();
+    // The fingerprint of some other proposal: what a conversation carries when the
+    // selection has moved on since the user was asked, or a teammate's merge has.
+    const outcome = share(MEMBER, "my-skill", { delegated: "deadbeef" }, signedInForge);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("not the one this would commit any more");
+    expect(outcome.error).toContain(PROPOSAL);
+    expect(repo.branches()).not.toContain(BRANCH);
+  });
+
+  it("given a machine with no way to open a merge request, when the wording is delegated, then nothing is committed at all", () => {
+    const repo = answered();
+    const probe = share(MEMBER, "my-skill", {});
+
+    // noForge is a machine without the CLI. Everywhere else that is a soft failure - the
+    // branch is pushed and the user opens the request by hand - but a delegation was given
+    // FOR that request, so here there is nothing to honour it at.
+    const outcome = share(MEMBER, "my-skill", { delegated: probe.proposalHash! });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("no merge request can be opened from this machine");
+    expect(repo.branches()).not.toContain(BRANCH);
   });
 
   it("given the user hands the proposal straight back, when it is shared, then the prefix is on the commit once", () => {

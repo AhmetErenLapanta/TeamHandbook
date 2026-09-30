@@ -27,7 +27,7 @@ function usage(): never {
   console.error(
     "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
       "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] " +
-      "[--message <commit message>] [--delegate-message]",
+      "[--message <commit message>] [--delegate-message <fingerprint>]",
   );
   process.exit(2);
 }
@@ -231,14 +231,14 @@ async function main(): Promise<void> {
   if (args.some((a) => a.startsWith("--update="))) usage();
   const update = args.includes("--update");
   // What the commit on a team delivery says. `--message` is the wording the reviewer saw
-  // and approved; `--delegate-message` is them answering "you decide", and it takes no
-  // value for the same reason `--update` takes none. Neither is passed unless the reviewer
-  // actually said something: a team approval with no answer here is refused, which is the
-  // point - nothing is committed with a sentence nobody read.
-  if (args.some((a) => a.startsWith("--delegate-message="))) usage();
-  const delegateMessage = args.includes("--delegate-message");
+  // and approved; `--delegate-message` is them answering "you decide", and it names the
+  // fingerprint of the proposal they were shown, which the refused run printed. Neither is
+  // passed unless the reviewer actually said something: a team approval with no answer
+  // here is refused, which is the point - nothing is committed with a sentence nobody read.
   const message = valueOf("--message");
   if (given("--message") && !message) usage();
+  const delegateMessage = valueOf("--delegate-message");
+  if (given("--delegate-message") && !delegateMessage) usage();
   const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
@@ -297,13 +297,13 @@ async function main(): Promise<void> {
   // which is the consent model of this whole command turned inside out.
   // A commit message joins them: one sentence is not consent for several different
   // commits, and `--all --message` would put the same claim on every one of them.
-  if ((as || update || message !== undefined || delegateMessage) && slugs.length > 1) usage();
+  if ((as || update || message !== undefined || delegateMessage !== undefined) && (all || slugs.length > 1)) usage();
   const options = {
     ...(update ? { update } : {}),
     ...(as ? { as } : {}),
     commitMessage: {
       ...(message !== undefined ? { message } : {}),
-      ...(delegateMessage ? { delegated: true } : {}),
+      ...(delegateMessage !== undefined ? { delegated: delegateMessage } : {}),
     },
   };
   for (const slug of slugs) {

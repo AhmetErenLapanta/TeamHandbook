@@ -165,6 +165,14 @@ Two things, and only these:
      message you have not seen; you can delegate the wording only at the moment the merge
      request is opened. This holds for every path that commits - `/handbook:review`
      approving to the team, `/handbook:share`, `/handbook:init` and its `--upgrade`.
+     Delegating is answering "you decide" about one specific sentence, so it names that
+     sentence's fingerprint: if the proposal has changed since you were shown it, the run
+     is refused and shows you the new one. And because the delegation is given for the
+     merge request, it is honoured only where one can actually be opened - on an empty
+     repository, where the scaffold goes straight to the default branch, and on a machine
+     whose `gh`/`glab` is missing or not signed in, the wording has to be yours. What this
+     does not promise: if the CLI is signed in and opening the request still fails, the
+     branch is pushed with the delegated message and the request is yours to open.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files

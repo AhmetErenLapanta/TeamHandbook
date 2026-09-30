@@ -111,12 +111,19 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    step 4, any `--update` flags from step 6, and their answer:
    - they approved or wrote a message: `--message "<their wording>"`. If it has no team
      prefix and the team needs one, the CLI adds it and the result says what was committed.
-   - they said you decide: `--delegate-message`, and nothing else. That is the ONLY way a
+   - they said you decide: `--delegate-message <fingerprint>`, with the fingerprint the
+     refusal printed next to the proposal, and nothing else. That is the ONLY way a
      wording the user did not give reaches a commit, and it is theirs to say, never yours
      to assume. Do not compose a message and pass it as `--message`: `--message` means
-     "these are the user's words".
+     "these are the user's words". Naming the fingerprint is what ties the answer to the
+     sentence they read: if the proposal has moved since, the run is refused and prints the
+     new one, which you show them before asking again.
    A run with neither flag is refused and nothing is committed. That is deliberate, and it
    is not something to work around by picking a message yourself.
+   Delegation can also be refused outright, because it is an answer about the merge
+   request: on a machine with no `gh`/`glab` signed in there is no request to open, so
+   nothing is committed and the user's own wording is the only way forward. Relay that as
+   printed rather than retrying.
 8. Relay the output verbatim. It names what went out per kind rather than as one total,
    because a skill somebody reads, a server that connects and a command somebody types are
    not interchangeable, and it names the commit the request carries. The team repository

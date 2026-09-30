@@ -101,6 +101,8 @@ export interface DeliverResult {
   // the subject a team delivery would commit with, carried on the refusal that asks the
   // reviewer to decide the wording; absent on every other refusal
   proposedMessage?: string;
+  // its fingerprint, which a delegated approval has to name back
+  proposalHash?: string;
 }
 
 /** How a reviewer answers a refusal: send it as an update to what is there, or under a
@@ -136,6 +138,21 @@ export function approveAndDeliver(
   // The per-skill decision: an explicit --to wins, then the harvest's suggestion,
   // then the legacy default (team when configured, else the project).
   const resolved: DeliveryTarget = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  // A commit message means nothing anywhere but the team, where a commit is made. Said
+  // out loud rather than dropped: a reviewer who asked their wording to go somewhere and
+  // was told nothing would believe it had. The check is on the RESOLVED target, so a
+  // plain `approve` that the harvest suggests keeping personally is caught too.
+  const wording = options.commitMessage ?? {};
+  if (resolved !== "team" && (wording.message !== undefined || wording.delegated !== undefined)) {
+    return {
+      ok: false,
+      meta,
+      error:
+        `this approval installs "${slug}" into ${resolved === "personal" ? "your own skills" : "the project"}, ` +
+        "which copies files and makes no commit, so there is no commit message to give. Approve with " +
+        "--to team for a message to have somewhere to go, or drop the flag. Nothing was written.",
+    };
+  }
   if (resolved === "team") {
     if (!team) {
       return {
@@ -278,6 +295,7 @@ function deliverToTeam(
       error: published.error,
       ...(published.collision ? { collision: published.collision } : {}),
       ...(published.proposedMessage ? { proposedMessage: published.proposedMessage } : {}),
+      ...(published.proposalHash ? { proposalHash: published.proposalHash } : {}),
     };
   }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;

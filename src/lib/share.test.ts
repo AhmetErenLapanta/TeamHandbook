@@ -4,23 +4,33 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildInventory, formatInventory, formatShareResult, shareSelection as shareSelectionDeciding } from "./share.js";
-import type { InventoryPaths, Selection } from "./share.js";
+import type { InventoryPaths, Selection, ShareResult } from "./share.js";
 import { formatCandidateList, listCandidates, writeCandidateMeta } from "./queue.js";
 import { sessionStartNotice } from "./notify.js";
 import type { CandidateMeta } from "./queue.js";
 import { approveAndDeliver } from "./deliver.js";
 import { candidatesDir } from "./skill-index.js";
-import type { GitRunner } from "./init.js";
+import type { CommitMessageChoice, GitRunner } from "./init.js";
 import { teamAssets } from "./publish.js";
 
 
 /**
  * The answer every case below gives about its commit message, because none of them is
- * about the wording: "use the one you derived". The product refuses to commit without an
- * answer, so a case that gave none would measure the refusal rather than the thing it is
- * named after. The cases that ARE about the wording call shareSelectionDeciding directly.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
+
+/**
+ * The two runs a delegated wording takes: the first shows the sentence and commits
+ * nothing, the second names its fingerprint back. Used where what the case measures is
+ * the derived title reaching the commit.
+ */
+function delegating(run: (choice: CommitMessageChoice) => ShareResult): ShareResult {
+  const probe = run({});
+  return run({ delegated: probe.team!.proposalHash! });
+}
 
 type ShareArgs = Parameters<typeof shareSelectionDeciding>;
 function shareSelection(
@@ -31,7 +41,7 @@ function shareSelection(
   forge?: ShareArgs[4],
   options: NonNullable<ShareArgs[5]> = {},
 ) {
-  return shareSelectionDeciding(selection, team, paths, git, forge, { commitMessage: DELEGATED, ...options });
+  return shareSelectionDeciding(selection, team, paths, git, forge, { commitMessage: APPROVED, ...options });
 }
 
 let home: string;
@@ -486,7 +496,11 @@ describe("shareSelection", () => {
       linear: { type: "sse", url: "https://mcp.linear.app/sse" },
     });
 
-    const result = shareSelection(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge);
+    const result = delegating((commitMessage) =>
+      shareSelectionDeciding(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge, {
+        commitMessage,
+      }),
+    );
 
     // The defect this guards: two requests opened off the same base both write "1.0.1",
     // git merges the identical line without a conflict, and the second server lands
@@ -712,16 +726,19 @@ describe("shareSelection carries commands", () => {
     writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
     const inv = buildInventory(paths());
 
-    const result = shareSelection(
-      select({
-        skills: inv.skills.map((s) => s.name),
-        servers: inv.servers.map((s) => s.name),
-        commands: inv.commands.map((c) => c.name),
-      }),
-      team(),
-      paths(),
-      undefined,
-      forge,
+    const result = delegating((commitMessage) =>
+      shareSelectionDeciding(
+        select({
+          skills: inv.skills.map((s) => s.name),
+          servers: inv.servers.map((s) => s.name),
+          commands: inv.commands.map((c) => c.name),
+        }),
+        team(),
+        paths(),
+        undefined,
+        forge,
+        { commitMessage },
+      ),
     );
 
     expect(result.team).toMatchObject({
@@ -819,7 +836,7 @@ describe("shareSelection carries commands", () => {
 
     const sent = shareSelectionDeciding(selection(), team(), paths(), undefined, forge, {
       update: ["explain"],
-      commitMessage: { delegated: true },
+      commitMessage: { delegated: second.team!.proposalHash! },
     });
 
     // what was committed is the sentence the SECOND run showed, which is the one the user

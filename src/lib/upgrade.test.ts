@@ -22,15 +22,15 @@ import {
 
 /**
  * The answer every case below gives about its commit message, because none of them is
- * about the wording: "use the one you derived". The product refuses to commit without an
- * answer, so a case that gave none would measure the refusal rather than the thing it is
- * named after. The cases that ARE about the wording call applyUpgradeDeciding directly.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
 
 type UpgradeArgs = Parameters<typeof applyUpgradeDeciding>;
 function applyUpgrade(team: UpgradeArgs[0], paths: UpgradeArgs[1], git?: UpgradeArgs[2], forge?: UpgradeArgs[3]) {
-  return applyUpgradeDeciding(team, paths, git, forge, DELEGATED);
+  return applyUpgradeDeciding(team, paths, git, forge, APPROVED);
 }
 
 // Every case here drives real git against a real bare repository, because the thing under

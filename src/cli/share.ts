@@ -10,7 +10,7 @@ function usage(): never {
   console.error(
     "usage: share.js [list]\n" +
       "       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... " +
-      "[--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message)",
+      "[--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>)",
   );
   process.exit(2);
 }
@@ -54,9 +54,10 @@ const UPDATE = "--update";
  * What the commit on the merge request says.
  *
  * `--message` carries the wording the user saw and approved; `--delegate-message` is the
- * one other answer they can give, "you decide", and it takes no value for the same reason
- * `--update` takes none. A share with neither is refused before anything is committed:
- * the message on a request other people read is the user's to write.
+ * one other answer they can give, "you decide", and it names the fingerprint of the
+ * proposal they were shown - the run that refused printed both. A share with neither is
+ * refused before anything is committed: the message on a request other people read is the
+ * user's to write.
  */
 const MESSAGE = "--message";
 const DELEGATE_MESSAGE = "--delegate-message";
@@ -64,15 +65,23 @@ const DELEGATE_MESSAGE = "--delegate-message";
 /** Every flag that swallows the argument after it, so the positional reader below knows
  * which bare words are values and which are the command. A boolean flag is deliberately
  * absent: treating `--delegate-message` as taking a value would eat the word `share`. */
-const VALUE_FLAGS: readonly string[] = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE];
+const VALUE_FLAGS: readonly string[] = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE];
+
+/** The value behind a flag, refused rather than guessed at when it is missing. */
+function valueOf(args: string[], flag: string): string | undefined {
+  const at = args.indexOf(flag);
+  if (at === -1) return undefined;
+  const value = args[at + 1];
+  if (!value || value.startsWith("--")) usage();
+  return value;
+}
 
 function parseCommitMessage(args: string[]): CommitMessageChoice {
-  const at = args.indexOf(MESSAGE);
-  const value = at === -1 ? undefined : args[at + 1];
-  if (at !== -1 && (!value || value.startsWith("--"))) usage();
+  const message = valueOf(args, MESSAGE);
+  const delegated = valueOf(args, DELEGATE_MESSAGE);
   return {
-    ...(value !== undefined ? { message: value } : {}),
-    ...(args.includes(DELEGATE_MESSAGE) ? { delegated: true } : {}),
+    ...(message !== undefined ? { message } : {}),
+    ...(delegated !== undefined ? { delegated } : {}),
   };
 }
 

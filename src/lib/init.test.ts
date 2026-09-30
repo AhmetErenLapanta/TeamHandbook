@@ -22,16 +22,17 @@ import {
   commitMessageProblem,
   commitSubject,
   decideCommitSubject,
+  proposalFingerprint,
   summarizeGitStderr,
 } from "./init.js";
 
 /**
  * The answer every scaffold below gives about its commit message, because none of them is
- * about the wording: "use the one you derived". /handbook:init refuses to commit without
- * an answer, so a case that gave none would measure the refusal rather than the thing it
- * is named after. The cases that ARE about the wording call initTeamRepoDeciding directly.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
 
 type InitArgs = Parameters<typeof initTeamRepoDeciding>;
 function initTeamRepo(
@@ -45,7 +46,7 @@ function initTeamRepo(
   commitPrefix?: InitArgs[7],
   withCi?: InitArgs[8],
 ) {
-  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, DELEGATED);
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, APPROVED);
 }
 
 
@@ -703,6 +704,44 @@ describe("initTeamRepo", () => {
     }
   });
 
+  it("given an empty repository, when the wording is delegated, then it is refused because there is no merge request to open", () => {
+    // The one case where the scaffold does NOT arrive as a merge request: an empty
+    // repository has no branch to open one against, so the commit goes straight to the
+    // default branch the whole team reads. "You decide" is an answer about the request;
+    // with no request, delegating it would put a sentence nobody saw on that branch.
+    const remote = bareRepo();
+    try {
+      const result = initTeamRepoDeciding(remote, "acme-skills", home, undefined, undefined, noForge, undefined, "", false, {
+        delegated: proposalFingerprint("chore: scaffold team skill base"),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("no commits yet");
+      expect(result.error).toContain("--message");
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe("");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a repository that is not empty and no way to open a merge request, when the wording is delegated, then nothing is pushed", () => {
+    const remote = seededRepo("master");
+    try {
+      const result = initTeamRepoDeciding(remote, "acme-skills", home, undefined, undefined, noForge, undefined, "", false, {
+        delegated: proposalFingerprint("chore: scaffold team skill base"),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("no merge request can be opened from this machine");
+      // the scaffold branch never appeared, and this machine was never pointed at a team
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).not.toContain("handbook/");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
   it("given a commit prefix and a message the user wrote, when a repository is scaffolded, then the commit carries both", () => {
     const remote = bareRepo();
     try {
@@ -1052,7 +1091,7 @@ describe("deciding what a commit will say", () => {
     // They are two different answers to one question, exactly as --as and --update are two
     // different answers to one refusal, and a caller that sent both decided nothing.
     const decided = decideCommitSubject(
-      { message: "feat: mine", delegated: true },
+      { message: "feat: mine", delegated: "deadbeef" },
       "TEAM-1 feat: theirs",
       "TEAM-1 ",
       RERUN,
@@ -1061,10 +1100,30 @@ describe("deciding what a commit will say", () => {
     expect("error" in decided && decided.error).toContain("answer the same question");
   });
 
-  it("given a delegation, when the decision is made, then the subject is the proposal exactly as it was shown", () => {
-    expect(decideCommitSubject({ delegated: true }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN)).toEqual({
-      subject: "TEAM-1 chore: scaffold",
+  it("given a delegation naming the proposal's fingerprint, when the decision is made, then the subject is that proposal exactly", () => {
+    const proposal = "TEAM-1 chore: scaffold";
+
+    expect(decideCommitSubject({ delegated: proposalFingerprint(proposal) }, proposal, "TEAM-1 ", RERUN)).toEqual({
+      subject: proposal,
     });
+  });
+
+  it("given a delegation naming some other sentence, when the decision is made, then it refuses and shows the one it would commit now", () => {
+    // What a conversation carries when the proposal moved between the run that showed it
+    // and the run that acts on it: an --update consented to, or a teammate's merge.
+    const decided = decideCommitSubject({ delegated: "deadbeef" }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN);
+
+    expect("error" in decided && decided.error).toContain("not the one this would commit any more");
+    expect("error" in decided && decided.error).toContain("TEAM-1 chore: scaffold");
+  });
+
+  it("given a proposal that could not be a commit title, when the decision is made, then it is refused before anyone is asked to delegate it", () => {
+    // The proposal is built out of names this machine did not write - a server, a command,
+    // a skill directory - so it goes through the same sieve a typed message does.
+    const decided = decideCommitSubject({}, "feat(mcp): add glpat-ABCDEFGHIJKLMNOPQRSTUVWX", "", RERUN);
+
+    expect("error" in decided && decided.error).toContain("gitlab-token");
+    expect("error" in decided && decided.error).toContain("There is nothing to delegate");
   });
 
   it("given an approved message, when the decision is made, then the subject is that message with the prefix on it", () => {

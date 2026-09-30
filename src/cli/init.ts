@@ -6,8 +6,8 @@ import { applyUpgrade, formatUpgradePlan, formatUpgradeResult, planUpgrade } fro
 function usage(): never {
   console.error(
     "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] " +
-      "[--with-ci] [--message <commit message>] [--delegate-message]\n" +
-      "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message]",
+      "[--with-ci] [--message <commit message>] [--delegate-message <fingerprint>]\n" +
+      "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>]",
   );
   process.exit(2);
 }
@@ -19,13 +19,20 @@ function usage(): never {
  * the honest reading of "they were never asked", and every path that commits refuses on
  * it rather than writing its own sentence into the team's repository.
  */
+function valueOf(args: string[], flag: string): string | undefined {
+  const at = args.indexOf(flag);
+  if (at === -1) return undefined;
+  const value = args[at + 1];
+  if (!value || value.startsWith("--")) usage();
+  return value;
+}
+
 function commitMessageFrom(args: string[]): CommitMessageChoice {
-  const at = args.indexOf("--message");
-  const value = at === -1 ? undefined : args[at + 1];
-  if (at !== -1 && (!value || value.startsWith("--"))) usage();
+  const message = valueOf(args, "--message");
+  const delegated = valueOf(args, "--delegate-message");
   return {
-    ...(value !== undefined ? { message: value } : {}),
-    ...(args.includes("--delegate-message") ? { delegated: true } : {}),
+    ...(message !== undefined ? { message } : {}),
+    ...(delegated !== undefined ? { delegated } : {}),
   };
 }
 
@@ -42,8 +49,10 @@ function upgrade(args: string[]): void {
   const files: string[] = [];
   const commitMessage = commitMessageFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--upgrade" || args[i] === "--delegate-message") continue;
-    if (args[i] === "--message") {
+    if (args[i] === "--upgrade") continue;
+    // Both take a value, which is read above: stepping over it here is what keeps the
+    // fingerprint from being read as a --file path.
+    if (args[i] === "--message" || args[i] === "--delegate-message") {
       i++;
       continue;
     }
@@ -94,10 +103,9 @@ function main(): void {
   let withCi = false;
   const commitMessage = commitMessageFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--message") {
+    if (args[i] === "--message" || args[i] === "--delegate-message") {
+      // read already, and its value stepped over so it is not mistaken for the URL
       i++;
-    } else if (args[i] === "--delegate-message") {
-      // read already, and skipped here so it is not mistaken for the URL
     } else if (args[i] === "--name") {
       name = args[++i];
       if (!name) usage();

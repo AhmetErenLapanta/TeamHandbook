@@ -17,11 +17,11 @@ import { slugifySkillName } from "./distill.js";
 
 /**
  * The answer every scaffold below gives about its commit message, because none of them is
- * about the wording: "use the one you derived". /handbook:init refuses to commit without
- * an answer, so a case that gave none would measure the refusal rather than the thing it
- * is named after. The cases that ARE about the wording call initTeamRepoDeciding directly.
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
  */
-const DELEGATED = { delegated: true } as const;
+const APPROVED = { message: "chore: the case under test" } as const;
 
 type InitArgs = Parameters<typeof initTeamRepoDeciding>;
 function initTeamRepo(
@@ -35,7 +35,7 @@ function initTeamRepo(
   commitPrefix?: InitArgs[7],
   withCi?: InitArgs[8],
 ) {
-  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, DELEGATED);
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, APPROVED);
 }
 
 let home: string;

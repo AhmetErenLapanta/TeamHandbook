@@ -65,6 +65,7 @@ function configIsBroken(home = handbookHome()) {
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, join as join3 } from "node:path";
 
@@ -298,10 +299,33 @@ function manualPrUrl(repoUrl, branch) {
 function extractUrl(output) {
   return output.match(/https?:\/\/\S+/)?.[0] ?? null;
 }
+function forgeTool(repoUrl) {
+  const host = hostFromUrl(repoUrl);
+  return host && host.includes("github") ? "gh" : "glab";
+}
+function forgeSignInProblem(repoUrl, repoDir, forge) {
+  const tool = forgeTool(repoUrl);
+  const host = hostFromUrl(repoUrl);
+  const attempts = host ? [["auth", "status", "--hostname", host], ["auth", "status"]] : [["auth", "status"]];
+  let last = "";
+  for (const args of attempts) {
+    try {
+      forge(tool, args, repoDir);
+      return null;
+    } catch (err) {
+      const e = err;
+      if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      last = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+      if (!/unknown (flag|shorthand)/i.test(stderr)) break;
+    }
+  }
+  return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
+}
 function openPr(repoUrl, branch, title, body, repoDir, forge) {
   const host = hostFromUrl(repoUrl);
   try {
-    const out = host && host.includes("github") ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+    const out = forgeTool(repoUrl) === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
       "glab",
       ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
       repoDir
@@ -309,7 +333,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     return { url: extractUrl(out) };
   } catch (err) {
     const e = err;
-    const tool = host && host.includes("github") ? "gh" : "glab";
+    const tool = forgeTool(repoUrl);
     let reason;
     if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
     else {
@@ -318,6 +342,9 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     }
     return { url: null, error: reason };
   }
+}
+function delegationNeedsForge(reason, rerun) {
+  return `no merge request can be opened from this machine (${reason}), and "you decide" is an answer about the request, not about a branch. Nothing was committed. Ask the user for the wording and ${rerun} with \`--message "<their wording>"\`, or sign the CLI in and delegate again.`;
 }
 
 // src/lib/git-errors.ts
@@ -397,6 +424,9 @@ function teamCommitPrefix(config) {
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
 }
+function proposalFingerprint(proposal) {
+  return createHash("sha256").update(proposal).digest("hex").slice(0, 8);
+}
 var COMMIT_MESSAGE_MAX = 200;
 function commitMessageProblem(value) {
   if (!value.trim()) return "it is empty";
@@ -410,25 +440,38 @@ function commitSubject(prefix, message) {
   return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
 }
 function decideCommitSubject(choice, proposal, prefix, rerun) {
-  if (choice.message !== void 0 && choice.delegated) {
+  if (choice.message !== void 0 && choice.delegated !== void 0) {
     return {
       error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
     };
   }
+  const unusable = commitMessageProblem(proposal);
+  if (unusable) {
+    return {
+      error: `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to delegate, so ${rerun} with \`--message "<the user's wording>"\`. Nothing was committed.`
+    };
+  }
+  const fingerprint = proposalFingerprint(proposal);
   if (choice.message !== void 0) {
     const problem = commitMessageProblem(choice.message);
     if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
     const subject = commitSubject(prefix, choice.message);
-    if (subject !== proposal && subject.length > COMMIT_MESSAGE_MAX) {
+    const ceiling = Math.max(COMMIT_MESSAGE_MAX, proposal.length);
+    if (subject.length > ceiling) {
       return {
-        error: `that commit message cannot be a commit title: it is longer than ${COMMIT_MESSAGE_MAX} characters. Nothing was committed.`
+        error: `that commit message cannot be a commit title: it is longer than ${ceiling} characters. Nothing was committed.`
       };
     }
     return { subject };
   }
-  if (choice.delegated) return { subject: proposal };
+  if (choice.delegated !== void 0) {
+    if (choice.delegated === fingerprint) return { subject: proposal };
+    return {
+      error: `the message you delegated is not the one this would commit any more: it now says "${proposal}" (${fingerprint}), and the answer named ${choice.delegated}. Show the user the new one, then ${rerun}. Nothing was committed.`
+    };
+  }
   return {
-    error: `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it, or with \`--delegate-message\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+    error: `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it, or with \`--delegate-message ${fingerprint}\` if they answered that you decide. Nothing was committed and nothing was pushed.`
   };
 }
 function loadTeamConfig(home = handbookHome()) {
@@ -888,8 +931,14 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
+  const stopped = (error) => ({
+    ok: false,
+    error,
+    proposedMessage: proposal,
+    proposalHash: proposalFingerprint(proposal)
+  });
   const decided = decideCommitSubject(commitMessage, proposal, commitMessagePrefix(commitPrefix), "run /handbook:init again");
-  if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
+  if ("error" in decided) return stopped(decided.error);
   const workdir = handbookWorkdir("handbook-init-");
   const repoDir = join3(workdir, "repo");
   try {
@@ -917,6 +966,15 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
       ok: false,
       error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
     };
+  }
+  if (isEmptyRepo && commitMessage.delegated !== void 0) {
+    return stopped(
+      `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open. Ask the user for the wording and run /handbook:init again with \`--message "<their wording>"\`. Nothing was committed and nothing was pushed.`
+    );
+  }
+  if (!isEmptyRepo && commitMessage.delegated !== void 0) {
+    const blocked = forgeSignInProblem(url, repoDir, forge);
+    if (blocked) return stopped(delegationNeedsForge(blocked, "run /handbook:init again"));
   }
   const { skipped } = writeSkeletonPreserving(
     repoDir,
@@ -1279,6 +1337,7 @@ function planUpgrade(team, git = runGit) {
       withCi: existsSync4(join5(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
       proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
+      proposalHash: proposalFingerprint(commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE)),
       ...candidates.linked.length ? { linked: candidates.linked } : {},
       ...candidates.withheld.length ? { withheld: candidates.withheld } : {},
       ...unreadable.length ? { unreadable } : {}
@@ -1359,7 +1418,17 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
     const messagePrefix = teamCommitPrefix(team);
     const proposal = commitSubject(messagePrefix, title);
     const decided = decideCommitSubject(commitMessage, proposal, messagePrefix, "run the refresh again");
-    if ("error" in decided) return { ok: false, error: decided.error, proposedMessage: proposal };
+    const stopped = (error) => ({
+      ok: false,
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal)
+    });
+    if ("error" in decided) return stopped(decided.error);
+    if (commitMessage.delegated !== void 0) {
+      const blocked = forgeSignInProblem(team.repoUrl, repoDir, forge);
+      if (blocked) return stopped(delegationNeedsForge(blocked, "run the refresh again"));
+    }
     let raised = null;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -1473,7 +1542,8 @@ function formatUpgradePlan(plan) {
     lines.push(
       "",
       `That request commits as "${plan.proposedMessage}". Pass the message you want with`,
-      '--message "<your wording>", or --delegate-message to use the one above as it stands.'
+      `--message "<your wording>", or --delegate-message ${plan.proposalHash} to use the one above as it`,
+      "stands - the fingerprint is what ties that answer to this exact sentence."
     );
   }
   return lines.join("\n");
@@ -1498,25 +1568,31 @@ function formatUpgradeResult(result) {
 // src/cli/init.ts
 function usage() {
   console.error(
-    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message]"
+    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message <fingerprint>]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>]"
   );
   process.exit(2);
 }
+function valueOf(args, flag) {
+  const at = args.indexOf(flag);
+  if (at === -1) return void 0;
+  const value = args[at + 1];
+  if (!value || value.startsWith("--")) usage();
+  return value;
+}
 function commitMessageFrom(args) {
-  const at = args.indexOf("--message");
-  const value = at === -1 ? void 0 : args[at + 1];
-  if (at !== -1 && (!value || value.startsWith("--"))) usage();
+  const message = valueOf(args, "--message");
+  const delegated = valueOf(args, "--delegate-message");
   return {
-    ...value !== void 0 ? { message: value } : {},
-    ...args.includes("--delegate-message") ? { delegated: true } : {}
+    ...message !== void 0 ? { message } : {},
+    ...delegated !== void 0 ? { delegated } : {}
   };
 }
 function upgrade(args) {
   const files = [];
   const commitMessage = commitMessageFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--upgrade" || args[i] === "--delegate-message") continue;
-    if (args[i] === "--message") {
+    if (args[i] === "--upgrade") continue;
+    if (args[i] === "--message" || args[i] === "--delegate-message") {
       i++;
       continue;
     }
@@ -1564,9 +1640,8 @@ function main() {
   let withCi = false;
   const commitMessage = commitMessageFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--message") {
+    if (args[i] === "--message" || args[i] === "--delegate-message") {
       i++;
-    } else if (args[i] === "--delegate-message") {
     } else if (args[i] === "--name") {
       name = args[++i];
       if (!name) usage();
