@@ -9,6 +9,7 @@ import {
   decideCandidate,
   formatCandidateList,
   auditSkillDir,
+  identityInSkillDir,
   isSafeSlug,
   listArchiveManifests,
   listCandidates,
@@ -554,6 +555,49 @@ describe("auditSkillDir", () => {
     expect(skillRefusalMessage("~/skills/rebuild-nightly-report", "rebuild-nightly-report", audit)).toContain(
       "scripts/seed.sh",
     );
+  });
+
+  // The stand-in names and the path are assembled rather than written out: this repository
+  // refuses a literal absolute home path on any line it takes in, a fixture's included.
+  const STAND_IN = "alice";
+  const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+  const ALICE = { names: [STAND_IN] };
+
+  it("given a home path in a file beside SKILL.md, when it is audited, then the skill is refused and neither the class nor the message carries the trace", () => {
+    const dir = handWrittenSkill("rebuild-nightly-report", {
+      "reference/setup.md": `Run the generator from ${HOME_PATH} once.\n`,
+    });
+
+    const audit = auditSkillDir(dir, { names: [] });
+
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("identity");
+    expect(audit.identity).toEqual({ class: "home-path", where: "reference/setup.md" });
+    const message = skillRefusalMessage("~/skills/rebuild-nightly-report", "rebuild-nightly-report", audit);
+    expect(message).toContain("reference/setup.md");
+    expect(message).toContain("home-path");
+    expect(message).not.toContain(STAND_IN);
+  });
+
+  it("given the account name in the directory name, when it is audited, then it is refused with the name as the place", () => {
+    const dir = handWrittenSkill(`${STAND_IN}-nightly-report`);
+
+    const audit = auditSkillDir(dir, ALICE);
+
+    expect(audit.shareable).toBe(false);
+    expect(audit.identity).toEqual({ class: "os-username", where: "name" });
+    expect(
+      skillRefusalMessage(`~/skills/${STAND_IN}-nightly-report`, `${STAND_IN}-nightly-report`, audit),
+    ).toContain("its name");
+  });
+
+  it("given the account name where a repository owner belongs, when it is audited, then it is shareable - the product put that name there", () => {
+    const dir = handWrittenSkill("rebuild-nightly-report", {
+      "reference/setup.md": `Applies ONLY in the example.com/${STAND_IN}/toolkit repository.\n`,
+    });
+
+    expect(auditSkillDir(dir, ALICE).shareable).toBe(true);
+    expect(identityInSkillDir(dir, undefined, undefined, ALICE)).toBeNull();
   });
 
   it("given a symlink in the directory, when it is audited, then it is refused rather than followed or dropped", () => {

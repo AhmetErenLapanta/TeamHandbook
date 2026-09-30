@@ -1,25 +1,25 @@
 // src/lib/pipeline.ts
 import {
   appendFileSync,
-  mkdirSync as mkdirSync5,
-  readdirSync as readdirSync4,
+  mkdirSync as mkdirSync6,
+  readdirSync as readdirSync5,
   readFileSync as readFileSync8,
   renameSync as renameSync2,
   rmSync as rmSync3,
   statSync,
   utimesSync,
-  writeFileSync as writeFileSync4
+  writeFileSync as writeFileSync5
 } from "node:fs";
-import { basename as basename2, join as join11 } from "node:path";
+import { basename as basename3, join as join12 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname3, join as join7 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname4, join as join8 } from "node:path";
 
 // src/lib/distill.ts
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, isAbsolute, join as join6 } from "node:path";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, isAbsolute, join as join7 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -78,8 +78,158 @@ function configIsBroken(home = handbookHome()) {
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 import { promisify } from "node:util";
+
+// src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
+function maskIdentity(text, host = hostIdentity()) {
+  const found = traces(text, host);
+  if (found.length === 0) return text;
+  let out = "";
+  let at = 0;
+  for (const trace of found) {
+    if (trace.index < at) continue;
+    out += text.slice(at, trace.index) + trace.replacement;
+    at = trace.index + trace.length;
+  }
+  return out + text.slice(at);
+}
 
 // src/lib/prompt-safety.ts
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
@@ -172,10 +322,10 @@ var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 function indent(value) {
   return value.split(LINE_TERMINATORS).map((line) => `  ${line}`).join("\n");
 }
-function fenceUntrusted(fields) {
+function fenceUntrusted(fields, host = hostIdentity()) {
   const body = Object.entries(fields).map(([label, value]) => {
-    const safeLabel = stripSentinels(label).replace(LABEL_BREAKS, " ");
-    const clean = stripSentinels(value ?? "").trim() || "(none)";
+    const safeLabel = maskIdentity(stripSentinels(label).replace(LABEL_BREAKS, " "), host);
+    const clean = maskIdentity(stripSentinels(value ?? ""), host).trim() || "(none)";
     return `${safeLabel}:
 ${indent(clean)}`;
   }).join("\n\n");
@@ -195,18 +345,18 @@ ${indent(clean)}`;
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync3, readdirSync as readdirSync2 } from "node:fs";
-import { basename, join as join4 } from "node:path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
 import { readdirSync, readFileSync as readFileSync2 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
   return join3(home, "candidates");
 }
 function defaultSkillDirs(home = handbookHome(), cwd = process.cwd()) {
-  return [candidatesDir(home), join3(cwd, ".claude", "skills"), join3(homedir2(), ".claude", "skills")];
+  return [candidatesDir(home), join3(cwd, ".claude", "skills"), join3(homedir3(), ".claude", "skills")];
 }
 var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
 function foldBlockScalar(lines, start, folded) {
@@ -454,10 +604,38 @@ function signalSecret(fields) {
   );
 }
 
+// src/lib/skill-files.ts
+import { copyFileSync, mkdirSync as mkdirSync2, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join4 } from "node:path";
+function isQueueBookkeeping(name) {
+  return name.startsWith("candidate.json");
+}
+function listSkillFiles(dir) {
+  const files = [];
+  const skipped = [];
+  const walk = (current, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync2(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
+      const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(join4(current, entry.name), rel);
+      else if (entry.isFile()) files.push(rel);
+      else skipped.push(rel);
+    }
+  };
+  walk(dir, "");
+  return { files, skipped };
+}
+
 // src/lib/queue.ts
 var STATUSES = ["pending", "approved", "rejected", "archived"];
 function candidateMetaFile(dir) {
-  return join4(dir, "candidate.json");
+  return join5(dir, "candidate.json");
 }
 function writeCandidateMeta(dir, meta) {
   writeFileAtomic(candidateMetaFile(dir), JSON.stringify(meta, null, 2) + "\n");
@@ -465,7 +643,7 @@ function writeCandidateMeta(dir, meta) {
 function synthesizeMeta(dir) {
   let md;
   try {
-    md = readFileSync3(join4(dir, "SKILL.md"), "utf8");
+    md = readFileSync3(join5(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -473,12 +651,12 @@ function synthesizeMeta(dir) {
   if (!summary) return null;
   let grounded = {};
   try {
-    grounded = JSON.parse(readFileSync3(join4(dir, "grounded-case.json"), "utf8"));
+    grounded = JSON.parse(readFileSync3(join5(dir, "grounded-case.json"), "utf8"));
   } catch {
   }
   const gate = grounded.gate;
   return {
-    slug: basename(dir),
+    slug: basename2(dir),
     status: "pending",
     createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
     scope: summary.scope ?? "team",
@@ -494,7 +672,7 @@ function readCandidateMeta(dir) {
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return {
         ...parsed,
-        slug: basename(dir),
+        slug: basename2(dir),
         createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
       };
     }
@@ -502,8 +680,23 @@ function readCandidateMeta(dir) {
   }
   return synthesizeMeta(dir);
 }
+function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = listSkillFiles(sourceDir).files, host = hostIdentity()) {
+  const inName = detectIdentity(name, host);
+  if (inName) return { class: inName, where: "name" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join5(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const trace = detectIdentity(content, host);
+    if (trace) return { class: trace, where: file };
+  }
+  return null;
+}
 function patchPendingCandidate(home, slug, patch) {
-  const dir = join4(candidatesDir(home), slug);
+  const dir = join5(candidatesDir(home), slug);
   const current = readCandidateMeta(dir);
   if (!current || current.status !== "pending") return false;
   writeCandidateMeta(dir, { ...current, ...patch });
@@ -513,18 +706,18 @@ function listCandidates(home = handbookHome(), status) {
   const base = candidatesDir(home);
   let entries;
   try {
-    entries = readdirSync2(base, { withFileTypes: true });
+    entries = readdirSync3(base, { withFileTypes: true });
   } catch {
     return [];
   }
-  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join4(base, e.name))).filter((m) => m !== null);
+  const metas = entries.filter((e) => e.isDirectory()).map((e) => readCandidateMeta(join5(base, e.name))).filter((m) => m !== null);
   const filtered = status ? metas.filter((m) => m.status === status) : metas;
   return filtered.sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt) || a.slug.localeCompare(b.slug)
   );
 }
 function mutedFile(home = handbookHome()) {
-  return join4(home, "muted.json");
+  return join5(home, "muted.json");
 }
 function loadMutedFingerprints(home = handbookHome()) {
   try {
@@ -699,7 +892,7 @@ function childInvocation(input) {
   const args = ["-p", input.prompt];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
-  const cwd = mkdtempSync(join5(tmpdir2(), "teamhandbook-child-"));
+  const cwd = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
   return {
     args,
     env: childEnv(),
@@ -751,7 +944,7 @@ function normalizeRemoteUrl(raw) {
 }
 function gitRemoteUrl(cwd) {
   try {
-    const out = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
+    const out = execFileSync2("git", ["-C", cwd, "remote", "get-url", "origin"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     }).trim();
@@ -761,7 +954,7 @@ function gitRemoteUrl(cwd) {
   }
 }
 function remoteUrlForEdits(paths, lookup = gitRemoteUrl) {
-  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname2(p)));
+  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname3(p)));
   const remotes = /* @__PURE__ */ new Set();
   for (const dir of dirs) {
     const remote = lookup(dir);
@@ -784,11 +977,23 @@ var ORIGIN_TEXT = {
   discovery: "convention uncovered during real work",
   "error-fix": "error-to-fix session"
 };
+var SCOPE_SENTENCE = /\s*Applies ONLY in the \S+ repository[^.\r\n]*\.?/g;
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
+function withoutScopeSentence(description) {
+  const cut = CUT_SCOPE_SENTENCE.exec(description.replace(/[\u2013\u2014]/g, "-"));
+  const whole = cut ? description.slice(0, cut.index) : description;
+  return whole.replace(SCOPE_SENTENCE, "").trim();
+}
 function assembleSkillMd(draft, scope, from = false) {
   const origin = typeof from === "string" ? ORIGIN_TEXT[from] ?? "real session" : from ? "completed task" : "error-to-fix session";
   const scoped = scope !== "team";
-  const guard = scoped ? ` Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
-  const description = draft.description + guard;
+  const guard = scoped ? `Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
+  const description = [withoutScopeSentence(draft.description), guard].filter(Boolean).join(" ");
   const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project - ignore this skill in any other repo.
 
 ${draft.body}` : draft.body;
@@ -820,12 +1025,12 @@ function uniqueSlug(baseSlug, taken) {
 }
 function writeCandidate(artifact, home = handbookHome()) {
   const base = candidatesDir(home);
-  const slug = uniqueSlug(artifact.slug, (s) => existsSync2(join6(base, s)));
-  const dir = join6(base, slug);
-  mkdirSync3(dir, { recursive: true });
+  const slug = uniqueSlug(artifact.slug, (s) => existsSync2(join7(base, s)));
+  const dir = join7(base, slug);
+  mkdirSync4(dir, { recursive: true });
   const skillMd = slug === artifact.slug ? artifact.skillMd : renameSkillMd(artifact.skillMd, slug);
-  writeFileSync2(join6(dir, "SKILL.md"), skillMd);
-  writeFileSync2(join6(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
+  writeFileSync3(join7(dir, "SKILL.md"), skillMd);
+  writeFileSync3(join7(dir, "grounded-case.json"), JSON.stringify(artifact.groundedCase, null, 2) + "\n");
   return dir;
 }
 
@@ -849,16 +1054,16 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join7(homedir3(), ".claude", "plugins", "marketplaces");
+  return join8(homedir4(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);
-  return team ? join7(root, team.marketplaceName, "skills") : null;
+  return team ? join8(root, team.marketplaceName, "skills") : null;
 }
 
 // src/lib/counters.ts
-import { mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join8 } from "node:path";
+import { mkdirSync as mkdirSync5, readdirSync as readdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
 var FIELDS = [
   "redactionBlocked",
   "postToolUse",
@@ -868,7 +1073,7 @@ var FIELDS = [
   "gateAbandoned"
 ];
 function countersFile(home = handbookHome()) {
-  return join8(home, "counters.json");
+  return join9(home, "counters.json");
 }
 function readCounters(home = handbookHome()) {
   const base = {
@@ -889,7 +1094,7 @@ function readCounters(home = handbookHome()) {
 function bumpCounter(field, home = handbookHome(), by = 1) {
   const counters = readCounters(home);
   counters[field] += by;
-  mkdirSync4(home, { recursive: true });
+  mkdirSync5(home, { recursive: true });
   writeFileAtomic(countersFile(home), JSON.stringify(counters, null, 2));
   return counters;
 }
@@ -897,22 +1102,22 @@ var DEBUG_DUMP_CAP = 50;
 function maybeDumpPayload(raw, home = handbookHome()) {
   if (!process.env.TEAMHANDBOOK_DEBUG) return;
   try {
-    const dir = join8(home, "debug");
-    mkdirSync4(dir, { recursive: true });
-    const n = readdirSync3(dir).length;
+    const dir = join9(home, "debug");
+    mkdirSync5(dir, { recursive: true });
+    const n = readdirSync4(dir).length;
     if (n >= DEBUG_DUMP_CAP) return;
-    writeFileSync3(join8(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
+    writeFileSync4(join9(dir, `payload-${String(n).padStart(4, "0")}-${process.pid}.json`), raw, { flag: "wx" });
   } catch {
   }
 }
 
 // src/lib/harvest.ts
 import { createHash } from "node:crypto";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 
 // src/lib/teachings.ts
 import { readFileSync as readFileSync6 } from "node:fs";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 var STORE_LIMIT = 2e3;
 var SAMPLE_CHARS = 160;
 var RECORD_VERSION = 2;
@@ -1025,7 +1230,7 @@ function sameTeaching(a, b) {
   return shared === shorter || shared >= 3 && shared / shorter >= 0.5;
 }
 function teachingsFile(home = handbookHome()) {
-  return join9(home, "teachings.json");
+  return join10(home, "teachings.json");
 }
 function readTeachings(home = handbookHome()) {
   try {
@@ -1464,6 +1669,7 @@ function parseItem(raw, grounding) {
   for (const key of ["name", "description", "body", "expect"]) {
     if (typeof o[key] !== "string" || !o[key].trim()) return null;
   }
+  if (!withoutScopeSentence(o.description)) return null;
   if (o.scope !== "team" && o.scope !== "project") return null;
   const scoresRaw = o.scores;
   if (typeof scoresRaw !== "object" || scoresRaw === null) return null;
@@ -1537,6 +1743,18 @@ function parseHarvestResponse(raw, grounding) {
 }
 var MAX_BODY_CHARS = 8e3;
 var MAX_PER_KIND = { discovery: 1 };
+function itemText(item) {
+  return [
+    item.name,
+    item.description,
+    item.body,
+    item.expect,
+    item.quote ?? "",
+    item.task?.goal ?? "",
+    ...item.task?.steps ?? [],
+    item.task?.verification ?? ""
+  ].join("\n");
+}
 function sieveHarvestItems(items, context) {
   const dropped = [];
   const survivors = items.filter((item) => {
@@ -1548,6 +1766,10 @@ function sieveHarvestItems(items, context) {
       task: item.task
     })) {
       dropped.push({ item, reason: "secret" });
+      return false;
+    }
+    if (detectIdentity(itemText(item))) {
+      dropped.push({ item, reason: "identity" });
       return false;
     }
     if (item.body.length > MAX_BODY_CHARS) {
@@ -1616,7 +1838,8 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   const config = loadHarvestConfig(home);
   const runner = deps.runner ?? runClaudeCli;
   const now = deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
-  const { slice, redacted } = job.transcriptPath ? buildTranscriptSlice(job.transcriptPath, config.transcriptCharCap) : { slice: "", redacted: 0 };
+  const { slice: readSlice, redacted } = job.transcriptPath ? buildTranscriptSlice(job.transcriptPath, config.transcriptCharCap) : { slice: "", redacted: 0 };
+  const slice = maskIdentity(readSlice);
   const hasEvidence = job.evidence.pairs.length > 0;
   if (!slice && !hasEvidence) {
     return { outcome: "skipped", reason: "no transcript and no evidence", written: [] };
@@ -1644,7 +1867,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   }
   const items = parseHarvestResponse(response, {
     slice,
-    corrections: (evidence.corrections ?? []).map((c) => c.text),
+    corrections: (evidence.corrections ?? []).map((c) => maskIdentity(c.text)),
     pairFingerprints: new Set(evidence.pairs.map((p) => p.fingerprint))
   });
   if (items === null) {
@@ -1671,7 +1894,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync3(join10(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync3(join11(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,
@@ -1684,6 +1907,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
       groundedCase: groundedCaseFor(item, job.evidence, now())
     };
     const dir = writeCandidate(artifact, home);
+    const trace = identityInSkillDir(dir);
     const meta = {
       slug,
       status: "pending",
@@ -1700,6 +1924,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
       // with no git remote a "project" lesson collapses to scope "team", and
       // routing off that would suggest publishing a one-repo rule to everyone.
       suggestedTarget: item.scope === "project" ? "project" : suggestedTargetFor(scope, teamConfigured),
+      ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {},
       ...echoFor(item, evidence.echoes) ?? {}
     };
     writeCandidateMeta(dir, meta);
@@ -1730,19 +1955,19 @@ function listSkillsSafe(dirs) {
 
 // src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
-  return join11(home, "pending");
+  return join12(home, "pending");
 }
 function enqueueHarvestJob(job, home = handbookHome()) {
-  mkdirSync5(pendingDir(home), { recursive: true });
+  mkdirSync6(pendingDir(home), { recursive: true });
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   const base = `${session}-${Date.now()}`;
-  let file = join11(pendingDir(home), `${base}.json`);
+  let file = join12(pendingDir(home), `${base}.json`);
   for (let i = 0; i < 50; i++) {
     try {
-      writeFileSync4(file, JSON.stringify(job), { flag: "wx" });
+      writeFileSync5(file, JSON.stringify(job), { flag: "wx" });
       return file;
     } catch {
-      file = join11(pendingDir(home), `${base}-x${i}.json`);
+      file = join12(pendingDir(home), `${base}-x${i}.json`);
     }
   }
   return null;
@@ -1753,12 +1978,12 @@ var CLAIM_TEMP = /\.tmp-\d+-\d+-[0-9a-z]+$/;
 function reclaimStaleClaims(dir) {
   let entries;
   try {
-    entries = readdirSync4(dir);
+    entries = readdirSync5(dir);
   } catch {
     return;
   }
   for (const entry of entries) {
-    const file = join11(dir, entry);
+    const file = join12(dir, entry);
     if (CLAIM_TEMP.test(entry)) {
       try {
         if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) rmSync3(file, { force: true });
@@ -1770,7 +1995,7 @@ function reclaimStaleClaims(dir) {
     if (!m) continue;
     try {
       if (Date.now() - statSync(file).mtimeMs > STALE_CLAIM_MS) {
-        renameSync2(file, join11(dir, `reclaimed-${Date.now()}-${m[1].replace(RECLAIM_STAMP, "")}`));
+        renameSync2(file, join12(dir, `reclaimed-${Date.now()}-${m[1].replace(RECLAIM_STAMP, "")}`));
       }
     } catch {
     }
@@ -1781,11 +2006,11 @@ function releaseHarvestJob(claimedFile) {
 }
 var MAX_HARVEST_ATTEMPTS = 3;
 function abandonedFile(home = handbookHome()) {
-  return join11(home, "abandoned.jsonl");
+  return join12(home, "abandoned.jsonl");
 }
 function abandonJob(job, home) {
   try {
-    mkdirSync5(home, { recursive: true });
+    mkdirSync6(home, { recursive: true });
     appendFileSync(abandonedFile(home), JSON.stringify(job) + "\n");
   } catch {
   }
@@ -1796,13 +2021,13 @@ function drainHarvestJobs(home = handbookHome()) {
   cleanupStaleHarvestMarkers(home);
   let entries;
   try {
-    entries = readdirSync4(pendingDir(home));
+    entries = readdirSync5(pendingDir(home));
   } catch {
     return [];
   }
   const jobs = [];
   for (const entry of entries.filter((e) => e.endsWith(".json")).sort()) {
-    const file = join11(pendingDir(home), entry);
+    const file = join12(pendingDir(home), entry);
     const claimed = `${file}.claimed-${process.pid}`;
     try {
       renameSync2(file, claimed);
@@ -1840,12 +2065,12 @@ function drainHarvestJobs(home = handbookHome()) {
   return jobs;
 }
 function pipelineLogFile(home = handbookHome()) {
-  return join11(home, "pipeline.log");
+  return join12(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var LOG_KEEP_LINES = 200;
 function appendPipelineLog(summary, home, ts) {
-  mkdirSync5(home, { recursive: true });
+  mkdirSync6(home, { recursive: true });
   const file = pipelineLogFile(home);
   appendFileSync(file, JSON.stringify({ ts, ...summary }) + "\n");
   try {
@@ -1857,7 +2082,7 @@ function appendPipelineLog(summary, home, ts) {
   }
 }
 function harvestedDir(home = handbookHome()) {
-  return join11(home, "harvested");
+  return join12(home, "harvested");
 }
 function harvestMarkerFile(job, home) {
   if (!job.transcriptPath) return null;
@@ -1868,7 +2093,7 @@ function harvestMarkerFile(job, home) {
     return null;
   }
   const session = job.sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
-  return join11(harvestedDir(home), `${session}-${size}`);
+  return join12(harvestedDir(home), `${session}-${size}`);
 }
 var MARKER_CLAIMED = "claimed";
 var MARKER_DONE = "done";
@@ -1881,8 +2106,8 @@ function markerIsFinished(marker) {
 }
 function claimHarvest(marker, home) {
   try {
-    mkdirSync5(harvestedDir(home), { recursive: true });
-    writeFileSync4(marker, MARKER_CLAIMED, { flag: "wx" });
+    mkdirSync6(harvestedDir(home), { recursive: true });
+    writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
     return true;
   } catch (err) {
     if (err?.code !== "EEXIST") return true;
@@ -1896,7 +2121,7 @@ function claimHarvest(marker, home) {
     if (Date.now() - claimedAt <= STALE_CLAIM_MS) return false;
     rmSync3(marker, { force: true });
     try {
-      writeFileSync4(marker, MARKER_CLAIMED, { flag: "wx" });
+      writeFileSync5(marker, MARKER_CLAIMED, { flag: "wx" });
       return true;
     } catch {
       return false;
@@ -1905,7 +2130,7 @@ function claimHarvest(marker, home) {
 }
 function finishHarvest(marker) {
   try {
-    writeFileSync4(marker, MARKER_DONE);
+    writeFileSync5(marker, MARKER_DONE);
   } catch {
   }
 }
@@ -1914,13 +2139,13 @@ function cleanupStaleHarvestMarkers(home, now = Date.now()) {
   const dir = harvestedDir(home);
   let entries;
   try {
-    entries = readdirSync4(dir);
+    entries = readdirSync5(dir);
   } catch {
     return;
   }
   for (const entry of entries) {
     try {
-      const file = join11(dir, entry);
+      const file = join12(dir, entry);
       const horizon = markerIsFinished(file) ? MARKER_MAX_AGE_MS : STALE_CLAIM_MS;
       if (now - statSync(file).mtimeMs > horizon) rmSync3(file, { force: true });
     } catch {

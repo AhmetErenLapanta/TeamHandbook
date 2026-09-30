@@ -232,6 +232,45 @@ describe("buildInventory", () => {
     expect(readFileSync(join(queued, "SKILL.md"), "utf8")).toBe(stale);
   });
 
+  it("given a skill carrying a home path, when the inventory is read, then the screen offers it as unshareable and says where", () => {
+    // Assembled rather than written out: this repository refuses a literal absolute home
+    // path on any line it takes in, a fixture's included.
+    const homePath = ["", "Users", "alice", "work", "api"].join("/");
+    writeSkill(userHome, "deploy-runbook", { "reference/setup.md": `Run it from ${homePath}.\n` });
+
+    const skill = buildInventory(paths()).skills[0]!;
+
+    expect(skill.shareable).toBe(false);
+    expect(skill.shareable === false && skill.reason).toContain('its file "reference/setup.md"');
+    expect(skill.shareable === false && skill.reason).toContain("home-path");
+    expect(JSON.stringify(skill)).not.toContain("alice");
+  });
+
+  it("given a command and a server that carry this machine, when the inventory is read, then both are offered as unshareable with their class", () => {
+    // All three kinds leave through this one screen, so all three are screened here.
+    const standIn = "alice";
+    const homePath = ["", "Users", standIn, "work", "api"].join("/");
+    writeCommand(userHome, "deploy", `Run it from ${homePath}.\n`);
+    writeServers({ notes: { command: "node", args: [`${homePath}/servers/notes.js`] } });
+
+    const inv = buildInventory(paths());
+
+    const command = inv.commands[0]!;
+    const server = inv.servers[0]!;
+    expect(command.shareable).toBe(false);
+    expect(command.shareable === false && command.reason).toContain("carries a trace of this machine");
+    expect(server.shareable).toBe(false);
+    expect(server.shareable === false && server.reason).toContain("carries a trace of this machine");
+    // Only the sentences are checked: the inventory itself holds the server definition as
+    // the user's own config has it, which is this machine describing itself to its owner.
+    const said = [
+      command.shareable === false && command.reason,
+      server.shareable === false && server.reason,
+      server.shareable === false && server.fullReason,
+    ].join(" ");
+    expect(said).not.toContain(standIn);
+  });
+
   it("given a file sitting beside the skills, when the inventory is read, then it is not a skill that failed", () => {
     writeSkill(userHome, "deploy-runbook");
     writeFileSync(join(userHome, ".claude", "skills", ".DS_Store"), "junk");

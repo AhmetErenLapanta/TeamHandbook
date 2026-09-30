@@ -106,10 +106,10 @@ const noForge = (_tool: "gh" | "glab", _args: string[]) => {
 const signedInForge = (_tool: "gh" | "glab", args: string[]) =>
   args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/team/skills/-/merge_requests/1";
 
-function localSkill(name: string): string {
+function localSkill(name: string, body = "Body."): string {
   const dir = join(mkdtempSync(join(tmpdir(), "handbook-skill-")), name);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: What ${name} is for.\n---\n\nBody.\n`);
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: What ${name} is for.\n---\n\n${body}\n`);
   return dir;
 }
 
@@ -118,9 +118,10 @@ function share(
   name = "my-skill",
   commitMessage: CommitMessageChoice = APPROVED,
   forge: ForgeRunner = noForge,
+  body?: string,
 ) {
   return publishTeamSelection(
-    { skills: [{ name, dir: localSkill(name) }] },
+    { skills: [{ name, dir: localSkill(name, body) }] },
     loadTeamConfig(home)!,
     gitAs(identity),
     forge,
@@ -404,6 +405,41 @@ describe("share by someone who joined a project that was already answered", () =
     expect(outcome).toMatchObject({ ok: true, branch: "TEAM-1-skills-my-skill", learnedBranchPrefix: BRANCH_PREFIX });
     // the refused name is not left behind on the project
     expect(repo.branches()).not.toContain("handbook/skills-my-skill");
+  });
+});
+
+describe("a skill carrying a trace of the machine it was written on", () => {
+  // The stand-in name and the path are assembled rather than written out: this repository
+  // refuses a literal absolute home path on any line it takes in, a fixture's included.
+  const STAND_IN = "alice";
+  const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+
+  it("given a home path in its body, when it is shared, then the project is never opened and the refusal names the class, not the trace", () => {
+    const repo = project();
+    initTeamRepo(repo.url, "acme-skills", home, gitAs(MEMBER), undefined, noForge);
+    repo.mergeIntoDefault("handbook/scaffold");
+    const before = repo.branches();
+
+    const result = share(MEMBER, "leaky-skill", APPROVED, noForge, `Run the suite from ${HOME_PATH} first.`);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("carries a trace of this machine");
+    expect(result.error).toContain("home-path");
+    // The whole outcome, not just the message: a refusal that prints the trace back would
+    // put it in the terminal, the transcript and whatever the user pastes next.
+    expect(JSON.stringify(result)).not.toContain(STAND_IN);
+    expect(repo.branches()).toEqual(before);
+  });
+
+  it("given the same skill with the path taken out, when it is shared, then it goes out - the refusal was the trace, not the skill", () => {
+    const repo = project();
+    initTeamRepo(repo.url, "acme-skills", home, gitAs(MEMBER), undefined, noForge);
+    repo.mergeIntoDefault("handbook/scaffold");
+
+    const result = share(MEMBER, "leaky-skill", APPROVED, noForge, "Run the suite from the repository root first.");
+
+    expect(result).toMatchObject({ ok: true, branch: "handbook/skills-leaky-skill" });
+    expect(repo.filesOn("handbook/skills-leaky-skill")).toContain("skills/leaky-skill/SKILL.md");
   });
 });
 

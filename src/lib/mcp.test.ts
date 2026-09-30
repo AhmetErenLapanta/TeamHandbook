@@ -27,6 +27,39 @@ describe("auditServer", () => {
     });
   });
 
+  it("given a server started from a path under a home directory, when audited, then it is refused and the trace is not printed", () => {
+    // Assembled rather than written out: this repository refuses a literal absolute home
+    // path on any line it takes in, a fixture's included.
+    const standIn = "alice";
+    const script = ["", "Users", standIn, "servers", "notes", "index.js"].join("/");
+
+    const audit = auditServer({ command: "node", args: [script] });
+
+    expect(audit).toMatchObject({ migratable: false, reason: "identity", detail: "home-path" });
+    const message = refusalMessage("notes", audit);
+    expect(message).toContain("home-path");
+    expect(message).not.toContain(standIn);
+    // The credential rules come first, so this is what is left AFTER them: a definition
+    // that no rule about secrets would have stopped, and that resolves to nothing on the
+    // machine it is being sent to.
+    expect(detectSecret(JSON.stringify({ command: "node", args: [script] }))).toBeNull();
+  });
+
+  it("given a home directory in a linux-shaped argument, when audited, then it is refused there too", () => {
+    const cache = ["", "home", "alice", "cache"].join("/");
+
+    expect(auditServer({ command: "npx", args: ["@acme/mcp", "--cache", cache] })).toMatchObject({
+      migratable: false,
+      reason: "identity",
+    });
+  });
+
+  it("given a server that names no machine, when audited, then nothing in this rule stops it", () => {
+    expect(auditServer({ command: "npx", args: ["@acme/mcp", "--cache", "./cache"] })).toMatchObject({
+      migratable: true,
+    });
+  });
+
   it("given a literal in a header, when audited, then it is refused on structure alone - not on pattern", () => {
     const withBearer = { type: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer 8f2c41d9ab7e05631cd4a29f" } };
     const withCookie = { type: "http", url: "https://api.example.com/mcp", headers: { Cookie: "session=9f13ab2c6d" } };

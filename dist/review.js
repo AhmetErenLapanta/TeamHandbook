@@ -4,11 +4,11 @@ import { join as join13 } from "node:path";
 
 // src/lib/deliver.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6, rmSync as rmSync5 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { basename as basename2, join as join9 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { basename as basename3, join as join9 } from "node:path";
 
 // src/lib/init.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join7 } from "node:path";
@@ -82,6 +82,156 @@ import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join6 } from "node:path";
 import { promisify } from "node:util";
+
+// src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
+function maskIdentity(text, host = hostIdentity()) {
+  const found = traces(text, host);
+  if (found.length === 0) return text;
+  let out = "";
+  let at = 0;
+  for (const trace of found) {
+    if (trace.index < at) continue;
+    out += text.slice(at, trace.index) + trace.replacement;
+    at = trace.index + trace.length;
+  }
+  return out + text.slice(at);
+}
 
 // src/lib/prompt-safety.ts
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
@@ -174,10 +324,10 @@ var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 function indent(value) {
   return value.split(LINE_TERMINATORS).map((line) => `  ${line}`).join("\n");
 }
-function fenceUntrusted(fields) {
+function fenceUntrusted(fields, host = hostIdentity()) {
   const body = Object.entries(fields).map(([label, value]) => {
-    const safeLabel = stripSentinels(label).replace(LABEL_BREAKS, " ");
-    const clean = stripSentinels(value ?? "").trim() || "(none)";
+    const safeLabel = maskIdentity(stripSentinels(label).replace(LABEL_BREAKS, " "), host);
+    const clean = maskIdentity(stripSentinels(value ?? ""), host).trim() || "(none)";
     return `${safeLabel}:
 ${indent(clean)}`;
   }).join("\n\n");
@@ -198,7 +348,7 @@ ${indent(clean)}`;
 
 // src/lib/queue.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join5 } from "node:path";
+import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
 import { join as join3 } from "node:path";
@@ -472,7 +622,7 @@ function synthesizeMeta(dir) {
   }
   const gate = grounded.gate;
   return {
-    slug: basename(dir),
+    slug: basename2(dir),
     status: "pending",
     createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
     scope: summary.scope ?? "team",
@@ -488,13 +638,51 @@ function readCandidateMeta(dir) {
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return {
         ...parsed,
-        slug: basename(dir),
+        slug: basename2(dir),
         createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
       };
     }
   } catch {
   }
   return synthesizeMeta(dir);
+}
+function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = listSkillFiles(sourceDir).files, host = hostIdentity()) {
+  const inName = detectIdentity(name, host);
+  if (inName) return { class: inName, where: "name" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join5(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const trace = detectIdentity(content, host);
+    if (trace) return { class: trace, where: file };
+  }
+  return null;
+}
+function identityPlace(where) {
+  return where === "name" ? "its name" : `its file "${where}"`;
+}
+function skillRefusalMessage(shownDir, slug, audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
+    case "no-skill-md":
+      return `no readable SKILL.md in ${shownDir}`;
+    case "no-frontmatter":
+      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
+    case "irregular-entry":
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was shared`;
+    case "no-files":
+      return `${slug} has no files to share`;
+    case "unreadable":
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
+    case "identity":
+      return `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
+    default:
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+  }
 }
 function listCandidates(home = handbookHome(), status) {
   const base = candidatesDir(home);
@@ -944,6 +1132,12 @@ function normalizeRemoteUrl(raw) {
   if (slash <= 0 || slash === s.length - 1) return null;
   return s.slice(0, slash).toLowerCase() + s.slice(slash);
 }
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
 function renameSkillMd(skillMd, newSlug) {
   return skillMd.replace(/^name:.*$/m, `name: ${newSlug}`);
 }
@@ -954,7 +1148,7 @@ function uniqueSlug(baseSlug, taken) {
 }
 
 // src/lib/forge.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 function hostFromUrl(url) {
   const normalized = normalizeRemoteUrl(url);
   if (!normalized) return null;
@@ -962,7 +1156,7 @@ function hostFromUrl(url) {
 }
 var FORGE_TIMEOUT_MS = 6e4;
 function runForge(tool, args, cwd) {
-  return execFileSync(tool, args, {
+  return execFileSync2(tool, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
@@ -1031,9 +1225,9 @@ function noRequestPossible(reason) {
 }
 
 // src/lib/display-path.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir2()) {
+function displayPath(path, userHome = homedir3()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -1192,7 +1386,7 @@ function summarizeGitStderr(stderr, tailLines = 3) {
 }
 function runGit(args, cwd) {
   try {
-    return execFileSync2("git", args, {
+    return execFileSync3("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
@@ -1463,6 +1657,18 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   if (!isSafeSlug(skillSlug)) {
     return { ok: false, error: `"${skillSlug}" cannot be a skill name (lowercase letters, digits and dashes)` };
   }
+  const trace = identityInSkillDir(candidateDir, skillSlug);
+  if (trace) {
+    return {
+      ok: false,
+      error: skillRefusalMessage(displayPath(candidateDir), skillSlug, {
+        shareable: false,
+        reason: "identity",
+        detail: trace.class,
+        identity: trace
+      })
+    };
+  }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, error: identity.error };
   const identityArgs = identity.args;
@@ -1557,7 +1763,7 @@ function soloSkillsDir(projectCwd) {
   return join9(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join9(homedir3(), ".claude", "skills");
+  return join9(homedir4(), ".claude", "skills");
 }
 function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
@@ -1568,7 +1774,7 @@ function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync4) {
 function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
-  return `${basename2(origin)}'s .claude/skills (where it was captured, not this project)`;
+  return `${basename3(origin)}'s .claude/skills (where it was captured, not this project)`;
 }
 function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
@@ -1639,17 +1845,32 @@ function namedAs(placed) {
     ...placed.updatedExisting ? { updatedExisting: true } : {}
   };
 }
+function traceInCandidate(dir, meta, options) {
+  return identityInSkillDir(dir, options.as ?? meta.slug);
+}
+function identityRefusal(dir, slug, trace) {
+  return skillRefusalMessage(displayPath(dir), slug, {
+    shareable: false,
+    reason: "identity",
+    detail: trace.class,
+    identity: trace
+  });
+}
 function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir(), options = {}) {
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "personal", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
   }
+  const trace = traceInCandidate(dir, meta, options);
   const updated = {
     ...meta,
     status: "approved",
     decidedAt,
     deliveredTo: placed.target,
-    deliveredMode: "personal"
+    deliveredMode: "personal",
+    // Recorded, not refused: this copy stays on the machine the trace names. The record is
+    // what the reviewer sees if they later decide it should go to a project or the team.
+    ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}
   };
   writeCandidateMeta(dir, updated);
   return {
@@ -1699,7 +1920,11 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
   const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
-  const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
+  const originProject2 = installedProject !== fallbackCwd ? basename3(installedProject) : void 0;
+  const trace = traceInCandidate(dir, meta, options);
+  if (trace) {
+    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, options.as ?? meta.slug, trace) };
+  }
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "solo", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
@@ -2057,7 +2282,7 @@ function pendingHarvestCount(home = handbookHome()) {
 import { readFileSync as readFileSync9 } from "node:fs";
 
 // src/lib/pipeline.ts
-import { basename as basename3, join as join12 } from "node:path";
+import { basename as basename4, join as join12 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
   return join12(home, "pipeline.log");
@@ -2106,6 +2331,12 @@ function showCandidate(home, slug) {
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
+  const trace = identityInSkillDir(dir, slug);
+  if (trace) {
+    console.log(
+      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine (${trace.class}) - approving this to a project or to the team is refused; keeping it for yourself still works, or take the trace out first`
+    );
+  }
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
     const dissent = gate.total < threshold ? `  - below the ${threshold}/10 bar` : "";

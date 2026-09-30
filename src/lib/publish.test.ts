@@ -941,6 +941,37 @@ describe("publishCandidate carries the whole skill", () => {
     expect(files).toContain("skills/fix-npm-test/references/queries.sql");
   });
 
+  it("given a grounded case carrying the machine it was learned on, when it is approved to the team, then nothing is pushed and the refusal names the class, not the trace", () => {
+    // The route that matters for a candidate: it never reaches the share screen, so this is
+    // where its own trace would otherwise travel - into the installed file AND into the body
+    // of the merge request, which prints the recorded paths.
+    // Assembled rather than written out: this repository refuses a literal absolute home
+    // path on any line it takes in, a fixture's included.
+    const standIn = "alice";
+    const homePath = ["", "Users", standIn, "work", "api"].join("/");
+    writeFileSync(
+      join(candidateDir, "grounded-case.json"),
+      JSON.stringify({ ...groundedCase(), edits: [`${homePath}/src/app.ts`] }) + "\n",
+    );
+    remote = teamRepo();
+    const before = gitIn(remote, ["branch", "--list"]);
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("carries a trace of this machine");
+    expect(result.error).toContain("home-path");
+    expect(result.error).toContain("grounded-case.json");
+    expect(JSON.stringify(result)).not.toContain(standIn);
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
   it("given an ordinary harvest candidate, when it is shared, then only its two files go out", () => {
     // the pre-existing behaviour, pinned: a general copy must not start shipping more
     remote = teamRepo();

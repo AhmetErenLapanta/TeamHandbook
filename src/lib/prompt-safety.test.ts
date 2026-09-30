@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fenceUntrusted, stripSentinels, UNTRUSTED_OPEN, UNTRUSTED_CLOSE } from "./prompt-safety.js";
+import type { HostIdentity } from "./identity.js";
 
 describe("fenceUntrusted", () => {
   it("wraps fields in sentinels and labels them as untrusted data", () => {
@@ -22,6 +23,32 @@ describe("fenceUntrusted", () => {
 
   it("renders empty fields as (none)", () => {
     expect(fenceUntrusted({ command: "" })).toContain("command:\n  (none)");
+  });
+});
+
+describe("the fence takes the machine off everything it holds", () => {
+  // Stand-in names, and the home path is assembled rather than written out: this
+  // repository refuses a literal absolute home path on any line it takes in.
+  const ZOLTAN: HostIdentity = { names: ["zoltan"] };
+  const homeOf = (name: string) => ["", "Users", name].join("/");
+
+  it("masks a home path in a value, leaving the rest of the field readable", () => {
+    const out = fenceUntrusted({ "failed command": `npm test in ${homeOf("zoltan")}/work/api` }, ZOLTAN);
+
+    expect(out).not.toContain("zoltan");
+    expect(out).toContain("npm test in ~/work/api");
+  });
+
+  it("masks a label too, because one caller labels its fields with skill names", () => {
+    const out = fenceUntrusted({ [`${homeOf("zoltan")}/skills/x`]: "body" }, ZOLTAN);
+
+    expect(out).not.toContain("zoltan");
+  });
+
+  it("masks an address and the account name wherever they sit", () => {
+    const out = fenceUntrusted({ note: "ask zoltan or bob@acme.corp" }, ZOLTAN);
+
+    expect(out).toContain("ask <user> or <email>");
   });
 });
 

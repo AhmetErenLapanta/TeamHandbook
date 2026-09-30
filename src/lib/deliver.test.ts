@@ -451,6 +451,60 @@ describe("three-way delivery (v2)", () => {
     expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
   });
 
+  // Assembled rather than written out: this repository refuses a literal absolute home path
+  // on any line it takes in, a fixture's included.
+  const STAND_IN = "alice";
+  const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+
+  function tracedCandidate(): string {
+    const dir = seedCandidate(meta());
+    writeFileSync(
+      join(dir, "grounded-case.json"),
+      JSON.stringify({ fingerprint: "abc123", edits: [`${HOME_PATH}/src/app.ts`] }) + "\n",
+    );
+    return dir;
+  }
+
+  it("given a candidate carrying a trace of this machine, when it is approved into a project, then nothing is written and the refusal names the class", () => {
+    // A project skill is committed with the repository, so this copy reaches everyone who
+    // clones it - the same journey the team route makes, through the reviewer's own commit.
+    const dir = tracedCandidate();
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("carries a trace of this machine");
+    expect(result.error).toContain("home-path");
+    expect(JSON.stringify(result)).not.toContain(STAND_IN);
+    expect(existsSync(join(soloSkillsDir(project), "fix-npm-test"))).toBe(false);
+    // still waiting for a verdict, so the reviewer can keep it or clean it up
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+
+  it("given the same candidate, when it is kept personally, then it is delivered and the trace is recorded rather than refused", () => {
+    const dir = tracedCandidate();
+    const personal = mkdtempSync(join(tmpdir(), "handbook-personal-"));
+    try {
+      const result = approveAndDeliver(
+        home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+        null, undefined, undefined, "personal", personal,
+      );
+
+      expect(result).toMatchObject({ ok: true, mode: "personal" });
+      expect(existsSync(join(personal, "fix-npm-test", "SKILL.md"))).toBe(true);
+      // the copy stays on the machine the trace names, and the record says what is in it
+      expect(readCandidateMeta(dir)?.hygiene).toEqual({
+        identity: "home-path",
+        where: "grounded-case.json",
+      });
+    } finally {
+      rmSync(personal, { recursive: true, force: true });
+    }
+  });
+
   it("follows the harvest's suggestedTarget when no explicit target is given", () => {
     seedCandidate(meta({ suggestedTarget: "project" }));
     // even with a team configured, the suggestion wins over the legacy default

@@ -250,14 +250,14 @@ import {
   utimesSync,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename2, join as join10 } from "node:path";
+import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/init.ts
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/lib/distill.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join6 } from "node:path";
 
@@ -282,6 +282,153 @@ import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join5 } from "node:path";
 import { promisify } from "node:util";
+
+// src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function maskIdentity(text, host = hostIdentity()) {
+  const found = traces(text, host);
+  if (found.length === 0) return text;
+  let out = "";
+  let at = 0;
+  for (const trace of found) {
+    if (trace.index < at) continue;
+    out += text.slice(at, trace.index) + trace.replacement;
+    at = trace.index + trace.length;
+  }
+  return out + text.slice(at);
+}
 
 // src/lib/prompt-safety.ts
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
@@ -374,10 +521,10 @@ var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 function indent(value) {
   return value.split(LINE_TERMINATORS).map((line) => `  ${line}`).join("\n");
 }
-function fenceUntrusted(fields) {
+function fenceUntrusted(fields, host = hostIdentity()) {
   const body = Object.entries(fields).map(([label, value]) => {
-    const safeLabel = stripSentinels(label).replace(LABEL_BREAKS, " ");
-    const clean = stripSentinels(value ?? "").trim() || "(none)";
+    const safeLabel = maskIdentity(stripSentinels(label).replace(LABEL_BREAKS, " "), host);
+    const clean = maskIdentity(stripSentinels(value ?? ""), host).trim() || "(none)";
     return `${safeLabel}:
 ${indent(clean)}`;
   }).join("\n\n");
@@ -397,17 +544,17 @@ ${indent(clean)}`;
 }
 
 // src/lib/queue.ts
-import { basename, join as join4 } from "node:path";
+import { basename as basename2, join as join4 } from "node:path";
 
 // src/lib/skill-index.ts
 import { readdirSync as readdirSync2, readFileSync as readFileSync3 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { join as join3 } from "node:path";
 function candidatesDir(home = handbookHome()) {
   return join3(home, "candidates");
 }
 function defaultSkillDirs(home = handbookHome(), cwd = process.cwd()) {
-  return [candidatesDir(home), join3(cwd, ".claude", "skills"), join3(homedir2(), ".claude", "skills")];
+  return [candidatesDir(home), join3(cwd, ".claude", "skills"), join3(homedir3(), ".claude", "skills")];
 }
 var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
 function foldBlockScalar(lines, start, folded) {
@@ -1042,7 +1189,7 @@ function normalizeRemoteUrl(raw) {
 }
 function gitRemoteUrl(cwd) {
   try {
-    const out = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
+    const out = execFileSync2("git", ["-C", cwd, "remote", "get-url", "origin"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     }).trim();
@@ -1145,11 +1292,23 @@ var ORIGIN_TEXT = {
   discovery: "convention uncovered during real work",
   "error-fix": "error-to-fix session"
 };
+var SCOPE_SENTENCE = /\s*Applies ONLY in the \S+ repository[^.\r\n]*\.?/g;
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
+function withoutScopeSentence(description) {
+  const cut = CUT_SCOPE_SENTENCE.exec(description.replace(/[\u2013\u2014]/g, "-"));
+  const whole = cut ? description.slice(0, cut.index) : description;
+  return whole.replace(SCOPE_SENTENCE, "").trim();
+}
 function assembleSkillMd(draft, scope, from = false) {
   const origin = typeof from === "string" ? ORIGIN_TEXT[from] ?? "real session" : from ? "completed task" : "error-to-fix session";
   const scoped = scope !== "team";
-  const guard = scoped ? ` Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
-  const description = draft.description + guard;
+  const guard = scoped ? `Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
+  const description = [withoutScopeSentence(draft.description), guard].filter(Boolean).join(" ");
   const body = scoped ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project - ignore this skill in any other repo.
 
 ${draft.body}` : draft.body;
@@ -1208,6 +1367,9 @@ async function distillVerdict(verdict, occurrences, config = defaultDistillConfi
   if (signalSecret({ command: draft.body, error: draft.description, edits: [draft.expect] })) {
     return { signal, outcome: "error", error: "distilled output contained secret-like content" };
   }
+  if (!withoutScopeSentence(draft.description)) {
+    return { signal, outcome: "error", error: "description was only the scope sentence" };
+  }
   const generality = verdict.result?.scores.generality ?? 0;
   const remote = remoteUrl(signal.cwd) ?? remoteUrlForEdits(signal.edits, remoteUrl);
   const scope = resolveScope(generality, normalizeRemoteUrl(remote ?? ""));
@@ -1261,7 +1423,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 function marketplacesRoot() {
-  return join7(homedir3(), ".claude", "plugins", "marketplaces");
+  return join7(homedir4(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);
@@ -1495,7 +1657,7 @@ async function runManualSignal(signal, home = handbookHome(), deps = {}, now = (
     return finish({ stage: "error", message: outcome.error ?? "distillation failed" });
   }
   const dir = writeCandidate(outcome.artifact, home);
-  const slug = basename2(dir);
+  const slug = basename3(dir);
   writeCandidateMeta(dir, candidateMetaFromArtifact(slug, outcome.artifact, verdict, now()));
   summary.written.push(slug);
   return finish({

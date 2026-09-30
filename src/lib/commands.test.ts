@@ -106,6 +106,36 @@ describe("auditCommand", () => {
     expect(commandRefusalMessage("deploy", audit)).toContain("github-token");
   });
 
+  it("given a command that says where to run it from, when it is audited, then the home path refuses it without being printed", () => {
+    // Assembled rather than written out: this repository refuses a literal absolute home
+    // path on any line it takes in, a fixture's included.
+    const standIn = "alice";
+    const homePath = ["", "Users", standIn, "work", "api"].join("/");
+    const file = writeCommand(userHome, "deploy", `Run it from ${homePath} before anything else.\n`);
+
+    const audit = auditCommand(file);
+
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("identity");
+    expect(audit.identity).toEqual({ class: "home-path", where: "deploy.md" });
+    const message = commandRefusalMessage("deploy", audit);
+    expect(message).toContain("home-path");
+    expect(message).toContain("deploy.md");
+    expect(message).not.toContain(standIn);
+  });
+
+  it("given a command that names an address, when it is audited, then it is refused too", () => {
+    const file = writeCommand(userHome, "notify", "Mail the result to bob@acme.corp.\n");
+
+    expect(auditCommand(file).reason).toBe("identity");
+  });
+
+  it("given a command with no trace of this machine, when it is audited, then nothing stops it", () => {
+    const file = writeCommand(userHome, "deploy", "Run it from the repository root before anything else.\n");
+
+    expect(auditCommand(file).shareable).toBe(true);
+  });
+
   it("given a name that is not a safe path component, when it is audited, then it cannot travel under it", () => {
     const file = writeCommand(userHome, "Deploy Prod", "Nothing secret here.\n");
 

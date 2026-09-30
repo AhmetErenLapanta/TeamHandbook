@@ -50,6 +50,26 @@ describe("buildScorePrompt", () => {
     expect(prompt).toContain("occurrences within the session: 3");
   });
 
+  it("given a case whose commands and edits are absolute, when the prompt is built, then the gate sends no part of the machine", () => {
+    // The promotion gate runs on the /handbook:learn path too, where the developer asks
+    // for one thing to be kept and every field of it is a real path from their session.
+    // Assembled rather than written out, as elsewhere in this repository.
+    const standIn = "zoltan";
+    const home = ["", "Users", standIn, "work", "api"].join("/");
+
+    const prompt = buildScorePrompt(
+      candidate({
+        command: `npm test --prefix ${home}`,
+        resolvedCommand: `npm test --prefix ${home}`,
+        edits: [`${home}/app.ts`],
+      }),
+      4,
+    );
+
+    expect(prompt).not.toContain(standIn);
+    expect(prompt).toContain("files edited for the fix:\n  ~/work/api/app.ts");
+  });
+
   it("marks missing resolution and edits explicitly", () => {
     const prompt = buildScorePrompt(candidate({ resolvedCommand: undefined, edits: [] }), 1);
     expect(prompt).toContain("resolving command:\n  (none recorded)");

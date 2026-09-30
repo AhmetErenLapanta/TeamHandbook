@@ -9,8 +9,15 @@ import { conflictingOptions, mayUpdate, publishCandidate, runForge } from "./pub
 import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
-import { isSafeSlug, readCandidateMeta, writeCandidateMeta } from "./queue.js";
+import {
+  identityInSkillDir,
+  isSafeSlug,
+  readCandidateMeta,
+  skillRefusalMessage,
+  writeCandidateMeta,
+} from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
+import type { IdentityClass } from "./identity.js";
 import { displayPath } from "./display-path.js";
 
 export function soloSkillsDir(projectCwd: string): string {
@@ -247,6 +254,29 @@ function namedAs(
   };
 }
 
+/**
+ * The trace of this machine in the candidate about to be delivered, under the name it
+ * will be delivered as.
+ *
+ * What is done with the answer depends on WHERE it is going, and that is the whole of the
+ * rule: a project copy is committed to a repository other people read, so a trace there is
+ * refused exactly as the team route refuses it, while a personal copy never leaves this
+ * machine and the path in it may be the reviewer's own working directory - refusing that
+ * would take a working skill away over a trace that is true and useful where it lands.
+ */
+function traceInCandidate(dir: string, meta: CandidateMeta, options: DeliveryOptions) {
+  return identityInSkillDir(dir, options.as ?? meta.slug);
+}
+
+function identityRefusal(dir: string, slug: string, trace: { class: IdentityClass; where: string }): string {
+  return skillRefusalMessage(displayPath(dir), slug, {
+    shareable: false,
+    reason: "identity",
+    detail: trace.class,
+    identity: trace,
+  });
+}
+
 /** Install into the user-level skills dir: available in every project, only for
  * this user. No origin-project logic - personal skills follow the person. */
 export function deliverPersonal(
@@ -260,12 +290,16 @@ export function deliverPersonal(
   if ("error" in placed) {
     return { ok: false, mode: "personal", meta, error: placed.error, ...(placed.collision ? { collision: placed.collision } : {}) };
   }
+  const trace = traceInCandidate(dir, meta, options);
   const updated: CandidateMeta = {
     ...meta,
     status: "approved",
     decidedAt,
     deliveredTo: placed.target,
     deliveredMode: "personal",
+    // Recorded, not refused: this copy stays on the machine the trace names. The record is
+    // what the reviewer sees if they later decide it should go to a project or the team.
+    ...(trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}),
   };
   writeCandidateMeta(dir, updated);
   return {
@@ -340,6 +374,13 @@ function deliverSolo(
   // is false for the session they will actually open.
   const installedProject = meta.cwd && existsSync(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject = installedProject !== fallbackCwd ? basename(installedProject) : undefined;
+  // Before anything is written: a project skill is committed with the repository, so this
+  // copy travels to everyone who clones it - the same journey the team route makes, taken
+  // through the reviewer's own commit instead of a merge request.
+  const trace = traceInCandidate(dir, meta, options);
+  if (trace) {
+    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, options.as ?? meta.slug, trace) };
+  }
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "solo", meta, error: placed.error, ...(placed.collision ? { collision: placed.collision } : {}) };

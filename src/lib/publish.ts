@@ -25,7 +25,7 @@ import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, noRequestPossible, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
-import { auditSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
+import { auditSkillDir, identityInSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { auditServer, declaredServerNames, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
@@ -458,6 +458,24 @@ export function publishCandidate(
   const skillSlug = options.as ?? meta.slug;
   if (!isSafeSlug(skillSlug)) {
     return { ok: false, error: `"${skillSlug}" cannot be a skill name (lowercase letters, digits and dashes)` };
+  }
+  // Ahead of every git call, and ahead of the identity the PUSH runs under, which is a
+  // different thing entirely: this is the last point where a candidate carrying the
+  // machine it was learned on can be stopped. The review screen marks it when it is
+  // written, because keeping such a lesson for yourself is fine; sending it is not, and
+  // the grounded case is what makes this the route that matters - its recorded paths reach
+  // both the file the team installs and the body of the merge request itself.
+  const trace = identityInSkillDir(candidateDir, skillSlug);
+  if (trace) {
+    return {
+      ok: false,
+      error: skillRefusalMessage(displayPath(candidateDir), skillSlug, {
+        shareable: false,
+        reason: "identity",
+        detail: trace.class,
+        identity: trace,
+      }),
+    };
   }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, error: identity.error };

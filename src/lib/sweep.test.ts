@@ -74,6 +74,19 @@ describe("buildSweepPrompt", () => {
     // the body is never sent: the test reads the description and the expectation
     expect(prompt).not.toContain("SKILL.md");
   });
+
+  it("given a candidate whose description names the machine, when the prompt is built, then the sweep sends it masked", () => {
+    // Assembled rather than written out, as elsewhere in this repository.
+    const standIn = "zoltan";
+    const home = ["", "Users", standIn, "work", "api"].join("/");
+
+    const prompt = buildSweepPrompt([
+      { slug: "some-rule", description: `Run it from ${home} first.`, expect: `${home} is current` },
+    ]);
+
+    expect(prompt).not.toContain(standIn);
+    expect(prompt).toContain("Run it from ~/work/api first.");
+  });
 });
 
 describe("parseSweepVerdicts", () => {

@@ -5,6 +5,8 @@ import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
 import { detectSecret } from "./secrets.js";
+import { detectIdentity, hostIdentity } from "./identity.js";
+import type { HostIdentity, IdentityClass } from "./identity.js";
 import { listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict } from "./score.js";
@@ -35,6 +37,11 @@ export interface CandidateMeta {
   // how many sessions this lesson was taught in before the one that produced it -
   // the "you have said this twice" evidence, absent when it is the first time
   taughtBefore?: number;
+  // a trace of this machine found in the candidate the moment it was written: the class
+  // and the file, never the value. It is a mark, not a verdict - the review screen shows
+  // it so the decision to send this anywhere is taken knowing it, and the share door
+  // refuses it outright.
+  hygiene?: { identity: IdentityClass; where: string };
   // written together when a candidate is archived and both removed on restore, so a
   // restored meta matches its pre-archive snapshot field for field
   archivedAt?: string;
@@ -147,7 +154,8 @@ export type SkillRefusal =
   | "irregular-entry"
   | "no-files"
   | "unreadable"
-  | "secret";
+  | "secret"
+  | "identity";
 
 export interface SkillAudit {
   shareable: boolean;
@@ -160,6 +168,8 @@ export interface SkillAudit {
   /** the frontmatter this directory parsed as, which a listing shows instead of re-reading it */
   summary?: SkillSummary;
   secret?: { pattern: string; file: string };
+  /** the class of host-identity trace that refused it, and where it sits - never the value */
+  identity?: { class: IdentityClass; where: string };
 }
 
 /**
@@ -182,7 +192,7 @@ export interface SkillAudit {
  * skill that never arrives is better than a skill that arrives hollow, so the audit names
  * the file, which is the one thing that lets the author fix it.
  */
-export function auditSkillDir(sourceDir: string): SkillAudit {
+export function auditSkillDir(sourceDir: string, host: HostIdentity = hostIdentity()): SkillAudit {
   const name = basename(sourceDir);
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let skillMd: string;
@@ -214,7 +224,53 @@ export function auditSkillDir(sourceDir: string): SkillAudit {
       return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
     }
   }
+  const trace = identityInSkillDir(sourceDir, name, files, host);
+  if (trace) return { shareable: false, reason: "identity", detail: trace.class, identity: trace };
   return { shareable: true, skillMd, files, summary };
+}
+
+/**
+ * The first trace of THIS machine's owner in a skill directory: its name first, then the
+ * files in screening order.
+ *
+ * Separate from the audit above because two paths need the same answer at different
+ * moments. The audit asks at the door, where a trace is a refusal. The harvest asks the
+ * moment it has written a candidate, where a trace is a mark on the review screen rather
+ * than a verdict - the lesson is still worth keeping for yourself, and the machine it was
+ * learned on is only a problem when it travels. One function, so the mark and the refusal
+ * cannot come to disagree about what a trace is.
+ *
+ * A file that cannot be read is skipped rather than reported: the audit already refuses an
+ * unreadable file on its own pass, and this must not turn that into a wrong reason.
+ *
+ * `name` is the name the skill will TRAVEL under, which is the directory's own only until a
+ * publisher renames it: the queue writes a candidate into a temporary directory whose name
+ * is nobody's, and screening that instead of the slug would ask the wrong question twice.
+ */
+export function identityInSkillDir(
+  sourceDir: string,
+  name: string = basename(sourceDir),
+  files: string[] = listSkillFiles(sourceDir).files,
+  host: HostIdentity = hostIdentity(),
+): { class: IdentityClass; where: string } | null {
+  const inName = detectIdentity(name, host);
+  if (inName) return { class: inName, where: "name" };
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(join(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const trace = detectIdentity(content, host);
+    if (trace) return { class: trace, where: file };
+  }
+  return null;
+}
+
+/** Where the trace sits, in a form both refusal messages can read - the place, never the value. */
+export function identityPlace(where: string): string {
+  return where === "name" ? "its name" : `its file "${where}"`;
 }
 
 /**
@@ -239,6 +295,12 @@ export function skillRefusalMessage(shownDir: string, slug: string, audit: Skill
       return `${slug} has no files to share`;
     case "unreadable":
       return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
+    case "identity":
+      return (
+        `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of ` +
+        `this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it ` +
+        `keeps the trace; take it out and try again.`
+      );
     default:
       return (
         `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was ` +

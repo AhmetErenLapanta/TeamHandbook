@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { auditServer, claudeConfigFile, readLocalServers, refusalMessage, refusalSummary } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
-import { auditSkillDir } from "./queue.js";
+import { auditSkillDir, identityPlace } from "./queue.js";
 import type { SkillAudit } from "./queue.js";
 import { publishTeamSelection } from "./publish.js";
 import type { PublishOptions, SkillShareEntry, TeamAssets, TeamPublishOutcome } from "./publish.js";
@@ -165,6 +165,8 @@ function skillRefusal(audit: SkillAudit): string {
       return "it has no files to share";
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    case "identity":
+      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
   }
