@@ -217,6 +217,40 @@ describe("parseDistillResponse", () => {
   });
 });
 
+describe("buildDistillPrompt keeps the machine out of what it sends", () => {
+  // Assembled rather than written out, as the fixtures above: a literal absolute home path
+  // is refused on any line this repository takes in.
+  const STAND_IN = "zoltan";
+  const HOME = ["", "Users", STAND_IN, "work", "api"].join("/");
+
+  it("given a case whose commands and edits are absolute, when the prompt is built, then no part of it names the machine", () => {
+    const prompt = buildDistillPrompt(
+      candidate({
+        command: `npm test --prefix ${HOME}`,
+        resolvedCommand: `npm test --prefix ${HOME}`,
+        edits: [`${HOME}/src/app.ts`],
+      }),
+      3,
+    );
+
+    expect(prompt).not.toContain(STAND_IN);
+    expect(prompt).toContain("npm test --prefix ~/work/api");
+    expect(prompt).toContain("~/work/api/src/app.ts");
+  });
+
+  it("given a completed task whose steps name the machine, when the prompt is built, then those fields are masked as well", () => {
+    const prompt = buildDistillPrompt(
+      candidate({
+        task: { goal: `set up ${HOME}`, steps: [`cd ${HOME}`, "run the installer"], verification: `ls ${HOME}` },
+      }),
+      1,
+    );
+
+    expect(prompt).not.toContain(STAND_IN);
+    expect(prompt).toContain("cd ~/work/api");
+  });
+});
+
 describe("assembleSkillMd", () => {
   it("produces spec-compliant team-scope frontmatter unchanged", () => {
     const draft = parseDistillResponse(validResponse)!;
@@ -239,6 +273,174 @@ describe("assembleSkillMd", () => {
     expect(md).toContain("Applies ONLY in the gitlab.x.com/ekip/bff repository");
     expect(md).toContain("**Scope: only the `gitlab.x.com/ekip/bff` repository.**");
     expect(parseSkillFrontmatter(md)?.scope).toBe("gitlab.x.com/ekip/bff");
+  });
+
+  it.each([
+    ["the dash the product writes today", "-"],
+    ["the dash the product used to write", "\u2014"],
+  ])(
+    "given a description that already carries the scope sentence with %s, when it is assembled, then the sentence is there once",
+    (_label, dash) => {
+      // It arrives carrying one because the descriptions the model is shown have it: the
+      // model writes in the shape it is given, and the product used to append a second
+      // copy, which the length cap then cut in half.
+      const draft = {
+        ...parseDistillResponse(validResponse)!,
+        description: `Use when npm test fails. Applies ONLY in the gitlab.x.com/ekip/bff repository ${dash} do not use it elsewhere.`,
+      };
+
+      const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+
+      expect(md.match(/Applies ONLY in the/g)).toHaveLength(1);
+      expect(parseSkillFrontmatter(md)?.description).toBe(
+        "Use when npm test fails. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere.",
+      );
+    },
+  );
+
+  it("given a description that continues after the scope sentence, when it is assembled, then what the author wrote after it survives", () => {
+    // The prompt asks the description to state the trigger situation, so text after the
+    // sentence is content the product itself asked for.
+    const draft = {
+      ...parseDistillResponse(validResponse)!,
+      description:
+        "Use rg not grep. Applies ONLY in the alpha repository - do not use it elsewhere. Trigger: when searching a large tree.",
+    };
+
+    const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+
+    expect(parseSkillFrontmatter(md)?.description).toBe(
+      "Use rg not grep. Trigger: when searching a large tree. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere.",
+    );
+  });
+
+  it.each([
+    ["cut inside the closing clause", "Applies ONLY in the alpha repository - do not use it el"],
+    ["cut inside the word repository", "Applies ONLY in the alpha reposi"],
+    ["cut right after the repository name", "Applies ONLY in the alpha"],
+    ["cut before the repository name", "Applies ONLY in the"],
+  ])(
+    "given a copy the length cap cut short, %s, when it is assembled, then the sentence is there once",
+    (_label, tail) => {
+      const draft = { ...parseDistillResponse(validResponse)!, description: `Use rg not grep. ${tail}` };
+
+      const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+
+      expect(md.match(/Applies ONLY in the/g)).toHaveLength(1);
+      expect(parseSkillFrontmatter(md)?.description).toBe(
+        "Use rg not grep. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere.",
+      );
+    },
+  );
+
+  it.each([
+    [
+      "the closing clause is not the one the product writes",
+      "Use when X. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use. And more.",
+    ],
+    [
+      "there is no closing clause at all",
+      "Use when X. Applies ONLY in the gitlab.x.com/ekip/bff repository. And more.",
+    ],
+  ])(
+    "given a copy whose wording drifted, %s, when it is assembled, then the whole sentence goes and nothing of it is left mid-text",
+    (_label, description) => {
+      // Matching the closing clause word for word left the drifted half standing in the
+      // middle of the description, which reads as something the author meant.
+      const draft = { ...parseDistillResponse(validResponse)!, description };
+
+      const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+
+      expect(parseSkillFrontmatter(md)?.description).toBe(
+        "Use when X. And more. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere.",
+      );
+    },
+  );
+
+  it.each([
+    ["a project scope, where a fresh sentence is appended", "gitlab.x.com/ekip/bff"],
+    ["team scope, where none is", "team"],
+  ])(
+    "given a description that is nothing but the scope sentence, under %s, when it is assembled, then nothing opens with a stray space",
+    (_label, scope) => {
+      // The space used to live at the front of the appended sentence, so an empty left-hand
+      // side put it at the front of the description - and a quoted YAML scalar keeps it.
+      const draft = {
+        ...parseDistillResponse(validResponse)!,
+        description: "Applies ONLY in the a/b repository - do not use it elsewhere.",
+      };
+
+      const description = parseSkillFrontmatter(assembleSkillMd(draft, scope))?.description ?? "";
+
+      expect(description).toBe(description.trim());
+    },
+  );
+
+  it("given the sentence standing first, when it is assembled, then the description does not open with the space it left behind", () => {
+    const draft = {
+      ...parseDistillResponse(validResponse)!,
+      description: "Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere. Use when Y.",
+    };
+
+    const md = assembleSkillMd(draft, "gitlab.x.com/ekip/bff");
+
+    expect(parseSkillFrontmatter(md)?.description).toBe(
+      "Use when Y. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere.",
+    );
+  });
+
+  it("given a repository name with dots in it, when it is assembled, then the sentence is still taken off whole", () => {
+    // The pattern stops at the first sentence end, and a forge scope carries dots of its
+    // own: if the repository name were not matched as one run, the stop would land inside
+    // it and half the sentence would stay.
+    const draft = {
+      ...parseDistillResponse(validResponse)!,
+      description: "Use when X. Applies ONLY in the gitlab.x.com/a/b repository - do not use it elsewhere. And more.",
+    };
+
+    const md = assembleSkillMd(draft, "team");
+
+    expect(parseSkillFrontmatter(md)?.description).toBe("Use when X. And more.");
+  });
+
+  it("given the author's own words inside that same sentence, when it is assembled, then they go with it - the accepted cost", () => {
+    // Written down as a test because it is a trade, not an oversight: the stop is a
+    // sentence end rather than a spelling, so anything standing between the opening words
+    // and the first full stop goes. Narrowing the pattern would bring back the half-removed
+    // copy this replaced, and this case is what would pay for it.
+    const draft = {
+      ...parseDistillResponse(validResponse)!,
+      description: "Use when X. Applies ONLY in the a/b repository, and also when Y. Trigger: Z.",
+    };
+
+    const md = assembleSkillMd(draft, "team");
+
+    expect(parseSkillFrontmatter(md)?.description).toBe("Use when X. Trigger: Z.");
+  });
+
+  it("given a description that merely begins like the sentence and then goes on, when it is assembled, then its own words are kept", () => {
+    const draft = {
+      ...parseDistillResponse(validResponse)!,
+      description: "Use rg not grep. Applies ONLY in the first pass over a large tree.",
+    };
+
+    const md = assembleSkillMd(draft, "team");
+
+    expect(parseSkillFrontmatter(md)?.description).toBe(
+      "Use rg not grep. Applies ONLY in the first pass over a large tree.",
+    );
+  });
+
+  it("given a team-scope skill whose description claims a repository boundary, when it is assembled, then the claim is taken off", () => {
+    const draft = {
+      ...parseDistillResponse(validResponse)!,
+      description: "Use when npm test fails. Applies ONLY in the gitlab.x.com/ekip/bff repository - do not use it elsewhere.",
+    };
+
+    const md = assembleSkillMd(draft, "team");
+
+    expect(md).not.toContain("Applies ONLY");
+    expect(parseSkillFrontmatter(md)?.description).toBe("Use when npm test fails.");
   });
 
   it("escapes quotes in the description", () => {
@@ -370,6 +572,24 @@ describe("distillVerdict", () => {
     const outcome = await distillVerdict(promoted(), 1, defaultDistillConfig, async () => "no json", () => null);
     expect(outcome).toMatchObject({ outcome: "error", error: "unparseable distill response" });
   });
+
+  it.each([
+    ["a whole one", "Applies ONLY in the a/b repository - do not use it elsewhere."],
+    ["one the length cap cut short", "Applies ONLY in the a/b reposi"],
+  ])(
+    "given a description that is nothing but the scope sentence, %s, when it is distilled, then the candidate is dropped rather than written with an empty one",
+    async (_label, description) => {
+      // Assembly owns that sentence and takes it back off, so what is left describes
+      // nothing - and a skill whose frontmatter describes nothing is one Claude Code never
+      // loads. The parse asks for a description that is not empty; this asks for one that
+      // is still not empty afterwards.
+      const reply = JSON.stringify({ ...JSON.parse(validResponse), description });
+
+      const outcome = await distillVerdict(promoted(), 1, defaultDistillConfig, async () => reply, () => null);
+
+      expect(outcome).toMatchObject({ outcome: "error", error: "description was only the scope sentence" });
+    },
+  );
 });
 
 describe("writeCandidate", () => {

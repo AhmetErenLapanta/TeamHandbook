@@ -4,6 +4,7 @@ import { handbookHome } from "./session-state.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { fenceUntrusted } from "./prompt-safety.js";
 import { signalSecret } from "./secrets.js";
+import { detectIdentity, maskIdentity } from "./identity.js";
 import { maybeDumpPayload } from "./counters.js";
 import { claudeErrorReason, runClaudeCli } from "./score.js";
 import { matchTokens, recordAndMatchTeachings, sameTeaching } from "./teachings.js";
@@ -16,6 +17,7 @@ import {
   remoteUrlForEdits,
   slugifySkillName,
   uniqueSlug,
+  withoutScopeSentence,
   writeCandidate,
 } from "./distill.js";
 import type { GroundedCase, SkillArtifact } from "./distill.js";
@@ -24,6 +26,7 @@ import { existsSync } from "node:fs";
 import { candidatesDir } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
 import {
+  identityInSkillDir,
   listCandidates,
   loadMutedFingerprints,
   patchPendingCandidate,
@@ -427,6 +430,11 @@ function parseItem(raw: unknown, grounding: HarvestGrounding): HarvestItem | nul
   for (const key of ["name", "description", "body", "expect"]) {
     if (typeof o[key] !== "string" || !(o[key] as string).trim()) return null;
   }
+  // A description that is nothing but the scope sentence assembly appends is an empty
+  // description by the time the skill is written, and the same rule that refuses an empty
+  // one refuses this: the model is shown descriptions carrying that sentence, so writing
+  // only it is a shape it can reach.
+  if (!withoutScopeSentence(o.description as string)) return null;
   if (o.scope !== "team" && o.scope !== "project") return null;
   const scoresRaw = o.scores;
   if (typeof scoresRaw !== "object" || scoresRaw === null) return null;
@@ -548,7 +556,29 @@ const MAX_PER_KIND: Partial<Record<HarvestKind, number>> = { discovery: 1 };
 
 export interface SievedItem {
   item: HarvestItem;
-  reason: "secret" | "oversized" | "duplicate" | "muted" | "below-floor" | "over-cap" | "kind-quota";
+  reason:
+    | "secret"
+    | "identity"
+    | "oversized"
+    | "duplicate"
+    | "muted"
+    | "below-floor"
+    | "over-cap"
+    | "kind-quota";
+}
+
+/** Everything the model wrote, which is everything it could have put a trace into. */
+function itemText(item: HarvestItem): string {
+  return [
+    item.name,
+    item.description,
+    item.body,
+    item.expect,
+    item.quote ?? "",
+    item.task?.goal ?? "",
+    ...(item.task?.steps ?? []),
+    item.task?.verification ?? "",
+  ].join("\n");
 }
 
 export function sieveHarvestItems(
@@ -573,6 +603,14 @@ export function sieveHarvestItems(
       })
     ) {
       dropped.push({ item, reason: "secret" });
+      return false;
+    }
+    // The same defense one class along: the text the model was shown is masked, so an
+    // item carrying a home path, an address or this account's name was not copied out of
+    // the session - and an item whose own name carries one would take the trace into the
+    // directory it is written to.
+    if (detectIdentity(itemText(item))) {
+      dropped.push({ item, reason: "identity" });
       return false;
     }
     if (item.body.length > MAX_BODY_CHARS) {
@@ -680,9 +718,13 @@ export async function harvestSession(
   const runner = deps.runner ?? runClaudeCli;
   const now = deps.now ?? (() => new Date().toISOString());
 
-  const { slice, redacted } = job.transcriptPath
+  const { slice: readSlice, redacted } = job.transcriptPath
     ? buildTranscriptSlice(job.transcriptPath, config.transcriptCharCap)
     : { slice: "", redacted: 0 };
+  // Masked here as well as inside the fence, because the grounding check matches a quote
+  // against this string: left raw, a quote the model copied correctly out of the masked
+  // text it was shown would read as invented and the whole item would be dropped.
+  const slice = maskIdentity(readSlice);
   // Recorded prompts are not evidence on their own any more - they used to be, when a
   // prompt was only recorded if it matched a teaching pattern. With no transcript to
   // read either, prompts alone would put a chat session in front of the model.
@@ -734,7 +776,7 @@ export async function harvestSession(
   }
   const items = parseHarvestResponse(response, {
     slice,
-    corrections: (evidence.corrections ?? []).map((c) => c.text),
+    corrections: (evidence.corrections ?? []).map((c) => maskIdentity(c.text)),
     pairFingerprints: new Set(evidence.pairs.map((p) => p.fingerprint)),
   });
   if (items === null) {
@@ -778,6 +820,10 @@ export async function harvestSession(
       groundedCase: groundedCaseFor(item, job.evidence, now()),
     };
     const dir = writeCandidate(artifact, home);
+    // Read back what was actually written, not what the model sent: the grounded case is
+    // assembled here from the session's own evidence, so a trace can enter the candidate
+    // after the sieve has already passed the item.
+    const trace = identityInSkillDir(dir);
     const meta: CandidateMeta = {
       slug,
       status: "pending",
@@ -795,6 +841,7 @@ export async function harvestSession(
       // routing off that would suggest publishing a one-repo rule to everyone.
       suggestedTarget:
         item.scope === "project" ? "project" : suggestedTargetFor(scope, teamConfigured),
+      ...(trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}),
       ...(echoFor(item, evidence.echoes) ?? {}),
     };
     writeCandidateMeta(dir, meta);

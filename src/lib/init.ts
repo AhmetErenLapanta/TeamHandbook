@@ -1,16 +1,18 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
-import { hostFromUrl, manualPrUrl, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { displayPath } from "./display-path.js";
+import { detectSecret } from "./secrets.js";
 
 // git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
 // runs arbitrary commands on clone, and a URL starting with `-` is parsed as an
@@ -44,6 +46,10 @@ export interface TeamConfig {
 
 export const DEFAULT_BRANCH_PREFIX = "handbook/";
 
+/** What the scaffold commit proposes to say. A constant rather than a derived sentence,
+ * because /handbook:init makes exactly one commit and it always does the same thing. */
+export const SCAFFOLD_COMMIT_TITLE = "chore: scaffold team skill base";
+
 /** A commit-message prefix is a word in the title, not glue: the separating space belongs
  * here rather than at each call site, one of which forgot it and put
  * "TEAM-1chore: scaffold team skill base" on the first commit of a team's repository. */
@@ -57,6 +63,186 @@ export function teamCommitPrefix(config: TeamConfig | null): string {
 
 export function teamBranchPrefix(config: TeamConfig | null): string {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
+
+/**
+ * What the user decided about the message a commit of theirs will carry.
+ *
+ * Both fields absent is not a default: it is the absence of a decision, and every path in
+ * this product that commits refuses on it rather than writing a sentence the user never
+ * read. The two fields are alternatives, not a pair. `message` is the wording the user
+ * approved or typed; `delegated` is the one other answer they can give, "you decide", and
+ * it is honoured only where a merge request will really be opened, which is the same
+ * moment the commit is made: not on an empty repository, whose scaffold goes straight to
+ * the default branch, and not on a machine whose forge CLI is missing or not signed in.
+ * Nothing remembers a delegation: a commit prefix is a standing rule the forge enforces,
+ * a commit message is a sentence about one change.
+ */
+export interface CommitMessageChoice {
+  message?: string;
+  /**
+   * The fingerprint of the proposal the user was shown, and their answer "you decide".
+   *
+   * A fingerprint rather than a flag, because the proposal is derived from what the
+   * request carries and that changes underneath a conversation: consenting to update a
+   * name the team already has turns "add x" into "update x", and a teammate's merge can
+   * move it too. A bare flag would have committed whatever the second run derived, which
+   * is not the sentence anybody read. Naming the fingerprint is how delegation stays a
+   * delegation OF SOMETHING rather than a blank cheque.
+   */
+  delegated?: string;
+}
+
+/** The fingerprint a delegated run has to name. Short on purpose: it is typed back by
+ * hand from a terminal, and it identifies one sentence rather than authenticating it. */
+export function proposalFingerprint(proposal: string): string {
+  return createHash("sha256").update(proposal).digest("hex").slice(0, 8);
+}
+
+// Long enough for a sentence that says what changed, short enough that a commit title
+// stays a title. git enforces no limit of its own, so the only one that matters is the
+// reader's in a log listing. It is checked in decideCommitSubject rather than here,
+// because the product's OWN proposal can exceed it - a selection of a dozen skills names
+// every one of them in the title - and the likeliest answer a user gives is that proposal
+// handed straight back. Refusing it as too long would break the case the share screen
+// exists for while `--delegate-message` committed the identical text.
+const COMMIT_MESSAGE_MAX = 200;
+
+/** Why this text cannot be the title of a commit, or null when it can. Length is not here:
+ * an empty, multi-line or credential-carrying message is WRONG, a long one is only long. */
+export function commitMessageProblem(value: string): string | null {
+  if (!value.trim()) return "it is empty";
+  // \p{C} is every control, format and unassigned code point. A newline is the one that
+  // matters most: `git commit -m` ends the title there and turns everything after it into
+  // a body nobody wrote, so the commit would carry a message the user never saw the whole
+  // of - which is the thing this whole path exists to prevent.
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  // The message is free text on its way into a repository other people read, which no
+  // other free-text field here is. The sieve that screens a skill's files screens it too.
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+
+/**
+ * The subject a commit carries, with the team's prefix on it exactly once.
+ *
+ * Idempotent, because the message a user approves is usually the proposal they were just
+ * shown and that proposal already carries the prefix. Prepending a second time would put
+ * "TEAM-1 TEAM-1 chore: ..." on the commit, and a push rule anchored at the front of the
+ * title accepts that happily, so nothing downstream would ever catch it.
+ */
+export function commitSubject(prefix: string, message: string): string {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+
+export type CommitDecision = { subject: string } | { error: string };
+
+/**
+ * The message this commit will be made with, or the refusal that stops it being made.
+ *
+ * Fail-closed at the same boundary the rest of the product fails closed at: silence is
+ * refused, not filled in. The refusal names the proposal so the one extra round trip it
+ * costs also produces the text the user is asked to approve, rather than sending the
+ * caller off to derive that text a second way and get it subtly wrong.
+ *
+ * `proposal` is the prefixed subject this run derived; `rerun` is how this particular
+ * command is run again, since the flags are the same everywhere and the command is not.
+ */
+export function decideCommitSubject(
+  choice: CommitMessageChoice,
+  proposal: string,
+  prefix: string,
+  rerun: string,
+  unavailable?: string,
+): CommitDecision {
+  if (choice.message !== undefined && choice.delegated !== undefined) {
+    return {
+      error:
+        "--message and --delegate-message answer the same question in different ways: --message is the " +
+        "wording the user approved, --delegate-message is them saying you decide. Pass one of them.",
+    };
+  }
+  if (choice.delegated !== undefined && !/^[0-9a-f]{8}$/.test(choice.delegated)) {
+    return {
+      error:
+        `"${choice.delegated}" is not the fingerprint of a proposed message. Delegating names the sentence ` +
+        `the user was shown, which the run that asked for it printed beside the proposal, so ${rerun} ` +
+        "with no message flag to see both. Nothing was committed.",
+    };
+  }
+  // The user's own words never wait on the proposal. They go through their own sieve
+  // below, and the proposal is neither shown nor committed on this branch - screening it
+  // here would refuse a clean message because of a sentence nobody is going to use, and
+  // the only advice the refusal could give is the flag that was already passed.
+  if (choice.message !== undefined) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    const subject = commitSubject(prefix, choice.message);
+    // The ceiling is the longer of the two, because the product's own proposal can exceed
+    // it: a selection of a dozen skills names every one of them in the title. Holding the
+    // user's EDIT of that proposal to a shorter limit than the proposal itself would
+    // refuse the likeliest answer of all - the sentence, shortened a little.
+    const ceiling = Math.max(COMMIT_MESSAGE_MAX, proposal.length);
+    if (subject.length > ceiling) {
+      return {
+        error:
+          `that commit message cannot be a commit title: it is longer than ${ceiling} characters. ` +
+          "Nothing was committed.",
+      };
+    }
+    return { subject };
+  }
+  // Both branches below either commit the proposal or put it in front of the user, so it
+  // is screened first. It is derived from names this machine did not write - an MCP
+  // server, a slash command, a skill directory - so "the product wrote it" is not a reason
+  // to trust it.
+  const unusable = commitMessageProblem(proposal);
+  if (unusable) {
+    return {
+      error:
+        `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to ` +
+        `show and nothing to delegate, so ask the user for the wording and ${rerun} with ` +
+        '`--message "<their wording>"`. Nothing was committed.',
+    };
+  }
+  if (choice.delegated !== undefined) {
+    // Before the fingerprint, because handing someone a fresh fingerprint for a machine
+    // that cannot use it costs them a round trip to be refused a second time.
+    if (unavailable) return { error: delegationImpossible(unavailable, rerun) };
+    if (choice.delegated === proposalFingerprint(proposal)) return { subject: proposal };
+    return {
+      error:
+        `the message you delegated is not the one this would commit any more: it now says "${proposal}" ` +
+        `(${proposalFingerprint(proposal)}), and the answer named ${choice.delegated}. Show the user the ` +
+        `new one, then ${rerun}. Nothing was committed.`,
+    };
+  }
+  const ask =
+    `commit message required: nothing is committed here with a message the user has not seen. This one ` +
+    `would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they ` +
+    "have approved or edited it";
+  // No `--delegate-message` where delegating is going to be refused anyway: offering it
+  // spends the user's next answer on a round trip whose outcome is already known.
+  if (unavailable) {
+    return {
+      error: `${ask}. "You decide" is not an answer here, because ${unavailable}. Nothing was committed and nothing was pushed.`,
+    };
+  }
+  return {
+    error:
+      `${ask}, or with \`--delegate-message ${proposalFingerprint(proposal)}\` if they answered that you ` +
+      "decide. Nothing was committed and nothing was pushed.",
+  };
+}
+
+/** What a delegated run is told when no merge request can be opened for it to be about. */
+export function delegationImpossible(unavailable: string, rerun: string): string {
+  return (
+    `"you decide" is an answer about the merge request, and ${unavailable}. Nothing was committed. Ask the ` +
+    `user for the wording and ${rerun} with \`--message "<their wording>"\`.`
+  );
 }
 
 export function loadTeamConfig(home: string = handbookHome()): TeamConfig | null {
@@ -782,6 +968,13 @@ export interface InitResult {
   // files the repository already had, left untouched
   skipped?: string[];
   withCi?: boolean;
+  // the subject the scaffold commit was actually made with, prefix included, so the user
+  // is told what was written rather than what was proposed
+  commitMessage?: string;
+  // the subject this run would have used, set on the refusal that asks for a decision
+  proposedMessage?: string;
+  // its fingerprint, which a delegated run has to name back
+  proposalHash?: string;
 }
 
 export function initTeamRepo(
@@ -794,6 +987,7 @@ export function initTeamRepo(
   branchPrefix: string = DEFAULT_BRANCH_PREFIX,
   commitPrefix = "",
   withCi = false,
+  commitMessage: CommitMessageChoice = {},
 ): InitResult {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   try {
@@ -832,6 +1026,7 @@ export function initTeamRepo(
         "and `git config --global user.email you@example.com`, then re-run.",
     };
   }
+  const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
   const workdir = handbookWorkdir("handbook-init-");
   const repoDir = join(workdir, "repo");
   // Clone first, always. Building a fresh history locally and pushing it assumed the
@@ -867,6 +1062,35 @@ export function initTeamRepo(
       error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
     };
   }
+  // The decision about the message sits HERE, after the clone, because whether "you
+  // decide" can be honoured at all is something only the clone can say. An empty
+  // repository has no branch to open a request against, so the scaffold goes straight to
+  // the default branch and there is no merge request for a delegation to be about; a
+  // repository that is not empty gets one, but only from a machine whose forge CLI is
+  // there and signed in. Refusing here costs the clone - which this command keeps either
+  // way - and still leaves no branch on the remote and nothing on this machine.
+  const stopped = (error: string): InitResult => ({
+    ok: false,
+    error,
+    proposedMessage: proposal,
+    proposalHash: proposalFingerprint(proposal),
+  });
+  const unavailable = isEmptyRepo
+    ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open`
+    : commitMessage.message === undefined
+      ? (() => {
+          const blocked = forgeSignInProblem(url, repoDir, forge);
+          return blocked ? noRequestPossible(blocked) : null;
+        })()
+      : null;
+  const decided = decideCommitSubject(
+    commitMessage,
+    proposal,
+    commitMessagePrefix(commitPrefix),
+    "run /handbook:init again",
+    unavailable ?? undefined,
+  );
+  if ("error" in decided) return stopped(decided.error);
   const { skipped } = writeSkeletonPreserving(
     repoDir,
     skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi),
@@ -886,7 +1110,7 @@ export function initTeamRepo(
     // because a forge that checks commit authors rejects anything else, and init pushes
     // to the same repository under the same rules. "TeamHandbook@localhost" was an
     // author waiting to be refused.
-    git([...identity, "commit", "-m", `${commitMessagePrefix(commitPrefix)}chore: scaffold team skill base`], repoDir);
+    git([...identity, "commit", "-m", decided.subject], repoDir);
     git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
   } catch (err) {
     return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
@@ -925,6 +1149,7 @@ export function initTeamRepo(
     merged: direct,
     skipped,
     withCi,
+    commitMessage: decided.subject,
     ...(prUrl ? { prUrl } : {}),
     ...(prError ? { prError } : {}),
     ...(!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
@@ -962,6 +1187,9 @@ export function formatInitSuccess(result: InitResult): string {
           "               copy that section across from skills/README.md or this output.",
         ]
       : []),
+    // What the commit says, for the same reason every other path here prints it: the
+    // wording may be the user's own, and it may have gained the team's prefix on the way.
+    ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     `  config:      team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
     "",
     // A handbook is normally private, and a private repo needs two separate things

@@ -67,13 +67,152 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+
+// src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
 
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
@@ -82,7 +221,7 @@ var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/queue.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join4 } from "node:path";
+import { basename as basename2, join as join4 } from "node:path";
 
 // src/lib/skill-index.ts
 var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
@@ -329,8 +468,8 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
 }
-function auditSkillDir(sourceDir) {
-  const name = basename(sourceDir);
+function auditSkillDir(sourceDir, host = hostIdentity()) {
+  const name = basename2(sourceDir);
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let skillMd;
   try {
@@ -357,7 +496,27 @@ function auditSkillDir(sourceDir) {
       return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
     }
   }
+  const trace = identityInSkillDir(sourceDir, name, files, host);
+  if (trace) return { shareable: false, reason: "identity", detail: trace.class, identity: trace };
   return { shareable: true, skillMd, files, summary };
+}
+function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = listSkillFiles(sourceDir).files, host = hostIdentity()) {
+  const inName = detectIdentity(name, host);
+  if (inName) return { class: inName, where: "name" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join4(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const trace = detectIdentity(content, host);
+    if (trace) return { class: trace, where: file };
+  }
+  return null;
+}
+function identityPlace(where) {
+  return where === "name" ? "its name" : `its file "${where}"`;
 }
 function skillRefusalMessage(shownDir, slug, audit) {
   switch (audit.reason) {
@@ -373,6 +532,8 @@ function skillRefusalMessage(shownDir, slug, audit) {
       return `${slug} has no files to share`;
     case "unreadable":
       return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
+    case "identity":
+      return `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
     default:
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
@@ -405,6 +566,12 @@ function slugifySkillName(name) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/g, "");
   return slug || null;
 }
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
 function uniqueSlug(baseSlug, taken) {
   let slug = baseSlug;
   for (let i = 2; taken(slug); i++) slug = `${baseSlug}-${i}`;
@@ -412,7 +579,7 @@ function uniqueSlug(baseSlug, taken) {
 }
 
 // src/lib/forge.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 function hostFromUrl(url) {
   const normalized = normalizeRemoteUrl(url);
   if (!normalized) return null;
@@ -420,7 +587,7 @@ function hostFromUrl(url) {
 }
 var FORGE_TIMEOUT_MS = 6e4;
 function runForge(tool, args, cwd) {
-  return execFileSync(tool, args, {
+  return execFileSync2(tool, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
@@ -440,10 +607,33 @@ function manualPrUrl(repoUrl, branch) {
 function extractUrl(output) {
   return output.match(/https?:\/\/\S+/)?.[0] ?? null;
 }
+function forgeTool(repoUrl) {
+  const host = hostFromUrl(repoUrl);
+  return host && host.includes("github") ? "gh" : "glab";
+}
+function forgeSignInProblem(repoUrl, repoDir, forge) {
+  const tool = forgeTool(repoUrl);
+  const host = hostFromUrl(repoUrl);
+  const attempts = host ? [["auth", "status", "--hostname", host], ["auth", "status"]] : [["auth", "status"]];
+  let last = "";
+  for (const args of attempts) {
+    try {
+      forge(tool, args, repoDir);
+      return null;
+    } catch (err) {
+      const e = err;
+      if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      last = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+      if (!/unknown (flag|shorthand)/i.test(stderr)) break;
+    }
+  }
+  return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
+}
 function openPr(repoUrl, branch, title, body, repoDir, forge) {
   const host = hostFromUrl(repoUrl);
   try {
-    const out = host && host.includes("github") ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+    const out = forgeTool(repoUrl) === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
       "glab",
       ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
       repoDir
@@ -451,7 +641,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     return { url: extractUrl(out) };
   } catch (err) {
     const e = err;
-    const tool = host && host.includes("github") ? "gh" : "glab";
+    const tool = forgeTool(repoUrl);
     let reason;
     if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
     else {
@@ -461,11 +651,14 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     return { url: null, error: reason };
   }
 }
+function noRequestPossible(reason) {
+  return `no merge request can be opened from this machine (${reason})`;
+}
 
 // src/lib/display-path.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir2()) {
+function displayPath(path, userHome = homedir3()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -490,6 +683,70 @@ function teamCommitPrefix(config) {
 }
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
+function proposalFingerprint(proposal) {
+  return createHash("sha256").update(proposal).digest("hex").slice(0, 8);
+}
+var COMMIT_MESSAGE_MAX = 200;
+function commitMessageProblem(value) {
+  if (!value.trim()) return "it is empty";
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+function commitSubject(prefix, message) {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+function decideCommitSubject(choice, proposal, prefix, rerun, unavailable) {
+  if (choice.message !== void 0 && choice.delegated !== void 0) {
+    return {
+      error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
+    };
+  }
+  if (choice.delegated !== void 0 && !/^[0-9a-f]{8}$/.test(choice.delegated)) {
+    return {
+      error: `"${choice.delegated}" is not the fingerprint of a proposed message. Delegating names the sentence the user was shown, which the run that asked for it printed beside the proposal, so ${rerun} with no message flag to see both. Nothing was committed.`
+    };
+  }
+  if (choice.message !== void 0) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    const subject = commitSubject(prefix, choice.message);
+    const ceiling = Math.max(COMMIT_MESSAGE_MAX, proposal.length);
+    if (subject.length > ceiling) {
+      return {
+        error: `that commit message cannot be a commit title: it is longer than ${ceiling} characters. Nothing was committed.`
+      };
+    }
+    return { subject };
+  }
+  const unusable = commitMessageProblem(proposal);
+  if (unusable) {
+    return {
+      error: `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to show and nothing to delegate, so ask the user for the wording and ${rerun} with \`--message "<their wording>"\`. Nothing was committed.`
+    };
+  }
+  if (choice.delegated !== void 0) {
+    if (unavailable) return { error: delegationImpossible(unavailable, rerun) };
+    if (choice.delegated === proposalFingerprint(proposal)) return { subject: proposal };
+    return {
+      error: `the message you delegated is not the one this would commit any more: it now says "${proposal}" (${proposalFingerprint(proposal)}), and the answer named ${choice.delegated}. Show the user the new one, then ${rerun}. Nothing was committed.`
+    };
+  }
+  const ask = `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it`;
+  if (unavailable) {
+    return {
+      error: `${ask}. "You decide" is not an answer here, because ${unavailable}. Nothing was committed and nothing was pushed.`
+    };
+  }
+  return {
+    error: `${ask}, or with \`--delegate-message ${proposalFingerprint(proposal)}\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+  };
+}
+function delegationImpossible(unavailable, rerun) {
+  return `"you decide" is an answer about the merge request, and ${unavailable}. Nothing was committed. Ask the user for the wording and ${rerun} with \`--message "<their wording>"\`.`;
 }
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -560,7 +817,7 @@ function summarizeGitStderr(stderr, tailLines = 3) {
 }
 function runGit(args, cwd) {
   try {
-    return execFileSync2("git", args, {
+    return execFileSync3("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
@@ -643,12 +900,12 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 
 // src/lib/share.ts
 import { readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { basename as basename3, join as join9 } from "node:path";
+import { homedir as homedir6 } from "node:os";
+import { basename as basename4, join as join9 } from "node:path";
 
 // src/lib/mcp.ts
 import { readFileSync as readFileSync5 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { join as join6 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
@@ -657,7 +914,7 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join6(dir || homedir3(), ".claude.json");
+  return join6(dir || homedir4(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
@@ -755,6 +1012,10 @@ function auditServer(config) {
   if (embedded) {
     return { ...base, transport, startsProcess, reason: "url-token", detail: embedded };
   }
+  const trace = detectIdentity(JSON.stringify(config));
+  if (trace) {
+    return { ...base, transport, startsProcess, reason: "identity", detail: trace, identity: trace };
+  }
   return { migratable: true, requiresEnv, startsProcess, transport };
 }
 function refusalMessage(name, audit) {
@@ -766,6 +1027,9 @@ function refusalMessage(name, audit) {
   }
   if (audit.reason === "secret-pattern") {
     return `"${name}" is not shareable: its definition contains what looks like a ${audit.detail}. Move the credential into an environment variable and reference it as \${VAR}.`;
+  }
+  if (audit.reason === "identity") {
+    return `"${name}" is not shareable as written: its definition carries a trace of this machine (${audit.detail}). A path under your home directory, your account name or your address resolves to nothing on a teammate's machine, so this stays here. Point it at something every machine has, or pass the location as a \${VAR} reference.`;
   }
   return `"${name}" is not a server this command can share (${audit.detail ?? "unsupported shape"}).`;
 }
@@ -819,6 +1083,7 @@ function mergeServersIntoMcpJson(existing, servers, replaceExisting = () => fals
 function refusalSummary(audit) {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
+  if (audit.reason === "identity") return `its definition carries a trace of this machine (${audit.detail})`;
   return String(audit.detail);
 }
 
@@ -828,15 +1093,15 @@ import { join as join8 } from "node:path";
 
 // src/lib/commands.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync6 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { basename as basename2, join as join7 } from "node:path";
-function localCommandDirs(userHome = homedir4(), cwd = process.cwd()) {
+import { homedir as homedir5 } from "node:os";
+import { basename as basename3, join as join7 } from "node:path";
+function localCommandDirs(userHome = homedir5(), cwd = process.cwd()) {
   return [
     { dir: join7(userHome, ".claude", "commands"), scope: "personal" },
     { dir: join7(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
-function readLocalCommands(userHome = homedir4(), cwd = process.cwd()) {
+function readLocalCommands(userHome = homedir5(), cwd = process.cwd()) {
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
     let entries;
@@ -846,7 +1111,7 @@ function readLocalCommands(userHome = homedir4(), cwd = process.cwd()) {
       continue;
     }
     for (const entry of entries.sort()) {
-      const name = basename2(entry, ".md");
+      const name = basename3(entry, ".md");
       byName.set(name, { name, scope, file: join7(dir, entry) });
     }
   }
@@ -860,17 +1125,23 @@ function commandDescription(content) {
   return body.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#")) ?? "";
 }
 function auditCommand(file) {
-  const name = basename2(file, ".md");
+  const name = basename3(file, ".md");
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let content;
   try {
     content = readFileSync6(file, "utf8");
   } catch {
-    return { shareable: false, reason: "unreadable", detail: basename2(file) };
+    return { shareable: false, reason: "unreadable", detail: basename3(file) };
   }
   const pattern = detectSecret(content);
   if (pattern) {
-    return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file: basename2(file) } };
+    return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file: basename3(file) } };
+  }
+  const inName = detectIdentity(name);
+  if (inName) return { shareable: false, reason: "identity", detail: inName, identity: { class: inName, where: "name" } };
+  const trace = detectIdentity(content);
+  if (trace) {
+    return { shareable: false, reason: "identity", detail: trace, identity: { class: trace, where: basename3(file) } };
   }
   return { shareable: true, content, description: commandDescription(content) };
 }
@@ -880,11 +1151,16 @@ function commandRefusalSummary(audit) {
       return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes)`;
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    case "identity":
+      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
       return `it looks like it contains a secret (${audit.detail})`;
   }
 }
 function commandRefusalMessage(name, audit) {
+  if (audit.reason === "identity") {
+    return `${name} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A command is merged as it is, and the teammate who types it has no such account or directory; take the trace out and try again.`;
+  }
   if (audit.reason === "secret") {
     return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${name} was not shared. Commands are reviewed and merged as they are, and a redacted one would arrive and then misfire; take the credential out of the command and try again.`;
   }
@@ -1409,6 +1685,25 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     let learnedBranchPrefix;
     let version = null;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
+    const proposal = commitSubject(commitPrefix, title);
+    const choice = options.commitMessage ?? {};
+    const stopped = (error) => ({
+      ok: false,
+      ...single,
+      refused,
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal)
+    });
+    const unavailable = choice.message === void 0 ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
+    const decided = decideCommitSubject(
+      choice,
+      proposal,
+      commitPrefix,
+      "share them again",
+      unavailable ? noRequestPossible(unavailable) : void 0
+    );
+    if ("error" in decided) return stopped(decided.error);
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync4(target, merged);
@@ -1423,7 +1718,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       }
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identity.args, "commit", "-m", `${commitPrefix}${title}`], repoDir);
+      git([...identity.args, "commit", "-m", decided.subject], repoDir);
       const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
@@ -1462,6 +1757,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       ...updated.servers.length || updated.commands.length || updated.skills.length ? { updated } : {},
       ...refused.length ? { refused } : {},
       branch,
+      commitMessage: decided.subject,
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...version ? { version } : {},
@@ -1478,7 +1774,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
 // src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join9(paths.userHome ?? homedir5(), ".claude", "skills"), scope: "personal" },
+    { dir: join9(paths.userHome ?? homedir6(), ".claude", "skills"), scope: "personal" },
     { dir: join9(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
@@ -1503,12 +1799,14 @@ function skillRefusal(audit) {
       return "it has no files to share";
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    case "identity":
+      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
   }
 }
 function readSkillDir(dir, scope) {
-  const name = basename3(dir);
+  const name = basename4(dir);
   const audit = auditSkillDir(dir);
   const base = { kind: "skill", name, scope, dir, description: audit.summary?.description ?? "" };
   return audit.shareable ? { ...base, shareable: true } : { ...base, shareable: false, reason: skillRefusal(audit) };
@@ -1547,7 +1845,7 @@ function buildInventory(paths = {}, teamHas = null) {
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers)
   );
-  const commands = readLocalCommands(paths.userHome ?? homedir5(), paths.cwd ?? process.cwd()).map(
+  const commands = readLocalCommands(paths.userHome ?? homedir6(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands)
   );
   return { skills: [...byName.values()], servers, commands };
@@ -1625,7 +1923,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     skills.push({ name, dir: skill.dir, namedBy: "inventory" });
   }
   for (const dir of selection.skillPaths ?? []) {
-    skills.push({ name: basename3(dir), dir, namedBy: "user" });
+    skills.push({ name: basename4(dir), dir, namedBy: "user" });
   }
   const entries = [];
   for (const name of selection.servers) {
@@ -1665,7 +1963,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
       ...selector ? { selector } : {}
     });
   }
-  if (!outcome.ok && outcome.error) {
+  if (!outcome.ok && outcome.error && !outcome.proposedMessage) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
     for (const skill of skills) {
       if (!judged.has(`skill:${skill.name}`)) {
@@ -1708,6 +2006,9 @@ function formatShareResult(result, marketplaceName) {
     }
     lines.push(
       `  - branch: ${shared.branch}`,
+      // What the commit actually says, not what was offered: the message may be the user's
+      // own wording, and it may have gained the team's prefix on the way in.
+      `  - commit: ${shared.commitMessage}`,
       // manualPrUrl returns null for a remote whose host it does not know how to build a
       // "new merge request" link for. The branch is pushed either way, and printing
       // "undefined" at someone is worse than telling them the link is theirs to find.
@@ -1738,6 +2039,9 @@ function formatShareResult(result, marketplaceName) {
       );
     }
   }
+  if (shared && !shared.ok && shared.proposedMessage && shared.error) {
+    lines.push(shared.error);
+  }
   const collisions = result.refused.filter((r) => r.collision);
   const faults = result.refused.filter((r) => !r.collision);
   if (faults.length) {
@@ -1746,12 +2050,23 @@ function formatShareResult(result, marketplaceName) {
   }
   if (collisions.length) {
     if (lines.length) lines.push("");
+    const travelled = !!shared?.ok;
     lines.push(
-      `The team already has these (${collisions.length}) - theirs is untouched:`,
+      `The team already has these (${collisions.length})${travelled ? " - theirs is untouched:" : ":"}`,
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
-      "To send one of them as an update to the team's copy, name that one and only that one:",
-      ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`)
+      ...travelled ? [
+        "To send one of them as an update to the team's copy, name that one and only that one:",
+        // The selector the run itself recorded, not one rebuilt from the kind: a skill
+        // named by path is re-named by that path, and printing "--skill <name>" for it
+        // would hand the reader a command that comes back "no skill of that name is
+        // installed here".
+        ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`)
+      ] : [
+        "Nothing has been shared yet, so these are answered on the same run as the rest:",
+        `add ${collisions.map((r) => `--update ${r.name}`).join(" ")} to the whole selection, for the`,
+        "names the user said yes to and no others, and run it again."
+      ]
     );
   }
   if (!lines.length) return "Nothing was selected, so nothing was shared.";
@@ -1761,7 +2076,7 @@ function formatShareResult(result, marketplaceName) {
 // src/cli/share.ts
 function usage() {
   console.error(
-    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]..."
+    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>)"
   );
   process.exit(2);
 }
@@ -1773,6 +2088,24 @@ function resolve(available, wanted) {
 var FLAGS = ["--skill", "--mcp", "--command"];
 var SKILL_PATH = "--skill-path";
 var UPDATE = "--update";
+var MESSAGE = "--message";
+var DELEGATE_MESSAGE = "--delegate-message";
+var VALUE_FLAGS = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE];
+function valueOf(args, flag) {
+  const at = args.indexOf(flag);
+  if (at === -1) return void 0;
+  const value = args[at + 1];
+  if (!value || value.startsWith("--")) usage();
+  return value;
+}
+function parseCommitMessage(args) {
+  const message = valueOf(args, MESSAGE);
+  const delegated = valueOf(args, DELEGATE_MESSAGE);
+  return {
+    ...message !== void 0 ? { message } : {},
+    ...delegated !== void 0 ? { delegated } : {}
+  };
+}
 function parseUpdates(args, inv) {
   const names = [];
   const available = [
@@ -1807,9 +2140,10 @@ function main() {
   const args = process.argv.slice(2);
   const selected = args.some((a) => FLAGS.includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
-  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
+  const messaged = args.includes(MESSAGE) || args.includes(DELEGATE_MESSAGE);
+  const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
-  if (cmd === "list" && (selected || update)) usage();
+  if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     const config = loadTeamConfig();
     console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
@@ -1835,13 +2169,16 @@ function main() {
     return;
   }
   const team = loadTeamConfig();
-  const result = shareSelection(selection, team, {}, void 0, void 0, updates.length ? { update: updates } : {});
+  const result = shareSelection(selection, team, {}, void 0, void 0, {
+    ...updates.length ? { update: updates } : {},
+    commitMessage: parseCommitMessage(args)
+  });
   const learned = {
     ...result.team?.learnedBranchPrefix ? { branchPrefix: result.team.learnedBranchPrefix } : {},
     ...result.team?.learnedCommitPrefix !== void 0 ? { commitPrefix: result.team.learnedCommitPrefix } : {}
   };
   if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
-  if (result.refused.length) process.exitCode = 1;
+  if (result.refused.length || result.team && !result.team.ok) process.exitCode = 1;
 }
 main();

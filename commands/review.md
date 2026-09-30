@@ -62,7 +62,8 @@ user clear them in one pass.
      the one `show` named; commit that repo and the skill travels with the code).
    - **Share with the team** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to team`
      (pushes a `handbook/<slug>` branch and opens a PR to the team handbook; needs
-     /handbook:init or /handbook:join first - the CLI says so if not).
+     /handbook:init or /handbook:join first - the CLI says so if not). This one commits,
+     so it takes the extra answer in step 8; the first run comes back asking for it.
    - Plain `approve <slug>` (no --to) follows the candidate's suggested target, which is
      the `suggested:` line `show` prints, not its `scope:`; relay
      where the CLI says it landed. If the output shows an "Open the PR here" link
@@ -99,13 +100,32 @@ user clear them in one pass.
    Never choose for them and never re-run with `--update` on your own initiative: an update
    overwrites work somebody else may have done to that skill. Three rules the CLI enforces
    rather than trusting to care here, so do not try to route around them: both flags answer
-   a refusal about ONE skill, so they are taken only with a single slug (never `--all`);
+   a refusal about ONE skill, so they are taken only with a single slug typed out, and never
+   with `--all` even on a queue holding one candidate;
    `--as` and `--update` are alternatives and are refused together, because `--update`
    would land on the name `--as` chose rather than the one that was refused; and `--update`
    takes no value, so write it bare.
-8. The name in the CLI's output is the name that was written, and it is not always the one
+8. **A team approval also needs the commit message, and it is the user's to write.** The
+   first `--to team` run commits nothing: it comes back with `commit message required` and
+   the exact message it proposes. Show them that message, let them approve it, edit it or
+   write their own, and run the same command again with their answer:
+   - they approved or wrote a message: `--message "<their wording>"`.
+   - they said you decide: `--delegate-message <fingerprint>`, with the fingerprint the
+     refusal printed beside the proposal, and nothing else. That is the only way a wording
+     the user did not give reaches a commit. Do not compose one yourself and pass it as
+     `--message`. If the proposal has changed since they were shown it, the run is refused
+     and prints the new one; show them that before asking again. **If the refusal offers no
+     `--delegate-message` at all**, delegating is not available here - this machine has no
+     `gh`/`glab` signed in, and a delegation is an answer about the merge request - so ask
+     for the wording rather than retrying.
+   Ask it after any `--update` or `--as` answer from step 7, because the proposed message
+   says which of the two the request is. The flag is per candidate, like those two: the CLI
+   refuses it together with `--all` or with several slugs, because one sentence is not a
+   claim about four different skills. A personal or project approval never takes one and
+   says so rather than dropping it: nothing is committed there.
+9. The name in the CLI's output is the name that was written, and it is not always the one
    in the queue - relay it as printed rather than repeating the slug you asked for.
-9. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and
+10. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and
    still pending.
 
 Queue STATE (candidate.json) is only ever written by the review CLI; the only file you may

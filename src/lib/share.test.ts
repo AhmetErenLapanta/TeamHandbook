@@ -3,15 +3,46 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildInventory, formatInventory, formatShareResult, shareSelection } from "./share.js";
-import type { InventoryPaths, Selection } from "./share.js";
+import { buildInventory, formatInventory, formatShareResult, shareSelection as shareSelectionDeciding } from "./share.js";
+import type { InventoryPaths, Selection, ShareResult } from "./share.js";
 import { formatCandidateList, listCandidates, writeCandidateMeta } from "./queue.js";
 import { sessionStartNotice } from "./notify.js";
 import type { CandidateMeta } from "./queue.js";
 import { approveAndDeliver } from "./deliver.js";
 import { candidatesDir } from "./skill-index.js";
-import type { GitRunner } from "./init.js";
+import type { CommitMessageChoice, GitRunner } from "./init.js";
 import { teamAssets } from "./publish.js";
+
+
+/**
+ * The answer every case below gives about its commit message, because none of them is
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
+ */
+const APPROVED = { message: "chore: the case under test" } as const;
+
+/**
+ * The two runs a delegated wording takes: the first shows the sentence and commits
+ * nothing, the second names its fingerprint back. Used where what the case measures is
+ * the derived title reaching the commit.
+ */
+function delegating(run: (choice: CommitMessageChoice) => ShareResult): ShareResult {
+  const probe = run({});
+  return run({ delegated: probe.team!.proposalHash! });
+}
+
+type ShareArgs = Parameters<typeof shareSelectionDeciding>;
+function shareSelection(
+  selection: ShareArgs[0],
+  team: ShareArgs[1],
+  paths?: ShareArgs[2],
+  git?: ShareArgs[3],
+  forge?: ShareArgs[4],
+  options: NonNullable<ShareArgs[5]> = {},
+) {
+  return shareSelectionDeciding(selection, team, paths, git, forge, { commitMessage: APPROVED, ...options });
+}
 
 let home: string;
 let userHome: string;
@@ -201,6 +232,45 @@ describe("buildInventory", () => {
     expect(readFileSync(join(queued, "SKILL.md"), "utf8")).toBe(stale);
   });
 
+  it("given a skill carrying a home path, when the inventory is read, then the screen offers it as unshareable and says where", () => {
+    // Assembled rather than written out: this repository refuses a literal absolute home
+    // path on any line it takes in, a fixture's included.
+    const homePath = ["", "Users", "alice", "work", "api"].join("/");
+    writeSkill(userHome, "deploy-runbook", { "reference/setup.md": `Run it from ${homePath}.\n` });
+
+    const skill = buildInventory(paths()).skills[0]!;
+
+    expect(skill.shareable).toBe(false);
+    expect(skill.shareable === false && skill.reason).toContain('its file "reference/setup.md"');
+    expect(skill.shareable === false && skill.reason).toContain("home-path");
+    expect(JSON.stringify(skill)).not.toContain("alice");
+  });
+
+  it("given a command and a server that carry this machine, when the inventory is read, then both are offered as unshareable with their class", () => {
+    // All three kinds leave through this one screen, so all three are screened here.
+    const standIn = "alice";
+    const homePath = ["", "Users", standIn, "work", "api"].join("/");
+    writeCommand(userHome, "deploy", `Run it from ${homePath}.\n`);
+    writeServers({ notes: { command: "node", args: [`${homePath}/servers/notes.js`] } });
+
+    const inv = buildInventory(paths());
+
+    const command = inv.commands[0]!;
+    const server = inv.servers[0]!;
+    expect(command.shareable).toBe(false);
+    expect(command.shareable === false && command.reason).toContain("carries a trace of this machine");
+    expect(server.shareable).toBe(false);
+    expect(server.shareable === false && server.reason).toContain("carries a trace of this machine");
+    // Only the sentences are checked: the inventory itself holds the server definition as
+    // the user's own config has it, which is this machine describing itself to its owner.
+    const said = [
+      command.shareable === false && command.reason,
+      server.shareable === false && server.reason,
+      server.shareable === false && server.fullReason,
+    ].join(" ");
+    expect(said).not.toContain(standIn);
+  });
+
   it("given a file sitting beside the skills, when the inventory is read, then it is not a skill that failed", () => {
     writeSkill(userHome, "deploy-runbook");
     writeFileSync(join(userHome, ".claude", "skills", ".DS_Store"), "junk");
@@ -287,6 +357,54 @@ describe("shareSelection", () => {
       { name: "deploy-runbook", kind: "skill", reason: expect.stringContaining("no team repository is configured") },
     ]);
     expect(listCandidates(home, "pending")).toEqual([]);
+  });
+
+  it("given no decision about the commit message, when several things are selected, then the request is asked about once, not once per name", () => {
+    remote = teamRepo();
+    writeSkill(userHome, "deploy-runbook");
+    writeSkill(userHome, "repo-conventions");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+    const before = gitIn(remote, ["branch", "--list"]);
+
+    // the imported function, not the delegating wrapper: the answer is what is under test
+    const result = shareSelectionDeciding(
+      select({ skills: ["deploy-runbook", "repo-conventions"], servers: ["gitlab"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+    );
+
+    expect(result.team?.ok).toBe(false);
+    expect(result.team?.proposedMessage).toBe("feat(skill,mcp): add deploy-runbook, repo-conventions, gitlab");
+    // One question about one request. Fanning it out would have turned a single four-line
+    // sentence into three, and buried the proposal it is asking the user to read.
+    expect(result.refused).toEqual([]);
+    const printed = formatShareResult(result);
+    expect(printed.match(/commit message required/g)).toHaveLength(1);
+    expect(printed).toContain("feat(skill,mcp): add deploy-runbook, repo-conventions, gitlab");
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
+  it("given the user's own wording, when the selection runs, then the commit carries it and the result says so", () => {
+    remote = teamRepo();
+    writeSkill(userHome, "deploy-runbook");
+
+    const result = shareSelectionDeciding(
+      select({ skills: ["deploy-runbook"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+      { commitMessage: { message: "feat: the deploy runbook, written down at last" } },
+    );
+
+    expect(result.team).toMatchObject({ ok: true, commitMessage: "feat: the deploy runbook, written down at last" });
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["log", "-1", "--format=%s", branch]).trim()).toBe(
+      "feat: the deploy runbook, written down at last",
+    );
+    expect(formatShareResult(result)).toContain("commit: feat: the deploy runbook, written down at last");
   });
 
   it("given a few of each were selected, when the selection runs, then every kind goes out in one request", () => {
@@ -417,7 +535,11 @@ describe("shareSelection", () => {
       linear: { type: "sse", url: "https://mcp.linear.app/sse" },
     });
 
-    const result = shareSelection(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge);
+    const result = delegating((commitMessage) =>
+      shareSelectionDeciding(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge, {
+        commitMessage,
+      }),
+    );
 
     // The defect this guards: two requests opened off the same base both write "1.0.1",
     // git merges the identical line without a conflict, and the second server lands
@@ -643,16 +765,19 @@ describe("shareSelection carries commands", () => {
     writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
     const inv = buildInventory(paths());
 
-    const result = shareSelection(
-      select({
-        skills: inv.skills.map((s) => s.name),
-        servers: inv.servers.map((s) => s.name),
-        commands: inv.commands.map((c) => c.name),
-      }),
-      team(),
-      paths(),
-      undefined,
-      forge,
+    const result = delegating((commitMessage) =>
+      shareSelectionDeciding(
+        select({
+          skills: inv.skills.map((s) => s.name),
+          servers: inv.servers.map((s) => s.name),
+          commands: inv.commands.map((c) => c.name),
+        }),
+        team(),
+        paths(),
+        undefined,
+        forge,
+        { commitMessage },
+      ),
     );
 
     expect(result.team).toMatchObject({
@@ -709,6 +834,56 @@ describe("shareSelection carries commands", () => {
     expect(calls).toEqual([]);
     expect(result.team?.ok).toBe(false);
     expect(result.refused[0]!.reason).toContain("deploy.md");
+  });
+
+  it("given a collision on the run that stopped for the message, when it is reported, then the answer is put on the whole selection rather than a request of its own", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+
+    const probe = shareSelectionDeciding(
+      select({ commands: ["explain", "fix-tests"] }),
+      team(),
+      paths(),
+      undefined,
+      forge,
+    );
+
+    // Nothing travelled on this run, so the one-item retry would send explain by itself and
+    // fix-tests in a second request - and two requests opened before either is merged claim
+    // the same plugin version, which is what one request exists to prevent.
+    expect(probe.team?.ok).toBe(false);
+    const printed = formatShareResult(probe);
+    expect(printed).not.toContain("share.js share --command explain --update explain");
+    expect(printed).toContain("--update explain");
+    expect(printed).toContain("the same run as the rest");
+  });
+
+  it("given an update answered on the second run, when the wording is delegated, then the commit carries that run's proposal and not the stale one", () => {
+    remote = teamRepo({ "commands/explain.md": "The team's own explain.\n" });
+    writeCommand(userHome, "explain", "My explain.\n");
+    writeCommand(userHome, "fix-tests", "Fix the tests.\n");
+    const selection = () => select({ commands: ["explain", "fix-tests"] });
+
+    // the first run: explain collides, so the proposal it derives is about fix-tests alone
+    const first = shareSelectionDeciding(selection(), team(), paths(), undefined, forge);
+    // the second: the user said yes to updating explain, so the proposal now says so too
+    const second = shareSelectionDeciding(selection(), team(), paths(), undefined, forge, { update: ["explain"] });
+
+    expect(first.team?.proposedMessage).not.toBe(second.team?.proposedMessage);
+    expect(second.team?.proposedMessage).toBe("feat(commands): add fix-tests; update explain");
+
+    const sent = shareSelectionDeciding(selection(), team(), paths(), undefined, forge, {
+      update: ["explain"],
+      commitMessage: { delegated: second.team!.proposalHash! },
+    });
+
+    // what was committed is the sentence the SECOND run showed, which is the one the user
+    // was asked about; delegating the wording must not commit a title nobody saw.
+    expect(sent.team?.commitMessage).toBe(second.team!.proposedMessage);
+    expect(gitIn(remote, ["log", "-1", "--format=%s", sent.team!.branch!]).trim()).toBe(
+      "feat(commands): add fix-tests; update explain",
+    );
   });
 
   it("given the team already has a command by that name, when it is shared, then theirs is untouched and the rest still go", () => {

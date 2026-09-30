@@ -211,6 +211,66 @@ const ORIGIN_TEXT: Record<string, string> = {
   "error-fix": "error-to-fix session",
 };
 
+/**
+ * The scope sentence belongs to assembly, so a description that already carries one gets
+ * it taken off before the fresh one goes on.
+ *
+ * It arrives carrying one because the harvest prompt shows the model the descriptions of
+ * existing skills and of recent review decisions, and those have the sentence in them; the
+ * model writes in the shape it is shown, and the product then appended a second copy. The
+ * result was visible in the artifact: the sentence twice, the second half cut off by the
+ * frontmatter length cap.
+ *
+ * Only the sentence goes, and the whole of it. The first version took everything from the
+ * opening words to the end of the description, which threw away whatever the author had
+ * written after it - and the prompt asks for a trigger situation in that very description,
+ * so what it threw away was content the product had asked for. The second matched the
+ * closing clause word for word, which left a copy whose wording had drifted ("- do not
+ * use.") lying in halves in the middle of the text: a worse artifact than the repetition
+ * being repaired, because it reads as something the author meant.
+ *
+ * So the end is a SENTENCE end rather than a spelling. From the opening words to the first
+ * `.` or line break, whatever stands between them and however the dash is written; what
+ * follows that stop is the author's and is kept. A description whose own words continue
+ * inside that same sentence loses them, which is the accepted cost: a sentence that opens
+ * by claiming a repository boundary is this function's own text, not theirs.
+ */
+const SCOPE_SENTENCE = /\s*Applies ONLY in the \S+ repository[^.\r\n]*\.?/g;
+
+/**
+ * Every opening of `literal`, as one pattern: "abc" becomes `(?:a(?:b(?:c)?)?)?`.
+ *
+ * Written rather than listed because what has to match is a string cut at a point nobody
+ * chose - the length cap can land between any two characters.
+ */
+function openingsOf(literal: string): string {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+
+/**
+ * The same sentence with its end cut off by the length cap.
+ *
+ * It can only stand at the END of a description - what cut it is the cap - and it has to be
+ * a real opening of the sentence rather than any text that begins the same way, so a
+ * description whose own words continue after it keeps them. The cut can land inside the
+ * repository name as easily as inside the words after it, which is why the name is matched
+ * as an optional run and everything past it as an opening.
+ */
+const CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`,
+);
+
+export function withoutScopeSentence(description: string): string {
+  // The cut copy is found on a dash-flattened reading and removed from the original by
+  // index: the flattening is one character for one character, so the two line up, and
+  // writing the dash into the openings pattern three times over would not.
+  const cut = CUT_SCOPE_SENTENCE.exec(description.replace(/[\u2013\u2014]/g, "-"));
+  const whole = cut ? description.slice(0, cut.index) : description;
+  // Trimmed at BOTH ends: a sentence standing first leaves the space that separated it
+  // from the next one, and that space goes on to open the description in the frontmatter.
+  return whole.replace(SCOPE_SENTENCE, "").trim();
+}
+
 export function assembleSkillMd(draft: DistilledDraft, scope: string, from: SkillOrigin = false): string {
   const origin =
     typeof from === "string" ? (ORIGIN_TEXT[from] ?? "real session") : from ? "completed task" : "error-to-fix session";
@@ -218,8 +278,11 @@ export function assembleSkillMd(draft: DistilledDraft, scope: string, from: Skil
   // and fire in every repo, so bake the boundary into the text the model reads:
   // the description (which is always in context) and the top of the body.
   const scoped = scope !== "team";
-  const guard = scoped ? ` Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
-  const description = draft.description + guard;
+  const guard = scoped ? `Applies ONLY in the ${scope} repository - do not use it elsewhere.` : "";
+  // Joined rather than concatenated: the space used to live at the front of the guard, so a
+  // description that was nothing but a scope sentence came back empty and the assembled one
+  // opened with that space - which a quoted YAML scalar keeps.
+  const description = [withoutScopeSentence(draft.description), guard].filter(Boolean).join(" ");
   const body = scoped
     ? `> **Scope: only the \`${scope}\` repository.** This convention is specific to that project - ignore this skill in any other repo.\n\n${draft.body}`
     : draft.body;
@@ -322,6 +385,13 @@ export async function distillVerdict(
   // even though the inputs were screened. Fail closed if so.
   if (signalSecret({ command: draft.body, error: draft.description, edits: [draft.expect] })) {
     return { signal, outcome: "error", error: "distilled output contained secret-like content" };
+  }
+  // The parse asks for a description that is not empty; this asks for one that is still not
+  // empty once the scope sentence assembly owns is taken back off. A model shown existing
+  // descriptions can write that sentence and nothing else, and what it produces then is a
+  // skill whose frontmatter describes nothing - which Claude Code never loads.
+  if (!withoutScopeSentence(draft.description)) {
+    return { signal, outcome: "error", error: "description was only the scope sentence" };
   }
   const generality = verdict.result?.scores.generality ?? 0;
   const remote = remoteUrl(signal.cwd) ?? remoteUrlForEdits(signal.edits, remoteUrl);

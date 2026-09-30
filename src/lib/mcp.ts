@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { detectSecret } from "./secrets.js";
+import { detectIdentity } from "./identity.js";
+import type { IdentityClass } from "./identity.js";
 
 // Reading the manager's own Claude Code setup, and deciding which of its MCP servers may
 // travel to a team repository at all.
@@ -18,7 +20,7 @@ export interface McpServerEntry {
   config: Record<string, unknown>;
 }
 
-export type McpRefusal = "credential-field" | "secret-pattern" | "url-token" | "unsupported-shape";
+export type McpRefusal = "credential-field" | "secret-pattern" | "url-token" | "identity" | "unsupported-shape";
 
 export interface McpAudit {
   migratable: boolean;
@@ -31,6 +33,8 @@ export interface McpAudit {
   // true when enabling the plugin starts a process on every teammate's machine
   startsProcess: boolean;
   transport: string;
+  /** the class of host-identity trace that refused it - never the value */
+  identity?: IdentityClass;
 }
 
 /**
@@ -231,6 +235,15 @@ export function auditServer(config: unknown): McpAudit {
   if (embedded) {
     return { ...base, transport, startsProcess, reason: "url-token", detail: embedded };
   }
+  // Last, because a credential is the more urgent refusal and should be the one named. A
+  // server definition is where a machine's own layout is hardest to avoid - the command it
+  // starts, the arguments it passes, a directory in `env` - and none of that resolves on a
+  // teammate's machine, so a definition carrying one is refused rather than carried over
+  // broken. The whole definition is read, `args` and `env` values included.
+  const trace = detectIdentity(JSON.stringify(config));
+  if (trace) {
+    return { ...base, transport, startsProcess, reason: "identity", detail: trace, identity: trace };
+  }
   return { migratable: true, requiresEnv, startsProcess, transport };
 }
 
@@ -255,6 +268,14 @@ export function refusalMessage(name: string, audit: McpAudit): string {
     return (
       `"${name}" is not shareable: its definition contains what looks like a ${audit.detail}. ` +
       "Move the credential into an environment variable and reference it as ${VAR}."
+    );
+  }
+  if (audit.reason === "identity") {
+    return (
+      `"${name}" is not shareable as written: its definition carries a trace of this machine ` +
+      `(${audit.detail}). A path under your home directory, your account name or your address ` +
+      "resolves to nothing on a teammate's machine, so this stays here. Point it at something " +
+      "every machine has, or pass the location as a ${VAR} reference."
     );
   }
   return `"${name}" is not a server this command can share (${audit.detail ?? "unsupported shape"}).`;
@@ -348,6 +369,7 @@ export function mergeServersIntoMcpJson(
 export function refusalSummary(audit: McpAudit): string {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
+  if (audit.reason === "identity") return `its definition carries a trace of this machine (${audit.detail})`;
   return String(audit.detail);
 }
 

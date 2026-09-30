@@ -27,6 +27,12 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+// A stand-in account and its home directory, assembled rather than written out: this
+// repository refuses a literal absolute home path on any line it takes in, a fixture's
+// included.
+const STAND_IN = "alice";
+const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+
 function item(overrides: Partial<HarvestItem> = {}): HarvestItem {
   return {
     kind: "correction",
@@ -219,6 +225,16 @@ describe("parseHarvestResponse", () => {
     expect(parseHarvestResponse(JSON.stringify([grounded]), grounding)).toHaveLength(1);
   });
 
+  it("given a description that is nothing but the scope sentence, when parsed, then the item is refused", () => {
+    // Assembly takes that sentence back off, so what the skill would be written with is an
+    // empty description - and the model is shown descriptions carrying it.
+    const raw = JSON.stringify([
+      rawItem({ description: "Applies ONLY in the a/b repository - do not use it elsewhere." }),
+    ]);
+
+    expect(parseHarvestResponse(raw, grounding)).toEqual([]);
+  });
+
   it("given a discovery, when parsed, then no anchor is demanded of it", () => {
     const raw = JSON.stringify([rawItem({ kind: "discovery", name: "d", quote: undefined })]);
 
@@ -247,6 +263,23 @@ describe("sieveHarvestItems", () => {
     );
     expect(kept.map((i) => i.name)).toEqual(["good-one"]);
     expect(dropped.map((d) => d.reason).sort()).toEqual(["below-floor", "duplicate", "oversized", "secret"]);
+  });
+
+  it("given an item carrying a home path, when sieved, then it is dropped for the trace rather than kept", () => {
+    const { kept, dropped } = sieveHarvestItems(
+      [item({ name: "run-the-suite", body: `## Rule\n\nRun it from ${HOME_PATH}.` }), item({ name: "good-one" })],
+      context,
+    );
+
+    expect(kept.map((i) => i.name)).toEqual(["good-one"]);
+    expect(dropped.map((d) => d.reason)).toEqual(["identity"]);
+  });
+
+  it("given an address in a field other than the body, when sieved, then it is dropped too - every field the model writes is screened", () => {
+    const { kept, dropped } = sieveHarvestItems([item({ description: "Use when bob@acme.corp asks." })], context);
+
+    expect(kept).toEqual([]);
+    expect(dropped.map((d) => d.reason)).toEqual(["identity"]);
   });
 
   it("given an existing skill that covers the lesson under another name, when sieved, then nothing stops the item", () => {
@@ -395,6 +428,26 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).toContain("recurred 3×");
     expect(prompt).toContain("old-skill");
     expect(prompt).toContain("empty array [] is a valid");
+  });
+
+  it("given the session text carries a home path, when the prompt is built, then the model is shown the path without its owner", () => {
+    const prompt = buildHarvestPrompt({
+      slice: `User: run the suite from ${HOME_PATH}`,
+      evidence: {
+        ...evidence,
+        pairs: [{ ...evidence.pairs[0]!, edits: [`${HOME_PATH}/src/app.ts`] }],
+        corrections: [{ at: "x", text: `always run it from ${HOME_PATH}` }],
+      },
+      existingSkills: [{ name: "old-skill", description: `Use when working in ${HOME_PATH}.` }],
+      recentDecisions: [`- one: captured in ${HOME_PATH}`],
+      maxItems: 3,
+    });
+
+    // Every source inside the fence, not just the conversation: the model writes in the
+    // shape of what it is shown, and it is shown six of them.
+    expect(prompt).not.toContain(STAND_IN);
+    expect(prompt).toContain("run the suite from ~/work/api");
+    expect(prompt).toContain("~/work/api/src/app.ts");
   });
 
   it("given a prompt repeated across sessions, when the prompt is built, then the model is pushed to look at it", () => {
@@ -580,6 +633,48 @@ describe("harvestSession (end to end with a fake runner)", () => {
       command: "npm test",
       resolvedCommand: "npm test",
     });
+  });
+
+  it("given the session's own evidence carries a home path, when the candidate is written, then it is marked rather than lost", async () => {
+    // The mark exists for exactly this: the sieve screens what the MODEL wrote, and the
+    // grounded case is assembled afterwards out of what the session did. Keeping the
+    // lesson is right - it is still worth having on this machine - and the mark is what
+    // the review screen shows before anyone decides to send it anywhere.
+    const reply = JSON.stringify([
+      rawItem({ kind: "error-fix", name: "fix-npm-snapshot", quote: undefined, source: "pair:abcdefabcdefabcd" }),
+    ]);
+    const dirty: HarvestEvidence = {
+      ...evidence,
+      pairs: [{ ...evidence.pairs[0]!, edits: [`${HOME_PATH}/src/app.ts`] }],
+    };
+
+    const summary = await harvestSession(job({ evidence: dirty }), home, {
+      runner: async () => reply,
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+
+    expect(summary.written).toEqual(["fix-npm-snapshot"]);
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-snapshot"))?.hygiene).toEqual({
+      identity: "home-path",
+      where: "grounded-case.json",
+    });
+  });
+
+  it("given a session with nothing of the machine in it, when a candidate is written, then it carries no mark", async () => {
+    const reply = JSON.stringify([rawItem()]);
+
+    await harvestSession(job(), home, {
+      runner: async () => reply,
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+
+    expect(
+      readCandidateMeta(join(candidatesDir(home), "prefer-config-feature-flags"))?.hygiene,
+    ).toBeUndefined();
   });
 
   it("resolves project scope to the git remote itself (model never controls the string)", async () => {

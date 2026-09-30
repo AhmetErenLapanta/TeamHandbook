@@ -579,6 +579,12 @@ import { basename, join as join3 } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+// src/lib/identity.ts
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
 var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
@@ -586,6 +592,14 @@ var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/score.ts
 var execFileAsync = promisify(execFile);
+
+// src/lib/distill.ts
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
 
 // src/lib/init.ts
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(

@@ -10,7 +10,7 @@ import {
   formatLeaveSuccess,
   teamSkillsDir,
   hostFromUrl,
-  initTeamRepo,
+  initTeamRepo as initTeamRepoDeciding,
   loadTeamConfig,
   nonInteractiveEnv,
   repoNameFromUrl,
@@ -19,8 +19,36 @@ import {
   writeSkeleton,
   pushFailureReason,
   commitMessagePrefix,
+  commitMessageProblem,
+  commitSubject,
+  decideCommitSubject,
+  proposalFingerprint,
   summarizeGitStderr,
 } from "./init.js";
+
+/**
+ * The answer every scaffold below gives about its commit message, because none of them is
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
+ */
+const APPROVED = { message: "chore: the case under test" } as const;
+
+type InitArgs = Parameters<typeof initTeamRepoDeciding>;
+function initTeamRepo(
+  url: InitArgs[0],
+  name?: InitArgs[1],
+  home?: InitArgs[2],
+  git?: InitArgs[3],
+  now?: InitArgs[4],
+  forge?: InitArgs[5],
+  branchPrefix?: InitArgs[6],
+  commitPrefix?: InitArgs[7],
+  withCi?: InitArgs[8],
+) {
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, APPROVED);
+}
+
 
 describe("nonInteractiveEnv", () => {
   it("given a shell that would prompt, when a forge or git call is built, then every prompt is disabled", () => {
@@ -657,6 +685,90 @@ describe("initTeamRepo", () => {
     return dir;
   }
 
+  it("given no decision about the commit message, when a repository is scaffolded, then nothing is pushed and no team is configured", () => {
+    const remote = bareRepo();
+    try {
+      // The imported function, not the delegating wrapper: this case is about the answer
+      // itself, so giving one would measure nothing.
+      const result = initTeamRepoDeciding(remote, "acme-skills", home);
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("commit message required");
+      expect(result.proposedMessage).toBe("chore: scaffold team skill base");
+      // The refusal lands before the clone, so there is no half-scaffolded machine to
+      // recover: no branch on the remote, and nothing pointing this machine at a team.
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe("");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given an empty repository, when the wording is delegated, then it is refused because there is no merge request to open", () => {
+    // The one case where the scaffold does NOT arrive as a merge request: an empty
+    // repository has no branch to open one against, so the commit goes straight to the
+    // default branch the whole team reads. "You decide" is an answer about the request;
+    // with no request, delegating it would put a sentence nobody saw on that branch.
+    const remote = bareRepo();
+    try {
+      const result = initTeamRepoDeciding(remote, "acme-skills", home, undefined, undefined, noForge, undefined, "", false, {
+        delegated: proposalFingerprint("chore: scaffold team skill base"),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("no commits yet");
+      expect(result.error).toContain("--message");
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe("");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a repository that is not empty and no way to open a merge request, when the wording is delegated, then nothing is pushed", () => {
+    const remote = seededRepo("master");
+    try {
+      const result = initTeamRepoDeciding(remote, "acme-skills", home, undefined, undefined, noForge, undefined, "", false, {
+        delegated: proposalFingerprint("chore: scaffold team skill base"),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("no merge request can be opened from this machine");
+      // the scaffold branch never appeared, and this machine was never pointed at a team
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).not.toContain("handbook/");
+      expect(loadTeamConfig(home)).toBeNull();
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a commit prefix and a message the user wrote, when a repository is scaffolded, then the commit carries both", () => {
+    const remote = bareRepo();
+    try {
+      const result = initTeamRepoDeciding(
+        remote,
+        "acme-skills",
+        home,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "TEAM-1",
+        false,
+        { message: "chore: start the team handbook" },
+      );
+
+      expect(result).toMatchObject({ ok: true, commitMessage: "TEAM-1 chore: start the team handbook" });
+      const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "main"], { encoding: "utf8" });
+      expect(subject.trim()).toBe("TEAM-1 chore: start the team handbook");
+      // The prefix was added to their wording, so the line they read has to say so: what
+      // was committed, not what they typed.
+      expect(formatInitSuccess(result)).toContain("commit:      TEAM-1 chore: start the team handbook");
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
   it("scaffolds, pushes to an empty repo, and records the team config", () => {
     const remote = bareRepo();
     try {
@@ -916,5 +1028,156 @@ describe("a broken config.json is never overwritten (it holds the privacy switch
     const result = initTeamRepo("git@x.com:a/b.git", "b", home, () => {});
     expect(result.ok).toBe(false);
     expect(result.error).toContain("not valid JSON");
+  });
+});
+
+describe("the message a commit is allowed to carry", () => {
+  it("given a message with nothing in it, when it is checked, then it is not a commit title", () => {
+    expect(commitMessageProblem("")).toContain("empty");
+    expect(commitMessageProblem("   ")).toContain("empty");
+  });
+
+  it("given a message with a newline in it, when it is checked, then it is refused rather than truncated", () => {
+    // `git commit -m` would take the first line as the title and make the rest a body, so
+    // the user would have approved one sentence and the repository would hold two.
+    const problem = commitMessageProblem("feat: add the runbook\n\nand quietly do something else");
+
+    expect(problem).toContain("control character");
+  });
+
+  it("given a message carrying a credential, when it is checked, then it is refused before it can reach the team's repository", () => {
+    // A commit message is the one free-text field in this product that a user types
+    // straight into a repository their whole team reads, so it goes through the same
+    // sieve every shared file does.
+    const problem = commitMessageProblem("fix: rotate glpat-ABCDEFGHIJKLMNOPQRSTUVWX after the outage");
+
+    expect(problem).toContain("gitlab-token");
+  });
+
+  it("given an ordinary sentence, when it is checked, then nothing is wrong with it", () => {
+    expect(commitMessageProblem("feat: share the deploy runbook with the team")).toBeNull();
+  });
+});
+
+describe("the prefix on a commit subject", () => {
+  it("given a message without the team's prefix, when the subject is built, then the prefix is added", () => {
+    expect(commitSubject("TEAM-1 ", "feat: add the runbook")).toBe("TEAM-1 feat: add the runbook");
+  });
+
+  it("given a message that already carries the prefix, when the subject is built, then it is not added twice", () => {
+    // The user approving a proposal by handing it straight back is the commonest answer
+    // there is, and a rule anchored at the front of the title accepts "TEAM-1 TEAM-1 ..."
+    // happily, so nothing downstream would have caught it.
+    expect(commitSubject("TEAM-1 ", "TEAM-1 feat: add the runbook")).toBe("TEAM-1 feat: add the runbook");
+  });
+
+  it("given a team with no prefix at all, when the subject is built, then the message stands as it is", () => {
+    expect(commitSubject("", "feat: add the runbook")).toBe("feat: add the runbook");
+  });
+});
+
+describe("deciding what a commit will say", () => {
+  const RERUN = "run it again";
+
+  it("given no answer at all, when the decision is made, then it refuses and names the sentence to show", () => {
+    const decided = decideCommitSubject({}, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN);
+
+    expect(decided).toEqual({ error: expect.stringContaining("commit message required") });
+    expect("error" in decided && decided.error).toContain("TEAM-1 chore: scaffold");
+    expect("error" in decided && decided.error).toContain(RERUN);
+  });
+
+  it("given both an approved message and a delegation, when the decision is made, then it refuses rather than picking one", () => {
+    // They are two different answers to one question, exactly as --as and --update are two
+    // different answers to one refusal, and a caller that sent both decided nothing.
+    const decided = decideCommitSubject(
+      { message: "feat: mine", delegated: "deadbeef" },
+      "TEAM-1 feat: theirs",
+      "TEAM-1 ",
+      RERUN,
+    );
+
+    expect("error" in decided && decided.error).toContain("answer the same question");
+  });
+
+  it("given a delegation naming the proposal's fingerprint, when the decision is made, then the subject is that proposal exactly", () => {
+    const proposal = "TEAM-1 chore: scaffold";
+
+    expect(decideCommitSubject({ delegated: proposalFingerprint(proposal) }, proposal, "TEAM-1 ", RERUN)).toEqual({
+      subject: proposal,
+    });
+  });
+
+  it("given a delegation naming some other sentence, when the decision is made, then it refuses and shows the one it would commit now", () => {
+    // What a conversation carries when the proposal moved between the run that showed it
+    // and the run that acts on it: an --update consented to, or a teammate's merge.
+    const decided = decideCommitSubject({ delegated: "deadbeef" }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN);
+
+    expect("error" in decided && decided.error).toContain("not the one this would commit any more");
+    expect("error" in decided && decided.error).toContain("TEAM-1 chore: scaffold");
+  });
+
+  it("given a proposal that could not be a commit title, when the decision is made, then it is refused before anyone is asked to delegate it", () => {
+    // The proposal is built out of names this machine did not write - a server, a command,
+    // a skill directory - so it goes through the same sieve a typed message does.
+    const decided = decideCommitSubject({}, "feat(mcp): add glpat-ABCDEFGHIJKLMNOPQRSTUVWX", "", RERUN);
+
+    expect("error" in decided && decided.error).toContain("gitlab-token");
+    // and the way out is named, which is the whole difference between a refusal and a loop
+    expect("error" in decided && decided.error).toContain("There is nothing to show and nothing to delegate");
+    expect("error" in decided && decided.error).toContain("--message");
+  });
+
+  it("given a proposal that could not be a commit title, when the user gives their own message, then it is committed rather than refused for the proposal", () => {
+    // The proposal is never shown and never committed on this branch, so screening it here
+    // would refuse a clean message for a sentence nobody is going to use - and the only
+    // advice such a refusal could give is the flag that had just been passed.
+    const decided = decideCommitSubject(
+      { message: "feat: add the gitlab server" },
+      "feat(mcp): add glpat-ABCDEFGHIJKLMNOPQRSTUVWX",
+      "",
+      RERUN,
+    );
+
+    expect(decided).toEqual({ subject: "feat: add the gitlab server" });
+  });
+
+  it("given a delegation with nothing in it, when the decision is made, then it is refused rather than read as an answer", () => {
+    const decided = decideCommitSubject({ delegated: "" }, "chore: scaffold", "", RERUN);
+
+    expect("error" in decided && decided.error).toContain("is not the fingerprint of a proposed message");
+  });
+
+  it("given no decision on a machine that cannot open a merge request, when it is asked for, then delegating is not offered", () => {
+    // Offering it would spend the user's next answer on a round trip whose outcome is
+    // already known: the delegated run would be refused for the same reason.
+    const decided = decideCommitSubject({}, "chore: scaffold", "", RERUN, "this project has no commits yet");
+
+    expect("error" in decided && decided.error).toContain("commit message required");
+    expect("error" in decided && decided.error).toContain("this project has no commits yet");
+    expect("error" in decided && decided.error).not.toContain("--delegate-message");
+  });
+
+  it("given an approved message, when the decision is made, then the subject is that message with the prefix on it", () => {
+    expect(decideCommitSubject({ message: "feat: mine" }, "TEAM-1 chore: scaffold", "TEAM-1 ", RERUN)).toEqual({
+      subject: "TEAM-1 feat: mine",
+    });
+  });
+
+  it("given a message of their own that runs past a title's length, when the decision is made, then it is refused", () => {
+    const decided = decideCommitSubject({ message: `feat: ${"x".repeat(300)}` }, "chore: scaffold", "", RERUN);
+
+    expect("error" in decided && decided.error).toContain("longer than");
+  });
+
+  it("given a long proposal handed straight back, when the decision is made, then its own length is not held against it", () => {
+    // The share screen exists for someone with a lot of skills, and a selection of a dozen
+    // names every one of them in the title. Refusing that text as too long would refuse
+    // the likeliest answer there is - approval by echo - while --delegate-message committed
+    // the identical sentence.
+    const proposal = `feat(skill): add ${Array.from({ length: 15 }, (_, i) => `team-skill-number-${i + 1}`).join(", ")}`;
+    expect(proposal.length).toBeGreaterThan(200);
+
+    expect(decideCommitSubject({ message: proposal }, proposal, "", RERUN)).toEqual({ subject: proposal });
   });
 });

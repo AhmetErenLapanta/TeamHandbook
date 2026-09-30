@@ -12,6 +12,9 @@
 //  2. every value is INDENTED. Field labels are the only column-0 "label:" lines,
 //     so content can never forge a field (e.g. a transcript line that reads
 //     "resolved error→fix pairs: …" cannot masquerade as real evidence).
+import { hostIdentity, maskIdentity } from "./identity.js";
+import type { HostIdentity } from "./identity.js";
+
 export const UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
 export const UNTRUSTED_CLOSE = "<<<END_UNTRUSTED_SESSION_DATA>>>";
 
@@ -152,15 +155,32 @@ function indent(value: string): string {
     .join("\n");
 }
 
-export function fenceUntrusted(fields: Record<string, string>): string {
+/**
+ * Every prompt this product sends is built by fencing captured session text, so this is the
+ * one place all of it passes through - and therefore the place the machine's own identity
+ * comes off it.
+ *
+ * It sits here rather than at the callers because a caller is exactly what gets forgotten:
+ * the masking began at one call site, and every other one went on handing over absolute
+ * paths and the account name in the fields that carry them - the failed command, the
+ * command that resolved it, the files edited for the fix. A rule that has to be remembered
+ * at each new prompt is a rule that holds until the next prompt is written.
+ *
+ * Labels are masked too: a label is caller-controlled, and one of them is a skill name.
+ * Masking runs after the sentinel strip, because it inserts nothing the strip looks for.
+ */
+export function fenceUntrusted(
+  fields: Record<string, string>,
+  host: HostIdentity = hostIdentity(),
+): string {
   const body = Object.entries(fields)
     .map(([label, value]) => {
       // labels are caller-controlled too: score.ts uses SKILL NAMES as labels, and a
       // repo could ship a skill named after this block's own delimiter
       // the same class as indent(): a label that kept the old four terminators could still
       // be split in two by a NEL, and half of it would land at column 0 as a second label
-      const safeLabel = stripSentinels(label).replace(LABEL_BREAKS, " ");
-      const clean = stripSentinels(value ?? "").trim() || "(none)";
+      const safeLabel = maskIdentity(stripSentinels(label).replace(LABEL_BREAKS, " "), host);
+      const clean = maskIdentity(stripSentinels(value ?? ""), host).trim() || "(none)";
       return `${safeLabel}:\n${indent(clean)}`;
     })
     .join("\n\n");

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { auditServer, claudeConfigFile, readLocalServers, refusalMessage, refusalSummary } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
-import { auditSkillDir } from "./queue.js";
+import { auditSkillDir, identityPlace } from "./queue.js";
 import type { SkillAudit } from "./queue.js";
 import { publishTeamSelection } from "./publish.js";
 import type { PublishOptions, SkillShareEntry, TeamAssets, TeamPublishOutcome } from "./publish.js";
@@ -165,6 +165,8 @@ function skillRefusal(audit: SkillAudit): string {
       return "it has no files to share";
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    case "identity":
+      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
       return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
   }
@@ -457,7 +459,11 @@ export function shareSelection(
   // names no single item, so it would otherwise be reported about nothing at all. The ones
   // already turned back keep the reason they were turned back for - and the set is keyed
   // by kind as well as name, because a server and a command may share one.
-  if (!outcome.ok && outcome.error) {
+  // The one whole-request failure that is NOT fanned out: a request stopped for want of a
+  // commit message was not refused item by item, and repeating one four-line sentence
+  // against every name the user picked buries the proposal it is asking them to read.
+  // formatShareResult prints it once instead, and the CLI still exits non-zero for it.
+  if (!outcome.ok && outcome.error && !outcome.proposedMessage) {
     const judged = new Set((outcome.refused ?? []).map((r) => `${r.kind}:${r.name}`));
     for (const skill of skills) {
       if (!judged.has(`skill:${skill.name}`)) {
@@ -510,6 +516,9 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
     }
     lines.push(
       `  - branch: ${shared.branch}`,
+      // What the commit actually says, not what was offered: the message may be the user's
+      // own wording, and it may have gained the team's prefix on the way in.
+      `  - commit: ${shared.commitMessage}`,
       // manualPrUrl returns null for a remote whose host it does not know how to build a
       // "new merge request" link for. The branch is pushed either way, and printing
       // "undefined" at someone is worse than telling them the link is theirs to find.
@@ -545,6 +554,10 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
       );
     }
   }
+  // Asked for once, about the whole request, because the request is what it is about.
+  if (shared && !shared.ok && shared.proposedMessage && shared.error) {
+    lines.push(shared.error);
+  }
   // Two kinds of refusal, kept apart. One is a fault the user has to fix in their own
   // setup (a credential, an unreadable file); the other is a name the team already uses,
   // which is a question with an answer. Reading them as one list makes the second look
@@ -558,15 +571,31 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
   }
   if (collisions.length) {
     if (lines.length) lines.push("");
+    // Which retry to print depends on whether the rest of the selection travelled. It did
+    // on a run that committed; it did NOT on a run that stopped for want of a commit
+    // message, and there the one-item command below would split one selection into two
+    // merge requests - two requests opened before either is merged claim the same plugin
+    // version, and the second reaches nobody. That is the defect one request exists to
+    // prevent, so the advice changes rather than the reader being expected to notice.
+    const travelled = !!shared?.ok;
     lines.push(
-      `The team already has these (${collisions.length}) - theirs is untouched:`,
+      `The team already has these (${collisions.length})${travelled ? " - theirs is untouched:" : ":"}`,
       ...collisions.map((r) => `  ${r.name} - ${r.reason}`),
       "",
-      "To send one of them as an update to the team's copy, name that one and only that one:",
-      // The selector the run itself recorded, not one rebuilt from the kind: a skill named
-      // by path is re-named by that path, and printing "--skill <name>" for it would hand
-      // the reader a command that comes back "no skill of that name is installed here".
-      ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`),
+      ...(travelled
+        ? [
+            "To send one of them as an update to the team's copy, name that one and only that one:",
+            // The selector the run itself recorded, not one rebuilt from the kind: a skill
+            // named by path is re-named by that path, and printing "--skill <name>" for it
+            // would hand the reader a command that comes back "no skill of that name is
+            // installed here".
+            ...collisions.map((r) => `  share.js share ${r.selector ?? `--skill ${r.name}`} --update ${r.name}`),
+          ]
+        : [
+            "Nothing has been shared yet, so these are answered on the same run as the rest:",
+            `add ${collisions.map((r) => `--update ${r.name}`).join(" ")} to the whole selection, for the`,
+            "names the user said yes to and no others, and run it again.",
+          ]),
     );
   }
   if (!lines.length) return "Nothing was selected, so nothing was shared.";

@@ -152,6 +152,17 @@ Two things, and only these:
      and the next session-start notice tells you.
    - A session with no substance (no error→fix pair, no teaching, no real work) is
      never harvested and costs no model call at all.
+   - Before that text is handed over, the traces of the machine it was read on are
+     masked where they are recognized: an absolute path into a home directory, an
+     address, the account name this process runs under. A path becomes `~` rather than
+     being dropped, so the lesson survives it. This happens where a prompt is built
+     rather than at one caller, so it covers every model call this product makes - the
+     automatic harvest above, the `/handbook:learn` call you ask for, the promotion gate
+     and the review sweep alike. Recognition is pattern-based and makes no claim to be
+     complete - an account name that reads as an ordinary word, a home directory written
+     in a shape these patterns do not know, or an address whose local part is one of the
+     job names a shared mailbox uses (`ci@`, `support@`, `noreply@`, and their kind, which
+     are treated as shareable) can still travel.
 2. **On your approval:** `/handbook:review` → approve installs the skill locally or
    opens a PR to the team repo you configured (your git credentials, your chosen repo).
    That command is the gate for everything the HARVEST proposed: a candidate it produced
@@ -161,6 +172,29 @@ Two things, and only these:
    single PR you can read before merging. Picking it there is the approval, the same act
    for all three kinds; the harvest proposed none of it, so there is no second verdict to
    give. Nothing is shared with your team before one of these two.
+   - Whatever you pick on the `/handbook:share` screen is screened for those same traces
+     first, and all three kinds are screened: a skill (every file it carries, and its
+     name), a slash command (its body and its name) and an MCP server (its whole
+     definition, `command`, `args` and `env` included). Anything one is found in is
+     refused rather than sent, and the refusal names the class and where it sits without
+     printing the trace itself; the rest of your selection still goes.
+   - `/handbook:review` screens a candidate the same way and prints what it finds before
+     you choose where it goes. Approving it to the team, or into a project - where it is
+     committed with the repository - is refused on those grounds. Keeping it for yourself
+     is not: that copy stays on the machine the trace names, so it is recorded rather than
+     refused.
+   - The commit on that request is yours as well: TeamHandbook never commits with a
+     message you have not seen; you can delegate the wording only at the moment the merge
+     request is opened. This holds for every path that commits - `/handbook:review`
+     approving to the team, `/handbook:share`, `/handbook:init` and its `--upgrade`.
+     Delegating is answering "you decide" about one specific sentence, so it names that
+     sentence's fingerprint: if the proposal has changed since you were shown it, the run
+     is refused and shows you the new one. And because the delegation is given for the
+     merge request, it is honoured only where one can actually be opened - on an empty
+     repository, where the scaffold goes straight to the default branch, and on a machine
+     whose `gh`/`glab` is missing or not signed in, the wording has to be yours. What this
+     does not promise: if the CLI is signed in and opening the request still fails, the
+     branch is pushed with the delegated message and the request is yours to open.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files

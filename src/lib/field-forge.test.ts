@@ -2,12 +2,38 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initTeamRepo, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { initTeamRepo as initTeamRepoDeciding, loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner } from "./init.js";
 import { joinTeamRepo } from "./join.js";
 import { publishTeamSelection } from "./publish.js";
 import { createGitLabRepo } from "./gitlab-fixture.js";
 import type { CommitIdentity, GitLabPushRules, GitLabRepo, GitLabRepoOptions } from "./gitlab-fixture.js";
+import type { CommitMessageChoice } from "./init.js";
+import type { ForgeRunner } from "./forge.js";
+
+/**
+ * The answer every scaffold below gives about its commit message, because none of them is
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
+ */
+const APPROVED = { message: "chore: the case under test" } as const;
+
+type InitArgs = Parameters<typeof initTeamRepoDeciding>;
+function initTeamRepo(
+  url: InitArgs[0],
+  name?: InitArgs[1],
+  home?: InitArgs[2],
+  git?: InitArgs[3],
+  now?: InitArgs[4],
+  forge?: InitArgs[5],
+  branchPrefix?: InitArgs[6],
+  commitPrefix?: InitArgs[7],
+  withCi?: InitArgs[8],
+) {
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, APPROVED);
+}
+
 
 // The chain init -> share -> join against a project that refuses a push for real, rather
 // than against a runner that agrees with whatever the product asks it. What these cases
@@ -67,25 +93,39 @@ function gitAs(identity: CommitIdentity): GitRunner {
 
 // No forge CLI is invoked from a test: the merge request is the one step this harness
 // cannot hold locally, and calling the real glab would reach the network.
-const noForge = () => {
+const noForge = (_tool: "gh" | "glab", _args: string[]) => {
   const err = new Error("spawn glab ENOENT") as Error & { code: string };
   err.code = "ENOENT";
   throw err;
 };
 
-function localSkill(name: string): string {
+/** A machine that HAS the CLI and is signed in: `auth status` answers, and the request it
+ * would open comes back as a link rather than a network call. Needed because a delegated
+ * wording is refused on a machine that cannot open a merge request, so the cases about
+ * delegation cannot use the runner that stands in for not having one. */
+const signedInForge = (_tool: "gh" | "glab", args: string[]) =>
+  args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/team/skills/-/merge_requests/1";
+
+function localSkill(name: string, body = "Body."): string {
   const dir = join(mkdtempSync(join(tmpdir(), "handbook-skill-")), name);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: What ${name} is for.\n---\n\nBody.\n`);
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: What ${name} is for.\n---\n\n${body}\n`);
   return dir;
 }
 
-function share(identity: CommitIdentity = MEMBER, name = "my-skill") {
+function share(
+  identity: CommitIdentity = MEMBER,
+  name = "my-skill",
+  commitMessage: CommitMessageChoice = APPROVED,
+  forge: ForgeRunner = noForge,
+  body?: string,
+) {
   return publishTeamSelection(
-    { skills: [{ name, dir: localSkill(name) }] },
+    { skills: [{ name, dir: localSkill(name, body) }] },
     loadTeamConfig(home)!,
     gitAs(identity),
-    noForge,
+    forge,
+    { commitMessage },
   );
 }
 
@@ -365,5 +405,135 @@ describe("share by someone who joined a project that was already answered", () =
     expect(outcome).toMatchObject({ ok: true, branch: "TEAM-1-skills-my-skill", learnedBranchPrefix: BRANCH_PREFIX });
     // the refused name is not left behind on the project
     expect(repo.branches()).not.toContain("handbook/skills-my-skill");
+  });
+});
+
+describe("a skill carrying a trace of the machine it was written on", () => {
+  // The stand-in name and the path are assembled rather than written out: this repository
+  // refuses a literal absolute home path on any line it takes in, a fixture's included.
+  const STAND_IN = "alice";
+  const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+
+  it("given a home path in its body, when it is shared, then the project is never opened and the refusal names the class, not the trace", () => {
+    const repo = project();
+    initTeamRepo(repo.url, "acme-skills", home, gitAs(MEMBER), undefined, noForge);
+    repo.mergeIntoDefault("handbook/scaffold");
+    const before = repo.branches();
+
+    const result = share(MEMBER, "leaky-skill", APPROVED, noForge, `Run the suite from ${HOME_PATH} first.`);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("carries a trace of this machine");
+    expect(result.error).toContain("home-path");
+    // The whole outcome, not just the message: a refusal that prints the trace back would
+    // put it in the terminal, the transcript and whatever the user pastes next.
+    expect(JSON.stringify(result)).not.toContain(STAND_IN);
+    expect(repo.branches()).toEqual(before);
+  });
+
+  it("given the same skill with the path taken out, when it is shared, then it goes out - the refusal was the trace, not the skill", () => {
+    const repo = project();
+    initTeamRepo(repo.url, "acme-skills", home, gitAs(MEMBER), undefined, noForge);
+    repo.mergeIntoDefault("handbook/scaffold");
+
+    const result = share(MEMBER, "leaky-skill", APPROVED, noForge, "Run the suite from the repository root first.");
+
+    expect(result).toMatchObject({ ok: true, branch: "handbook/skills-leaky-skill" });
+    expect(repo.filesOn("handbook/skills-leaky-skill")).toContain("skills/leaky-skill/SKILL.md");
+  });
+});
+
+// The message on the commit, against the same project. It belongs in this suite rather
+// than beside the mocked cases because the thing being asserted is what the PROJECT now
+// holds: a runner that agrees with whatever it is asked would record the product's
+// intention, and the intention was never the doubt. The doubt is whether the sentence the
+// user approved is the sentence that ends up in the repository their team reads.
+describe("the commit says what the user approved, not what the product derived", () => {
+  const BRANCH = "TEAM-1-skills-my-skill";
+  const PROPOSAL = "TEAM-1 feat(skill): add my-skill";
+
+  /** A project whose three rules are already answered, so nothing below is refused for a
+   * prefix and every case measures the message and only the message. */
+  function answered(): GitLabRepo {
+    const repo = project({ rules: { branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE, email: EMAIL_RULE } });
+    initTeamRepo(repo.url, "acme-skills", home, gitAs(MEMBER), undefined, noForge, BRANCH_PREFIX, COMMIT_PREFIX);
+    repo.mergeIntoDefault("TEAM-1-scaffold");
+    return repo;
+  }
+
+  it("given no decision about the message, when a share is run, then nothing is committed and the proposal comes back to be shown", () => {
+    const repo = answered();
+
+    const outcome = share(MEMBER, "my-skill", {});
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("commit message required");
+    // The refusal is also the screen: it carries the exact sentence to put in front of
+    // the user, so the round trip it costs is the round trip that asks them.
+    expect(outcome.proposedMessage).toBe(PROPOSAL);
+    expect(repo.branches()).not.toContain(BRANCH);
+  });
+
+  it("given a message the user approved, when it is shared, then the commit the project holds carries that message word for word", () => {
+    const repo = answered();
+
+    const outcome = share(MEMBER, "my-skill", { message: "feat: the deploy runbook everyone keeps asking for" });
+
+    expect(outcome.ok).toBe(true);
+    // Their wording, with the prefix their project demands and nothing else added.
+    expect(repo.subjectOn(BRANCH)).toBe("TEAM-1 feat: the deploy runbook everyone keeps asking for");
+    expect(outcome.commitMessage).toBe("TEAM-1 feat: the deploy runbook everyone keeps asking for");
+  });
+
+  it("given the user answered that you decide, when it is shared, then the commit carries the very sentence the refusal had shown them", () => {
+    const repo = answered();
+    // The two runs are the point: whatever the first one said it would commit is what the
+    // second one commits, so "you decide" delegates the wording the user was shown rather
+    // than a second sentence derived somewhere else. The fingerprint is what ties them.
+    const probe = share(MEMBER, "my-skill", {});
+
+    const outcome = share(MEMBER, "my-skill", { delegated: probe.proposalHash! }, signedInForge);
+
+    expect(outcome.ok).toBe(true);
+    expect(repo.subjectOn(BRANCH)).toBe(probe.proposedMessage);
+  });
+
+  it("given a delegation naming a sentence that is no longer the one this would commit, when it is shared, then it is refused with the new one", () => {
+    const repo = answered();
+    // The fingerprint of some other proposal: what a conversation carries when the
+    // selection has moved on since the user was asked, or a teammate's merge has.
+    const outcome = share(MEMBER, "my-skill", { delegated: "deadbeef" }, signedInForge);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("not the one this would commit any more");
+    expect(outcome.error).toContain(PROPOSAL);
+    expect(repo.branches()).not.toContain(BRANCH);
+  });
+
+  it("given a machine with no way to open a merge request, when the wording is delegated, then nothing is committed at all", () => {
+    const repo = answered();
+    const probe = share(MEMBER, "my-skill", {});
+
+    // noForge is a machine without the CLI. Everywhere else that is a soft failure - the
+    // branch is pushed and the user opens the request by hand - but a delegation was given
+    // FOR that request, so here there is nothing to honour it at.
+    const outcome = share(MEMBER, "my-skill", { delegated: probe.proposalHash! });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("no merge request can be opened from this machine");
+    expect(repo.branches()).not.toContain(BRANCH);
+  });
+
+  it("given the user hands the proposal straight back, when it is shared, then the prefix is on the commit once", () => {
+    const repo = answered();
+    // Approving by echoing the sentence is the likeliest answer of all, and it is the one
+    // that used to produce "TEAM-1 TEAM-1 ..." - which the project's own rule would have
+    // accepted, since the rule only looks at the front of the title.
+    const probe = share(MEMBER, "my-skill", {});
+
+    const outcome = share(MEMBER, "my-skill", { message: probe.proposedMessage! });
+
+    expect(outcome.ok).toBe(true);
+    expect(repo.subjectOn(BRANCH)).toBe(PROPOSAL);
   });
 });

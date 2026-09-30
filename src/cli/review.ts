@@ -10,6 +10,8 @@ import {
   listCandidates,
   readArchiveManifest,
   formatUnreadableCandidates,
+  identityInSkillDir,
+  identityPlace,
   readCandidateMeta,
   restoreArchived,
   unreadableCandidates,
@@ -26,7 +28,8 @@ import { displayPath } from "../lib/display-path.js";
 function usage(): never {
   console.error(
     "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
-      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>]",
+      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] " +
+      "[--message <commit message>] [--delegate-message <fingerprint>]",
   );
   process.exit(2);
 }
@@ -49,6 +52,21 @@ function showCandidate(home: string, slug: string): void {
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
+  // Scanned here rather than read from the meta, and printed before the score: it changes
+  // what the verdict MEANS rather than how good the lesson is. Live, because the mark the
+  // harvest wrote is the state of the candidate when it was written - a candidate from
+  // before this screening existed carries no mark at all, and one whose trace the reviewer
+  // has since edited out would keep a warning that is no longer true. The class and the
+  // file, never the trace itself: naming it would put it in the transcript of the very
+  // session deciding whether it may travel.
+  const trace = identityInSkillDir(dir, slug);
+  if (trace) {
+    console.log(
+      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine ` +
+        `(${trace.class}) - approving this to a project or to the team is refused; keeping ` +
+        `it for yourself still works, or take the trace out first`,
+    );
+  }
   if (gate) {
     const scores = Object.entries(gate.scores)
       .map(([k, v]) => `${k} ${v}`)
@@ -229,6 +247,15 @@ async function main(): Promise<void> {
   // ignoring it is what made "overwrite it" read as "give it a suffix".
   if (args.some((a) => a.startsWith("--update="))) usage();
   const update = args.includes("--update");
+  // What the commit on a team delivery says. `--message` is the wording the reviewer saw
+  // and approved; `--delegate-message` is them answering "you decide", and it names the
+  // fingerprint of the proposal they were shown, which the refused run printed. Neither is
+  // passed unless the reviewer actually said something: a team approval with no answer
+  // here is refused, which is the point - nothing is committed with a sentence nobody read.
+  const message = valueOf("--message");
+  if (given("--message") && !message) usage();
+  const delegateMessage = valueOf("--delegate-message");
+  if (given("--delegate-message") && !delegateMessage) usage();
   const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
@@ -285,8 +312,17 @@ async function main(): Promise<void> {
   // batch. A new name would install the last candidate over the ones before it, and
   // `--all --update` would overwrite every colliding skill the team has on a single word -
   // which is the consent model of this whole command turned inside out.
-  if ((as || update) && slugs.length > 1) usage();
-  const options = { ...(update ? { update } : {}), ...(as ? { as } : {}) };
+  // A commit message joins them: one sentence is not consent for several different
+  // commits, and `--all --message` would put the same claim on every one of them.
+  if ((as || update || message !== undefined || delegateMessage !== undefined) && (all || slugs.length > 1)) usage();
+  const options = {
+    ...(update ? { update } : {}),
+    ...(as ? { as } : {}),
+    commitMessage: {
+      ...(message !== undefined ? { message } : {}),
+      ...(delegateMessage !== undefined ? { delegated: delegateMessage } : {}),
+    },
+  };
   for (const slug of slugs) {
     if (cmd === "approve") approveOne(home, slug, to, options);
     else rejectOne(home, slug, never);

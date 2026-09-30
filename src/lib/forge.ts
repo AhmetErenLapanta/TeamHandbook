@@ -41,6 +41,52 @@ function extractUrl(output: string): string | null {
   return output.match(/https?:\/\/\S+/)?.[0] ?? null;
 }
 
+/** Which CLI opens a merge request against this repository. One reading, used by both
+ * openPr and the sign-in check, so the check cannot end up asking a different tool than
+ * the one that will be asked to open the request. */
+export function forgeTool(repoUrl: string): "gh" | "glab" {
+  const host = hostFromUrl(repoUrl);
+  return host && host.includes("github") ? "gh" : "glab";
+}
+
+/**
+ * Why a merge request could not be opened from this machine, or null when one could.
+ *
+ * Asked BEFORE the push, and only for a run whose wording was delegated. Everywhere else a
+ * forge that is missing is a soft failure: the branch is pushed and the user is handed a
+ * link to open the request by hand. It cannot be soft for a delegated run, because the
+ * delegation was given for the moment the request is opened - if no request can be opened,
+ * a commit carrying a sentence nobody read is all that would be left behind, on a branch,
+ * waiting for someone to notice.
+ */
+export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: ForgeRunner): string | null {
+  const tool = forgeTool(repoUrl);
+  const host = hostFromUrl(repoUrl);
+  // The host is named where the CLI accepts it, so a machine signed in to some other
+  // forge does not read as signed in to this one. Measured with the gh on the machine this
+  // was written on: `gh auth status --hostname bogus.invalid` exits 1 saying "You are not
+  // logged into any accounts on bogus.invalid", and a host it holds a token for exits 0 -
+  // so a failure throws here rather than returning quietly. glab documents the same flag
+  // but was not installed there and is therefore unverified, which is why an old build
+  // that does not know the flag falls back to the plain command rather than being
+  // reported as a sign-in failure it is not.
+  const attempts = host ? [["auth", "status", "--hostname", host], ["auth", "status"]] : [["auth", "status"]];
+  let last = "";
+  for (const args of attempts) {
+    try {
+      forge(tool, args, repoDir);
+      return null;
+    } catch (err) {
+      const e = err as { code?: string; stderr?: string; message?: string };
+      if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      last = (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
+      if (!/unknown (flag|shorthand)/i.test(stderr)) break;
+    }
+  }
+  return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
+}
+
 export function openPr(
   repoUrl: string,
   branch: string,
@@ -52,7 +98,7 @@ export function openPr(
   const host = hostFromUrl(repoUrl);
   try {
     const out =
-      host && host.includes("github")
+      forgeTool(repoUrl) === "gh"
         ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir)
         : forge(
             "glab",
@@ -65,7 +111,7 @@ export function openPr(
     // link) - but surface WHY, so the user isn't left guessing that gh/glab just
     // needs installing or `gh auth login`.
     const e = err as { code?: string; stderr?: string; message?: string };
-    const tool = host && host.includes("github") ? "gh" : "glab";
+    const tool = forgeTool(repoUrl);
     let reason: string;
     if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
     else {
@@ -76,3 +122,15 @@ export function openPr(
   }
 }
 
+/**
+ * The clause that says no merge request can be opened from this machine.
+ *
+ * One phrasing for every path, because it is one rule: "you decide" is an answer about the
+ * merge request, and a machine with no way to open one would turn it into a commit pushed
+ * to a branch with nobody told. The sentence around it is built where the decision is
+ * made, so the same clause serves both the run that delegated and the run that has not
+ * been asked yet.
+ */
+export function noRequestPossible(reason: string): string {
+  return `no merge request can be opened from this machine (${reason})`;
+}

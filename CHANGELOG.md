@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.15.1] - 2026-10-01
+
+- **Nothing that carries your home directory path, your account name or an email address
+  goes out to a team or a project any more.** A skill, a slash command or a server
+  definition with one of those in it is refused where it would have travelled before, and
+  the share and review screens name the item and the kind of trace it carries rather than
+  the trace itself. A candidate drawn out of a session is marked the same way, so you see
+  it before you decide. Keeping such an item for yourself still works, and taking the trace
+  out clears the refusal. Documentation domains and role accounts are not counted as
+  anyone's address.
+
+## [0.15.0] - 2026-09-30
+
+- **TeamHandbook no longer commits with a message you have not seen.** Sharing your setup,
+  approving something to the team, scaffolding the team repository and upgrading it all
+  show you the commit message they propose and wait: you can approve that wording, give
+  your own, or hand the wording over - and that last one only at the moment the merge
+  request is opened, for the one sentence you were shown. If the proposal changes in
+  between, the run stops and shows you the new one. Where no request can be opened at all -
+  an empty repository, or a machine with no forge command signed in - the wording has to be
+  yours. The prefix your team's repository requires is applied to the proposal before you
+  see it, so what you approve is what is committed, and a proposal that carries something
+  that looks like a credential is refused rather than committed.
+
 ## [0.14.1] - 2026-09-30
 
 - **The engine that reads a repository's history for the work it repeats is now in the

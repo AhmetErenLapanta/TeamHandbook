@@ -4,11 +4,12 @@ import { join as join13 } from "node:path";
 
 // src/lib/deliver.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6, rmSync as rmSync5 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { basename as basename2, join as join9 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { basename as basename3, join as join9 } from "node:path";
 
 // src/lib/init.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join7 } from "node:path";
 
@@ -81,6 +82,156 @@ import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join6 } from "node:path";
 import { promisify } from "node:util";
+
+// src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
+function maskIdentity(text, host = hostIdentity()) {
+  const found = traces(text, host);
+  if (found.length === 0) return text;
+  let out = "";
+  let at = 0;
+  for (const trace of found) {
+    if (trace.index < at) continue;
+    out += text.slice(at, trace.index) + trace.replacement;
+    at = trace.index + trace.length;
+  }
+  return out + text.slice(at);
+}
 
 // src/lib/prompt-safety.ts
 var UNTRUSTED_OPEN = "<<<UNTRUSTED_SESSION_DATA>>>";
@@ -173,10 +324,10 @@ var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 function indent(value) {
   return value.split(LINE_TERMINATORS).map((line) => `  ${line}`).join("\n");
 }
-function fenceUntrusted(fields) {
+function fenceUntrusted(fields, host = hostIdentity()) {
   const body = Object.entries(fields).map(([label, value]) => {
-    const safeLabel = stripSentinels(label).replace(LABEL_BREAKS, " ");
-    const clean = stripSentinels(value ?? "").trim() || "(none)";
+    const safeLabel = maskIdentity(stripSentinels(label).replace(LABEL_BREAKS, " "), host);
+    const clean = maskIdentity(stripSentinels(value ?? ""), host).trim() || "(none)";
     return `${safeLabel}:
 ${indent(clean)}`;
   }).join("\n\n");
@@ -197,7 +348,7 @@ ${indent(clean)}`;
 
 // src/lib/queue.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
-import { basename, join as join5 } from "node:path";
+import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
 import { join as join3 } from "node:path";
@@ -393,6 +544,18 @@ var GLOBAL_TWIN = new Map(
     new RegExp(p.re.source, p.re.flags + "g")
   ])
 );
+function detectSecret(text) {
+  for (const { name, re, reject } of SECRET_PATTERNS) {
+    if (!reject) {
+      if (re.test(text)) return name;
+      continue;
+    }
+    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
+      if (!reject(match[0])) return name;
+    }
+  }
+  return null;
+}
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
@@ -459,7 +622,7 @@ function synthesizeMeta(dir) {
   }
   const gate = grounded.gate;
   return {
-    slug: basename(dir),
+    slug: basename2(dir),
     status: "pending",
     createdAt: typeof grounded.capturedAt === "string" ? grounded.capturedAt : "",
     scope: summary.scope ?? "team",
@@ -475,13 +638,51 @@ function readCandidateMeta(dir) {
     if (typeof parsed === "object" && parsed !== null && STATUSES.includes(parsed.status) && typeof parsed.description === "string" && typeof parsed.scope === "string") {
       return {
         ...parsed,
-        slug: basename(dir),
+        slug: basename2(dir),
         createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : ""
       };
     }
   } catch {
   }
   return synthesizeMeta(dir);
+}
+function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = listSkillFiles(sourceDir).files, host = hostIdentity()) {
+  const inName = detectIdentity(name, host);
+  if (inName) return { class: inName, where: "name" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join5(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const trace = detectIdentity(content, host);
+    if (trace) return { class: trace, where: file };
+  }
+  return null;
+}
+function identityPlace(where) {
+  return where === "name" ? "its name" : `its file "${where}"`;
+}
+function skillRefusalMessage(shownDir, slug, audit) {
+  switch (audit.reason) {
+    case "unsafe-name":
+      return `"${slug}" cannot be a skill name (lowercase letters, digits and dashes)`;
+    case "no-skill-md":
+      return `no readable SKILL.md in ${shownDir}`;
+    case "no-frontmatter":
+      return `the SKILL.md in ${shownDir} has no name and description frontmatter`;
+    case "irregular-entry":
+      return `${slug} contains "${audit.detail}", which is not a regular file; nothing was shared`;
+    case "no-files":
+      return `${slug} has no files to share`;
+    case "unreadable":
+      return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
+    case "identity":
+      return `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
+    default:
+      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+  }
 }
 function listCandidates(home = handbookHome(), status) {
   const base = candidatesDir(home);
@@ -931,6 +1132,12 @@ function normalizeRemoteUrl(raw) {
   if (slash <= 0 || slash === s.length - 1) return null;
   return s.slice(0, slash).toLowerCase() + s.slice(slash);
 }
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
 function renameSkillMd(skillMd, newSlug) {
   return skillMd.replace(/^name:.*$/m, `name: ${newSlug}`);
 }
@@ -941,7 +1148,7 @@ function uniqueSlug(baseSlug, taken) {
 }
 
 // src/lib/forge.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 function hostFromUrl(url) {
   const normalized = normalizeRemoteUrl(url);
   if (!normalized) return null;
@@ -949,7 +1156,7 @@ function hostFromUrl(url) {
 }
 var FORGE_TIMEOUT_MS = 6e4;
 function runForge(tool, args, cwd) {
-  return execFileSync(tool, args, {
+  return execFileSync2(tool, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
@@ -969,10 +1176,33 @@ function manualPrUrl(repoUrl, branch) {
 function extractUrl(output) {
   return output.match(/https?:\/\/\S+/)?.[0] ?? null;
 }
+function forgeTool(repoUrl) {
+  const host = hostFromUrl(repoUrl);
+  return host && host.includes("github") ? "gh" : "glab";
+}
+function forgeSignInProblem(repoUrl, repoDir, forge) {
+  const tool = forgeTool(repoUrl);
+  const host = hostFromUrl(repoUrl);
+  const attempts = host ? [["auth", "status", "--hostname", host], ["auth", "status"]] : [["auth", "status"]];
+  let last = "";
+  for (const args of attempts) {
+    try {
+      forge(tool, args, repoDir);
+      return null;
+    } catch (err) {
+      const e = err;
+      if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      last = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+      if (!/unknown (flag|shorthand)/i.test(stderr)) break;
+    }
+  }
+  return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
+}
 function openPr(repoUrl, branch, title, body, repoDir, forge) {
   const host = hostFromUrl(repoUrl);
   try {
-    const out = host && host.includes("github") ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+    const out = forgeTool(repoUrl) === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
       "glab",
       ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
       repoDir
@@ -980,7 +1210,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     return { url: extractUrl(out) };
   } catch (err) {
     const e = err;
-    const tool = host && host.includes("github") ? "gh" : "glab";
+    const tool = forgeTool(repoUrl);
     let reason;
     if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
     else {
@@ -990,11 +1220,14 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
     return { url: null, error: reason };
   }
 }
+function noRequestPossible(reason) {
+  return `no merge request can be opened from this machine (${reason})`;
+}
 
 // src/lib/display-path.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir2()) {
+function displayPath(path, userHome = homedir3()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -1019,6 +1252,70 @@ function teamCommitPrefix(config) {
 }
 function teamBranchPrefix(config) {
   return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+}
+function proposalFingerprint(proposal) {
+  return createHash("sha256").update(proposal).digest("hex").slice(0, 8);
+}
+var COMMIT_MESSAGE_MAX = 200;
+function commitMessageProblem(value) {
+  if (!value.trim()) return "it is empty";
+  if (/\p{C}/u.test(value)) return "it carries a control character, and a newline would end the title early";
+  const secret = detectSecret(value);
+  if (secret) return `it carries what looks like a ${secret}, and the team repository is read by everyone on the team`;
+  return null;
+}
+function commitSubject(prefix, message) {
+  const subject = message.trim();
+  return prefix && !subject.startsWith(prefix) ? `${prefix}${subject}` : subject;
+}
+function decideCommitSubject(choice, proposal, prefix, rerun, unavailable) {
+  if (choice.message !== void 0 && choice.delegated !== void 0) {
+    return {
+      error: "--message and --delegate-message answer the same question in different ways: --message is the wording the user approved, --delegate-message is them saying you decide. Pass one of them."
+    };
+  }
+  if (choice.delegated !== void 0 && !/^[0-9a-f]{8}$/.test(choice.delegated)) {
+    return {
+      error: `"${choice.delegated}" is not the fingerprint of a proposed message. Delegating names the sentence the user was shown, which the run that asked for it printed beside the proposal, so ${rerun} with no message flag to see both. Nothing was committed.`
+    };
+  }
+  if (choice.message !== void 0) {
+    const problem = commitMessageProblem(choice.message);
+    if (problem) return { error: `that commit message cannot be a commit title: ${problem}. Nothing was committed.` };
+    const subject = commitSubject(prefix, choice.message);
+    const ceiling = Math.max(COMMIT_MESSAGE_MAX, proposal.length);
+    if (subject.length > ceiling) {
+      return {
+        error: `that commit message cannot be a commit title: it is longer than ${ceiling} characters. Nothing was committed.`
+      };
+    }
+    return { subject };
+  }
+  const unusable = commitMessageProblem(proposal);
+  if (unusable) {
+    return {
+      error: `the commit message this would propose cannot be a commit title: ${unusable}. There is nothing to show and nothing to delegate, so ask the user for the wording and ${rerun} with \`--message "<their wording>"\`. Nothing was committed.`
+    };
+  }
+  if (choice.delegated !== void 0) {
+    if (unavailable) return { error: delegationImpossible(unavailable, rerun) };
+    if (choice.delegated === proposalFingerprint(proposal)) return { subject: proposal };
+    return {
+      error: `the message you delegated is not the one this would commit any more: it now says "${proposal}" (${proposalFingerprint(proposal)}), and the answer named ${choice.delegated}. Show the user the new one, then ${rerun}. Nothing was committed.`
+    };
+  }
+  const ask = `commit message required: nothing is committed here with a message the user has not seen. This one would be "${proposal}". Show it to them, then ${rerun} with \`--message "<their wording>"\` once they have approved or edited it`;
+  if (unavailable) {
+    return {
+      error: `${ask}. "You decide" is not an answer here, because ${unavailable}. Nothing was committed and nothing was pushed.`
+    };
+  }
+  return {
+    error: `${ask}, or with \`--delegate-message ${proposalFingerprint(proposal)}\` if they answered that you decide. Nothing was committed and nothing was pushed.`
+  };
+}
+function delegationImpossible(unavailable, rerun) {
+  return `"you decide" is an answer about the merge request, and ${unavailable}. Nothing was committed. Ask the user for the wording and ${rerun} with \`--message "<their wording>"\`.`;
 }
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -1089,7 +1386,7 @@ function summarizeGitStderr(stderr, tailLines = 3) {
 }
 function runGit(args, cwd) {
   try {
-    return execFileSync2("git", args, {
+    return execFileSync3("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
@@ -1360,6 +1657,18 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
   if (!isSafeSlug(skillSlug)) {
     return { ok: false, error: `"${skillSlug}" cannot be a skill name (lowercase letters, digits and dashes)` };
   }
+  const trace = identityInSkillDir(candidateDir, skillSlug);
+  if (trace) {
+    return {
+      ok: false,
+      error: skillRefusalMessage(displayPath(candidateDir), skillSlug, {
+        shareable: false,
+        reason: "identity",
+        detail: trace.class,
+        identity: trace
+      })
+    };
+  }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, error: identity.error };
   const identityArgs = identity.args;
@@ -1385,6 +1694,19 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     let learnedBranchPrefix;
     let version = null;
     const title = buildPrTitle(skillSlug, occupied);
+    const proposal = commitSubject(commitPrefix, title);
+    const choice = options.commitMessage ?? {};
+    const unavailable = choice.message === void 0 ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
+    const decided = decideCommitSubject(
+      choice,
+      proposal,
+      commitPrefix,
+      "approve it again",
+      unavailable ? noRequestPossible(unavailable) : void 0
+    );
+    if ("error" in decided) {
+      return { ok: false, error: decided.error, proposedMessage: proposal, proposalHash: proposalFingerprint(proposal) };
+    }
     try {
       git(["checkout", "-b", branch], repoDir);
       if (occupied) rmSync4(join8(repoDir, skillDir), { recursive: true, force: true });
@@ -1395,7 +1717,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       );
       version = bumpPluginVersion(repoDir);
       git(["add", "-A"], repoDir);
-      git([...identityArgs, "commit", "-m", `${commitPrefix}${title}`], repoDir);
+      git([...identityArgs, "commit", "-m", decided.subject], repoDir);
       const pushed = pushBranch(git, repoDir, branch, pushTeam.team, branchSlug, remoteBranches);
       branch = pushed.branch;
       learnedBranchPrefix = pushed.learnedBranchPrefix;
@@ -1416,7 +1738,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       ...learnedBranchPrefix ? { learnedBranchPrefix } : {},
       ...pushTeam.learned !== void 0 ? { learnedCommitPrefix: pushTeam.learned } : {}
     };
-    const named = { skillDir, skillSlug, ...occupied ? { updatedExisting: true } : {} };
+    const named = { skillDir, skillSlug, commitMessage: decided.subject, ...occupied ? { updatedExisting: true } : {} };
     const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
     if (pr.url) {
       return { ok: true, branch, ...named, prUrl: pr.url, ...version ? { version } : {}, ...learned };
@@ -1441,7 +1763,7 @@ function soloSkillsDir(projectCwd) {
   return join9(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join9(homedir3(), ".claude", "skills");
+  return join9(homedir4(), ".claude", "skills");
 }
 function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
@@ -1452,7 +1774,7 @@ function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync4) {
 function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
-  return `${basename2(origin)}'s .claude/skills (where it was captured, not this project)`;
+  return `${basename3(origin)}'s .claude/skills (where it was captured, not this project)`;
 }
 function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
@@ -1468,6 +1790,14 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
     return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
   }
   const resolved = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  const wording = options.commitMessage ?? {};
+  if (resolved !== "team" && (wording.message !== void 0 || wording.delegated !== void 0)) {
+    return {
+      ok: false,
+      meta,
+      error: `this approval installs "${slug}" into ${resolved === "personal" ? "your own skills" : "the project"}, which copies files and makes no commit, so there is no commit message to give. Approve with --to team for a message to have somewhere to go, or drop the flag. Nothing was written.`
+    };
+  }
   if (resolved === "team") {
     if (!team) {
       return {
@@ -1515,17 +1845,32 @@ function namedAs(placed) {
     ...placed.updatedExisting ? { updatedExisting: true } : {}
   };
 }
+function traceInCandidate(dir, meta, options) {
+  return identityInSkillDir(dir, options.as ?? meta.slug);
+}
+function identityRefusal(dir, slug, trace) {
+  return skillRefusalMessage(displayPath(dir), slug, {
+    shareable: false,
+    reason: "identity",
+    detail: trace.class,
+    identity: trace
+  });
+}
 function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir(), options = {}) {
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "personal", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
   }
+  const trace = traceInCandidate(dir, meta, options);
   const updated = {
     ...meta,
     status: "approved",
     decidedAt,
     deliveredTo: placed.target,
-    deliveredMode: "personal"
+    deliveredMode: "personal",
+    // Recorded, not refused: this copy stays on the machine the trace names. The record is
+    // what the reviewer sees if they later decide it should go to a project or the team.
+    ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}
   };
   writeCandidateMeta(dir, updated);
   return {
@@ -1544,7 +1889,9 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
       mode: "team",
       meta,
       error: published.error,
-      ...published.collision ? { collision: published.collision } : {}
+      ...published.collision ? { collision: published.collision } : {},
+      ...published.proposedMessage ? { proposedMessage: published.proposedMessage } : {},
+      ...published.proposalHash ? { proposalHash: published.proposalHash } : {}
     };
   }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
@@ -1558,6 +1905,7 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
     ...published.skillSlug ? { deliveredSlug: published.skillSlug } : {},
     ...published.updatedExisting ? { updatedExisting: true } : {},
     branch: published.branch,
+    commitMessage: published.commitMessage,
     prUrl: published.prUrl,
     ...published.version ? { version: published.version } : {},
     manualUrl: published.manualUrl,
@@ -1572,7 +1920,11 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
   const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
-  const originProject2 = installedProject !== fallbackCwd ? basename2(installedProject) : void 0;
+  const originProject2 = installedProject !== fallbackCwd ? basename3(installedProject) : void 0;
+  const trace = traceInCandidate(dir, meta, options);
+  if (trace) {
+    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, options.as ?? meta.slug, trace) };
+  }
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "solo", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
@@ -1617,6 +1969,7 @@ function formatApproveResult(slug, result) {
     if (result.updatedExisting) {
       lines.push("The merge replaces their copy, so review the removed lines too, not only the added ones.");
     }
+    if (result.commitMessage) lines.push(`The commit says: ${result.commitMessage}`);
     if (result.learnedBranchPrefix) {
       lines.push(
         `Your project refuses the default branch name, so this went out as ${result.branch}. That prefix is remembered - later skills use it straight away.`
@@ -1929,7 +2282,7 @@ function pendingHarvestCount(home = handbookHome()) {
 import { readFileSync as readFileSync9 } from "node:fs";
 
 // src/lib/pipeline.ts
-import { basename as basename3, join as join12 } from "node:path";
+import { basename as basename4, join as join12 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
   return join12(home, "pipeline.log");
@@ -1959,7 +2312,7 @@ function lastPipelineRun(home = handbookHome()) {
 // src/cli/review.ts
 function usage() {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>]"
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] [--message <commit message>] [--delegate-message <fingerprint>]"
   );
   process.exit(2);
 }
@@ -1978,6 +2331,12 @@ function showCandidate(home, slug) {
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
+  const trace = identityInSkillDir(dir, slug);
+  if (trace) {
+    console.log(
+      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine (${trace.class}) - approving this to a project or to the team is refused; keeping it for yourself still works, or take the trace out first`
+    );
+  }
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
     const dissent = gate.total < threshold ? `  - below the ${threshold}/10 bar` : "";
@@ -2107,6 +2466,10 @@ async function main() {
   if (given("--as") && (!as || !isSafeSlug(as))) usage();
   if (args.some((a) => a.startsWith("--update="))) usage();
   const update = args.includes("--update");
+  const message = valueOf("--message");
+  if (given("--message") && !message) usage();
+  const delegateMessage = valueOf("--delegate-message");
+  if (given("--delegate-message") && !delegateMessage) usage();
   const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
@@ -2154,8 +2517,15 @@ ${broken}`);
   }
   const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
-  if ((as || update) && slugs.length > 1) usage();
-  const options = { ...update ? { update } : {}, ...as ? { as } : {} };
+  if ((as || update || message !== void 0 || delegateMessage !== void 0) && (all || slugs.length > 1)) usage();
+  const options = {
+    ...update ? { update } : {},
+    ...as ? { as } : {},
+    commitMessage: {
+      ...message !== void 0 ? { message } : {},
+      ...delegateMessage !== void 0 ? { delegated: delegateMessage } : {}
+    }
+  };
   for (const slug of slugs) {
     if (cmd === "approve") approveOne(home, slug, to, options);
     else rejectOne(home, slug, never);

@@ -16,6 +16,14 @@ import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 
+/**
+ * The answer every team delivery below gives about its commit message, because none of
+ * them is about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
+ */
+const APPROVED = { message: "chore: the case under test" } as const;
+
 let home: string;
 let project: string;
 
@@ -240,6 +248,9 @@ describe("approveAndDeliver (team mode)", () => {
       undefined,
       undefined,
       () => "https://gitlab.acme.com/team/skills/-/merge_requests/7\n",
+      undefined,
+      undefined,
+      { commitMessage: APPROVED },
     );
     expect(result).toMatchObject({
       ok: true,
@@ -283,6 +294,9 @@ describe("approveAndDeliver (team mode)", () => {
       undefined,
       policedGit,
       () => "",
+      undefined,
+      undefined,
+      { commitMessage: APPROVED },
     );
 
     expect(result).toMatchObject({ ok: true, mode: "team", branch: "HQA-000-fix-npm-test" });
@@ -292,9 +306,20 @@ describe("approveAndDeliver (team mode)", () => {
   it("records the branch as deliveredTo when no PR URL could be obtained", () => {
     saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
     seedCandidate(meta());
-    const result = approveAndDeliver(home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z", undefined, undefined, () => {
-      throw new Error("glab: command not found");
-    });
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => {
+        throw new Error("glab: command not found");
+      },
+      undefined,
+      undefined,
+      { commitMessage: APPROVED },
+    );
     expect(result).toMatchObject({
       ok: true,
       mode: "team",
@@ -302,6 +327,59 @@ describe("approveAndDeliver (team mode)", () => {
       deliveredTo: `${remote} (branch handbook/fix-npm-test)`,
     });
     expect(result.prUrl).toBeUndefined();
+  });
+
+  it("given no decision about the commit message, when a candidate is approved to the team, then nothing is pushed and the candidate is still waiting", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+    const before = execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" });
+
+    // no commitMessage in the options: the reviewer was never asked. The forge stub is
+    // not decoration - a run with no wording asks whether a request could be opened, so
+    // the default runner would reach for the real gh or glab on whatever machine runs this.
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => "Logged in",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.mode).toBe("team");
+    expect(result.error).toContain("commit message required");
+    // the sentence to put in front of the reviewer travels with the refusal
+    expect(result.proposedMessage).toBe("feat(skill): add fix-npm-test");
+    // and the verdict is still theirs to give: a refusal must not spend the candidate
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+    expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe(before);
+  });
+
+  it("given the reviewer's own wording, when a candidate is approved to the team, then the commit says it and they are told so", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => "https://example.com/mr/3",
+      undefined,
+      undefined,
+      { commitMessage: { message: "feat: the npm test fix we all keep hitting" } },
+    );
+
+    expect(result).toMatchObject({ ok: true, commitMessage: "feat: the npm test fix we all keep hitting" });
+    const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "handbook/fix-npm-test"], {
+      encoding: "utf8",
+    });
+    expect(subject.trim()).toBe("feat: the npm test fix we all keep hitting");
+    expect(formatApproveResult("fix-npm-test", result)).toContain("feat: the npm test fix we all keep hitting");
   });
 
   it("keeps the candidate pending when the team repo is unreachable", () => {
@@ -334,6 +412,22 @@ describe("three-way delivery (v2)", () => {
     }
   });
 
+  it("given a commit message on an approval that installs rather than commits, when it runs, then it says so instead of dropping it", () => {
+    // Nothing is committed on the way to ~/.claude/skills, so a wording given for it has
+    // nowhere to go. Silently dropping it told the reviewer their words had travelled.
+    const dir = seedCandidate(meta({ suggestedTarget: "personal" }));
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, undefined, "personal", undefined,
+      { commitMessage: { message: "feat: mine" } },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no commit message to give");
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+
   it("an explicit --to project overrides a team config", () => {
     saveTeamConfig({ repoUrl: "git@unreachable:x/y.git", marketplaceName: "t" }, home);
     seedCandidate(meta());
@@ -355,6 +449,60 @@ describe("three-way delivery (v2)", () => {
     expect(result.error).toContain("no team configured");
     expect(result.error).toContain("--to personal");
     expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+  });
+
+  // Assembled rather than written out: this repository refuses a literal absolute home path
+  // on any line it takes in, a fixture's included.
+  const STAND_IN = "alice";
+  const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+
+  function tracedCandidate(): string {
+    const dir = seedCandidate(meta());
+    writeFileSync(
+      join(dir, "grounded-case.json"),
+      JSON.stringify({ fingerprint: "abc123", edits: [`${HOME_PATH}/src/app.ts`] }) + "\n",
+    );
+    return dir;
+  }
+
+  it("given a candidate carrying a trace of this machine, when it is approved into a project, then nothing is written and the refusal names the class", () => {
+    // A project skill is committed with the repository, so this copy reaches everyone who
+    // clones it - the same journey the team route makes, through the reviewer's own commit.
+    const dir = tracedCandidate();
+
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      null, undefined, undefined, "project",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("carries a trace of this machine");
+    expect(result.error).toContain("home-path");
+    expect(JSON.stringify(result)).not.toContain(STAND_IN);
+    expect(existsSync(join(soloSkillsDir(project), "fix-npm-test"))).toBe(false);
+    // still waiting for a verdict, so the reviewer can keep it or clean it up
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+
+  it("given the same candidate, when it is kept personally, then it is delivered and the trace is recorded rather than refused", () => {
+    const dir = tracedCandidate();
+    const personal = mkdtempSync(join(tmpdir(), "handbook-personal-"));
+    try {
+      const result = approveAndDeliver(
+        home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+        null, undefined, undefined, "personal", personal,
+      );
+
+      expect(result).toMatchObject({ ok: true, mode: "personal" });
+      expect(existsSync(join(personal, "fix-npm-test", "SKILL.md"))).toBe(true);
+      // the copy stays on the machine the trace names, and the record says what is in it
+      expect(readCandidateMeta(dir)?.hygiene).toEqual({
+        identity: "home-path",
+        where: "grounded-case.json",
+      });
+    } finally {
+      rmSync(personal, { recursive: true, force: true });
+    }
   });
 
   it("follows the harvest's suggestedTarget when no explicit target is given", () => {
@@ -590,7 +738,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
     const result = approveAndDeliver(
       home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
       undefined, undefined, () => "https://example.com/mr/9",
-      undefined, undefined, { update: true },
+      undefined, undefined, { update: true, commitMessage: APPROVED },
     );
 
     // then it goes out under the contested name, and the reviewer is told it replaces theirs
@@ -614,7 +762,7 @@ describe("the team's own copy, and the reviewer's answer to it", () => {
     const result = approveAndDeliver(
       home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
       undefined, undefined, () => "https://example.com/mr/9",
-      undefined, undefined, { as: "fix-npm-snapshot" },
+      undefined, undefined, { as: "fix-npm-snapshot", commitMessage: APPROVED },
     );
 
     expect(result.deliveredSlug).toBe("fix-npm-snapshot");

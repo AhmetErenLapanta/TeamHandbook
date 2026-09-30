@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { formatJoinSuccess, joinTeamRepo, marketplaceNameProblem } from "./join.js";
 import {
   commitPrefixProblem,
-  initTeamRepo,
+  initTeamRepo as initTeamRepoDeciding,
   loadTeamConfig,
   readTeamCommitPrefix,
   saveTeamConfig,
@@ -14,6 +14,29 @@ import {
   TEAM_PREFIX_FILE,
 } from "./init.js";
 import { slugifySkillName } from "./distill.js";
+
+/**
+ * The answer every scaffold below gives about its commit message, because none of them is
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
+ */
+const APPROVED = { message: "chore: the case under test" } as const;
+
+type InitArgs = Parameters<typeof initTeamRepoDeciding>;
+function initTeamRepo(
+  url: InitArgs[0],
+  name?: InitArgs[1],
+  home?: InitArgs[2],
+  git?: InitArgs[3],
+  now?: InitArgs[4],
+  forge?: InitArgs[5],
+  branchPrefix?: InitArgs[6],
+  commitPrefix?: InitArgs[7],
+  withCi?: InitArgs[8],
+) {
+  return initTeamRepoDeciding(url, name, home, git, now, forge, branchPrefix, commitPrefix, withCi, APPROVED);
+}
 
 let home: string;
 let remote: string;
@@ -99,6 +122,7 @@ function seedTeamRepoRecording(record: string): void {
 }
 
 import { cloneFailureReason } from "./git-errors.js";
+
 
 describe("cloneFailureReason", () => {
   const url = "https://github.com/acme/handbook";

@@ -10,16 +10,60 @@ import {
   buildPrTitle,
   buildSelectionPrBody,
   manualPrUrl,
-  publishCandidate,
-  publishTeamSelection,
+  publishCandidate as publishCandidateDeciding,
+  publishTeamSelection as publishTeamSelectionDeciding,
   retryBranchAfterNameRejection,
 } from "./publish.js";
+import type { PublishOptions } from "./publish.js";
 import { auditServer } from "./mcp.js";
 import type { McpServerEntry } from "./mcp.js";
 import { runGit, TEAM_PREFIX_FILE } from "./init.js";
-import type { GitRunner, TeamConfig } from "./init.js";
+import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import type { GroundedCase } from "./distill.js";
+
+
+/**
+ * The answer every case below gives about its commit message, because none of them is
+ * about the wording: a plain sentence of the user's own. It carries no team prefix, so the
+ * cases that measure the prefix still measure it. Delegating instead would cost every one
+ * of them a second run, since "you decide" has to name the proposal it was shown.
+ */
+const APPROVED = { message: "chore: the case under test" } as const;
+
+type CandidateArgs = Parameters<typeof publishCandidateDeciding>;
+function publishCandidate(
+  dir: CandidateArgs[0],
+  meta: CandidateArgs[1],
+  team: CandidateArgs[2],
+  git?: CandidateArgs[3],
+  forge?: CandidateArgs[4],
+  options: PublishOptions = {},
+) {
+  return publishCandidateDeciding(dir, meta, team, git, forge, { commitMessage: APPROVED, ...options });
+}
+
+/**
+ * The two runs a delegated wording takes, which is what the product requires of anyone who
+ * answers "you decide": the first shows the sentence and commits nothing, the second names
+ * its fingerprint back. The cases below use it where what they measure IS the derived
+ * title reaching the commit; everywhere else a case gives its own message and pays one run.
+ */
+function delegating<T extends { proposalHash?: string }>(run: (choice: CommitMessageChoice) => T): T {
+  const probe = run({});
+  return run({ delegated: probe.proposalHash! });
+}
+
+type SelectionArgs = Parameters<typeof publishTeamSelectionDeciding>;
+function publishTeamSelection(
+  selection: SelectionArgs[0],
+  team: SelectionArgs[1],
+  git?: SelectionArgs[2],
+  forge?: SelectionArgs[3],
+  options: PublishOptions = {},
+) {
+  return publishTeamSelectionDeciding(selection, team, git, forge, { commitMessage: APPROVED, ...options });
+}
 
 let candidateDir: string;
 let remote: string;
@@ -743,12 +787,14 @@ describe("a name the destination already has", () => {
     const team = { repoUrl: remote, marketplaceName: "acme" };
 
     // when the selection is sent again as an update
-    const result = publishTeamSelection(
-      { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
-      team,
-      undefined,
-      () => "",
-      { update: ["gitlab", "explain"] },
+    const result = delegating((commitMessage) =>
+      publishTeamSelection(
+        { servers: [gitlab], commands: [{ name: "explain", scope: "personal", file: join(commandDir, "explain.md") }] },
+        team,
+        undefined,
+        () => "",
+        { update: ["gitlab", "explain"], commitMessage },
+      ),
     );
 
     // then both carry the publisher's version, and the request says which names it rewrites
@@ -796,7 +842,9 @@ describe("a name the destination already has", () => {
     const linear: McpServerEntry = { name: "linear", scope: "user", config: { type: "sse", url: "https://mcp.linear.app/sse" } };
 
     // when both travel in one request
-    const result = publishTeamSelection({ servers: [linear, gitlab] }, team, undefined, () => "", { update: true });
+    const result = delegating((commitMessage) =>
+      publishTeamSelection({ servers: [linear, gitlab] }, team, undefined, () => "", { update: true, commitMessage }),
+    );
 
     // then the title keeps the two verbs apart and the body spells out the consequence
     expect(result.ok).toBe(true);
@@ -891,6 +939,37 @@ describe("publishCandidate carries the whole skill", () => {
     expect(files).toContain("skills/fix-npm-test/preflight.sh");
     expect(files).toContain("skills/fix-npm-test/scripts/server.cjs");
     expect(files).toContain("skills/fix-npm-test/references/queries.sql");
+  });
+
+  it("given a grounded case carrying the machine it was learned on, when it is approved to the team, then nothing is pushed and the refusal names the class, not the trace", () => {
+    // The route that matters for a candidate: it never reaches the share screen, so this is
+    // where its own trace would otherwise travel - into the installed file AND into the body
+    // of the merge request, which prints the recorded paths.
+    // Assembled rather than written out: this repository refuses a literal absolute home
+    // path on any line it takes in, a fixture's included.
+    const standIn = "alice";
+    const homePath = ["", "Users", standIn, "work", "api"].join("/");
+    writeFileSync(
+      join(candidateDir, "grounded-case.json"),
+      JSON.stringify({ ...groundedCase(), edits: [`${homePath}/src/app.ts`] }) + "\n",
+    );
+    remote = teamRepo();
+    const before = gitIn(remote, ["branch", "--list"]);
+
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      runGit,
+      () => "",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("carries a trace of this machine");
+    expect(result.error).toContain("home-path");
+    expect(result.error).toContain("grounded-case.json");
+    expect(JSON.stringify(result)).not.toContain(standIn);
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
   });
 
   it("given an ordinary harvest candidate, when it is shared, then only its two files go out", () => {
@@ -1055,7 +1134,11 @@ describe("a machine that joined before the repository recorded its prefix", () =
   it("given the repository records that the team needs no prefix, when shared, then that answer is learned rather than looked up again", () => {
     const remote = recordingRepo("");
 
-    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), undefined, () => "https://example.com/mr/11");
+    const result = delegating((commitMessage) =>
+      publishTeamSelection({ servers: [gitlab] }, joiner(remote), undefined, () => "https://example.com/mr/11", {
+        commitMessage,
+      }),
+    );
 
     expect(result.ok).toBe(true);
     expect(result.learnedCommitPrefix).toBe("");
@@ -1164,5 +1247,128 @@ describe("a machine that joined before the repository recorded its prefix", () =
     expect(result.learnedBranchPrefix).toBe("HQA-000-");
     expect(result.learnedCommitPrefix).toBe("HQA-000");
     expect(pushes).toBe(2);
+  });
+});
+
+// A delegated wording is an answer about the merge request, so it is honoured only where
+// one can really be opened. These sit against a real bare repository rather than a
+// recording runner, because what they measure is that the REMOTE was never written to:
+// the check runs before the push, and a check that ran after it would leave the commit
+// carrying an unread sentence on a branch with nothing to carry it further.
+describe("a delegated wording needs a merge request to be about", () => {
+  /** A machine without the CLI at all, which is what ENOENT means here. */
+  const missingForge = () => {
+    const err = new Error("spawn glab ENOENT") as Error & { code: string };
+    err.code = "ENOENT";
+    throw err;
+  };
+  /** A machine that has it and is signed in: `auth status` answers, and the request comes
+   * back as a link. The control for every case below. */
+  const signedInForge = (_tool: "gh" | "glab", args: string[]) =>
+    args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/mr/1";
+
+  it("given no way to open one, when a candidate is approved to the team with the wording delegated, then nothing reaches the remote", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const before = gitIn(remote, ["branch", "--list"]);
+    const probe = publishCandidateDeciding(candidateDir, meta(), team, undefined, missingForge, { commitMessage: {} });
+
+    const result = publishCandidateDeciding(candidateDir, meta(), team, undefined, missingForge, {
+      commitMessage: { delegated: probe.proposalHash! },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no merge request can be opened from this machine");
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
+  it("given a machine that is signed in, when the same approval is delegated, then it goes out as it always did", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const probe = publishCandidateDeciding(candidateDir, meta(), team, undefined, signedInForge, { commitMessage: {} });
+
+    const result = publishCandidateDeciding(candidateDir, meta(), team, undefined, signedInForge, {
+      commitMessage: { delegated: probe.proposalHash! },
+    });
+
+    expect(result).toMatchObject({ ok: true, branch: "handbook/fix-npm-test" });
+    expect(gitIn(remote, ["log", "-1", "--format=%s", "handbook/fix-npm-test"]).trim()).toBe(probe.proposedMessage);
+  });
+
+  it("given no way to open one, when a selection is shared with the wording delegated, then nothing reaches the remote", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const server: McpServerEntry = {
+      name: "gitlab",
+      scope: "user",
+      config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+    };
+    const before = gitIn(remote, ["branch", "--list"]);
+    const probe = publishTeamSelectionDeciding({ servers: [server] }, team, undefined, missingForge, {
+      commitMessage: {},
+    });
+
+    const result = publishTeamSelectionDeciding({ servers: [server] }, team, undefined, missingForge, {
+      commitMessage: { delegated: probe.proposalHash! },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no merge request can be opened from this machine");
+    expect(gitIn(remote, ["branch", "--list"])).toBe(before);
+  });
+
+  it("given a machine that cannot open one, when nobody has been asked yet, then the refusal does not offer a delegation it would refuse", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+
+    const probe = publishCandidateDeciding(candidateDir, meta(), team, undefined, missingForge, { commitMessage: {} });
+
+    expect(probe.error).toContain("commit message required");
+    expect(probe.error).toContain("no merge request can be opened from this machine");
+    expect(probe.error).not.toContain("--delegate-message");
+    // the fingerprint still travels: the machine may be signed in by the next run
+    expect(probe.proposalHash).toBeTruthy();
+  });
+
+  it("given a server whose own NAME reads as a credential, when the user gives their own message, then it is committed rather than refused for the proposal", () => {
+    // The title is built from names this machine did not write, and the audit screens a
+    // server's config rather than what it is called, so the proposal really can arrive
+    // unusable. Screening it on this branch too would refuse a clean message and leave
+    // the user with no answer that works.
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const poisoned: McpServerEntry = {
+      name: "glpat-ABCDEFGHIJKLMNOPQRSTUVWX",
+      scope: "user",
+      config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+    };
+
+    const result = publishTeamSelectionDeciding({ servers: [poisoned] }, team, undefined, () => "", {
+      commitMessage: { message: "feat: add the server the team asked for" },
+    });
+
+    expect(result).toMatchObject({ ok: true, commitMessage: "feat: add the server the team asked for" });
+    expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe(
+      "feat: add the server the team asked for",
+    );
+  });
+
+  it("given a server whose own NAME reads as a credential, when nobody has been asked yet, then the refusal says so and offers no delegation", () => {
+    remote = teamRepo();
+    const team = { repoUrl: remote, marketplaceName: "t" };
+    const poisoned: McpServerEntry = {
+      name: "glpat-ABCDEFGHIJKLMNOPQRSTUVWX",
+      scope: "user",
+      config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+    };
+
+    const probe = publishTeamSelectionDeciding({ servers: [poisoned] }, team, undefined, () => "", {
+      commitMessage: {},
+    });
+
+    expect(probe.ok).toBe(false);
+    expect(probe.error).toContain("gitlab-token");
+    expect(probe.error).toContain("--message");
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
   });
 });

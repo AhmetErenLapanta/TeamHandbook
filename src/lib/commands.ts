@@ -1,8 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { isSafeSlug } from "./queue.js";
+import { identityPlace, isSafeSlug } from "./queue.js";
 import { detectSecret } from "./secrets.js";
+import { detectIdentity } from "./identity.js";
+import type { IdentityClass } from "./identity.js";
 
 // Reading the slash commands this machine has, and deciding which of them may travel to a
 // team repository.
@@ -24,7 +26,7 @@ export interface CommandEntry {
   file: string;
 }
 
-export type CommandRefusal = "unsafe-name" | "unreadable" | "secret";
+export type CommandRefusal = "unsafe-name" | "unreadable" | "secret" | "identity";
 
 export interface CommandAudit {
   shareable: boolean;
@@ -35,6 +37,8 @@ export interface CommandAudit {
   content?: string;
   description?: string;
   secret?: { pattern: string; file: string };
+  /** the class of host-identity trace that refused it, and where - never the value */
+  identity?: { class: IdentityClass; where: string };
 }
 
 /**
@@ -135,6 +139,16 @@ export function auditCommand(file: string): CommandAudit {
   if (pattern) {
     return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file: basename(file) } };
   }
+  // A command is a file of instructions written on ONE machine, so it is the likeliest of
+  // the three kinds to say "run it from here" with an absolute path in it. The teammate who
+  // types the command has no such directory, so the trace is both a reputation cost and a
+  // command that cannot work where it lands.
+  const inName = detectIdentity(name);
+  if (inName) return { shareable: false, reason: "identity", detail: inName, identity: { class: inName, where: "name" } };
+  const trace = detectIdentity(content);
+  if (trace) {
+    return { shareable: false, reason: "identity", detail: trace, identity: { class: trace, where: basename(file) } };
+  }
   return { shareable: true, content, description: commandDescription(content) };
 }
 
@@ -145,6 +159,8 @@ export function commandRefusalSummary(audit: CommandAudit): string {
       return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes)`;
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
+    case "identity":
+      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
       return `it looks like it contains a secret (${audit.detail})`;
   }
@@ -152,6 +168,13 @@ export function commandRefusalSummary(audit: CommandAudit): string {
 
 /** The same refusal with the fix spelled out, for when it is reported rather than listed. */
 export function commandRefusalMessage(name: string, audit: CommandAudit): string {
+  if (audit.reason === "identity") {
+    return (
+      `${name} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of ` +
+      `this machine (${audit.detail}). A command is merged as it is, and the teammate who types ` +
+      `it has no such account or directory; take the trace out and try again.`
+    );
+  }
   if (audit.reason === "secret") {
     return (
       `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${name} was not ` +
