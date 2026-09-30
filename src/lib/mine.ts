@@ -689,10 +689,10 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
   variantOverlap?: number;
   /**
    * How much of a UNIT's own roles the core has to be before the unit counts as doing the workflow.
-   * `containment` asks the other direction, and on its own a ticket that touched forty files
-   * contains almost every small core and joins almost every shape: measured, one such ticket was a
-   * member of nineteen of the twenty most repeated shapes, and the examples a draft would quote
-   * come from it. 0 turns it off.
+   * `containment` asks the other direction, and on its own a ticket that touched a large part of a
+   * codebase contains almost every small core and joins almost every shape: measured, one such
+   * ticket was a member of most of the shapes at the top of the list, and the examples a draft
+   * would quote come from it. 0 turns it off.
    */
   unitShare?: number;
   /**
@@ -722,15 +722,15 @@ export interface MineOptions extends ClassifyOptions, RoleOptions {
 // non-workflows among the top twenty.
 //
 // The unit share is what the examples cost: on that workspace a ticket that changed most of the
-// codebase in one go was a member of most of the twenty most repeated shapes, and of a handful once
-// the share was on. It is paid for, and the price was read: one known workflow then matched a
-// slightly worse shape and another a slightly better one, and raising the share further made a
-// second workflow pay and then began to move the ranks. The variant overlap is the lowest that
+// codebase in one go was a member of most of the shapes at the top of the list, and of a handful
+// once the share was on. It is paid for, and the price was read: a known workflow then matched a
+// slightly worse shape and another a slightly better one, and raising the share further made
+// another workflow pay and then began to move the ranks. The variant overlap is the lowest that
 // merged the repeats without losing one: below it a known workflow was swallowed by a wider shape,
 // and well above it nothing merged at all. Requiring core roles the history does not mostly touch
-// is off because it was measured worthless: at this hub share almost no role in three measured
-// histories is common enough to count as one, and at any share low enough to catch the shapes it
-// was meant for, it took two known workflows' precision down with them.
+// is off because it was measured worthless: at this hub share almost no role in any measured
+// history is common enough to count as one, and at any share low enough to catch the shapes it was
+// meant for, it took known workflows' precision down with them.
 const MINE_DEFAULTS = {
   minRecurrence: 8,
   minProposers: 5,
