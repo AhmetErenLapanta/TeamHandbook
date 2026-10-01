@@ -245,3 +245,48 @@ export function readPatch(
     return "";
   }
 }
+
+/** Bigger than this and a file is not evidence a reader can hold in their head, nor a prompt. */
+const MAX_BLOB_BYTES = 1 << 20;
+
+export interface Blob {
+  text: string;
+  bytes: number;
+}
+
+/**
+ * One file's content at a ref, or null when there is nothing usable there.
+ *
+ * The size is asked for FIRST, from the object database, rather than read off the string that
+ * comes back. A repository holding a 200 MB fixture would otherwise be decoded into memory in
+ * full before anything decided it was too big, and the deciding is the cheap half.
+ *
+ * A NUL byte means binary. git has its own notion of binary for diffs, but `show` of a blob does
+ * not report it, and a lock file or an image quoted as lines is noise at best.
+ */
+export function readBlob(
+  repoPath: string,
+  ref: string,
+  path: string,
+  options: { run?: GitRunner; maxBytes?: number } = {},
+): Blob | null {
+  const run = options.run ?? defaultRunner;
+  const max = options.maxBytes ?? MAX_BLOB_BYTES;
+  const spec = `${ref}:${path}`;
+  let bytes: number;
+  try {
+    bytes = Number(run(["cat-file", "-s", spec], repoPath).trim());
+  } catch {
+    // The path does not exist at this ref - renamed, deleted, or never there. One file fewer.
+    return null;
+  }
+  if (!Number.isFinite(bytes) || bytes === 0 || bytes > max) return null;
+  let text: string;
+  try {
+    text = run(["-c", "core.quotePath=false", "show", spec], repoPath);
+  } catch {
+    return null;
+  }
+  if (text.includes("\u0000")) return null;
+  return { text, bytes };
+}

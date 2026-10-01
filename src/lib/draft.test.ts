@@ -7,12 +7,15 @@ import {
   buildDraftPrompt,
   buildEvidence,
   buildScreen,
+  citableCounts,
   cohesion,
   coverage,
   draftSkill,
   holdoutSplit,
   isIncidentalPath,
+  quotedPaths,
   readUnitIndex,
+  trimToSignature,
   variantFamilies,
   type Evidence,
   type EvidencePacket,
@@ -1219,5 +1222,644 @@ describe("what a retry is told", () => {
     const prompt = buildDraftPrompt(empty, everyRule, HOST);
     const withoutRemedy = everyRule.filter((rule) => prompt.includes(`- ${rule}: does not meet the template.`));
     expect(withoutRemedy).toEqual([]);
+  });
+});
+
+/**
+ * A draft that passes every other rule, with one extra step carrying the citation under test. The
+ * rest of it is deliberately dull: the only thing any assertion here is about is `step-evidence`.
+ */
+function skillCiting(citation: string): string {
+  return [
+    "---",
+    "name: add-entity-field",
+    "description: >-",
+    "  Adds a field to a record type end to end. Use when a ticket asks for a new field on a record.",
+    '  Also when a saved field comes back empty. Triggers: "add a field", "field on the response".',
+    'argument-hint: "[TICKET]"',
+    "---",
+    "# add-entity-field - add a field to a record type",
+    "",
+    "Two repositories carry this: the service that stores the field and the client that shows it.",
+    "",
+    "## 0. Reading the ticket",
+    "- Note the record type and the field name.",
+    "",
+    "## 1. The service",
+    "1. Add the field to the request type. [map 1]",
+    "2. Carry it through the service. [hunk 1]",
+    "",
+    "## 2. The client",
+    "1. Add the field to the generated types. [subject 1]",
+    "",
+    "## 3. The registry",
+    `1. Add the entry the registry already expects. ${citation}`,
+    "",
+    "## 4. File map (6 past changes)",
+    "| File (pattern) | Touched in | Note |",
+    "|---|---|---|",
+    "| src/dto/*Request.kt | 6/6 | the request type |",
+    "",
+    "## 5. Verification",
+    "Run in this order; a green run is a safety net, not proof:",
+    "- [ ] Run `npm test`.",
+    "- [ ] The response contains the new field.",
+    "",
+    "## 6. Delivery",
+    "- The service merges first, then the client.",
+    "",
+    "## Common mistakes (observed)",
+    "| Mistake | Evidence | Do instead |",
+    "|---|---|---|",
+    "| Field not mapped | job #1 | map it in the service |",
+    "",
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// The expanded evidence sources: a file's current content, its configuration, later corrections
+// ---------------------------------------------------------------------------
+
+const EXPAND_ALL = { files: true, config: true, laterFixes: true };
+
+/**
+ * The same workflow as above, plus the three things the expanded sources are supposed to see: a
+ * registry file whose CONTENT carries the entry shape no single diff shows, a configuration the
+ * work keeps editing, and a correction made by a SEPARATE, LATER ticket.
+ */
+function seedExpandedHistory(fixture: Fixture): { api: FixtureRepo; repos: string[] } {
+  const api = fixture.repo("acme-api");
+  api.commit({
+    files: {
+      "README.md": "# acme-api\n",
+      "src/registry/Sections.kt": "enum class Sections {\n  // every section this service knows\n  HOME,\n}\n",
+      "config/application.yml": "server:\n  port: 8080\nsections:\n  cacheSeconds: 30\n",
+    },
+    subject: "initial",
+    author: "Ada Lovelace",
+  });
+
+  ENTITIES.forEach((entity, i) => {
+    const ticket = `TEAM-${11 + i}`;
+    api.commit({
+      files: {
+        [`src/dto/Create${entity}Request.kt`]: `class Create${entity}Request(val page: String)\n`,
+        "src/registry/Sections.kt": `enum class Sections {\n  // every section this service knows\n  HOME,\n${ENTITIES.slice(0, i + 1)
+          .map((e) => `  ${e.toUpperCase()}_SECTION,`)
+          .join("\n")}\n}\n`,
+        "config/application.yml": `server:\n  port: 8080\nsections:\n  cacheSeconds: 30\n  enabled:\n${ENTITIES.slice(0, i + 1)
+          .map((e) => `    - ${e.toLowerCase()}`)
+          .join("\n")}\n`,
+      },
+      subject: `${ticket} add the ${entity} section`,
+      author: AUTHORS[i % AUTHORS.length]!,
+    });
+  });
+  return { api, repos: [api.path] };
+}
+
+/** The shape the expanded fixture hides, with the registry and the configuration as core roles. */
+function expandedShape(repos: string[]): { shape: Shape; index: UnitIndex } {
+  const mined = mineShapes(repos, { minRecurrence: 4, minProposers: 3, minRoles: 2 });
+  return { shape: mined.shapes[0]!, index: readUnitIndex(repos) };
+}
+
+describe("the expanded evidence sources", () => {
+  let fixture: Fixture;
+  let repos: string[];
+  let api: FixtureRepo;
+  let shape: Shape;
+  let index: UnitIndex;
+
+  beforeAll(() => {
+    fixture = createFixture();
+    ({ api, repos } = seedExpandedHistory(fixture));
+    // A SEPARATE, LATER ticket that puts the same role right. This is the whole point of the third
+    // source: the in-ticket pool cannot see it, because it belongs to no member unit.
+    api.commit({
+      files: { "src/registry/Sections.kt": "enum class Sections {\n  // every section this service knows\n  HOME,\n" + ENTITIES.map((e) => `  ${e.toUpperCase()}_SECTION,`).join("\n") + "\n  INVOICE_SECTION_V2,\n}\n" },
+      subject: "TEAM-90 hotfix the section enum, a missing key turns the listing into an error",
+      author: "Grace Hopper",
+    });
+    ({ shape, index } = expandedShape(repos));
+  });
+  afterAll(() => fixture.cleanup());
+
+  it("given the sources are not asked for, when a packet is built, then it carries none of them", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    // ABSENT, not empty: the baseline every earlier measurement was taken against has to be
+    // reproducible byte for byte from this code.
+    expect(packet.files).toBeUndefined();
+    expect(packet.configs).toBeUndefined();
+    expect(packet.laterFixes).toBeUndefined();
+    expect(packet.expanded).toBeUndefined();
+    expect(JSON.stringify(packet)).not.toContain("later-fix");
+  });
+
+  it("given the sources are asked for, when the packet is built twice, then the bytes are identical", () => {
+    const first = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL }).packet;
+    const second = buildEvidence(shape, readUnitIndex(repos), { host: HOST, expand: EXPAND_ALL }).packet;
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+
+  it("given a core file, when its content is collected, then the file is quoted as it stands now", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { files: true } });
+    expect(packet.files!.length).toBeGreaterThan(0);
+    const registry = packet.files!.find((file) => file.path.includes("Sections.kt"));
+    expect(registry).toBeDefined();
+    // The ENTRY SHAPE, which no one job's diff shows in full: the current file holds every page.
+    expect(registry!.lines.join("\n")).toContain("INVOICE_SECTION");
+    expect(registry!.lines.join("\n")).toContain("SUPPLIER_SECTION");
+  });
+
+  it("given a file longer than the ceiling, when trimmed, then declarations are kept before comments", () => {
+    const text = ["// a comment", "", "class Thing {", "  val a: String", "}", "// another comment"].join("\n");
+    const { lines, omitted } = trimToSignature(text, 3);
+    expect(lines).toEqual(["class Thing {", "  val a: String", "}"]);
+    expect(omitted).toBe(3);
+  });
+
+  it("given a file that opens with imports, when trimmed, then the declarations come first", () => {
+    // The measured failure: an import opens with a keyword and carries dotted names, so it looked
+    // like a declaration to the first cut and took most of the quota on a long file.
+    const text = ["import a.b.C", "import a.b.D", "import a.b.E", "class Thing {", "  val a: String", "}"].join("\n");
+    const { lines } = trimToSignature(text, 3);
+    expect(lines).toEqual(["class Thing {", "  val a: String", "}"]);
+  });
+
+  it("given a configuration the work keeps editing, when collected, then the touched keys are quoted", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { config: true } });
+    expect(packet.configs!.length).toBeGreaterThan(0);
+    const yml = packet.configs!.find((config) => config.path.includes("application.yml"));
+    expect(yml).toBeDefined();
+    expect(yml!.lines.join("\n")).toContain("enabled");
+  });
+
+  it("given a later ticket correcting a core role, when collected, then it reaches the packet", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { laterFixes: true } });
+    const subjects = packet.laterFixes!.map((fix) => fix.subject).join("\n");
+    expect(subjects).toContain("hotfix the section enum");
+    // The in-ticket pool still cannot see it, which is the gap this source was added to close.
+    expect(packet.fixes.map((fix) => fix.subject).join("\n")).not.toContain("hotfix the section enum");
+    expect(packet.laterFixes![0]!.signals).toContain("urgent");
+  });
+
+  it("given a correction that came BEFORE the workflow began, when collected, then it is not a candidate", () => {
+    const early = createFixture();
+    const seeded = seedExpandedHistory(early);
+    // Dated before every member unit, so the workflow cannot have caused it.
+    seeded.api.commit({
+      files: { "src/registry/Sections.kt": "enum class Sections {\n  HOME,\n}\n" },
+      subject: "TEAM-1 fix the section enum before any of this",
+      author: "Grace Hopper",
+      date: "2020-01-01T00:00:00Z",
+    });
+    const { shape: s, index: i } = expandedShape(seeded.repos);
+    const { packet } = buildEvidence(s, i, { host: HOST, expand: { laterFixes: true } });
+    expect(packet.laterFixes!.map((fix) => fix.subject).join("\n")).not.toContain("before any of this");
+    early.cleanup();
+  });
+
+  it("given the strict clock, when collected, then a correction inside the run of jobs is excluded", () => {
+    const during = createFixture();
+    const seeded = seedExpandedHistory(during);
+    // Dated between the first job and the last, so the two clocks disagree about it.
+    const jobs = readUnitIndex(seeded.repos);
+    const between = (Date.parse(jobs.get("TEAM-11")!.firstAt) + Date.parse(jobs.get("TEAM-18")!.firstAt)) / 2 + 1_800_000;
+    seeded.api.commit({
+      files: { "src/registry/Sections.kt": "enum class Sections {\n  HOME,\n  INVOICE_SECTION,\n}\n" },
+      subject: "TEAM-95 fix the section enum while the jobs were still landing",
+      author: "Grace Hopper",
+      date: new Date(between).toISOString(),
+    });
+    const { shape: s, index: i } = expandedShape(seeded.repos);
+    const loose = buildEvidence(s, i, { host: HOST, expand: { laterFixes: true }, laterFixAfter: "first" }).packet;
+    const strict = buildEvidence(s, i, { host: HOST, expand: { laterFixes: true }, laterFixAfter: "last" }).packet;
+    expect(strict.expanded!.after).toBe("last");
+    // The strict reading can only ever keep a subset: it starts the clock later.
+    expect(strict.laterFixes!.length).toBeLessThanOrEqual(loose.laterFixes!.length);
+    expect(loose.laterFixes!.map((fix) => fix.subject)).toEqual([expect.stringContaining("while the jobs were still landing")]);
+    expect(strict.laterFixes).toEqual([]);
+    during.cleanup();
+  });
+});
+
+/** A workflow of this module's own whose every job writes the files `jobFiles` returns. */
+function seedJobs(fixture: Fixture, jobFiles: (entity: string, i: number) => Record<string, string>): { api: FixtureRepo; repos: string[] } {
+  const api = fixture.repo("acme-api");
+  api.commit({ files: { "README.md": "# acme-api\n" }, subject: "initial", author: "Ada Lovelace" });
+  ENTITIES.forEach((entity, i) => {
+    api.commit({ files: jobFiles(entity, i), subject: `TEAM-${11 + i} add the ${entity} section`, author: AUTHORS[i % AUTHORS.length]! });
+  });
+  return { api, repos: [api.path] };
+}
+
+const sectionsEnum = (i: number): string =>
+  `enum class Sections {\n  HOME,\n${ENTITIES.slice(0, i + 1)
+    .map((e) => `  ${e.toUpperCase()}_SECTION,`)
+    .join("\n")}\n}\n`;
+
+/**
+ * Every job edits an environment file, its committed sample and a binary asset, so all three are
+ * core roles and every source that reads core files reaches them. The environment values are ones
+ * no detector recognises: the name rule is the only thing between them and the packet.
+ */
+function seedEnvironmentHistory(fixture: Fixture): { api: FixtureRepo; repos: string[] } {
+  return seedJobs(fixture, (entity, i) => ({
+    [`src/dto/Create${entity}Request.kt`]: `class Create${entity}Request(val page: String)\n`,
+    "src/registry/Sections.kt": sectionsEnum(i),
+    "config/.env": `REGION=eu-west-1\nINTERNAL_HOST=billing.corp.example\nSMTP_USER=release-bot\nSMTP_PASS=Spring2024\nSECTION_${i}=on\n`,
+    "config/.env.example": `REGION=<region>\nSECTION_${i}=<on|off>\n`,
+    "assets/logo.png": `\u0000\u0001logo${i}\u0000\n`,
+  }));
+}
+
+describe("the name rule over every source that quotes a file", () => {
+  const ENV_VALUES = ["SMTP_PASS", "Spring2024", "INTERNAL_HOST"];
+  // The hunks are kept out of the tests of the expanded sources, so each count is that source's
+  // alone; the hunks have a test of their own.
+  const NO_HUNKS = { maxHunks: 0 };
+
+  it("given an environment file every job edits, when the default packet is built, then its hunk is withheld by name and counted", () => {
+    const fixture = createFixture();
+    const { repos } = seedEnvironmentHistory(fixture);
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    const roles = packet.hunks.map((hunk) => hunk.role);
+    expect(roles).not.toContain("acme-api:config/.env");
+    for (const value of ENV_VALUES) expect(JSON.stringify(packet)).not.toContain(value);
+    expect(packet.dropped.withheld).toBe(1);
+    expect(roles).toContain("acme-api:config/*env.example");
+    // A binary file's hunk is one line saying it differs: skipped, not withheld.
+    expect(roles).not.toContain("acme-api:assets/*logo.png");
+    expect(packet.dropped.hunksSkipped).toBe(1);
+    fixture.cleanup();
+  });
+
+  it("given an environment file every job edits, when file content is collected, then it is withheld by name and counted", () => {
+    const fixture = createFixture();
+    const { repos } = seedEnvironmentHistory(fixture);
+    const { shape, index } = expandedShape(repos);
+    // A core role, so the content source reaches the file rather than passing it by.
+    expect(shape.coreFiles.map((file) => file.role)).toContain("acme-api:config/.env");
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { files: true }, ...NO_HUNKS });
+    const paths = packet.files!.map((file) => file.path);
+    expect(paths).not.toContain("acme-api/config/.env");
+    for (const value of ENV_VALUES) expect(JSON.stringify(packet.files)).not.toContain(value);
+    expect(packet.dropped.withheld).toBe(1);
+    // The committed sample documents the configuration and is quoted.
+    expect(paths).toContain("acme-api/config/.env.example");
+    // The binary asset is skipped rather than withheld: nothing was there to read.
+    expect(paths.some((path) => path.endsWith("logo.png"))).toBe(false);
+    expect(packet.dropped.filesSkipped).toBeGreaterThan(0);
+    fixture.cleanup();
+  });
+
+  it("given an environment file every job edits, when configuration is collected, then it is withheld by name and counted", () => {
+    const fixture = createFixture();
+    const { repos } = seedEnvironmentHistory(fixture);
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { config: true }, ...NO_HUNKS });
+    const paths = packet.configs!.map((config) => config.path);
+    expect(paths).not.toContain("acme-api/config/.env");
+    for (const value of ENV_VALUES) expect(JSON.stringify(packet.configs)).not.toContain(value);
+    expect(packet.dropped.withheld).toBe(1);
+    expect(paths).toContain("acme-api/config/.env.example");
+    fixture.cleanup();
+  });
+
+  it("given a later correction that also edits an environment file, when collected, then the file is left off its list and counted", () => {
+    const fixture = createFixture();
+    const { api, repos } = seedEnvironmentHistory(fixture);
+    for (const ticket of ["TEAM-90", "TEAM-92"]) {
+      api.commit({
+        files: { "src/registry/Sections.kt": sectionsEnum(ENTITIES.length - 1) + `// ${ticket}\n`, "config/.env": `SMTP_PASS=${ticket}\n` },
+        subject: `${ticket} hotfix the section enum and its environment`,
+        author: "Grace Hopper",
+      });
+    }
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { laterFixes: true }, ...NO_HUNKS });
+    expect(packet.laterFixes!.length).toBe(2);
+    for (const fix of packet.laterFixes!) {
+      expect(fix.files).toContain("src/registry/Sections.kt");
+      expect(fix.files).not.toContain("config/.env");
+    }
+    expect(packet.dropped.withheld).toBe(2);
+    // A correction ranked out of the pool lists nothing, so it leaves nothing to count.
+    const one = buildEvidence(shape, index, { host: HOST, expand: { laterFixes: true }, maxLaterFixes: 1, ...NO_HUNKS }).packet;
+    expect(one.dropped.withheld).toBe(1);
+    fixture.cleanup();
+  });
+
+  it("given a history with nothing to withhold, when a packet is built with the sources off, then it carries no count", () => {
+    const fixture = createFixture();
+    // No environment file and no binary one: the default packet has to stay exactly what it was
+    // before the counts existed, byte for byte, so they are created only when something is counted.
+    const { repos } = seedExpandedHistory(fixture);
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    expect(packet.dropped.withheld).toBeUndefined();
+    expect(packet.dropped.hunksSkipped).toBeUndefined();
+    fixture.cleanup();
+  });
+});
+
+describe("the hygiene chain over the expanded sources", () => {
+  it("given a core path only the machine trace screen refuses, when collected, then the drop carries that class", () => {
+    const fixture = createFixture();
+    // Every job writes both files under a directory named after this machine's account.
+    const { repos } = seedJobs(fixture, (entity, i) => ({
+      [`src/dto/Create${entity}Request.kt`]: `class Create${entity}Request(val page: String)\n`,
+      "src/testaccount/Sections.kt": sectionsEnum(i),
+      "config/testaccount/application.yml": `sections:\n  cacheSeconds: ${30 + i}\n`,
+    }));
+    const { shape, index } = expandedShape(repos);
+    const before = buildEvidence(shape, index, { host: HOST }).packet.dropped.reasons;
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { files: true, config: true } });
+    expect(packet.dropped.files).toBeGreaterThan(0);
+    expect(packet.dropped.configs).toBeGreaterThan(0);
+    // The file map refuses the same paths for the same reason, so only what the new sources added
+    // is compared.
+    const added = Object.fromEntries(
+      Object.entries(packet.dropped.reasons)
+        .map(([reason, n]) => [reason, n - (before[reason] ?? 0)] as const)
+        .filter(([, n]) => n > 0),
+    );
+    expect(added).toEqual({ identity: packet.dropped.files! + packet.dropped.configs! });
+    fixture.cleanup();
+  });
+
+  it("given a secret in a core file, when collected, then the file is dropped and counted", () => {
+    const fixture = createFixture();
+    const { api, repos } = seedExpandedHistory(fixture);
+    api.commit({
+      files: { "src/registry/Sections.kt": 'enum class Sections {\n  HOME,\n}\nval token = "ghp_' + "d".repeat(36) + '"\n' },
+      subject: "TEAM-40 tidy the section enum",
+      author: "Ada Lovelace",
+    });
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { files: true } });
+    expect(JSON.stringify(packet)).not.toContain("ghp_");
+    expect(packet.dropped.files).toBeGreaterThan(0);
+    expect(packet.dropped.reasons["secret"]).toBeGreaterThan(0);
+    // The packet is still produced: one withheld file is not a reason to lose the workflow.
+    expect(packet.fileMap.length).toBeGreaterThan(0);
+    fixture.cleanup();
+  });
+
+  it("given a machine trace in a configuration, when collected, then the piece is dropped and counted", () => {
+    const fixture = createFixture();
+    const { api, repos } = seedExpandedHistory(fixture);
+    api.commit({
+      files: { "config/application.yml": "server:\n  port: 8080\nsections:\n  cacheSeconds: 30\n  enabled:\n    - invoice\n  home: /home/testaccount/sections\n" },
+      subject: "TEAM-41 point the section cache at the right place",
+      author: "Ada Lovelace",
+    });
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { config: true } });
+    expect(JSON.stringify(packet)).not.toContain("testaccount");
+    expect(packet.dropped.configs).toBeGreaterThan(0);
+    expect(packet.dropped.reasons["identity"]).toBeGreaterThan(0);
+    fixture.cleanup();
+  });
+
+  it("given a later correction naming a person, when collected, then the subject is dropped and counted", () => {
+    const fixture = createFixture();
+    const { api, repos } = seedExpandedHistory(fixture);
+    // The author of this one appears in NO member unit. That is the case the member-author name
+    // set cannot see on its own, and the reason the pool's own authors are added to the screen.
+    api.commit({
+      files: { "src/registry/Sections.kt": "enum class Sections {\n  // every section this service knows\n  HOME,\n" + ENTITIES.map((e) => `  ${e.toUpperCase()}_SECTION,`).join("\n") + "\n  INVOICE_SECTION_V2,\n}\n" },
+      subject: "TEAM-91 fix the section enum after Katherine Johnson found the gap",
+      author: "Katherine Johnson",
+    });
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { laterFixes: true } });
+    expect(JSON.stringify(packet)).not.toContain("Johnson");
+    expect(packet.dropped.laterFixes).toBeGreaterThan(0);
+    expect(packet.dropped.reasons["person"]).toBeGreaterThan(0);
+    fixture.cleanup();
+  });
+
+  it("given an environment file and a binary file, when collected, then neither is quoted", () => {
+    const fixture = createFixture();
+    const { api, repos } = seedExpandedHistory(fixture);
+    // A job of this same workflow that also brings an environment file and a binary one, so both
+    // are reached by the collector: a commit touching none of the workflow's roles is not a member
+    // unit and would be tested against a packet that never looked at it.
+    api.commit({
+      files: {
+        "src/dto/CreateArchiveRequest.kt": "class CreateArchiveRequest(val page: String)\n",
+        "src/registry/Sections.kt": "enum class Sections {\n  // every section this service knows\n  HOME,\n  ARCHIVE_SECTION,\n}\n",
+        "config/application.yml": "server:\n  port: 8080\nsections:\n  cacheSeconds: 30\n  enabled:\n    - archive\n",
+        ".env": "API_TOKEN=ghp_" + "e".repeat(36) + "\n",
+        ".env.example": "API_TOKEN=<your token>\n",
+        "config/logo.json": "\u0000\u0001binary\u0000\n",
+      },
+      subject: "TEAM-42 add the Archive section",
+      author: "Ada Lovelace",
+    });
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { config: true } });
+    const quoted = packet.configs!.map((config) => config.path).join("\n");
+    // The real environment file is excluded BY NAME, before any detector is asked.
+    expect(quoted).not.toContain(".env\n");
+    expect(quoted.split("\n")).not.toContain("acme-api/.env");
+    expect(JSON.stringify(packet)).not.toContain("ghp_");
+    // The binary file is skipped rather than withheld: nothing was there to read.
+    expect(quoted).not.toContain("logo.json");
+    expect(packet.dropped.configsSkipped).toBeGreaterThan(0);
+    fixture.cleanup();
+  });
+
+  it("given a configuration whose value only reads as a credential alone, when collected, then the line pass catches it", () => {
+    const fixture = createFixture();
+    const { api, repos } = seedExpandedHistory(fixture);
+    api.commit({
+      files: { "config/application.yml": "server:\n  port: 8080\nsections:\n  cacheSeconds: 30\n  enabled:\n    - invoice\n  apiKey: " + "f".repeat(28) + "\n" },
+      subject: "TEAM-43 give the section cache its key",
+      author: "Ada Lovelace",
+    });
+    const { shape, index } = expandedShape(repos);
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: { config: true } });
+    expect(JSON.stringify(packet)).not.toContain("f".repeat(28));
+    expect(packet.dropped.configs).toBeGreaterThan(0);
+    fixture.cleanup();
+  });
+});
+
+describe("the packet's size ceiling", () => {
+  let fixture: Fixture;
+  let shape: Shape;
+  let index: UnitIndex;
+
+  beforeAll(() => {
+    fixture = createFixture();
+    const { repos } = seedExpandedHistory(fixture);
+    ({ shape, index } = expandedShape(repos));
+  });
+  afterAll(() => fixture.cleanup());
+
+  it("given a ceiling the packet exceeds, when trimmed, then configuration goes before file content", () => {
+    const full = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL }).packet;
+    expect(full.configs!.length).toBeGreaterThan(0);
+    expect(full.files!.length).toBeGreaterThan(0);
+    // A ceiling just under what the packet needs, so the trim has to give something up.
+    const cap = JSON.stringify(full).length - 1;
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL, maxPacketChars: cap });
+    expect(packet.trimmed!.configs).toBeGreaterThan(0);
+    expect(packet.trimmed!.files).toBe(0);
+    expect(JSON.stringify(packet).length).toBeLessThanOrEqual(cap);
+  });
+
+  it("given a ceiling nothing can meet, when trimmed, then the file map survives and the overrun is reported", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL, maxPacketChars: 1 });
+    expect(packet.configs).toEqual([]);
+    expect(packet.files).toEqual([]);
+    // The one part never given up: the map is what the back-test scores and what the format gate
+    // holds the draft to, so trimming it would reject a draft for a file it was never shown.
+    expect(packet.fileMap.length).toBeGreaterThan(0);
+    expect(packet.trimmed!.overCap).toBe(true);
+  });
+
+  it("given a ceiling met only once configuration and file content are gone, when trimmed, then the later corrections go last", () => {
+    const later = createFixture();
+    const seeded = seedExpandedHistory(later);
+    for (const ticket of ["TEAM-90", "TEAM-92"]) {
+      seeded.api.commit({
+        files: { "src/registry/Sections.kt": sectionsEnum(ENTITIES.length - 1) + `// ${ticket}\n` },
+        subject: `${ticket} hotfix the section enum, a missing key turns the listing into an error`,
+        author: "Grace Hopper",
+      });
+    }
+    const { shape: s, index: i } = expandedShape(seeded.repos);
+    const full = buildEvidence(s, i, { host: HOST, expand: EXPAND_ALL }).packet;
+    expect(full.laterFixes!.length).toBe(2);
+    // What the packet weighs once every configuration and file quote is gone and both corrections
+    // are still in it, so the ceiling just under that can only be met by giving one of them up.
+    const bare = { ...full, files: [], configs: [], trimmed: { files: full.files!.length, configs: full.configs!.length, laterFixes: 0, overCap: false } };
+    const cap = JSON.stringify(bare).length - 1;
+    const { packet } = buildEvidence(s, i, { host: HOST, expand: EXPAND_ALL, maxPacketChars: cap });
+    expect(packet.configs).toEqual([]);
+    expect(packet.files).toEqual([]);
+    expect(packet.laterFixes!.length).toBe(1);
+    expect(packet.trimmed).toEqual({ files: full.files!.length, configs: full.configs!.length, laterFixes: 1, overCap: false });
+    expect(JSON.stringify(packet).length).toBeLessThanOrEqual(cap);
+    expect(packet.fileMap).toEqual(full.fileMap);
+    later.cleanup();
+  });
+
+  it("given a packet over a ceiling nothing can meet, when drafted, then no model is asked and the refusal says why", async () => {
+    const evidence = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL, maxPacketChars: 300 });
+    expect(JSON.stringify(evidence.packet).length).toBeGreaterThan(300);
+    const refused = await draftSkill(
+      evidence,
+      async () => {
+        throw new Error("a packet over the ceiling reached a model");
+      },
+      { host: HOST },
+    );
+    expect(refused).toEqual({ ok: false, skill: null, reasons: ["over-cap"], attempts: 0, prompts: [] });
+    // Under the default ceiling the same workflow is drafted as before.
+    let calls = 0;
+    await draftSkill(
+      buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL }),
+      async () => {
+        calls++;
+        return "";
+      },
+      { host: HOST },
+    );
+    expect(calls).toBeGreaterThan(0);
+  });
+
+  it("given a trimmed packet, when the citable counts are read, then they match what is left", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL, maxPacketChars: 1 });
+    expect(citableCounts(packet).config).toBe(0);
+    expect(citableCounts(packet).file).toBe(0);
+  });
+});
+
+describe("citing the expanded sources", () => {
+  let fixture: Fixture;
+  let packet: EvidencePacket;
+
+  beforeAll(() => {
+    fixture = createFixture();
+    const { api, repos } = seedExpandedHistory(fixture);
+    api.commit({
+      files: { "src/registry/Sections.kt": "enum class Sections {\n  // every section this service knows\n  HOME,\n" + ENTITIES.map((e) => `  ${e.toUpperCase()}_SECTION,`).join("\n") + "\n  INVOICE_SECTION_V2,\n}\n" },
+      subject: "TEAM-92 hotfix the section enum, the listing fails without the key",
+      author: "Grace Hopper",
+    });
+    const { shape, index } = expandedShape(repos);
+    packet = buildEvidence(shape, index, { host: HOST, expand: EXPAND_ALL }).packet;
+  });
+  afterAll(() => fixture.cleanup());
+
+  it("given a packet carrying the new sources, when the prompt is built, then each is numbered and fenced", () => {
+    const prompt = buildDraftPrompt(packet, [], HOST);
+    expect(prompt).toContain("[file 1]");
+    expect(prompt).toContain("[config 1]");
+    expect(prompt).toContain("[later-fix 1]");
+    // Still data rather than instructions: everything quoted sits inside the fence.
+    const fenced = prompt.slice(prompt.indexOf(UNTRUSTED_OPEN), prompt.indexOf(UNTRUSTED_CLOSE));
+    expect(fenced).toContain("[file 1]");
+    expect(fenced).toContain("[later-fix 1]");
+  });
+
+  it("given a packet without the new sources, when the prompt is built, then no new form is offered", () => {
+    const bare: EvidencePacket = { ...packet, files: undefined, configs: undefined, laterFixes: undefined };
+    const prompt = buildDraftPrompt(bare, [], HOST);
+    expect(prompt).not.toContain("[file 1]");
+    expect(prompt).not.toContain("[config 1]");
+    expect(prompt).not.toContain("[later-fix 1]");
+    expect(prompt).toContain("[map 3],\n  [fix 7], [hunk 2] or [subject 5], numbered exactly");
+  });
+
+  it("given a step citing a file the evidence holds, when checked, then the citation is accepted", () => {
+    const text = skillCiting("[file 1]");
+    expect(failedRules(checkSkillFormat(text, { extended: true, expects: { citable: { file: 1, map: 1, fix: 1, hunk: 1, subject: 1 } } })))
+      .not.toContain("step-evidence");
+  });
+
+  it("given a step citing a file the evidence does not hold, when checked, then it is rejected", () => {
+    const text = skillCiting("[file 9]");
+    expect(failedRules(checkSkillFormat(text, { extended: true, expects: { citable: { file: 1, map: 1, fix: 1, hunk: 1, subject: 1 } } })))
+      .toContain("step-evidence");
+  });
+
+  it("given a step naming a file the evidence quoted, when checked, then the map does not refuse it", () => {
+    const quoted = quotedPaths(packet)!;
+    expect(quoted.length).toBeGreaterThan(0);
+    const step = `1. Follow the shape already in \`${quoted[0]}\`. [file 1]`;
+    const text = skillCiting("[file 1]").replace("1. Add the entry the registry already expects. [file 1]", step);
+    const citable = { map: 1, fix: 1, hunk: 1, subject: 1, file: 1 };
+    // Without the quoted list the draft is refused for naming the very file it was shown, which
+    // is the friction this exists to remove.
+    expect(failedRules(checkSkillFormat(text, { extended: true, expects: { fileMap: true, citable } })))
+      .toContain("step-map-consistency");
+    expect(failedRules(checkSkillFormat(text, { extended: true, expects: { fileMap: true, citable, quoted } })))
+      .not.toContain("step-map-consistency");
+  });
+
+  it("given a step naming a file nothing showed, when checked, then the map still refuses it", () => {
+    const step = "1. Edit `src/nowhere/Absent.kt` as well. [map 1]";
+    const text = skillCiting("[map 1]").replace("1. Add the entry the registry already expects. [map 1]", step);
+    const citable = { map: 1, fix: 1, hunk: 1, subject: 1 };
+    expect(failedRules(checkSkillFormat(text, { extended: true, expects: { fileMap: true, citable, quoted: quotedPaths(packet) } })))
+      .toContain("step-map-consistency");
+  });
+
+  it("given a later correction cited, when checked, then it resolves against its own pool and not the in-ticket one", () => {
+    const expects = { citable: { map: 1, fix: 1, hunk: 1, subject: 1, "later-fix": 2 } };
+    expect(failedRules(checkSkillFormat(skillCiting("[later-fix 2]"), { extended: true, expects })))
+      .not.toContain("step-evidence");
+    // `fix` holds one piece and `later-fix` two. A citation read against the wrong pool would
+    // accept this one, which is how the two would silently become one list.
+    const wrong = { citable: { map: 1, fix: 2, hunk: 1, subject: 1, "later-fix": 1 } };
+    expect(failedRules(checkSkillFormat(skillCiting("[later-fix 2]"), { extended: true, expects: wrong })))
+      .toContain("step-evidence");
   });
 });

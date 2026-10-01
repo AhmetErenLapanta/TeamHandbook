@@ -270,6 +270,7 @@ function renamedTo(path) {
   const arrow = path.indexOf(" => ");
   return arrow === -1 ? path : path.slice(arrow + 4);
 }
+var MAX_BLOB_BYTES = 1 << 20;
 
 // src/lib/mine.ts
 var LOCK = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum|gradle\.lockfile|deno\.lock)$/;

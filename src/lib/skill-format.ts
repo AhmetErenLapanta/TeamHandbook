@@ -121,9 +121,9 @@ export interface FormatOptions {
    * What the evidence says this draft owes, which two of the extended rules cannot know by
    * reading the file.
    *
-   * Measured: with these rules applied unconditionally, all three of the fixtures the source
-   * checker must pass failed all three of them - a minimal hand-written skill has no file map and
-   * no delivery section, and nothing in its text is wrong for lacking them. The fixtures are not
+   * Measured: with these rules applied unconditionally, every fixture the source checker must pass
+   * failed them - a minimal skill written by hand has no file map and no delivery section, and
+   * nothing in its text is wrong for lacking them. The fixtures are not
    * drafts of a mined workflow, so the rules ask for a section only when the caller says this
    * draft was supposed to have one, and otherwise judge the section it does have.
    */
@@ -133,10 +133,28 @@ export interface FormatOptions {
     /**
      * How many pieces of each kind the evidence packet offered, so a citation can be resolved.
      * Without it `step-evidence` cannot tell a reference to the third map row from a reference to
-     * a row that was never there, so the rule asks for nothing at all and the hand-written
-     * fixtures - which cite nothing, having no packet behind them - stay untouched.
+     * a row that was never there, so the rule asks for nothing at all and the fixtures written by
+     * hand - which cite nothing, having no packet behind them - stay untouched.
      */
-    citable?: { map?: number; fix?: number; hunk?: number; subject?: number };
+    citable?: {
+      map?: number;
+      fix?: number;
+      hunk?: number;
+      subject?: number;
+      file?: number;
+      config?: number;
+      "later-fix"?: number;
+    };
+    /**
+     * Concrete paths the evidence packet QUOTED to the draft, beyond the file map's patterns.
+     *
+     * A step naming one of them is not the draft contradicting its own map: it is the draft using
+     * a file it was shown. Without this, `step-map-consistency` rejects a draft for naming the
+     * very file the evidence put in front of it - the same defect the rule's own history records,
+     * where eight of fourteen flagged drafts were flagged for a file their map listed all along.
+     * Absent when the packet quoted none, so a draft with no expanded evidence is judged as before.
+     */
+    quoted?: string[];
   };
 }
 
@@ -299,18 +317,18 @@ const HEAD_NUMBER_RE = new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}
  * optional `/N` is the share form the file map's own cells use, accepted so that a draft writing
  * `[map 3/7]` is not punished for echoing the notation it was given.
  */
-const CITATION_RE = /\[(map|fix|hunk|subject)[ \t]+(\d+)(?:[ \t]*\/[ \t]*\d+)?\]/g;
+const CITATION_RE = /\[(map|later-fix|fix|hunk|subject|file|config)[ \t]+(\d+)(?:[ \t]*\/[ \t]*\d+)?\]/g;
 const NOT_VISIBLE_HEAD_RE = ci("not visible in history|not visible in the history");
 /**
  * What an item in that section is allowed to be: a question, or a statement that says outright
  * that the history does not record the thing. Anything else is a step wearing the section as a
  * disguise, which is the one place a draft can still assert something it cannot cite.
  *
- * A question mark ANYWHERE in the item, not only at its end. Measured on fifteen drafts: the form
- * the model actually writes is a question followed by the observation that raised it - "What is
- * the merge order? Only a sixth of the jobs followed one" - and demanding the mark at the end
- * rejected nine of the ten drafts that have the section, every one of them for an item that opens
- * with exactly the question the rule wants.
+ * A question mark ANYWHERE in the item, not only at its end. Measured against real drafts: the form
+ * the model actually writes is a question followed by the observation that raised it - "What is the
+ * merge order? Few of the jobs followed one" - and demanding the mark at the end rejected nearly
+ * every draft that has the section, each for an item that opens with exactly the question the rule
+ * wants.
  */
 const OPEN_QUESTION_RE = ci(
   "\\?|not (recorded|measured|visible|captured|in the evidence|known)|no commit|nothing (in the )?(history|evidence)|does not (say|record|show)|unknown|unclear|is not stated",
@@ -326,10 +344,11 @@ const MAP_HEAD_RE = /file map|files? touched/i;
  * document's single top-level title contains every other section. Judged by its own words that
  * title matches no exempt pattern, so it counted as a procedure section and every exempt section's
  * content was read a second time through it - the exemptions existed in the code and not in the
- * product. Measured on a draft that was otherwise clean: checks written as a numbered list were
- * asked for citations, a file named in a check or in the delivery note was charged against the
- * file map, and the step count came out at ten for four steps. Deleting the title alone made all
- * three clean, which is what identifies the container rather than the patterns as the fault.
+ * product. Measured against a draft that was otherwise clean: checks written as a numbered list
+ * were asked for citations, a file named in a check or in the delivery note was charged against the
+ * file map, and the step count came out at more than twice the steps the draft had. Deleting the
+ * title alone made all three clean, which is what identifies the container rather than the patterns
+ * as the fault.
  *
  * The NUMBER guard: the exempt patterns are broad on purpose - the checks section is found by
  * `verif|validat|checklist|test` - so a real layer section called `## 2. Test the gateway` would
@@ -589,10 +608,10 @@ function addExtendedFindings(
  * The four rules that read the draft as a STRUCTURE rather than as prose.
  *
  * Each exists because a measured draft cleared every earlier rule while breaking the thing the
- * rule names: nine of thirty-four reused a section number, one wrote a sentence where the file
- * map's pattern column belongs and scored a coverage of zero, four named a class of file in a
- * step that the map never listed, and the drafts as a whole cited nothing at all, so a fabricated
- * step read exactly like a measured one.
+ * rule names: drafts reused a section number, one wrote a sentence where the file map's pattern
+ * column belongs and scored a coverage of zero, others named a class of file in a step that the
+ * map never listed, and the drafts as a whole cited nothing at all, so a fabricated step read
+ * exactly like a measured one.
  */
 function addMechanicalFindings(
   findings: FormatFinding[],
@@ -629,12 +648,17 @@ function addMechanicalFindings(
     .filter(isProcedureSection)
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);
-  const matchers = mapCells.map((cell) => [patternMatcher(cell), baseMatcher(cell)] as const);
+  const matchers = [...mapCells, ...(expects.quoted ?? [])].map(
+    (cell) => [patternMatcher(cell), baseMatcher(cell)] as const,
+  );
   // The extensions the map itself uses. A bare word with a dot in it is a file name in one
   // language and an attribute chain in another, and nothing in the token says which; the map is
   // the draft's own statement of what kind of file this workflow is about, so it decides.
   const mapExtensions = new Set(
-    mapCells.flatMap(pathTokens).map(extensionOf).filter((ext): ext is string => ext !== null),
+    [...mapCells, ...(expects.quoted ?? [])]
+      .flatMap(pathTokens)
+      .map(extensionOf)
+      .filter((ext): ext is string => ext !== null),
   );
   const named = [...new Set(stepLines.flatMap((line) => fileTokens(line, mapExtensions)))];
   const unmapped = named.filter(
@@ -667,8 +691,8 @@ function addMechanicalFindings(
     `not-visible items=${openItems.length} written as a claim=${asserted.length} ${JSON.stringify(asserted.slice(0, 2))}`,
   );
 
-  // Off unless the caller says what there was to cite: a hand-written skill has no evidence packet
-  // behind it, and asking it for citations would be asking it to invent them.
+  // Off unless the caller says what there was to cite: a skill written by hand has no evidence
+  // packet behind it, and asking it for citations would be asking it to invent them.
   const citable = expects.citable;
   if (!citable) return;
   const counts: Record<string, number> = {
@@ -676,6 +700,11 @@ function addMechanicalFindings(
     fix: citable.fix ?? 0,
     hunk: citable.hunk ?? 0,
     subject: citable.subject ?? 0,
+    file: citable.file ?? 0,
+    config: citable.config ?? 0,
+    // Its own count, never the in-ticket one. `later-fix` is matched ahead of `fix` in the pattern
+    // above so that `[later-fix 2]` is not read as a correction from a pool it is not in.
+    "later-fix": citable["later-fix"] ?? 0,
   };
   const numberedSteps = secs
     .filter(isProcedureSection)
@@ -717,12 +746,12 @@ function namesAFile(line: string): boolean {
  * The file references a step line names, as opposed to the commands, keys and identifiers it
  * quotes.
  *
- * Measured on thirty-four drafts: read loosely, this flagged twenty-five of them, and most of
- * what it caught was not a file at all - a message key (`label.<name>.text`), an attribute
- * chain (`self.connection`), a call (`super().clean`) and a language keyword (`for...of`) all
- * end in something that looks like an extension. Each exclusion below removes one of those
- * classes. A path says it is a path by carrying a separator; a bare name has to earn it by
- * ending the way the draft's own map says files in this workflow end.
+ * Measured against real drafts: read loosely, this flagged most of them, and most of what it caught
+ * was not a file at all - a message key (`label.<name>.text`), an attribute chain
+ * (`self.connection`), a call (`super().clean`) and a language keyword (`for...of`) all end in
+ * something that looks like an extension. Each exclusion below removes one of those classes. A path
+ * says it is a path by carrying a separator; a bare name has to earn it by ending the way the
+ * draft's own map says files in this workflow end.
  */
 function fileTokens(line: string, mapExtensions: Set<string>): string[] {
   const out: string[] = [];
