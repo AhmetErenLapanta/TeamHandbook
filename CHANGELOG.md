@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.15.5] - 2026-10-01
+
+- **The evidence a draft skill is built from can now include the current contents of the
+  files a workflow touches, its configuration files and the corrections later tickets made
+  to the same places, all screened the same way.** This stays off unless asked for, because
+  measured against hand-written skills it did not close the gap. Nothing calls it from a
+  command yet.
+
 ## [0.15.4] - 2026-10-01
 
 - **A draft skill now shows its work, and nothing calls it from a command yet.** Each step
