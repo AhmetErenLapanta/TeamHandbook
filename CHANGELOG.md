@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.15.3] - 2026-10-01
+
+- **A piece of repeated work found in a repository's history can now be turned into a
+  draft skill, and nothing calls it from a command yet.** What is handed to the model is
+  screened first for credentials, for traces of the machine the work was done on and for
+  people's names; the draft that comes back has to meet the same format a skill written by
+  hand does, and is screened again. Anything that fails either check is dropped rather than
+  kept, so a draft that reaches you is one that passed both.
+
 ## [0.15.2] - 2026-10-01
 
 - **The engine that reads a repository's history for the work it repeats now puts the work
