@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.15.4] - 2026-10-01
+
+- **A draft skill now shows its work, and nothing calls it from a command yet.** Each step
+  says which part of the repository's history it rests on; a step that nothing in the
+  history supports is left out rather than guessed at, and what the history cannot show is
+  listed as a question for whoever reads the draft. Two versions of the same piece of work
+  produce one draft instead of several near-identical ones.
+
 ## [0.15.3] - 2026-10-01
 
 - **A piece of repeated work found in a repository's history can now be turned into a
