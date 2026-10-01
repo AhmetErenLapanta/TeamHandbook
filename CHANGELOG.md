@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.16.0] - 2026-10-01
+
+### Added
+
+- **`/handbook:mine` finds the work a repository's history keeps repeating.** It lists each
+  piece of repeating work with how often it was done, across how many repositories, by how
+  many people, and the files it always touches. Listing makes no model call and sends
+  nothing. Picking one with `draft <n>` sends that workflow's screened evidence to the model
+  and queues a draft skill for `/handbook:review`. Other repositories to read come from
+  `--repo <path>` or a `mine.repos` list in the config.
+- **`/handbook:review` marks a draft mined from history as one:** a skeleton with a measured
+  file map, where the steps the history cannot show are listed rather than guessed.
+- **A mined draft approved into the project is committed to that repository's
+  `.claude/skills/`.** It is the one delivery that commits without opening a merge request,
+  so the commit message is asked for first and handing the wording over is refused: there is
+  no request for it to be an answer about. The commit carries the skill alone and leaves
+  anything already staged untouched.
+
+### Changed
+
+- **The per-session lesson harvest now ships switched off.** Turn it on with
+  `{"harvest": {"lessons": true}}` in your `config.json`. The hooks that record errors and
+  activity keep running and still send nothing. `/handbook:learn` follows the same switch and
+  says so when it is off; `/handbook:demo` turns it on as part of its setup and says that it
+  did.
+
+### Fixed
+
+- **A skill approved to the team from `/handbook:review` was checked for traces of this
+  machine but not for secrets,** so a credential edited into a queued candidate could reach
+  the team's merge request. Approving to the team now runs the same checks as
+  `/handbook:share`, secrets included, before the team's repository is cloned, and a mined
+  draft committed into the project gets the same checks.
+
 ## [0.15.5] - 2026-10-01
 
 - **The evidence a draft skill is built from can now include the current contents of the
