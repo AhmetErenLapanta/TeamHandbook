@@ -11,7 +11,7 @@ import {
 import { flushResolvedPairs, ledgerFingerprintCounts, ledgerPairsForSession } from "../lib/signals.js";
 import { enqueueHarvestJob, hasPendingHarvestJobs, spawnPipelineRunner } from "../lib/pipeline.js";
 import { gateAutoEnabled } from "../lib/score.js";
-import { loadHarvestConfig } from "../lib/harvest.js";
+import { lessonHarvestEnabled, loadHarvestConfig } from "../lib/harvest.js";
 
 /**
  * Salvage sessions that ended without SessionEnd firing (rage-quit, crash): flush
@@ -25,7 +25,7 @@ import { loadHarvestConfig } from "../lib/harvest.js";
  * little early. cleanupStaleSessionFiles (7d) handles file hygiene.
  */
 function salvageOrphans(currentSessionId?: string): void {
-  if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
+  if (!gateAutoEnabled() || !loadHarvestConfig().enabled || !lessonHarvestEnabled()) return;
   let enqueued = 0;
   for (const id of orphanedSessionIds()) {
     if (id === currentSessionId) continue;

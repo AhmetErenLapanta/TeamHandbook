@@ -14,6 +14,21 @@ hands off to a clean session produced it 3 out of 3. So the demo hands the work 
 clean session. That is also the honest thing to show, since it is what the product
 actually does all day.
 
+## Step 0, here: turn the lesson harvest on
+
+This demo shows the per-session lesson harvest, which ships switched OFF - the product's
+main path is now `/handbook:mine`, which reads a repository's history instead of a
+session. So the demo has to turn it on, and say that it did:
+
+```bash
+node -e 'const f=require("path").join(process.env.TEAMHANDBOOK_HOME||require("path").join(require("os").homedir(),".teamhandbook"),"config.json");const fs=require("fs");fs.mkdirSync(require("path").dirname(f),{recursive:true});let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}c.harvest={...(c.harvest||{}),lessons:true};fs.writeFileSync(f,JSON.stringify(c,null,2));console.log("lesson harvest on")'
+```
+
+Tell the user plainly that you switched it on, and that `{"harvest": {"lessons": false}}`
+in their config puts it back. If they only wanted to see the product work and not
+specifically the session harvest, `/handbook:mine` is the shorter demo and costs nothing
+to list.
+
 ## Step 1, here: build the scratch project
 
 Create it with ONE Bash call, exactly as written. One call is deliberate: `mkdir` and

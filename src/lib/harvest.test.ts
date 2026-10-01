@@ -6,6 +6,7 @@ import {
   buildHarvestPrompt,
   harvestFingerprint,
   harvestSession,
+  lessonHarvestEnabled,
   loadHarvestConfig,
   parseHarvestResponse,
   sieveHarvestItems,
@@ -998,5 +999,47 @@ describe("the archive must not swallow the recent-decisions window", () => {
 
     expect(seen).toContain("really-rejected [rejected]");
     expect(seen).not.toContain("swept-0");
+  });
+});
+
+describe("the lesson harvest switch", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "handbook-switch-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("given a stock install, when the switch is read, then the lesson harvest is off", () => {
+    // given a home with no config at all, which is what a fresh install has
+    // when the switch is read
+    // then the per-session lesson path does not run
+    expect(lessonHarvestEnabled(dir)).toBe(false);
+  });
+
+  it("given the switch turned on, when it is read, then the lesson harvest runs", () => {
+    // given a user who asked for it explicitly
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
+    // when the switch is read
+    // then the old behaviour is back
+    expect(lessonHarvestEnabled(dir)).toBe(true);
+  });
+
+  it("given a config file nobody can parse, when the switch is read, then it stays off", () => {
+    // given a hand-edited config with a trailing comma
+    writeFileSync(join(dir, "config.json"), '{"harvest": {"lessons": true,}}');
+    // when the switch is read
+    // then it fails closed, like the other privacy switches
+    expect(lessonHarvestEnabled(dir)).toBe(false);
+  });
+
+  it("given the harvest kill switch on but lessons unset, when the switch is read, then it is still off", () => {
+    // given the older switch left at its default while the newer one was never set
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ harvest: { enabled: true } }));
+    // when the switch is read
+    // then enabling the old one does not re-enable the lesson path
+    expect(loadHarvestConfig(dir).enabled).toBe(true);
+    expect(lessonHarvestEnabled(dir)).toBe(false);
   });
 });

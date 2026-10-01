@@ -543,6 +543,10 @@ var defaultHarvestConfig = {
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
 };
+function lessonHarvestEnabled(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
@@ -597,7 +601,7 @@ async function main() {
   const transcriptPath = state.transcriptPath ?? input.transcript_path;
   flushSessionEnd(input.session_id);
   if (!substance || alreadyHarvested) return;
-  if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
+  if (!gateAutoEnabled() || !loadHarvestConfig().enabled || !lessonHarvestEnabled()) return;
   const pairs = ledgerPairsForSession(input.session_id);
   const counts = ledgerFingerprintCounts();
   const recurrence = {};

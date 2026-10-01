@@ -67,6 +67,31 @@ export const defaultHarvestConfig: HarvestConfig = {
   timeoutMs: 180_000,
 };
 
+/**
+ * Is the per-session lesson harvest switched on? Off unless the config says otherwise.
+ *
+ * The product's unit is a repeating workflow mined from a repository's history, and the
+ * lesson harvest is the path that replaced. Switched off rather than deleted, because the
+ * replacement has not been measured in the field yet and the code has to still be here
+ * when that measurement says something.
+ *
+ * CAPTURE is deliberately not gated by this: the hooks that record corrections and
+ * activity keep running, because the next session source is built on what they write.
+ * What stops is the model call that turns a session into candidates.
+ *
+ * Fails closed with the other privacy switches - a config file nobody can parse leaves
+ * the harvest off rather than reading a broken file as consent.
+ */
+export function lessonHarvestEnabled(home: string = handbookHome()): boolean {
+  const harvest = readConfigFile(home).harvest as Record<string, unknown> | undefined;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
+
+/** What a command says when it was asked to harvest a lesson and the switch is off. */
+export const LESSON_HARVEST_OFF =
+  'lesson harvest is off; enable it with {"harvest": {"lessons": true}} in your TeamHandbook config.json. ' +
+  "Mining a repository's history with /handbook:mine is unaffected.";
+
 export function loadHarvestConfig(home: string = handbookHome()): HarvestConfig {
   const harvest = readConfigFile(home).harvest as Record<string, unknown> | undefined;
   const num = (v: unknown, fallback: number) => (typeof v === "number" && v > 0 ? v : fallback);

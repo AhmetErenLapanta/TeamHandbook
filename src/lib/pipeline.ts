@@ -25,7 +25,7 @@ import { distillVerdict, gitRemoteUrl, loadDistillConfig, writeCandidate } from 
 import { defaultSkillDirs, listExistingSkills } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
 import { candidateMetaFromArtifact, writeCandidateMeta } from "./queue.js";
-import { harvestSession } from "./harvest.js";
+import { LESSON_HARVEST_OFF, harvestSession, lessonHarvestEnabled } from "./harvest.js";
 import type { HarvestDeps, HarvestJob, HarvestSummary } from "./harvest.js";
 
 // ── harvest job hand-off ────────────────────────────────────────────────────
@@ -466,6 +466,11 @@ export async function runHarvestJob(
     );
     return { outcome: "skipped", reason, written: [] };
   }
+  // A job queued before the switch was turned off must not still reach the model: the
+  // queue outlives the setting that filled it.
+  if (!lessonHarvestEnabled(home)) {
+    return { outcome: "skipped", reason: LESSON_HARVEST_OFF, written: [] };
+  }
   const summary = await harvestSession(job, home, deps);
   const log: PipelineSummary = {
     received: summary.produced ?? 0,
@@ -525,6 +530,7 @@ export async function runHarvestJob(
 export type ManualOutcome =
   | { stage: "sieved"; reason: DropReason; detail?: string }
   | { stage: "error"; message: string }
+  | { stage: "disabled"; message: string }
   // the model invoked /handbook:learn on its own (signal.trigger === "manual-model")
   // and the gate rejected it: enforced, not carried as advice, because there was no
   // explicit ask to honor
@@ -549,6 +555,9 @@ export async function runManualSignal(
   deps: PipelineDeps = {},
   now: () => string = () => new Date().toISOString(),
 ): Promise<ManualOutcome> {
+  // Before the sieve and before any model call: with the switch off there is no lesson
+  // path to run, so nothing is read, nothing is sent and nothing is logged.
+  if (!lessonHarvestEnabled(home)) return { stage: "disabled", message: LESSON_HARVEST_OFF };
   const runner = deps.runner ?? runClaudeCli;
   const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
   const listSkills = deps.listSkills ?? listExistingSkills;

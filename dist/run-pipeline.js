@@ -1472,6 +1472,11 @@ var defaultHarvestConfig = {
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
 };
+function lessonHarvestEnabled(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
+var LESSON_HARVEST_OFF = `lesson harvest is off; enable it with {"harvest": {"lessons": true}} in your TeamHandbook config.json. Mining a repository's history with /handbook:mine is unaffected.`;
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
@@ -2170,6 +2175,9 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
       now()
     );
     return { outcome: "skipped", reason, written: [] };
+  }
+  if (!lessonHarvestEnabled(home)) {
+    return { outcome: "skipped", reason: LESSON_HARVEST_OFF, written: [] };
   }
   const summary = await harvestSession(job, home, deps);
   const log = {

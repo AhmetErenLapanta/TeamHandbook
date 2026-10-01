@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
 } from "./deliver.js";
 import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
 import type { GitRunner } from "./init.js";
+import type { ForgeRunner } from "./publish.js";
 import { readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
@@ -23,6 +24,9 @@ import { candidatesDir } from "./skill-index.js";
  * of them a second run, since "you decide" has to name the proposal it was shown.
  */
 const APPROVED = { message: "chore: the case under test" } as const;
+
+/** A credential in the shape the secret sieve knows, built rather than written out whole. */
+const LIVE_KEY = "sk-ant-api03-" + "b".repeat(95);
 
 let home: string;
 let project: string;
@@ -874,5 +878,315 @@ describe("two answers to one refusal are not one answer twice", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("--as and --update");
     expect(calls).toEqual([]);
+  });
+});
+
+describe("a candidate edited in the queue, approved to the team", () => {
+  function recordingRunners(): { git: GitRunner; forge: ForgeRunner; gitCalls: string[][]; forgeCalls: string[][] } {
+    const gitCalls: string[][] = [];
+    const forgeCalls: string[][] = [];
+    return {
+      gitCalls,
+      forgeCalls,
+      git: (args) => {
+        gitCalls.push(args);
+        return "";
+      },
+      forge: (_tool, args) => {
+        forgeCalls.push(args);
+        return "";
+      },
+    };
+  }
+
+  beforeEach(() => {
+    saveTeamConfig({ repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "t" }, home);
+  });
+
+  it("given a secret in SKILL.md next to a symlink, when it is approved to the team, then nothing is cloned or pushed", () => {
+    // given a candidate whose body holds a credential and which carries a link out of itself
+    const dir = seedCandidate(meta());
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: fix-npm-test\ndescription: "d"\n---\n\nexport KEY=${LIVE_KEY}\n`);
+    writeFileSync(join(home, "outside.md"), "elsewhere\n");
+    symlinkSync(join(home, "outside.md"), join(dir, "reference.md"));
+    const runners = recordingRunners();
+    // when it is approved to the team with wording
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-10-01T00:00:00Z",
+      undefined, runners.git, runners.forge, "team", undefined, { commitMessage: APPROVED },
+    );
+    // then the share door's audit turns it back before git or the forge is run at all
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("not a regular file");
+    expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
+    expect(runners.gitCalls).toEqual([]);
+    expect(runners.forgeCalls).toEqual([]);
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+
+  it("given a secret in a SKILL.md with no frontmatter, when it is approved to the team, then nothing is cloned or pushed", () => {
+    // given a candidate edited into a body with no frontmatter and a credential in it
+    const dir = seedCandidate(meta());
+    writeFileSync(join(dir, "SKILL.md"), `Steps.\n\nexport KEY=${LIVE_KEY}\n`);
+    const runners = recordingRunners();
+    // when it is approved to the team with wording
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-10-01T00:00:00Z",
+      undefined, runners.git, runners.forge, "team", undefined, { commitMessage: APPROVED },
+    );
+    // then the audit's first refusal is a refusal here too, though it never reached the secret
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("frontmatter");
+    expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
+    expect(runners.gitCalls).toEqual([]);
+    expect(runners.forgeCalls).toEqual([]);
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+
+  it("given a secret in a reference file, when it is approved to the team, then the refusal names the file and not the value", () => {
+    // given a candidate whose only problem is a credential beside its SKILL.md
+    const dir = seedCandidate(meta());
+    writeFileSync(join(dir, "reference.md"), `export KEY=${LIVE_KEY}\n`);
+    const runners = recordingRunners();
+    // when it is approved to the team with wording
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-10-01T00:00:00Z",
+      undefined, runners.git, runners.forge, "team", undefined, { commitMessage: APPROVED },
+    );
+    // then the secret sieve stops it, by the file and the class of what it found
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('"reference.md" looks like it contains a secret (anthropic-api-key)');
+    expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
+    expect(runners.gitCalls).toEqual([]);
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+});
+
+/**
+ * A mined draft is the one candidate whose project delivery COMMITS, so it is the one
+ * that has to answer for its wording. Everything here is about that difference: the
+ * wording is asked for before anything is written, the sieves that guard a shared file
+ * run, and the commit carries the skill and nothing else the tree happened to hold.
+ */
+describe("a mined draft delivered into the project it came from", () => {
+  function gitRepo(): string {
+    execFileSync("git", ["init", "-b", "main", project], { stdio: "ignore" });
+    execFileSync("git", ["-C", project, "config", "user.name", "t"]);
+    execFileSync("git", ["-C", project, "config", "user.email", "t@t"]);
+    writeFileSync(join(project, "README.md"), "a repository\n");
+    execFileSync("git", ["-C", project, "add", "-A"]);
+    execFileSync("git", ["-C", project, "commit", "-m", "seed"], { stdio: "ignore" });
+    return project;
+  }
+
+  function mined(overrides: Partial<CandidateMeta> = {}): CandidateMeta {
+    return meta({ slug: "add-entity-field", origin: "mine", kind: "procedure", ...overrides });
+  }
+
+  function log(): string {
+    return execFileSync("git", ["-C", project, "log", "--oneline", "-1"], { encoding: "utf8" });
+  }
+
+  it("given no commit message, when it is approved into the project, then nothing is written and the proposal is shown", () => {
+    // given a mined candidate whose delivery will make a commit
+    gitRepo();
+    seedCandidate(mined());
+    // when it is approved with no wording decided
+    const result = approveAndDeliver(home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project");
+    // then it is refused, the candidate is untouched, and the sentence it would commit is on offer
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("commit message required");
+    expect(result.proposedMessage).toContain("add-entity-field");
+    expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+    expect(existsSync(join(soloSkillsDir(project), "add-entity-field"))).toBe(false);
+  });
+
+  it("given the reviewer's own wording, when it is approved, then the skill is committed with it", () => {
+    // given a mined candidate and a sentence the reviewer approved
+    gitRepo();
+    seedCandidate(mined());
+    // when it is approved with that wording
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the add-entity-field skill" } },
+    );
+    // then the skill is in the tree and the commit says what the reviewer said
+    expect(result.ok).toBe(true);
+    expect(result.commitMessage).toBe("add the add-entity-field skill");
+    expect(existsSync(join(soloSkillsDir(project), "add-entity-field", "SKILL.md"))).toBe(true);
+    expect(log()).toContain("add the add-entity-field skill");
+    // and the reviewer is not sent to make a commit that this approval already made
+    const said = formatApproveResult("add-entity-field", result);
+    expect(said).toContain("It is committed");
+    expect(said).not.toContain("Commit this directory");
+  });
+
+  it("given you decide, when it is approved, then it is refused because no merge request is opened here", () => {
+    // given a mined candidate and a reviewer who delegated the wording
+    gitRepo();
+    seedCandidate(mined());
+    const asked = approveAndDeliver(home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project");
+    // when the fingerprint they were shown is handed back
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { delegated: asked.proposalHash } },
+    );
+    // then delegating is refused: it is an answer about a merge request that is never opened
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("merge request");
+    expect(existsSync(join(soloSkillsDir(project), "add-entity-field"))).toBe(false);
+  });
+
+  it("given a draft carrying a trace of this machine, when it is approved, then nothing is committed", () => {
+    // given a mined candidate whose body names this machine's home directory
+    gitRepo();
+    const dir = seedCandidate(mined());
+    const standIn = ["", "Users", "alice", "work", "api"].join("/");
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: add-entity-field\ndescription: "d"\n---\n\nRun it in ${standIn}.\n`);
+    // when it is approved with wording
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the skill" } },
+    );
+    // then the trace stops it before the commit
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("home-path");
+    expect(log()).toContain("seed");
+  });
+
+  it("given a draft carrying a secret, when it is approved, then nothing is committed", () => {
+    // given a mined candidate whose reference file holds a credential
+    gitRepo();
+    const dir = seedCandidate(mined());
+    writeFileSync(join(dir, "reference.md"), "export KEY=sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    // when it is approved with wording
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the skill" } },
+    );
+    // then the sieve that guards a shared file stops it
+    expect(result.ok).toBe(false);
+    expect(result.error?.toLowerCase()).toContain("secret");
+    expect(log()).toContain("seed");
+  });
+
+  function nothingCommitted(): void {
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    expect(log()).toContain("seed");
+    expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+  }
+
+  it("given a secret in SKILL.md next to a symlink, when it is approved, then nothing is written or committed", () => {
+    // given a mined candidate whose body holds a credential and which carries a link out of itself
+    gitRepo();
+    const dir = seedCandidate(mined());
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: add-entity-field\ndescription: "d"\n---\n\nexport KEY=${LIVE_KEY}\n`);
+    writeFileSync(join(home, "outside.md"), "elsewhere\n");
+    symlinkSync(join(home, "outside.md"), join(dir, "reference.md"));
+    // when it is approved with wording
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the skill" } },
+    );
+    // then the link refuses it before the copy can skip it, and the key goes nowhere
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("not a regular file");
+    expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
+    nothingCommitted();
+  });
+
+  it("given a secret in a SKILL.md with no frontmatter, when it is approved, then nothing is written or committed", () => {
+    // given a mined candidate edited into a body with no frontmatter and a credential in it
+    gitRepo();
+    const dir = seedCandidate(mined());
+    writeFileSync(join(dir, "SKILL.md"), `Steps.\n\nexport KEY=${LIVE_KEY}\n`);
+    // when it is approved with wording
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the skill" } },
+    );
+    // then the audit's first refusal is a refusal here too, though it never reached the secret
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("frontmatter");
+    expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
+    nothingCommitted();
+  });
+
+  it("given a draft carrying a secret, when it is kept personally, then it is delivered and the secret is marked by its pattern", () => {
+    // given a mined candidate whose reference file holds a credential
+    const dir = seedCandidate(mined());
+    writeFileSync(join(dir, "reference.md"), `export KEY=${LIVE_KEY}\n`);
+    const personal = mkdtempSync(join(tmpdir(), "handbook-personal-"));
+    try {
+      // when it is kept for yourself
+      const result = approveAndDeliver(
+        home, "add-entity-field", "/fallback", "2026-10-01T00:00:00Z",
+        null, undefined, undefined, "personal", personal,
+      );
+      // then it installs, since it stays on this machine, and the record names the pattern and the file
+      expect(result).toMatchObject({ ok: true, mode: "personal" });
+      const recorded = readCandidateMeta(dir);
+      expect(recorded?.hygiene).toEqual({ secret: { pattern: "anthropic-api-key", file: "reference.md" } });
+      expect(JSON.stringify(recorded)).not.toContain(LIVE_KEY);
+    } finally {
+      rmSync(personal, { recursive: true, force: true });
+    }
+  });
+
+  it("given unrelated work already staged, when a mined draft is committed, then that work is left staged and out of the commit", () => {
+    // given a reviewer who had staged something of their own before approving
+    gitRepo();
+    seedCandidate(mined());
+    writeFileSync(join(project, "mine.txt"), "my own work in progress\n");
+    execFileSync("git", ["-C", project, "add", "mine.txt"]);
+    // when the mined draft is approved
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the skill" } },
+    );
+    // then the commit holds the skill alone and their work is still staged, still theirs
+    expect(result.ok).toBe(true);
+    const files = execFileSync("git", ["-C", project, "show", "--name-only", "--format=", "HEAD"], { encoding: "utf8" });
+    expect(files).toContain(".claude/skills/add-entity-field/SKILL.md");
+    expect(files).not.toContain("mine.txt");
+    const staged = execFileSync("git", ["-C", project, "diff", "--cached", "--name-only"], { encoding: "utf8" });
+    expect(staged).toContain("mine.txt");
+  });
+
+  it("given .claude is ignored by the repository, when a mined draft is approved, then it is refused and no directory is left behind", () => {
+    // given a repository whose .gitignore excludes the directory a project skill lives in
+    gitRepo();
+    writeFileSync(join(project, ".gitignore"), ".claude/\n");
+    execFileSync("git", ["-C", project, "add", "-A"]);
+    execFileSync("git", ["-C", project, "commit", "-m", "ignore .claude"], { stdio: "ignore" });
+    seedCandidate(mined());
+    // when it is approved with wording
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the skill" } },
+    );
+    // then it fails closed: no half-installed skill, and the candidate is still waiting
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ignored by this repository's .gitignore");
+    expect(result.error).toContain("--to personal");
+    // the advice has to be the form git actually honours: measured, a re-include under a
+    // directory excluded outright does nothing, which is what the first wording told people to do
+    expect(result.error).toContain(".claude/*");
+    expect(result.error).toContain("!.claude/skills/");
+    // the directories the install made go too, or "nothing was written" is not true
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+  });
+
+  it("given an ordinary harvested candidate, when it is approved into the project, then it still installs without being asked for a message", () => {
+    // given a candidate the harvest produced rather than the miner
+    gitRepo();
+    seedCandidate(meta({ slug: "fix-npm-test", origin: "harvest" }));
+    // when it is approved into the project
+    const result = approveAndDeliver(home, "fix-npm-test", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project");
+    // then the route it always took is unchanged: files copied, no commit, no question
+    expect(result.ok).toBe(true);
+    expect(result.commitMessage).toBeUndefined();
+    expect(log()).toContain("seed");
   });
 });

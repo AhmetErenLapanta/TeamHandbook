@@ -13,9 +13,18 @@ import { saveSessionState, emptySessionState } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
 import type { ClaudeRunner } from "./score.js";
 
+// The lesson harvest ships off, so every case below that exercises it turns it on the way
+// a user would. Written here rather than defaulted on, so these tests keep measuring the
+// harvest while the stock install measures the switch.
+function enableLessons(dir: string): string {
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
+  return dir;
+}
+
+
 let home: string;
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "handbook-proc-"));
+  home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-proc-")));
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });

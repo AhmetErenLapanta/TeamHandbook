@@ -138,11 +138,13 @@ Two things, and only these:
    of that session's conversation - up to 40 000 characters, 60% of that budget
    reserved for your own messages - plus the captured error→fix pairs and the
    session's work shape. This reaches Anthropic exactly as any Claude Code prompt
-   does. Disable it with `{"harvest": {"enabled": false}}`, or disable every
-   automatic model call with `{"gate": {"auto": false}}`, in
-   `~/.teamhandbook/config.json`; both are checked before a session is queued, so the
-   transcript is never read and nothing is sent. `/handbook:learn` still works and
-   sends only what you asked it to capture.
+   does. **This path ships switched off**: it runs only once you set
+   `{"harvest": {"lessons": true}}` in `~/.teamhandbook/config.json`, so on a stock
+   install no session is read and nothing is sent. `{"harvest": {"enabled": false}}` and
+   `{"gate": {"auto": false}}` remain as the older switches, and all three are checked
+   before a session is queued. Capture itself keeps running either way: the hooks that
+   record errors and activity write to your machine only. `/handbook:learn` follows the
+   same switch and sends only what you asked it to capture.
    - Precisely: those switches stop the SENDING, not the local capture. The
      `PostToolUse` and `UserPromptSubmit` hooks keep writing evidence into
      `~/.teamhandbook/` (secret-redacted, as above) so the history is there if you turn
@@ -182,7 +184,10 @@ Two things, and only these:
      you choose where it goes. Approving it to the team, or into a project - where it is
      committed with the repository - is refused on those grounds. Keeping it for yourself
      is not: that copy stays on the machine the trace names, so it is recorded rather than
-     refused.
+     refused. Approving it to the team, or approving a mined draft into the project it is
+     committed to, also runs the share screen's whole audit first: a secret in any file the
+     skill carries, a symlink, or a SKILL.md without its frontmatter refuses it before
+     anything is copied, and the refusal names the class and the file, never the value.
    - The commit on that request is yours as well: TeamHandbook never commits with a
      message you have not seen; you can delegate the wording only at the moment the merge
      request is opened. This holds for every path that commits - `/handbook:review`
@@ -202,6 +207,64 @@ Two things, and only these:
    without a `--file` it prints the diff and makes no change at all. It never writes
    `skills/`, `commands/`, `agents/` or `.mcp.json`, and inside the two `.claude-plugin`
    manifests it carries the team's own entries across rather than replacing them.
+
+## What `/handbook:mine` reads and sends
+
+`/handbook:mine` with no arguments reads git history and nothing else. It walks the
+repository you are in, plus any you name with `--repo` or list under `mine.repos`, all
+read-only, and prints what repeats. It makes no model call and opens no network
+connection, so listing costs nothing and discloses nothing.
+
+Asking for a draft is what sends anything. Picking a workflow sends the screened
+evidence for that one workflow to `claude -p`, exactly as any other Claude Code prompt
+reaches Anthropic. The evidence is screened piece by piece on the way in, and the model's
+reply is screened again before anything is kept; a piece that trips a screen is dropped
+and counted, and the packet is built without it rather than abandoned.
+
+The line is drawn between PROSE and IDENTIFIERS, because the same word means different
+things on either side of it:
+
+- **Prose** - commit subjects, in-ticket corrections, series names, and the draft the
+  model writes back - is screened for secrets, for this machine's own identity, for an
+  optional list of organisation terms, and for people. Every part of every author's name
+  counts here, along with the thanks and trailer phrases that name somebody who never
+  committed. In a sentence a name is a name, and dropping one sentence is cheap.
+- **Identifiers** - patch bodies, file paths and repository names - get the same layers
+  with one documented relaxation: a single PART of a name is treated as a name only where
+  it is rare in the work itself. Without it, a contributor whose first name is an ordinary
+  word in the code would withhold most of the paths and patches that use that word, and
+  take much of the quotable evidence with them. A FULL name is never
+  narrowed: its parts count in order with any separator between them, or none, so the
+  forms a path actually uses - `a-b`, `a/b`, `a.b`, `a_b`, `ab` - are caught as well as
+  the spelling git records.
+- **File paths and repository names in the evidence** - the file map, the order
+  repositories were changed in, and the paths a fix touched - are additionally exempt from
+  the organisation-term list alone. They ARE the workflow being described - the file map is
+  the product - so a vocabulary list is not allowed to empty the evidence. The exemption
+  ends there: the draft the model writes back is screened in full, so a draft that repeats
+  a path carrying a listed term is dropped whole. `/handbook:mine` itself passes no term
+  list, so on that path the layer is empty. A path that names a person is withheld and the
+  row keeps its counts; a role that names a person is dropped with its row.
+
+Author names are held in memory only: the list itself never enters a packet, a prompt or
+a file, and it is rebuilt from git each run.
+
+**Limits this makes no promise about.** The person screen knows the people who authored
+the work. A third party named in a code comment or in test data is not in that set; the
+thanks and trailer phrases are what catch the common cases. The relaxation on identifier
+text is a deliberate hole with a known shape: ONE part of a name, common enough in the
+code to read as a word, can appear in a quoted path or hunk; the two parts together
+cannot. Whether the person layer has ever caught a real leak in a patch or a path has not
+been measured. And a draft mined from a private repository is specific to that repository
+by construction - its file map is made of real paths - so it stays local until
+`/handbook:review` sends it anywhere.
+
+**Where a mined draft goes.** Into the review queue, and nowhere else. Approving one into
+the project writes it to that repository's `.claude/skills/` and commits it there, which
+is the one delivery that makes a commit without opening a merge request - so the commit
+message is asked for first and never invented. It is screened for secrets and for traces
+of this machine before that commit is made, and a failure to commit removes what was
+written and leaves the candidate waiting.
 
 ## Removing your data
 

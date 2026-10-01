@@ -20,12 +20,22 @@ import { readCandidateMeta } from "./queue.js";
 import type { ClaudeRunner } from "./score.js";
 import { ledgerFingerprintCounts } from "./signals.js";
 import type { Signal } from "./signals.js";
+import { LESSON_HARVEST_OFF } from "./harvest.js";
 import type { HarvestJob } from "./harvest.js";
 import { candidatesDir } from "./skill-index.js";
 import { emptySessionState, loadSessionState, saveSessionState } from "./session-state.js";
 import { captureLearnInvocation } from "./capture.js";
 import { finalizeExplicitLearnInvocation, peekExplicitLearnInvocation } from "./learn.js";
 import type { HookInput } from "./hook-io.js";
+
+// The lesson harvest ships off, so every case below that exercises it turns it on the way
+// a user would. Written here rather than defaulted on, so these tests keep measuring the
+// harvest while the stock install measures the switch.
+function enableLessons(dir: string): string {
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
+  return dir;
+}
+
 
 function candidate(overrides: Partial<Signal> = {}): Signal {
   return {
@@ -96,7 +106,7 @@ describe("harvest job hand-off", () => {
   let home: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-test-")));
   });
 
   afterEach(() => {
@@ -155,7 +165,7 @@ describe("runHarvestJob", () => {
   let home: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-test-")));
   });
 
   afterEach(() => {
@@ -203,11 +213,54 @@ describe("runHarvestJob", () => {
   });
 });
 
-describe("harvest once per transcript state", () => {
+describe("the lesson harvest switched off", () => {
   let home: string;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("given a job queued before the switch went off, when it is run, then no model is called and nothing is written", async () => {
+    // given a stock install and a job that would harvest if the switch were on
+    const calls: string[] = [];
+    // when the runner reaches it
+    const summary = await runHarvestJob(job(home), home, {
+      listSkills: () => [],
+      skillDirs: () => [],
+      remoteUrl: () => null,
+      runner: fakeRunner(calls),
+    });
+    // then it is skipped for the switch, before the transcript reaches the model
+    expect(summary).toMatchObject({ outcome: "skipped", reason: LESSON_HARVEST_OFF });
+    expect(calls).toHaveLength(0);
+    expect(existsSync(candidatesDir(home))).toBe(false);
+  });
+
+  it("given a manual signal, when it is run, then it stops before the sieve and the model", async () => {
+    // given a stock install and a signal /handbook:learn would otherwise distill
+    const calls: string[] = [];
+    // when it is run
+    const outcome = await runManualSignal(candidate({ trigger: "manual", edits: [] }), home, {
+      runner: fakeRunner(calls),
+      remoteUrl: () => null,
+    });
+    // then it says the switch is off, and nothing was called, logged or queued
+    expect(outcome).toEqual({ stage: "disabled", message: LESSON_HARVEST_OFF });
+    expect(calls).toHaveLength(0);
+    expect(existsSync(pipelineLogFile(home))).toBe(false);
+    expect(existsSync(candidatesDir(home))).toBe(false);
+  });
+});
+
+describe("harvest once per transcript state", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-test-")));
   });
 
   afterEach(() => {
@@ -456,7 +509,7 @@ describe("a failed harvest is picked up again", () => {
   let home: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-test-")));
   });
 
   afterEach(() => {
@@ -535,7 +588,7 @@ describe("a job whose runner is killed instead of failing", () => {
   let home: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-test-")));
   });
 
   afterEach(() => {
@@ -651,7 +704,7 @@ describe("runManualSignal", () => {
   let home: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    home = enableLessons(mkdtempSync(join(tmpdir(), "handbook-test-")));
   });
 
   afterEach(() => {

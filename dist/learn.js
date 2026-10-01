@@ -275,6 +275,16 @@ function readConfigFile(home = handbookHome()) {
     return {};
   }
 }
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync2(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
+  }
+}
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
@@ -1569,6 +1579,13 @@ var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*
 var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
 
+// src/lib/harvest.ts
+function lessonHarvestEnabled(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
+var LESSON_HARVEST_OFF = `lesson harvest is off; enable it with {"harvest": {"lessons": true}} in your TeamHandbook config.json. Mining a repository's history with /handbook:mine is unaffected.`;
+
 // src/lib/pipeline.ts
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function dedupSkillDirs(home, cwd, marketplacesRootDir) {
@@ -1596,6 +1613,7 @@ function appendPipelineLog(summary, home, ts) {
 }
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 async function runManualSignal(signal, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+  if (!lessonHarvestEnabled(home)) return { stage: "disabled", message: LESSON_HARVEST_OFF };
   const runner = deps.runner ?? runClaudeCli;
   const remoteUrl = deps.remoteUrl ?? gitRemoteUrl;
   const listSkills = deps.listSkills ?? listExistingSkills;
@@ -1696,6 +1714,9 @@ async function main() {
   const outcome = await runManualSignal(signal);
   if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {
+    case "disabled":
+      console.log(outcome.message);
+      return 0;
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));
       return 0;

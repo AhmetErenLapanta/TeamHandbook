@@ -244,6 +244,7 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 
 | Command | What it does |
 |---|---|
+| `/handbook:mine` | List the work this repository keeps repeating, and draft a skill out of one of them. Listing reads git history and sends nothing. |
 | `/handbook:review` | Keep, scope, share, edit, or reject each skill TeamHandbook captured. **Nothing it captured ships without this.** |
 | `/handbook:init` | Scaffold the team handbook repo and print the message your team needs. |
 | `/handbook:init --upgrade` | Bring an existing team repo's scaffold up to this version: shows the diff, you pick file by file. |
@@ -261,14 +262,19 @@ To find the skill, TeamHandbook sends a slice of the finished session to **your 
 `claude` CLI - no bundled key, no third-party model, no telemetry. Exactly what is read,
 what is never read, and every file it writes: [SECURITY.md](SECURITY.md).
 
-Turn it off in `~/.teamhandbook/config.json`:
+The per-session harvest **ships switched off.** Turn it on, or the rest off, in
+`~/.teamhandbook/config.json`:
 
 ```jsonc
+{ "harvest": { "lessons": true } }    // read finished sessions (off by default)
 { "harvest": { "enabled": false } }   // no session is ever read or sent
 { "gate":    { "auto": false } }      // no automatic model calls at all
 ```
 
-Both fail **closed** if the file cannot be parsed. Secrets are redacted before anything
+All three fail **closed** if the file cannot be parsed. Capture keeps running whatever
+they say: the hooks that record errors and activity write to your machine and send
+nothing. `/handbook:mine`, which reads git history rather than a session, is unaffected
+by any of them. Secrets are redacted before anything
 is written or sent, though detection is pattern matching - eyeball a candidate before
 approving it.
 

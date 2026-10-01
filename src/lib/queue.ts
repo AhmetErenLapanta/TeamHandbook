@@ -30,7 +30,7 @@ export interface CandidateMeta {
   deliveredTo?: string;
   deliveredMode?: "solo" | "personal" | "team";
   // how this candidate came to exist and what it is - drives the review wording
-  origin?: "harvest" | "manual" | "recurrence";
+  origin?: "harvest" | "manual" | "recurrence" | "mine";
   kind?: "procedure" | "correction" | "error-fix" | "discovery";
   // default answer to "keep it, or share it?" - derived from scope + team config
   suggestedTarget?: "personal" | "project" | "team";
@@ -40,8 +40,8 @@ export interface CandidateMeta {
   // a trace of this machine found in the candidate the moment it was written: the class
   // and the file, never the value. It is a mark, not a verdict - the review screen shows
   // it so the decision to send this anywhere is taken knowing it, and the share door
-  // refuses it outright.
-  hygiene?: { identity: IdentityClass; where: string };
+  // refuses it outright. A secret is marked the same way, by the pattern that matched.
+  hygiene?: { identity?: IdentityClass; where?: string; secret?: { pattern: string; file: string } };
   // written together when a candidate is archived and both removed on restore, so a
   // restored meta matches its pre-archive snapshot field for field
   archivedAt?: string;
@@ -266,6 +266,62 @@ export function identityInSkillDir(
     if (trace) return { class: trace, where: file };
   }
   return null;
+}
+
+/**
+ * The first secret in a skill directory: the pattern that matched and the file, never the value.
+ *
+ * The audit asks the same question at the door, where a secret refuses the skill. A personal
+ * copy never leaves this machine, so there it is a mark instead, kept for the moment the
+ * reviewer decides the skill should travel after all.
+ */
+export function secretInSkillDir(
+  sourceDir: string,
+  files: string[] = listSkillFiles(sourceDir).files,
+): { pattern: string; file: string } | null {
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(join(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const pattern = detectSecret(content);
+    if (pattern) return { pattern, file };
+  }
+  return null;
+}
+
+/**
+ * What the review screen says about a candidate's hygiene, one line per finding: the class and
+ * the file, never the value, since naming it would put it in the transcript of the very session
+ * deciding whether it may travel. Scanned rather than read from the meta, because a mark in the
+ * meta is the state of the candidate when it was written: one from before this screening existed
+ * carries none, and one the reviewer has since cleaned would keep a warning that is no longer true.
+ *
+ * The two lines promise different things on purpose. A trace is refused by every route that
+ * leaves this machine; a secret is refused only by the routes that audit the whole skill, so
+ * its line asks for the credential to come out rather than saying a refusal will catch it.
+ */
+export function hygieneLines(dir: string, slug: string): string[] {
+  const lines: string[] = [];
+  const trace = identityInSkillDir(dir, slug);
+  if (trace) {
+    lines.push(
+      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine ` +
+        `(${trace.class}) - approving this to a project or to the team is refused; keeping ` +
+        `it for yourself still works, or take the trace out first`,
+    );
+  }
+  const secret = secretInSkillDir(dir);
+  if (secret) {
+    lines.push(
+      `hygiene:   ${identityPlace(secret.file)} looks like it contains a secret ` +
+        `(${secret.pattern}) - keeping it for yourself still works; take the credential out ` +
+        `before it goes to a project or the team`,
+    );
+  }
+  return lines;
 }
 
 /** Where the trace sits, in a form both refusal messages can read - the place, never the value. */
@@ -497,6 +553,26 @@ export interface DecideResult {
   muted?: boolean;
 }
 
+/** What the reviewer is told after a rejection, which must not promise more than the mute does. */
+export function rejectionMessage(slug: string, result: DecideResult, never: boolean): string {
+  // A mined draft is written only when someone picks its workflow, and the list it was picked
+  // from reads no verdict: muting its fingerprint stops nothing, so it is not offered as if it did.
+  if (result.meta?.origin === "mine") {
+    return (
+      `Rejected "${slug}". It is not drafted again unless you ask: the workflow stays in the ` +
+      "/handbook:mine list, and a draft is only written when you pick it there."
+    );
+  }
+  if (never && result.muted) {
+    return `Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`;
+  }
+  if (never) return `Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`;
+  return (
+    `Rejected "${slug}". If the same learning recurs it may be suggested again; ` +
+    `use "reject ${slug} --never" to silence it permanently.`
+  );
+}
+
 export function decideCandidate(
   home: string,
   slug: string,
@@ -689,6 +765,15 @@ export function formatCandidateList(
       `  ${i + 1}. ${meta.slug}  ${kind}[${meta.scope}]  ${gate}  ·  ${relativeAge(meta.createdAt, now)}  ·  from ${originProject(meta)}`,
     );
     lines.push(`     ${meta.description}`);
+    // A mined draft is a different kind of thing from a harvested lesson and is read
+    // differently: it is a skeleton with a measured file map, and the part of the work
+    // git never saw is listed on it rather than filled in. Said on the list as well as on
+    // the detail screen, because the decision to open one is taken here.
+    if (meta.origin === "mine") lines.push(`     ${MINE_REVIEW_HEADING}`);
   });
   return lines.join("\n");
 }
+
+/** What a mined draft is, wherever the review shows one. */
+export const MINE_REVIEW_HEADING =
+  "draft from repository history: a skeleton and a measured file map; steps the history cannot show are listed, not guessed";

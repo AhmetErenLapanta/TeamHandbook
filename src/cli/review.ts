@@ -10,9 +10,10 @@ import {
   listCandidates,
   readArchiveManifest,
   formatUnreadableCandidates,
-  identityInSkillDir,
-  identityPlace,
+  hygieneLines,
+  MINE_REVIEW_HEADING,
   readCandidateMeta,
+  rejectionMessage,
   restoreArchived,
   unreadableCandidates,
 } from "../lib/queue.js";
@@ -52,21 +53,13 @@ function showCandidate(home: string, slug: string): void {
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
-  // Scanned here rather than read from the meta, and printed before the score: it changes
-  // what the verdict MEANS rather than how good the lesson is. Live, because the mark the
-  // harvest wrote is the state of the candidate when it was written - a candidate from
-  // before this screening existed carries no mark at all, and one whose trace the reviewer
-  // has since edited out would keep a warning that is no longer true. The class and the
-  // file, never the trace itself: naming it would put it in the transcript of the very
-  // session deciding whether it may travel.
-  const trace = identityInSkillDir(dir, slug);
-  if (trace) {
-    console.log(
-      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine ` +
-        `(${trace.class}) - approving this to a project or to the team is refused; keeping ` +
-        `it for yourself still works, or take the trace out first`,
-    );
-  }
+  // Said before the body is printed, because it changes how the body is read: a mined draft
+  // is a skeleton and a measured map, not a finished skill, and the steps git could not see
+  // are listed on it rather than filled in.
+  if (meta?.origin === "mine") console.log(`kind:      ${MINE_REVIEW_HEADING}`);
+  // Printed before the score: it changes what the verdict MEANS rather than how good the
+  // lesson is.
+  for (const line of hygieneLines(dir, slug)) console.log(line);
   if (gate) {
     const scores = Object.entries(gate.scores)
       .map(([k, v]) => `${k} ${v}`)
@@ -169,15 +162,7 @@ function rejectOne(home: string, slug: string, never: boolean): void {
     console.error(`error (${slug}): ${result.error}`);
     return;
   }
-  if (never && result.muted) {
-    console.log(`Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`);
-  } else if (never) {
-    console.log(`Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`);
-  } else {
-    console.log(
-      `Rejected "${slug}". If the same learning recurs it may be suggested again; use "reject ${slug} --never" to silence it permanently.`,
-    );
-  }
+  console.log(rejectionMessage(slug, result, never));
 }
 
 /**

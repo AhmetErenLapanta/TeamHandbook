@@ -3,9 +3,9 @@ import { readFileSync as readFileSync10 } from "node:fs";
 import { join as join13 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync4, readFileSync as readFileSync6, rmSync as rmSync5 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename3, join as join9 } from "node:path";
+import { basename as basename3, dirname as dirname4, join as join9, relative } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
@@ -646,6 +646,38 @@ function readCandidateMeta(dir) {
   }
   return synthesizeMeta(dir);
 }
+function auditSkillDir(sourceDir, host = hostIdentity()) {
+  const name = basename2(sourceDir);
+  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+  let skillMd;
+  try {
+    skillMd = readFileSync3(join5(sourceDir, "SKILL.md"), "utf8");
+  } catch {
+    return { shareable: false, reason: "no-skill-md" };
+  }
+  const summary = parseSkillFrontmatter(skillMd);
+  if (!summary) return { shareable: false, reason: "no-frontmatter" };
+  const { files, skipped } = listSkillFiles(sourceDir);
+  if (skipped.length > 0) {
+    return { shareable: false, reason: "irregular-entry", detail: skipped[0] };
+  }
+  if (files.length === 0) return { shareable: false, reason: "no-files" };
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join5(sourceDir, file), "utf8");
+    } catch {
+      return { shareable: false, reason: "unreadable", detail: file };
+    }
+    const pattern = detectSecret(content);
+    if (pattern) {
+      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    }
+  }
+  const trace = identityInSkillDir(sourceDir, name, files, host);
+  if (trace) return { shareable: false, reason: "identity", detail: trace.class, identity: trace };
+  return { shareable: true, skillMd, files, summary };
+}
 function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = listSkillFiles(sourceDir).files, host = hostIdentity()) {
   const inName = detectIdentity(name, host);
   if (inName) return { class: inName, where: "name" };
@@ -660,6 +692,35 @@ function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = list
     if (trace) return { class: trace, where: file };
   }
   return null;
+}
+function secretInSkillDir(sourceDir, files = listSkillFiles(sourceDir).files) {
+  for (const file of files) {
+    let content;
+    try {
+      content = readFileSync3(join5(sourceDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    const pattern = detectSecret(content);
+    if (pattern) return { pattern, file };
+  }
+  return null;
+}
+function hygieneLines(dir, slug) {
+  const lines = [];
+  const trace = identityInSkillDir(dir, slug);
+  if (trace) {
+    lines.push(
+      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine (${trace.class}) - approving this to a project or to the team is refused; keeping it for yourself still works, or take the trace out first`
+    );
+  }
+  const secret = secretInSkillDir(dir);
+  if (secret) {
+    lines.push(
+      `hygiene:   ${identityPlace(secret.file)} looks like it contains a secret (${secret.pattern}) - keeping it for yourself still works; take the credential out before it goes to a project or the team`
+    );
+  }
+  return lines;
 }
 function identityPlace(where) {
   return where === "name" ? "its name" : `its file "${where}"`;
@@ -793,6 +854,16 @@ function originProject(meta) {
   if (!meta.cwd) return "unknown project";
   return meta.cwd.split("/").filter(Boolean).pop() ?? meta.cwd;
 }
+function rejectionMessage(slug, result, never) {
+  if (result.meta?.origin === "mine") {
+    return `Rejected "${slug}". It is not drafted again unless you ask: the workflow stays in the /handbook:mine list, and a draft is only written when you pick it there.`;
+  }
+  if (never && result.muted) {
+    return `Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`;
+  }
+  if (never) return `Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`;
+  return `Rejected "${slug}". If the same learning recurs it may be suggested again; use "reject ${slug} --never" to silence it permanently.`;
+}
 function decideCandidate(home, slug, status, decidedAt = (/* @__PURE__ */ new Date()).toISOString(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
   const dir = join5(candidatesDir(home), slug);
@@ -901,9 +972,11 @@ function formatCandidateList(metas, now = Date.now(), label = "Pending") {
       `  ${i + 1}. ${meta.slug}  ${kind}[${meta.scope}]  ${gate}  \xB7  ${relativeAge(meta.createdAt, now)}  \xB7  from ${originProject(meta)}`
     );
     lines.push(`     ${meta.description}`);
+    if (meta.origin === "mine") lines.push(`     ${MINE_REVIEW_HEADING}`);
   });
   return lines.join("\n");
 }
+var MINE_REVIEW_HEADING = "draft from repository history: a skeleton and a measured file map; steps the history cannot show are listed, not guessed";
 
 // src/lib/score.ts
 var execFileAsync = promisify(execFile);
@@ -1791,7 +1864,8 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
   }
   const resolved = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
   const wording = options.commitMessage ?? {};
-  if (resolved !== "team" && (wording.message !== void 0 || wording.delegated !== void 0)) {
+  const commitsLocally = resolved === "project" && meta.origin === "mine";
+  if (resolved !== "team" && !commitsLocally && (wording.message !== void 0 || wording.delegated !== void 0)) {
     return {
       ok: false,
       meta,
@@ -1815,7 +1889,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
     return delivered;
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
-  return deliverSolo(dir, meta, fallbackCwd, decidedAt, options);
+  return deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commitsLocally ? git : void 0);
 }
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
@@ -1862,15 +1936,22 @@ function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir(), 
     return { ok: false, mode: "personal", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
   }
   const trace = traceInCandidate(dir, meta, options);
+  const secret = secretInSkillDir(dir);
   const updated = {
     ...meta,
     status: "approved",
     decidedAt,
     deliveredTo: placed.target,
     deliveredMode: "personal",
-    // Recorded, not refused: this copy stays on the machine the trace names. The record is
-    // what the reviewer sees if they later decide it should go to a project or the team.
-    ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}
+    // Recorded, not refused: this copy stays on the machine the trace names, and a secret in
+    // it is the reviewer's own. The record is what the reviewer sees if they later decide it
+    // should go to a project or the team.
+    ...trace || secret ? {
+      hygiene: {
+        ...trace ? { identity: trace.class, where: trace.where } : {},
+        ...secret ? { secret } : {}
+      }
+    } : {}
   };
   writeCandidateMeta(dir, updated);
   return {
@@ -1882,6 +1963,8 @@ function deliverPersonal(dir, meta, decidedAt, skillsDir = personalSkillsDir(), 
   };
 }
 function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
+  const refusal = auditRefusal(dir, options.as ?? meta.slug);
+  if (refusal) return { ok: false, mode: "team", meta, error: refusal };
   const published = publishCandidate(dir, meta, team, git, forge, options);
   if (!published.ok) {
     return {
@@ -1914,20 +1997,54 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
     ...published.learnedCommitPrefix !== void 0 ? { learnedCommitPrefix: published.learnedCommitPrefix } : {}
   };
 }
-function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
+function deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commit) {
   const originGone = !!meta.cwd && !existsSync4(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
   const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename3(installedProject) : void 0;
+  const named = options.as ?? meta.slug;
+  let subject;
+  if (commit) {
+    const proposal = projectCommitProposal(named);
+    const decided = decideCommitSubject(
+      options.commitMessage ?? {},
+      proposal,
+      "",
+      "approve it again",
+      NO_REQUEST_HERE
+    );
+    if ("error" in decided) {
+      return {
+        ok: false,
+        mode: "solo",
+        meta,
+        error: decided.error,
+        proposedMessage: proposal,
+        proposalHash: proposalFingerprint(proposal)
+      };
+    }
+    subject = decided.subject;
+  }
+  if (commit) {
+    const refusal = auditRefusal(dir, named);
+    if (refusal) return { ok: false, mode: "solo", meta, error: refusal };
+  }
   const trace = traceInCandidate(dir, meta, options);
   if (trace) {
-    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, options.as ?? meta.slug, trace) };
+    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, named, trace) };
   }
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "solo", meta, error: placed.error, ...placed.collision ? { collision: placed.collision } : {} };
+  }
+  if (commit && subject !== void 0) {
+    const failure = commitProjectSkill(commit, installedProject, placed.target, subject);
+    if (failure) {
+      uninstall(placed.target, skillsDir);
+      return { ok: false, mode: "solo", meta, error: failure };
+    }
   }
   const updated = {
     ...meta,
@@ -1943,9 +2060,42 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options) {
     meta: updated,
     deliveredTo: placed.target,
     ...namedAs(placed),
+    ...subject !== void 0 ? { commitMessage: subject } : {},
     ...warning ? { warning } : {},
     ...originProject2 ? { originProject: originProject2 } : {}
   };
+}
+function auditRefusal(dir, named) {
+  const audit = auditSkillDir(dir);
+  return audit.shareable ? null : skillRefusalMessage(displayPath(dir), named, audit);
+}
+var NO_REQUEST_HERE = "a project skill is committed into this repository itself, so there is no merge request to open";
+function projectCommitProposal(slug) {
+  return `add the ${slug} skill, drafted from this repository's history`;
+}
+function commitProjectSkill(git, repoDir, target, subject) {
+  const path = relative(repoDir, target);
+  try {
+    git(["add", "--", path], repoDir);
+    git(["commit", "--only", "-m", subject, "--", path], repoDir);
+  } catch (err) {
+    const reason = err.message;
+    if (/ignored by one of your .gitignore|Use -f if you really want/.test(reason)) {
+      return `${displayPath(target)} is ignored by this repository's .gitignore, so a project skill cannot be committed there. Nothing was written and the candidate is still waiting. Either allow the path and approve it again, or keep this one for yourself with \`--to personal\`, which installs without committing. Allowing it takes two lines, because git cannot re-include anything inside a directory that was excluded outright: replace the \`.claude\` rule with \`.claude/*\` and add \`!.claude/skills/\` under it.`;
+    }
+    return `the skill could not be committed to ${displayPath(target)}: ${reason}. Nothing was written and the candidate is still pending, so fix the repository and approve it again.`;
+  }
+  return null;
+}
+function uninstall(target, skillsDir) {
+  rmSync5(target, { recursive: true, force: true });
+  for (const dir of [skillsDir, dirname4(skillsDir)]) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      return;
+    }
+  }
 }
 function formatApproveResult(slug, result) {
   const name = result.deliveredSlug ?? slug;
@@ -1984,7 +2134,7 @@ function formatApproveResult(slug, result) {
   } else {
     if (result.warning) lines.push(`Note: ${result.warning}`);
     const loads = result.originProject ? `Claude will load it in ${result.originProject} (where it was captured) next session` : "Claude will load it next session";
-    const commit = result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
+    const commit = result.commitMessage ? `It is committed, so it already travels with the repo. The commit says: ${result.commitMessage}` : result.originProject ? "Commit it there so the skill travels with that repo." : "Commit this directory so the skill travels with the repo.";
     lines.push(`Approved "${name}" and installed it at ${landedAt}. ${loads}. ${commit}`);
   }
   if (result.updatedExisting) {
@@ -2331,12 +2481,8 @@ function showCandidate(home, slug) {
   const kind = meta?.kind ? `  [${meta.kind}]` : "";
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
-  const trace = identityInSkillDir(dir, slug);
-  if (trace) {
-    console.log(
-      `hygiene:   ${identityPlace(trace.where)} carries a trace of this machine (${trace.class}) - approving this to a project or to the team is refused; keeping it for yourself still works, or take the trace out first`
-    );
-  }
+  if (meta?.origin === "mine") console.log(`kind:      ${MINE_REVIEW_HEADING}`);
+  for (const line of hygieneLines(dir, slug)) console.log(line);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
     const dissent = gate.total < threshold ? `  - below the ${threshold}/10 bar` : "";
@@ -2411,15 +2557,7 @@ function rejectOne(home, slug, never) {
     console.error(`error (${slug}): ${result.error}`);
     return;
   }
-  if (never && result.muted) {
-    console.log(`Rejected "${slug}" and muted its fingerprint - this learning will not be suggested again.`);
-  } else if (never) {
-    console.log(`Rejected "${slug}", but it has no recorded fingerprint, so it could not be muted.`);
-  } else {
-    console.log(
-      `Rejected "${slug}". If the same learning recurs it may be suggested again; use "reject ${slug} --never" to silence it permanently.`
-    );
-  }
+  console.log(rejectionMessage(slug, result, never));
 }
 function listArchived(home) {
   console.log(formatCandidateList(listCandidates(home, "archived"), Date.now(), "Archived"));

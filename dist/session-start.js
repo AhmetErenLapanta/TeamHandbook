@@ -1049,6 +1049,10 @@ var defaultHarvestConfig = {
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
 };
+function lessonHarvestEnabled(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
@@ -1113,7 +1117,7 @@ function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
 
 // src/hooks/session-start.ts
 function salvageOrphans(currentSessionId) {
-  if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
+  if (!gateAutoEnabled() || !loadHarvestConfig().enabled || !lessonHarvestEnabled()) return;
   let enqueued = 0;
   for (const id of orphanedSessionIds()) {
     if (id === currentSessionId) continue;

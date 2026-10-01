@@ -1,6 +1,16 @@
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mineShapes, type MineOptions } from "../lib/mine.js";
+import { runMineCommand } from "../lib/mine-run.js";
+
+// Two programs behind one bundle, told apart by an exact first word.
+//
+// `list` and `draft` are the product: what /handbook:mine runs, and the only thing a user
+// ever sees. Anything else is the measurement harness below, which takes repository paths
+// positionally and prints JSON - an invocation that is written down in a measurement record
+// and has to keep reproducing those numbers. Routing on an exact word rather than on a
+// leading dash keeps both: a repository path is a path, and neither of these is one.
+const USER_COMMANDS = new Set(["list", "draft"]);
 
 const USAGE = `usage: node dist/mine.js <repo>... [options]
 
@@ -37,6 +47,18 @@ function number(value: string | undefined, name: string): number | undefined {
 }
 
 function main(): void {
+  if (USER_COMMANDS.has(process.argv[2] ?? "")) {
+    // Its own parse, its own usage, its own failures: nothing on this path may fall
+    // through to the harness text below, which is written in the miner's vocabulary.
+    runMineCommand(process.argv.slice(2)).then(
+      (code) => process.exit(code),
+      (err) => {
+        console.error(`error: ${(err as Error).message}`);
+        process.exit(1);
+      },
+    );
+    return;
+  }
   let parsed;
   try {
     parsed = parseArgs({

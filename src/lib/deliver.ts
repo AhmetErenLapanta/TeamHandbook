@@ -1,7 +1,13 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
-import { loadTeamConfig, runGit, saveTeamConfig } from "./init.js";
+import { basename, dirname, join, relative } from "node:path";
+import {
+  decideCommitSubject,
+  loadTeamConfig,
+  proposalFingerprint,
+  runGit,
+  saveTeamConfig,
+} from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
@@ -10,9 +16,11 @@ import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
 import {
+  auditSkillDir,
   identityInSkillDir,
   isSafeSlug,
   readCandidateMeta,
+  secretInSkillDir,
   skillRefusalMessage,
   writeCandidateMeta,
 } from "./queue.js";
@@ -150,7 +158,12 @@ export function approveAndDeliver(
   // was told nothing would believe it had. The check is on the RESOLVED target, so a
   // plain `approve` that the harvest suggests keeping personally is caught too.
   const wording = options.commitMessage ?? {};
-  if (resolved !== "team" && (wording.message !== undefined || wording.delegated !== undefined)) {
+  // A draft mined from a repository's history goes back into that repository, and a
+  // project skill is a tracked file there, so this one approval makes a commit without
+  // opening a merge request. It is the only project delivery with a wording to ask about;
+  // every other one still copies files and is told so below.
+  const commitsLocally = resolved === "project" && meta.origin === "mine";
+  if (resolved !== "team" && !commitsLocally && (wording.message !== undefined || wording.delegated !== undefined)) {
     return {
       ok: false,
       meta,
@@ -181,7 +194,7 @@ export function approveAndDeliver(
     return delivered;
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
-  return deliverSolo(dir, meta, fallbackCwd, decidedAt, options);
+  return deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commitsLocally ? git : undefined);
 }
 
 /**
@@ -291,15 +304,24 @@ export function deliverPersonal(
     return { ok: false, mode: "personal", meta, error: placed.error, ...(placed.collision ? { collision: placed.collision } : {}) };
   }
   const trace = traceInCandidate(dir, meta, options);
+  const secret = secretInSkillDir(dir);
   const updated: CandidateMeta = {
     ...meta,
     status: "approved",
     decidedAt,
     deliveredTo: placed.target,
     deliveredMode: "personal",
-    // Recorded, not refused: this copy stays on the machine the trace names. The record is
-    // what the reviewer sees if they later decide it should go to a project or the team.
-    ...(trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}),
+    // Recorded, not refused: this copy stays on the machine the trace names, and a secret in
+    // it is the reviewer's own. The record is what the reviewer sees if they later decide it
+    // should go to a project or the team.
+    ...(trace || secret
+      ? {
+          hygiene: {
+            ...(trace ? { identity: trace.class, where: trace.where } : {}),
+            ...(secret ? { secret } : {}),
+          },
+        }
+      : {}),
   };
   writeCandidateMeta(dir, updated);
   return {
@@ -320,6 +342,11 @@ function deliverToTeam(
   forge: ForgeRunner,
   options: DeliveryOptions,
 ): DeliverResult {
+  // A team skill reaches everyone who installs the plugin, and a candidate can be edited in the
+  // queue after the harvest or the miner screened it, so this door audits it exactly as the
+  // share door does - before a clone exists for a credential to be copied into.
+  const refusal = auditRefusal(dir, options.as ?? meta.slug);
+  if (refusal) return { ok: false, mode: "team", meta, error: refusal };
   const published = publishCandidate(dir, meta, team, git, forge, options);
   if (!published.ok) {
     return {
@@ -359,6 +386,7 @@ function deliverSolo(
   fallbackCwd: string,
   decidedAt: string,
   options: DeliveryOptions,
+  commit?: GitRunner,
 ): DeliverResult {
   // Surface a fall-back honestly: installing into the wrong project silently is
   // worse than a warning the reviewer can act on.
@@ -377,13 +405,57 @@ function deliverSolo(
   // Before anything is written: a project skill is committed with the repository, so this
   // copy travels to everyone who clones it - the same journey the team route makes, taken
   // through the reviewer's own commit instead of a merge request.
+  // The wording is decided before any screen runs and before anything is written, so a
+  // reviewer who has not been asked yet is asked while the candidate is still untouched.
+  const named = options.as ?? meta.slug;
+  let subject: string | undefined;
+  if (commit) {
+    const proposal = projectCommitProposal(named);
+    const decided = decideCommitSubject(
+      options.commitMessage ?? {},
+      proposal,
+      "",
+      "approve it again",
+      NO_REQUEST_HERE,
+    );
+    if ("error" in decided) {
+      return {
+        ok: false,
+        mode: "solo",
+        meta,
+        error: decided.error,
+        proposedMessage: proposal,
+        proposalHash: proposalFingerprint(proposal),
+      };
+    }
+    subject = decided.subject;
+  }
+  // A committed skill is read by everyone who clones the repository, which is the journey
+  // the share door screens for. The draft was screened when it was written, but a candidate
+  // can be edited in the queue after that, so the last word is here.
+  if (commit) {
+    const refusal = auditRefusal(dir, named);
+    if (refusal) return { ok: false, mode: "solo", meta, error: refusal };
+  }
   const trace = traceInCandidate(dir, meta, options);
   if (trace) {
-    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, options.as ?? meta.slug, trace) };
+    return { ok: false, mode: "solo", meta, error: identityRefusal(dir, named, trace) };
   }
   const placed = installLocally(dir, meta, skillsDir, options);
   if ("error" in placed) {
     return { ok: false, mode: "solo", meta, error: placed.error, ...(placed.collision ? { collision: placed.collision } : {}) };
+  }
+  if (commit && subject !== undefined) {
+    const failure = commitProjectSkill(commit, installedProject, placed.target, subject);
+    if (failure) {
+      // Nothing is left behind that the candidate no longer accounts for: the skill is
+      // only installed because it was about to be committed, and `approved` is terminal,
+      // so a candidate left pending has to be left with nothing written for it either.
+      // The empty directories go too, or the refusal's "nothing was installed" is a lie
+      // the next `ls` catches.
+      uninstall(placed.target, skillsDir);
+      return { ok: false, mode: "solo", meta, error: failure };
+    }
   }
   const updated: CandidateMeta = {
     ...meta,
@@ -399,9 +471,86 @@ function deliverSolo(
     meta: updated,
     deliveredTo: placed.target,
     ...namedAs(placed),
+    ...(subject !== undefined ? { commitMessage: subject } : {}),
     ...(warning ? { warning } : {}),
     ...(originProject ? { originProject } : {}),
   };
+}
+
+/**
+ * Why a candidate may not be handed to other people, or null when it may.
+ *
+ * The share door's own audit, so the doors that send a skill somewhere cannot drift apart.
+ * Every refusal refuses, not only the secret one: the audit stops at its first finding and the
+ * secret scan comes last, so a symlink or a broken frontmatter answers before a single file has
+ * been read - and a symlink the copy then skips is the silent pruning the share door exists to
+ * refuse. The message names the class and the file, never the value.
+ */
+function auditRefusal(dir: string, named: string): string | null {
+  const audit = auditSkillDir(dir);
+  return audit.shareable ? null : skillRefusalMessage(displayPath(dir), named, audit);
+}
+
+/** Why "you decide" is not an answer on this route: there is no merge request for it to
+ * be an answer about. The commit is made in the user's own repository and goes nowhere. */
+const NO_REQUEST_HERE =
+  "a project skill is committed into this repository itself, so there is no merge request to open";
+
+export function projectCommitProposal(slug: string): string {
+  return `add the ${slug} skill, drafted from this repository's history`;
+}
+
+/**
+ * Commit the installed skill, and nothing else that happens to be in the tree.
+ *
+ * Pathspec-scoped on both halves: `git commit` with no paths would sweep up whatever the
+ * user had already staged and put the product's message on it. The user's own work in
+ * progress is not part of this delivery and must still be theirs afterwards.
+ */
+function commitProjectSkill(git: GitRunner, repoDir: string, target: string, subject: string): string | null {
+  const path = relative(repoDir, target);
+  try {
+    git(["add", "--", path], repoDir);
+    git(["commit", "--only", "-m", subject, "--", path], repoDir);
+  } catch (err) {
+    const reason = (err as Error).message;
+    // A repository that ignores this directory is an ordinary repository, not a broken
+    // one, and `-f` is not the answer: the repository has said it does not want these
+    // files tracked, and a skill forced past that is a skill its own team deletes again.
+    // The reviewer is told what to change and keeps their candidate.
+    if (/ignored by one of your .gitignore|Use -f if you really want/.test(reason)) {
+      return (
+        `${displayPath(target)} is ignored by this repository's .gitignore, so a project skill cannot be ` +
+        "committed there. Nothing was written and the candidate is still waiting. Either allow the path " +
+        "and approve it again, or keep this one for yourself with `--to personal`, which installs " +
+        "without committing. Allowing it takes two lines, because git cannot re-include anything " +
+        "inside a directory that was excluded outright: replace the `.claude` rule with `.claude/*` " +
+        "and add `!.claude/skills/` under it."
+      );
+    }
+    return (
+      `the skill could not be committed to ${displayPath(target)}: ${reason}. ` +
+      "Nothing was written and the candidate is still pending, so fix the repository and approve it again."
+    );
+  }
+  return null;
+}
+
+/**
+ * Undo an install that was only made in order to be committed.
+ *
+ * The directories it created go with it, but only while they are empty: `.claude/skills`
+ * usually holds other skills, and a failed delivery must not take them.
+ */
+function uninstall(target: string, skillsDir: string): void {
+  rmSync(target, { recursive: true, force: true });
+  for (const dir of [skillsDir, dirname(skillsDir)]) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      return; // not empty, or not ours: stop climbing
+    }
+  }
 }
 
 /**
@@ -469,9 +618,13 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
       : "Claude will load it next session";
     // "this directory" is only the right repo to commit when the skill landed here; when
     // it landed in the project it was captured in, that is the repo the skill travels with.
-    const commit = result.originProject
-      ? "Commit it there so the skill travels with that repo."
-      : "Commit this directory so the skill travels with the repo.";
+    // A mined draft was committed by this very approval, so telling its reviewer to go and
+    // commit it sends them to look for a change that is already in their log.
+    const commit = result.commitMessage
+      ? `It is committed, so it already travels with the repo. The commit says: ${result.commitMessage}`
+      : result.originProject
+        ? "Commit it there so the skill travels with that repo."
+        : "Commit this directory so the skill travels with the repo.";
     lines.push(`Approved "${name}" and installed it at ${landedAt}. ${loads}. ${commit}`);
   }
   if (result.updatedExisting) {

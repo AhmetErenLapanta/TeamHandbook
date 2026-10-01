@@ -34,6 +34,9 @@ async function main(): Promise<number> {
   // not silently downgraded because the first attempt happened to fail.
   if (outcome.stage !== "error") finalizeExplicitLearnInvocation(sessionId);
   switch (outcome.stage) {
+    case "disabled":
+      console.log(outcome.message);
+      return 0;
     case "sieved":
       console.log(describeSieve(outcome.reason, outcome.detail));
       return 0;

@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
 import { enqueueHarvestJob, spawnPipelineRunner } from "../lib/pipeline.js";
 import { gateAutoEnabled } from "../lib/score.js";
-import { loadHarvestConfig } from "../lib/harvest.js";
+import { lessonHarvestEnabled, loadHarvestConfig } from "../lib/harvest.js";
 import { flushSessionEnd, ledgerFingerprintCounts, ledgerPairsForSession } from "../lib/signals.js";
 import { loadSessionState, sessionHasSubstance } from "../lib/session-state.js";
 
@@ -21,8 +21,10 @@ async function main(): Promise<void> {
   flushSessionEnd(input.session_id);
   if (!substance || alreadyHarvested) return; // trivial or already harvested - no claude call
   // gate.auto=false / harvest.enabled=false: capture stays local; nothing is sent
-  // to claude -p unless the user explicitly runs /handbook:learn
-  if (!gateAutoEnabled() || !loadHarvestConfig().enabled) return;
+  // to claude -p unless the user explicitly runs /handbook:learn. harvest.lessons is
+  // the newer switch and is off by default, so this hook ends here on a stock install -
+  // the evidence above has already been flushed, which is the part Phase 2 builds on.
+  if (!gateAutoEnabled() || !loadHarvestConfig().enabled || !lessonHarvestEnabled()) return;
   const pairs = ledgerPairsForSession(input.session_id);
   const counts = ledgerFingerprintCounts();
   const recurrence: Record<string, number> = {};
