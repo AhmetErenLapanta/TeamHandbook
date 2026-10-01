@@ -181,3 +181,67 @@ export function renamedTo(path: string): string {
   const arrow = path.indexOf(" => ");
   return arrow === -1 ? path : path.slice(arrow + 4);
 }
+
+/**
+ * Author names for a walk, keyed by commit.
+ *
+ * Deliberately a SEPARATE read rather than another field on `RawCommit`. A name added to that
+ * record would ride along into every unit, cluster and shape built from it, and the one guarantee
+ * the mining path makes is that no author identity survives into what is written down. Here the
+ * name has exactly one consumer - the screen that drops a piece of evidence mentioning a person -
+ * and it never enters a record that is serialized.
+ */
+export function readAuthorNames(repoPath: string, options: ReadCommitsOptions = {}): Map<string, string[]> {
+  const run = options.run ?? defaultRunner;
+  // BOTH spellings of the name. `%aN` is the one a .mailmap has rewritten and `%an` is the one
+  // the commit actually carries; where a mailmap maps an account to a full name the two differ,
+  // and a subject mentioning the account would be invisible to a screen that only knew the
+  // rewritten form. Screening is fail-closed, so it gets both.
+  const args = ["log", options.ref ?? "HEAD", `--format=%H${FIELD}%aN${FIELD}%an`];
+  if (options.since) args.push(`--since=${options.since}`);
+  const names = new Map<string, string[]>();
+  for (const line of run(args, repoPath).split("\n")) {
+    if (!line) continue;
+    const [sha, mapped, raw] = line.split(FIELD);
+    if (!sha) continue;
+    const both = [mapped, raw].filter((n): n is string => Boolean(n));
+    if (both.length) names.set(sha, [...new Set(both)]);
+  }
+  return names;
+}
+
+/**
+ * One commit's patch, limited to the paths asked for.
+ *
+ * `--unified=3` rather than git's default because a hunk is quoted to show what the step looks
+ * like, and a hunk with no surrounding lines reads as a diff rather than as code. Renames and
+ * binaries come back as headers with no body, which is what a reader should see for them anyway.
+ */
+export function readPatch(
+  repoPath: string,
+  sha: string,
+  paths: string[],
+  options: { run?: GitRunner } = {},
+): string {
+  if (paths.length === 0) return "";
+  const run = options.run ?? defaultRunner;
+  const args = [
+    "-c",
+    "core.quotePath=false",
+    "show",
+    sha,
+    "--format=",
+    "--unified=3",
+    "--no-color",
+    "--no-ext-diff",
+    "--",
+    ...paths,
+  ];
+  try {
+    return run(args, repoPath);
+  } catch {
+    // A path that no longer resolves in this commit is not a reason to lose the whole packet;
+    // the caller simply gets one hunk fewer.
+    return "";
+  }
+}

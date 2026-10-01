@@ -1,0 +1,1675 @@
+{
+ "denyTerms": [
+  "acmecorp"
+ ],
+ "denyUsers": [
+  "jdoe"
+ ],
+ "positives": [
+  {
+   "pattern": "TRIGGER_RE",
+   "text": "Use when a ticket adds a field",
+   "matches": true
+  },
+  {
+   "pattern": "TRIGGER_RE",
+   "text": "Triggers: \"alan ekle\"",
+   "matches": true
+  },
+  {
+   "pattern": "TRIGGER_RE",
+   "text": "Also when it is empty",
+   "matches": true
+  },
+  {
+   "pattern": "NUM_HEAD_RE",
+   "text": "Step 3: Add client",
+   "matches": true
+  },
+  {
+   "pattern": "NUM_ITEM_RE",
+   "text": "  4. Run the build",
+   "matches": true
+  },
+  {
+   "pattern": "LIST_ITEM_RE",
+   "text": "- [ ] Run tests",
+   "matches": true
+  },
+  {
+   "pattern": "TABLE_SEP_RE",
+   "text": "|---|:---:|",
+   "matches": true
+  },
+  {
+   "pattern": "TABLE_ROW_RE",
+   "text": "| a | b |",
+   "matches": true
+  },
+  {
+   "pattern": "FENCE_RE",
+   "text": "```bash",
+   "matches": true
+  },
+  {
+   "pattern": "HEAD_RE",
+   "text": "### Entity",
+   "matches": true
+  },
+  {
+   "pattern": "ABBREV_RE",
+   "text": "e.g. a chart",
+   "matches": true
+  },
+  {
+   "pattern": "VERIFY_HEAD_RE",
+   "text": "Verification",
+   "matches": true
+  },
+  {
+   "pattern": "COMMAND_RE",
+   "text": "run `./gradlew test`",
+   "matches": true
+  },
+  {
+   "pattern": "COMMAND_RE",
+   "text": "```bash",
+   "matches": true
+  },
+  {
+   "pattern": "PITFALL_HEAD_RE",
+   "text": "Common mistakes",
+   "matches": true
+  },
+  {
+   "pattern": "ABS_PATH_RE",
+   "text": "cat /home/x/a",
+   "matches": true
+  },
+  {
+   "pattern": "EMAIL_RE",
+   "text": "a.b@c.io",
+   "matches": true
+  },
+  {
+   "pattern": "XML_RE",
+   "text": "<b>",
+   "matches": true
+  },
+  {
+   "pattern": "NAME_RE",
+   "text": "add-endpoint",
+   "matches": true
+  }
+ ],
+ "excludedPositives": [
+  {
+   "pattern": "NUM_HEAD_RE",
+   "reason": "exercises a non-English phrase the port does not carry"
+  },
+  {
+   "pattern": "VERIFY_HEAD_RE",
+   "reason": "exercises a non-English phrase the port does not carry"
+  },
+  {
+   "pattern": "DELIVERY_HEAD_RE",
+   "reason": "exercises a non-English phrase the port does not carry"
+  },
+  {
+   "pattern": "PITFALL_HEAD_RE",
+   "reason": "exercises a non-English phrase the port does not carry"
+  }
+ ],
+ "homePrefixSubstituted": "platform-specific home prefix rewritten to the POSIX one before the verdict was taken",
+ "mustPass": [
+  {
+   "label": "minimal",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "h2-with-only-h3-content",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\n### Names\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "hash-comment-inside-fence",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n```bash\n# build first\nnpm test\n```\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  }
+ ],
+ "broken": [
+  {
+   "label": "frontmatter",
+   "text": "# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "description",
+    "frontmatter",
+    "name",
+    "trigger"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": false,
+     "required": true
+    },
+    "name": {
+     "ok": false,
+     "required": true
+    },
+    "description": {
+     "ok": false,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": false,
+     "required": true
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "name",
+   "text": "---\nname: Add_Widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "name"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": false,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "description",
+   "text": "---\nname: add-widget\ndescription: <b>Adds</b> a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "description"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": false,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "listing-cap",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nwhen_to_use: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "listing-cap"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": false,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "trigger-none",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "trigger"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": false,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "trigger-single",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "trigger"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": false,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "argument-hint",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: TICKET\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "argument-hint"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": false,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "steps-unnumbered",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## Read the ticket\nNote the widget name and where it shows.\n## Edit the files\nCreate `src/widgets/<name>.ts`.\nRegister it in `src/widgets/index.ts`.\nAdd a test.\n## Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "steps"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": false,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "steps-empty-heading",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "steps"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": false,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "steps-only-in-fence",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## Read the ticket\nNote the widget name and where it shows.\n## Edit the files\n```\n1. Create\n2. Register\n3. Add\n```\n## Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "steps"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": false,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "verification-missing",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Check in\nDone.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "verification"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": false,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "verification-thin",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "verification"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": false,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "pitfalls-missing",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n",
+   "expectedFailed": [
+    "pitfalls"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": false,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "pitfalls-header-only",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n",
+   "expectedFailed": [
+    "pitfalls"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": false,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "no-abs-path",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `/home/someone/bin/t`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "no-abs-path"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": false,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "no-email",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Ask dev@example.com.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "no-email"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": false,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "no-username",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Ask jdoe.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "no-username"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": false,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "no-org-term",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run the Acmecorp suite.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\n",
+   "expectedFailed": [
+    "no-org-term"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": false,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "body-length",
+   "text": "---\nname: add-widget\ndescription: Adds a widget end to end. Use when a ticket asks for a new widget, e.g. a chart. Also when a widget does not render.\nargument-hint: \"[TICKET]\"\n---\n# add-widget\n## 1. Read the ticket\nNote the widget name and where it shows.\n## 2. Edit the files\n1. Create `src/widgets/<name>.ts`.\n2. Register it in `src/widgets/index.ts`.\n3. Add a test.\n## 3. Verification\n- [ ] Run `npm test`.\n- [ ] Open the page and see the widget.\n## Common mistakes (observed)\n| Mistake | Evidence |\n|---|---|\n| Widget not registered | a past ticket |\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\n",
+   "expectedFailed": [
+    "body-length"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": true,
+     "required": true
+    },
+    "argument-hint": {
+     "ok": true,
+     "required": false
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": true,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": true,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": false,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "skeleton-empty",
+   "text": "---\nname: do-the-thing\ndescription: Does the thing. Use when the user asks for anything at all.\n---\n# do-the-thing\n## 1. Step one\n## 2. Step two\n## 3. Step three\n## Verification\n## Common mistakes\n",
+   "expectedFailed": [
+    "pitfalls",
+    "steps",
+    "trigger",
+    "verification"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": false,
+     "required": true
+    },
+    "steps": {
+     "ok": false,
+     "required": true
+    },
+    "verification": {
+     "ok": false,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": false,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  },
+  {
+   "label": "skeleton-trivial",
+   "text": "---\nname: do-the-thing\ndescription: Does the thing. Use when the user asks for anything at all.\n---\n# do-the-thing\n1. a\n2. b\n3. c\n## test\n## gotcha\n",
+   "expectedFailed": [
+    "pitfalls",
+    "trigger",
+    "verification"
+   ],
+   "rules": {
+    "frontmatter": {
+     "ok": true,
+     "required": true
+    },
+    "name": {
+     "ok": true,
+     "required": true
+    },
+    "description": {
+     "ok": true,
+     "required": true
+    },
+    "listing-cap": {
+     "ok": true,
+     "required": true
+    },
+    "trigger": {
+     "ok": false,
+     "required": true
+    },
+    "steps": {
+     "ok": true,
+     "required": true
+    },
+    "verification": {
+     "ok": false,
+     "required": true
+    },
+    "pitfalls": {
+     "ok": false,
+     "required": true
+    },
+    "no-abs-path": {
+     "ok": true,
+     "required": true
+    },
+    "no-email": {
+     "ok": true,
+     "required": true
+    },
+    "no-username": {
+     "ok": true,
+     "required": true
+    },
+    "no-org-term": {
+     "ok": true,
+     "required": true
+    },
+    "body-length": {
+     "ok": true,
+     "required": true
+    }
+   }
+  }
+ ]
+}

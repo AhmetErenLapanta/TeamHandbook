@@ -151,7 +151,7 @@ function isReformat(files: CommitFile[], o: Required<ClassifyOptions>): boolean 
  * vulnerabilities has CVE-2023, CVE-2024 and CVE-2025 in its subjects, and merging those three
  * into cross-repository work units would fabricate the largest "workflow" in the output.
  */
-const NOT_A_TICKET = new Set([
+export const NOT_A_TICKET = new Set([
   "UTF",
   "ISO",
   "CVE",
@@ -176,9 +176,9 @@ const NOT_A_TICKET = new Set([
   "SQL",
 ]);
 
-const KEY_CANDIDATE = /\b([A-Z]{2,})-(\d+)\b/g;
+export const KEY_CANDIDATE = /\b([A-Z]{2,})-(\d+)\b/g;
 // A squash merge writes its pull request as "(#6909)", so an opening parenthesis counts as a boundary.
-const ISSUE_NUMBER = /(?:^|[\s(])#(\d+)\b/;
+export const ISSUE_NUMBER = /(?:^|[\s(])#(\d+)\b/;
 const MERGE_BRANCH = /Merge branch '([^']+)'|Merge (?:remote-tracking )?branch "([^"]+)"|Merge pull request #\d+ from \S+/;
 const CONVENTIONAL = /^([a-z]+)(?:\(([^)]+)\))?!?:/;
 
@@ -758,7 +758,7 @@ const UMBRELLA_DAYS = 180;
 const UMBRELLA_COMMITS = 5;
 
 /** Refs to try, in order, when the caller did not name one. */
-const PREFERRED_REFS = ["origin/master", "origin/main", "master", "main", "HEAD"];
+export const PREFERRED_REFS = ["origin/master", "origin/main", "master", "main", "HEAD"];
 
 /**
  * Everything read out of history before any shape is formed. Split out so that a caller trying
@@ -1024,7 +1024,7 @@ function readRepository(repoPath: string, options: MineOptions): { commits: RawC
   }
 }
 
-interface KeyedCommit {
+export interface KeyedCommit {
   commit: RawCommit;
   key: string;
   cls: CommitClass;
@@ -1035,7 +1035,7 @@ interface KeyedCommit {
  * rest are reached through the merge that brought them in: git records a branch name only in the
  * merge subject, so the key travels backwards from the merge down its second parent.
  */
-function assignUnitKeys(
+export function assignUnitKeys(
   commits: RawCommit[],
   repo: string,
   prefixes: Set<string>,
