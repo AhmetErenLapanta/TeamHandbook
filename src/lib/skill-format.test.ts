@@ -420,7 +420,7 @@ describe("the exemptions the structural rules promise", () => {
     expect(stepCount(numbered)).toBe(stepCount(withoutTitle));
   });
 
-  it("given four steps, when counted, then the detail says four rather than counting them twice", () => {
+  it("given five steps, when counted, then the detail says five rather than counting them twice", () => {
     expect(stepCount(DRAFT)).toContain("steps=5");
   });
 
@@ -465,6 +465,25 @@ describe("the one section a draft may write without evidence", () => {
     expect(rules(text)).toEqual([]);
   });
 
+  it("given an instruction carrying an uncertainty word, when checked, then naming a file still rejects it", () => {
+    // The marker words match anywhere in the line, so an instruction can wear one: the item below
+    // reads as a step and names the file to copy from, which is the fabrication shape this
+    // section was added to absorb rather than to host.
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "- Copy the rate class from the neighbouring entry in `endpoints/widget_endpoints.json` if it is unclear.",
+    );
+    expect(rules(text)).toContain("not-visible-open");
+  });
+
+  it("given an open note naming a KIND of file, when checked, then a bare extension is not an instruction", () => {
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "- Whether a compiled `.mo` artefact belongs in the same change is not recorded.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
   it("given an instruction smuggled into that section, when checked, then it is rejected", () => {
     const text = DRAFT.replace(
       "- Whether the gateway needs a new rate class is recorded in no commit.",
@@ -479,5 +498,26 @@ describe("the one section a draft may write without evidence", () => {
       "",
     );
     expect(rules(text)).not.toContain("not-visible-open");
+  });
+});
+
+describe("a fixed section that carries a number anyway", () => {
+  const citable = { map: 3, fix: 1, hunk: 0, subject: 0 };
+  const ext = { ...options, extended: true, expects: { fileMap: true, multiRepo: true, citable } };
+  const rules = (text: string): string[] => failedRules(checkSkillFormat(text, ext));
+
+  it("given numbered checks and delivery headings, when they name a file, then the map is not charged", () => {
+    // Every draft written before the template dropped those numbers writes them this way, so the
+    // number alone cannot decide what a layer is: a numbered heading is exempt when its title IS
+    // the section's name, and a layer merely starting with the same word is not.
+    const text = DRAFT.replace("## Verification", "## 4. Verification")
+      .replace("## Delivery", "## 5. Delivery")
+      .replace("- [ ] `./gradlew test` exits 0.", "- [ ] `./gradlew test` exits 0, see `build/reports/tests.html`.");
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given a numbered file map heading with its count, when checked, then it is still the map", () => {
+    const text = DRAFT.replace("## File map (9 past changes)", "## 6. File map (9 past changes)");
+    expect(rules(text)).toEqual([]);
   });
 });

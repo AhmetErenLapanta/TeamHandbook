@@ -334,21 +334,42 @@ const MAP_HEAD_RE = /file map|files? touched/i;
  * The NUMBER guard: the exempt patterns are broad on purpose - the checks section is found by
  * `verif|validat|checklist|test` - so a real layer section called `## 2. Test the gateway` would
  * match one and escape both rules entirely. That trades a rule that asks too much for a rule that
- * asks nothing, which is the worse of the two. The template numbers layer sections and leaves the
- * fixed ones unnumbered, so a numbered heading is a layer whatever words it uses. Numbering inside
- * an exempt section is untouched: the heading decides, not its items.
+ * asks nothing, which is the worse of the two.
+ *
+ * A number alone cannot decide it, though. The template leaves the fixed sections unnumbered, but
+ * every draft recorded before that template did number them, and reading `## 4. Verification` as a
+ * layer brings back exactly the over-reach the level guard just removed. So a NUMBERED heading is
+ * exempt only when its title, with the number and any trailing parenthetical taken off, IS one of
+ * the fixed section names rather than merely containing one: `4. Verification` is the checks
+ * section, `2. Test the gateway` is a layer that happens to start with the word. An unnumbered
+ * heading still matches loosely, because that is the form the template asks for and the looser
+ * test costs nothing there.
  */
 function isProcedureSection(section: Section): boolean {
   if (section.level < 2) return false;
-  if (NUM_HEAD_RE.test(section.title)) return true;
-  return !(
+  const loose =
     MAP_HEAD_RE.test(section.title) ||
     VERIFY_HEAD_RE.test(section.title) ||
     DELIVERY_HEAD_RE.test(section.title) ||
     PITFALL_HEAD_RE.test(section.title) ||
-    NOT_VISIBLE_HEAD_RE.test(section.title)
-  );
+    NOT_VISIBLE_HEAD_RE.test(section.title);
+  if (!loose) return true;
+  if (!NUM_HEAD_RE.test(section.title)) return false;
+  return !EXEMPT_EXACT_RE.test(bareTitle(section.title));
 }
+
+/** A heading without its number and without a trailing parenthetical count. */
+function bareTitle(title: string): string {
+  return title
+    .replace(new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}]+)?\\p{Nd}+[.)]?[${SPACE}]*`, "iu"), "")
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .trim();
+}
+
+/** The fixed sections by name, for a heading that carries a number and so has to earn its exemption. */
+const EXEMPT_EXACT_RE = ci(
+  "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$",
+);
 
 /** A table's DATA rows: everything after the separator, header excluded. */
 function dataRows(body: Line[]): string[] {
@@ -633,7 +654,13 @@ function addMechanicalFindings(
   const openItems = notVisible
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);
-  const asserted = openItems.filter((item) => !OPEN_QUESTION_RE.test(item));
+  // A question is always allowed. Otherwise an item naming a FILE is an instruction however it is
+  // worded: the marker words match anywhere in the line, so "Copy the default from `x.json` if it
+  // is unclear" carried a marker and read as a step - the exact shape of the fabrication this
+  // section was added to absorb, in the one section no citation is required.
+  const asserted = openItems.filter(
+    (item) => !/\?/.test(item) && (namesAFile(item) || !OPEN_QUESTION_RE.test(item)),
+  );
   add(
     "not-visible-open",
     asserted.length === 0,
@@ -667,6 +694,23 @@ function addMechanicalFindings(
     numberedSteps.length > 0 && uncited.length === 0 && dangling.length === 0,
     `steps=${numberedSteps.length} uncited=${uncited.length} dangling=${JSON.stringify([...new Set(dangling)].slice(0, 3))} available=${JSON.stringify(counts)}`,
   );
+}
+
+/**
+ * Whether a line quotes something shaped like a file path at all.
+ *
+ * A bare extension is not one: an open note saying a compiled `.mo` file is not recorded names a
+ * KIND of file, not a file, and reading it as an instruction rejected a section that was doing
+ * exactly what it is for.
+ */
+function namesAFile(line: string): boolean {
+  for (const [, code] of line.matchAll(/`([^`\n]+)`/g)) {
+    const text = code!.trim();
+    if (/\s/.test(text)) continue;
+    if (text.includes("/")) return true;
+    if (/^[A-Za-z0-9_]/.test(text) && extensionOf(text) !== null) return true;
+  }
+  return false;
 }
 
 /**
