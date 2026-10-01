@@ -120,6 +120,26 @@ room to improve lives entirely in the hard half.
   every run gets a fresh home and is therefore a first session. Held-out cases must not
   target those two commands.
 
+## The headline's band
+
+Three unchanged runs of the held-out half at `ebdce06` returned 0.8133, 0.8400 and
+0.7867. Mean 0.8133, empirical two standard deviations 0.0533, so a later measurement is
+read against the band [0.7600 ; 0.8667]: inside it, a change did not move routing that this
+package can see; outside it, something did.
+
+| measured at | what changed | runs | mean | against the band |
+|---|---|---|---:|---|
+| `ebdce06` | the three runs above | 0.8133, 0.8400, 0.7867 | 0.8133 | |
+| `b2694c9` | `/handbook:mine` joins the commands a sentence can route to | 0.8000, 0.7467, 0.7467 | 0.7645 | inside, near the floor |
+
+The first `b2694c9` run was taken on an earlier tree whose command descriptions were
+identical to these; only the body of the new command's instructions differed, and a
+sentence is routed on the description alone. One run sat inside the band and two just
+below its floor, which is why the package is read on its mean of three. In the third run
+every miss was traced: none reached `/handbook:mine`, so the drop is not the new command
+taking other commands' sentences. The control scored 1.0000 on `b2694c9`, its three cases
+for the new command included.
+
 ## Giving a sentence something to point at
 
 A run starts in an empty directory with no history. A sentence like "share this" or "the
