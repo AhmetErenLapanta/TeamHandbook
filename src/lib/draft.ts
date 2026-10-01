@@ -1252,7 +1252,8 @@ const INSTRUCTIONS = [
   "  you cannot cite is a step you may not write.",
   "- Do not invent. If something you believe belongs to this workflow is not in the evidence, it",
   "  goes under '## Not visible in history' as an open question, in the words of a question. Never",
-  "  write a guess in the language of a measurement.",
+  "  write a guess in the language of a measurement. Every item there ends in a question mark or",
+  "  says outright that the history does not record it; an instruction there will be rejected.",
   "- Every verification item must carry a command in backticks or a result someone can observe.",
   "  These two pass:",
   "    `./gradlew test` exits 0.",
@@ -1299,6 +1300,8 @@ const REMEDIES: Record<string, string> = {
   "verification-concrete":
     "Every verification item needs a command in backticks or an observable result, not 'run the tests'.",
   "unique-sections": "Two sections carry the same number; number them in sequence.",
+  "not-visible-open":
+    "Every item under 'Not visible in history' must be an open question, or say plainly that the history does not record it. Do not write a step there.",
   "file-map-pattern": "The first column of the file map must hold a file pattern, not a sentence.",
   "step-map-consistency": "A step names a file the file map has no row for; add the row or drop the step.",
   "step-evidence":

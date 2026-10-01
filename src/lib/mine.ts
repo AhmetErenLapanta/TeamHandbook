@@ -68,6 +68,17 @@ const RELEASE_SUBJECT = /^\s*(?:(?:bump(?:ed|s)?|release[ds]?|prepare release|ve
 const CONFLICT_SUBJECT = /\b(resolve[sd]? (merge )?conflicts?|merge (branch|remote)|conflict)\b/i;
 // The non-English words in these two patterns are data, not product text: subjects are written in
 // whatever language the team speaks, and these came from a measured history that mixed two.
+/**
+ * KNOWN LIMIT: anchored at the start of the subject, so a revert reaches this test only when the
+ * word is the first thing written. A history whose subjects open with a ticket key - which is the
+ * common convention - puts that key first, and the revert is then classed as ordinary work and
+ * mined like any other commit. Measured on one large history: reverts were present throughout the
+ * evidence packets this filter is supposed to keep them out of.
+ *
+ * Left as it is deliberately. Widening it would move `excludedCommits`, and with it the shape
+ * ranking every calibrated default in this file was measured against, so it is a decision to take
+ * with that re-measurement rather than a line to change in passing.
+ */
 const REVERT_SUBJECT = /^\s*(revert|geri al)\b|\bthis reverts commit\b/i;
 /** Words that mean the commit adds something even when it also mentions formatting. */
 const ADDITIVE_SUBJECT = /\b(add|feat|new|endpoint|field|alan|ekle)\b/i;

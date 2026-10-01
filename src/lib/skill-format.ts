@@ -301,16 +301,52 @@ const HEAD_NUMBER_RE = new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}
  */
 const CITATION_RE = /\[(map|fix|hunk|subject)[ \t]+(\d+)(?:[ \t]*\/[ \t]*\d+)?\]/g;
 const NOT_VISIBLE_HEAD_RE = ci("not visible in history|not visible in the history");
+/**
+ * What an item in that section is allowed to be: a question, or a statement that says outright
+ * that the history does not record the thing. Anything else is a step wearing the section as a
+ * disguise, which is the one place a draft can still assert something it cannot cite.
+ *
+ * A question mark ANYWHERE in the item, not only at its end. Measured on fifteen drafts: the form
+ * the model actually writes is a question followed by the observation that raised it - "What is
+ * the merge order? Only a sixth of the jobs followed one" - and demanding the mark at the end
+ * rejected nine of the ten drafts that have the section, every one of them for an item that opens
+ * with exactly the question the rule wants.
+ */
+const OPEN_QUESTION_RE = ci(
+  "\\?|not (recorded|measured|visible|captured|in the evidence|known)|no commit|nothing (in the )?(history|evidence)|does not (say|record|show)|unknown|unclear|is not stated",
+);
 const MAP_HEAD_RE = /file map|files? touched/i;
 
-/** The sections a numbered STEP can live in: not the map, the checks, the delivery or the table. */
-function isProcedureSection(title: string): boolean {
+/**
+ * The sections a numbered STEP can live in: not the map, the checks, the delivery or the table.
+ *
+ * Two guards, and each one covers a hole the other opens.
+ *
+ * The LEVEL guard: a section's body runs to the next heading of the same or a higher level, so the
+ * document's single top-level title contains every other section. Judged by its own words that
+ * title matches no exempt pattern, so it counted as a procedure section and every exempt section's
+ * content was read a second time through it - the exemptions existed in the code and not in the
+ * product. Measured on a draft that was otherwise clean: checks written as a numbered list were
+ * asked for citations, a file named in a check or in the delivery note was charged against the
+ * file map, and the step count came out at ten for four steps. Deleting the title alone made all
+ * three clean, which is what identifies the container rather than the patterns as the fault.
+ *
+ * The NUMBER guard: the exempt patterns are broad on purpose - the checks section is found by
+ * `verif|validat|checklist|test` - so a real layer section called `## 2. Test the gateway` would
+ * match one and escape both rules entirely. That trades a rule that asks too much for a rule that
+ * asks nothing, which is the worse of the two. The template numbers layer sections and leaves the
+ * fixed ones unnumbered, so a numbered heading is a layer whatever words it uses. Numbering inside
+ * an exempt section is untouched: the heading decides, not its items.
+ */
+function isProcedureSection(section: Section): boolean {
+  if (section.level < 2) return false;
+  if (NUM_HEAD_RE.test(section.title)) return true;
   return !(
-    MAP_HEAD_RE.test(title) ||
-    VERIFY_HEAD_RE.test(title) ||
-    DELIVERY_HEAD_RE.test(title) ||
-    PITFALL_HEAD_RE.test(title) ||
-    NOT_VISIBLE_HEAD_RE.test(title)
+    MAP_HEAD_RE.test(section.title) ||
+    VERIFY_HEAD_RE.test(section.title) ||
+    DELIVERY_HEAD_RE.test(section.title) ||
+    PITFALL_HEAD_RE.test(section.title) ||
+    NOT_VISIBLE_HEAD_RE.test(section.title)
   );
 }
 
@@ -569,7 +605,7 @@ function addMechanicalFindings(
   // two halves disagree about what this workflow touches, and the half the reader trusts to be
   // complete is the map.
   const stepLines = secs
-    .filter((s) => isProcedureSection(s.title))
+    .filter(isProcedureSection)
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);
   const matchers = mapCells.map((cell) => [patternMatcher(cell), baseMatcher(cell)] as const);
@@ -589,6 +625,21 @@ function addMechanicalFindings(
     `files named in steps=${named.length} missing from the map=${unmapped.length} ${JSON.stringify(unmapped.slice(0, 3))}`,
   );
 
+  // The one section a draft may write without evidence has to SOUND like it: the prompt asks for an
+  // open question and nothing enforced that, so the section was free to hold an ordinary step
+  // phrased as a fact - exactly the move the citation rule exists to stop, in the one place the
+  // citation rule does not reach.
+  const notVisible = secs.filter((s) => s.level >= 2 && NOT_VISIBLE_HEAD_RE.test(s.title));
+  const openItems = notVisible
+    .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
+    .map((line) => (line as { text: string }).text);
+  const asserted = openItems.filter((item) => !OPEN_QUESTION_RE.test(item));
+  add(
+    "not-visible-open",
+    asserted.length === 0,
+    `not-visible items=${openItems.length} written as a claim=${asserted.length} ${JSON.stringify(asserted.slice(0, 2))}`,
+  );
+
   // Off unless the caller says what there was to cite: a hand-written skill has no evidence packet
   // behind it, and asking it for citations would be asking it to invent them.
   const citable = expects.citable;
@@ -600,7 +651,7 @@ function addMechanicalFindings(
     subject: citable.subject ?? 0,
   };
   const numberedSteps = secs
-    .filter((s) => isProcedureSection(s.title))
+    .filter(isProcedureSection)
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && NUM_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);
   const uncited = numberedSteps.filter((step) => [...step.matchAll(CITATION_RE)].length === 0);

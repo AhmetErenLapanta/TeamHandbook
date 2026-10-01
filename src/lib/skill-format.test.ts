@@ -263,21 +263,24 @@ Two repositories, and the gateway copy is the one people forget.
 1. Register the path in \`endpoints/widget_endpoints.json\`. [map 3]
 2. Keep the method the same on both sides. [fix 1]
 
+## 3. Both sides
+1. Compare the two paths before opening the request. [map 3]
+
 ## Not visible in history
 - Whether the gateway needs a new rate class is recorded in no commit.
 
-## 3. File map (9 past changes)
+## File map (9 past changes)
 | File (pattern) | Touched in | Note |
 |---|---|---|
 | \`controller/*Controller.kt\` | 9/9 | the handler |
 | \`dto/*Request.kt\` | 8/9 | the input shape |
 | \`endpoints/*_endpoints.json\` | 7/9 | the gateway route |
 
-## 4. Verification
+## Verification
 - [ ] \`./gradlew test\` exits 0.
 - [ ] The route returns 200 through the gateway.
 
-## 5. Delivery
+## Delivery
 - The service merges first, then the gateway.
 
 ## Common mistakes (observed)
@@ -295,7 +298,7 @@ describe("the rules that read a draft as a structure", () => {
   });
 
   it("given two sections numbered the same, when checked, then the section rule fails", () => {
-    const text = DRAFT.replace("## 3. File map", "## 2. File map");
+    const text = DRAFT.replace("## 2. Gateway", "## 1. Gateway");
     expect(failedRules(checkSkillFormat(text, ext))).toContain("unique-sections");
   });
 
@@ -360,5 +363,121 @@ describe("the rules that read a draft as a structure", () => {
   it("given the empty template, when checked with the structural rules on, then it is still rejected", () => {
     const skeleton = dump.broken.find((b) => b.label === "skeleton-empty")!.text;
     expect(formatPasses(checkSkillFormat(skeleton, ext))).toBe(false);
+  });
+});
+
+describe("the exemptions the structural rules promise", () => {
+  const citable = { map: 3, fix: 1, hunk: 0, subject: 0 };
+  const ext = { ...options, extended: true, expects: { fileMap: true, multiRepo: true, citable } };
+  const rules = (text: string): string[] => failedRules(checkSkillFormat(text, ext));
+  const stepCount = (text: string): string =>
+    checkSkillFormat(text, ext).find((f) => f.rule === "step-evidence")!.detail;
+
+  it("given checks written as a numbered list, when checked, then they are not steps and need no citation", () => {
+    const text = DRAFT.replace(
+      "- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.",
+      "1. `./gradlew test` exits 0.\n2. The route returns 200 through the gateway.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given a file named only in the checks, when checked, then the map is not charged for it", () => {
+    const text = DRAFT.replace(
+      "- [ ] `./gradlew test` exits 0.",
+      "- [ ] `./gradlew test` exits 0.\n- [ ] The report at `build/reports/tests.html` lists the new case.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given a file named only in the delivery note, when checked, then the map is not charged for it", () => {
+    const text = DRAFT.replace(
+      "- The service merges first, then the gateway.",
+      "- The service merges first, then the gateway, tagged in `gateway/version.txt`.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given numbered items under the not-visible heading, when checked, then they are not steps", () => {
+    // Pins the not-visible branch of the exemption. Written NUMBERED on purpose: the bullet form
+    // this section normally uses is already excluded by what counts as a step, so a bullet test
+    // stays green with the branch deleted and proves nothing.
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "1. Whether the gateway needs a new rate class is recorded in no commit.\n2. Whether a second gateway copy exists is recorded in no commit.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given the same draft with its top-level title removed, when checked, then the verdict does not change", () => {
+    // The title contains every other section, so reading it as a step section was what made the
+    // exemptions unreachable. Agreement between the two forms is what says the container is gone.
+    const numbered = DRAFT.replace(
+      "- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.",
+      "1. `./gradlew test` exits 0.\n2. The route returns 200 through the gateway.",
+    );
+    const withoutTitle = numbered.replace("# add-widget-route - a new widget route\n", "");
+    expect(rules(numbered)).toEqual(rules(withoutTitle));
+    expect(stepCount(numbered)).toBe(stepCount(withoutTitle));
+  });
+
+  it("given four steps, when counted, then the detail says four rather than counting them twice", () => {
+    expect(stepCount(DRAFT)).toContain("steps=5");
+  });
+
+  it("given a numbered layer whose title happens to match an exempt pattern, when checked, then it is still a step section", () => {
+    // The exempt patterns are broad - the checks pattern matches a bare "test" - so a real layer
+    // called "Test the gateway" would escape both rules if the heading words alone decided. The
+    // template numbers layers and leaves the fixed sections unnumbered, so the number decides.
+    const text = DRAFT.replace("## 2. Gateway", "## 2. Test the gateway").replace(
+      "1. Register the path in `endpoints/widget_endpoints.json`. [map 3]",
+      "1. Register the path in `endpoints/widget_endpoints.json`.",
+    );
+    expect(rules(text)).toContain("step-evidence");
+  });
+
+  it("given a numbered layer matching an exempt pattern, when it names an unmapped file, then the map rule still fires", () => {
+    const text = DRAFT.replace("## 2. Gateway", "## 4. Finish the rollout").replace(
+      "2. Keep the method the same on both sides. [fix 1]",
+      "2. Tag the release in `gateway/version.txt`. [fix 1]",
+    );
+    expect(rules(text)).toContain("step-map-consistency");
+  });
+});
+
+describe("the one section a draft may write without evidence", () => {
+  const citable = { map: 3, fix: 1, hunk: 0, subject: 0 };
+  const ext = { ...options, extended: true, expects: { fileMap: true, multiRepo: true, citable } };
+  const rules = (text: string): string[] => failedRules(checkSkillFormat(text, ext));
+
+  it("given an open question there, when checked, then it is accepted", () => {
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "- Which environments need a new rate class? The history does not show one being opened.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given a plain statement that the history is silent, when checked, then it is accepted", () => {
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "- The owner of the gateway configuration is not recorded in any commit.",
+    );
+    expect(rules(text)).toEqual([]);
+  });
+
+  it("given an instruction smuggled into that section, when checked, then it is rejected", () => {
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "- Copy the rate class from the neighbouring entry in `endpoints/widget_endpoints.json`.",
+    );
+    expect(rules(text)).toContain("not-visible-open");
+  });
+
+  it("given a draft with no such section at all, when checked, then the rule asks for nothing", () => {
+    const text = DRAFT.replace(
+      "## Not visible in history\n- Whether the gateway needs a new rate class is recorded in no commit.\n\n",
+      "",
+    );
+    expect(rules(text)).not.toContain("not-visible-open");
   });
 });

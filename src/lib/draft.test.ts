@@ -1188,3 +1188,36 @@ describe("which member of a workflow family gets the draft", () => {
     expect(families[0]!.variants.map((s) => s.id)).toEqual(["narrow-but-top-ranked"]);
   });
 });
+
+describe("what a retry is told", () => {
+  it("given every rule the gate can report, when a retry is built, then each one names its own remedy", () => {
+    // A rule with no entry falls back to "does not meet the template", which sends the model
+    // looking in the wrong place: the retry is the only thing it is told, and a rule added
+    // without a remedy is a rule the model cannot act on.
+    const empty: EvidencePacket = {
+      version: 1,
+      shapeId: "x",
+      view: "repo",
+      units: 1,
+      fileMap: [],
+      delivery: { order: null, agreement: 0, units: 0 },
+      subjects: [],
+      hunks: [],
+      fixes: [],
+      siblings: [],
+      rubric: { support: 1, supportScore: 1, coreFiles: 0, roles: 0, repos: 1, testShare: 0, authors: 1, coreRepos: 1 },
+      authors: 1,
+      missingUnits: 0,
+      fileMapDropped: 0,
+      dropped: { subjects: 0, hunks: 0, siblings: 0, fileMap: 0, delivery: 0, reasons: {} },
+    };
+    const everyRule = checkSkillFormat("", {
+      extended: true,
+      expects: { fileMap: true, multiRepo: true, citable: { map: 1, fix: 1, hunk: 1, subject: 1 } },
+    }).map((finding) => finding.rule);
+    expect(everyRule.length).toBeGreaterThan(15);
+    const prompt = buildDraftPrompt(empty, everyRule, HOST);
+    const withoutRemedy = everyRule.filter((rule) => prompt.includes(`- ${rule}: does not meet the template.`));
+    expect(withoutRemedy).toEqual([]);
+  });
+});
