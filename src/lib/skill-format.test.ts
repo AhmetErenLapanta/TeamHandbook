@@ -237,3 +237,128 @@ describe("keeping the wider Unicode meanings the source engine has", () => {
     expect([...fields!["name"]!].length).toBe(3);
   });
 });
+
+/**
+ * A draft shaped the way a mined workflow is supposed to come out: its own fixture rather than a
+ * mutation of the hand-written ones, which belong to the equivalence table and are not drafts.
+ */
+const DRAFT = `---
+name: add-widget-route
+description: >-
+  Adds a widget route across the service and the gateway. Use when a ticket asks for a new widget
+  endpoint. Also when a route answers through the service but not through the gateway.
+---
+# add-widget-route - a new widget route
+
+Two repositories, and the gateway copy is the one people forget.
+
+## 0. Reading the ticket
+- Which widget the route is for.
+
+## 1. Service
+1. Add the handler in \`controller/WidgetController.kt\`. [map 1]
+2. Add the request shape in \`dto/WidgetRequest.kt\`. [map 2]
+
+## 2. Gateway
+1. Register the path in \`endpoints/widget_endpoints.json\`. [map 3]
+2. Keep the method the same on both sides. [fix 1]
+
+## Not visible in history
+- Whether the gateway needs a new rate class is recorded in no commit.
+
+## 3. File map (9 past changes)
+| File (pattern) | Touched in | Note |
+|---|---|---|
+| \`controller/*Controller.kt\` | 9/9 | the handler |
+| \`dto/*Request.kt\` | 8/9 | the input shape |
+| \`endpoints/*_endpoints.json\` | 7/9 | the gateway route |
+
+## 4. Verification
+- [ ] \`./gradlew test\` exits 0.
+- [ ] The route returns 200 through the gateway.
+
+## 5. Delivery
+- The service merges first, then the gateway.
+
+## Common mistakes (observed)
+| Mistake | Evidence | Do instead |
+|---|---|---|
+| method differs between the two sides | #1 | compare both files |
+`;
+
+describe("the rules that read a draft as a structure", () => {
+  const citable = { map: 3, fix: 1, hunk: 0, subject: 0 };
+  const ext = { ...options, extended: true, expects: { fileMap: true, multiRepo: true, citable } };
+
+  it("given a draft that meets the template, when checked, then nothing fails", () => {
+    expect(failedRules(checkSkillFormat(DRAFT, ext))).toEqual([]);
+  });
+
+  it("given two sections numbered the same, when checked, then the section rule fails", () => {
+    const text = DRAFT.replace("## 3. File map", "## 2. File map");
+    expect(failedRules(checkSkillFormat(text, ext))).toContain("unique-sections");
+  });
+
+  it("given a map whose first column is a sentence, when checked, then the pattern rule fails", () => {
+    const text = DRAFT.replace("| \`dto/*Request.kt\` | 8/9 |", "| the request shape the BFF sends | 8/9 |");
+    expect(failedRules(checkSkillFormat(text, ext))).toContain("file-map-pattern");
+  });
+
+  it("given a step naming a file the map has no row for, when checked, then the consistency rule fails", () => {
+    const text = DRAFT.replace(
+      "2. Keep the method the same on both sides. [fix 1]",
+      "2. Add the changelog entry in \`db/schema.changelog.xml\`. [fix 1]",
+    );
+    expect(failedRules(checkSkillFormat(text, ext))).toContain("step-map-consistency");
+  });
+
+  it("given a step naming a file the map covers by pattern, when checked, then the row counts", () => {
+    const text = DRAFT.replace(
+      "1. Add the handler in \`controller/WidgetController.kt\`. [map 1]",
+      "1. Add the handler in \`service/controller/OtherController.kt\`. [map 1]",
+    );
+    expect(failedRules(checkSkillFormat(text, ext))).not.toContain("step-map-consistency");
+  });
+
+  it("given a step with no citation, when checked, then the evidence rule fails", () => {
+    const text = DRAFT.replace("2. Keep the method the same on both sides. [fix 1]", "2. Keep the method the same on both sides.");
+    expect(failedRules(checkSkillFormat(text, ext))).toContain("step-evidence");
+  });
+
+  it("given a citation to a piece the evidence never carried, when checked, then the evidence rule fails", () => {
+    const text = DRAFT.replace("[map 3]", "[map 9]");
+    const findings = checkSkillFormat(text, ext);
+    expect(failedRules(findings)).toContain("step-evidence");
+    expect(findings.find((f) => f.rule === "step-evidence")!.detail).toContain("map 9");
+  });
+
+  it("given the share form the map itself uses, when checked, then the citation still resolves", () => {
+    const text = DRAFT.replace("[map 3]", "[map 3/9]");
+    expect(failedRules(checkSkillFormat(text, ext))).not.toContain("step-evidence");
+  });
+
+  it("given a draft with no packet behind it, when checked, then citations are not demanded", () => {
+    const text = DRAFT.replace(/ \[(map|fix) \d+\]/g, "");
+    const rules = failedRules(checkSkillFormat(text, { ...options, extended: true, expects: { fileMap: true, multiRepo: true } }));
+    expect(rules).not.toContain("step-evidence");
+  });
+
+  it("given the unnumbered not-visible section, when steps are counted, then its bullets are not steps", () => {
+    const text = DRAFT.replace(
+      "- Whether the gateway needs a new rate class is recorded in no commit.",
+      "- Whether the gateway needs a new rate class is recorded in no commit.\n- Whether a second gateway copy exists is recorded in no commit.",
+    );
+    expect(failedRules(checkSkillFormat(text, ext))).toEqual([]);
+  });
+
+  describe.each(dump.mustPass)("a hand-written skill is untouched by them: $label", ({ text }) => {
+    it("given no packet and no map, when checked with the structural rules on, then nothing fails", () => {
+      expect(failedRules(checkSkillFormat(text, { ...options, extended: true }))).toEqual([]);
+    });
+  });
+
+  it("given the empty template, when checked with the structural rules on, then it is still rejected", () => {
+    const skeleton = dump.broken.find((b) => b.label === "skeleton-empty")!.text;
+    expect(formatPasses(checkSkillFormat(skeleton, ext))).toBe(false);
+  });
+});

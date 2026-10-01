@@ -7,15 +7,22 @@ import {
   buildDraftPrompt,
   buildEvidence,
   buildScreen,
+  cohesion,
   coverage,
   draftSkill,
   holdoutSplit,
+  isIncidentalPath,
   readUnitIndex,
+  variantFamilies,
   type Evidence,
   type EvidencePacket,
   type UnitIndex,
 } from "./draft.js";
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from "./prompt-safety.js";
+import { checkSkillFormat, failedRules } from "./skill-format.js";
+
+/** The gate's verdict on a draft, with the three rules a packet would switch on left off. */
+const failedRulesOf = (text: string): string[] => failedRules(checkSkillFormat(text, { extended: true }));
 
 /**
  * A history of this module's own, rather than the shared one. The shared fixture backs twenty-odd
@@ -670,11 +677,11 @@ describe("asking a model for the draft", () => {
     "- Note the record type and the field name.",
     "",
     "## 1. The service",
-    "1. Add the field to the request type.",
-    "2. Carry it through the service.",
+    "1. Add the field to the request type. [map 1]",
+    "2. Carry it through the service. [hunk 1]",
     "",
     "## 2. The client",
-    "1. Add the field to the generated types.",
+    "1. Add the field to the generated types. [subject 1]",
     "",
     "## 3. File map (6 past changes)",
     "| File (pattern) | Touched in | Note |",
@@ -779,5 +786,372 @@ describe("asking a model for the draft", () => {
     const result = await draftSkill(neutral, async () => "   ");
     expect(result.ok).toBe(false);
     expect(result.reasons).toEqual(["empty-reply"]);
+  });
+});
+
+describe("putting the costliest correction in front of the model", () => {
+  let fixture: Fixture;
+  let repos: string[];
+  let shape: Shape;
+  let index: UnitIndex;
+
+  /**
+   * A history whose corrections differ in COST rather than in number. The cheap one happens over
+   * and over on the same afternoon in one repository; the expensive ones each happen once.
+   */
+  beforeAll(() => {
+    fixture = createFixture();
+    const api = fixture.repo("acme-api");
+    const app = fixture.repo("acme-app");
+    api.commit({ files: { "README.md": "# acme-api\n" }, subject: "initial", author: "Ada Lovelace" });
+    app.commit({ files: { "README.md": "# acme-app\n" }, subject: "initial", author: "Ada Lovelace" });
+    ENTITIES.forEach((entity, i) => {
+      const ticket = `TEAM-${41 + i}`;
+      api.commit({
+        files: {
+          [`src/dto/Create${entity}Request.kt`]: `class Create${entity}Request(val f${i}: String)\n`,
+          [`src/service/${entity}Service.kt`]: `class ${entity}Service\n`,
+        },
+        subject: `${ticket} add f${i} to ${entity}`,
+        author: "Ada Lovelace",
+      });
+      app.commit({
+        files: { [`src/api/${entity.toLowerCase()}Types.ts`]: `export type ${entity} = { f${i}: string }\n` },
+        subject: `${ticket} show f${i} on the ${entity} form`,
+        author: "Ada Lovelace",
+      });
+      // The ordinary correction: frequent, same day, same repository, inside the core files.
+      api.commit({
+        files: { [`src/service/${entity}Service.kt`]: `class ${entity}Service // tidy\n` },
+        subject: `${ticket} fix the ${entity} wording`,
+        author: "Ada Lovelace",
+      });
+    });
+    // One ticket is put right in BOTH repositories, in a file outside the core, two months later.
+    // Two months rather than a year: a unit whose commits span more than half a year is an epic by
+    // the miner's own filter, and the first version of this fixture lost the whole ticket to it.
+    const late = "2025-03-01T00:00:00Z";
+    api.commit({
+      files: { "ops/limits.yaml": "rate: 10\n" },
+      subject: "TEAM-41 hotfix the production incident",
+      author: "Ada Lovelace",
+      date: late,
+    });
+    app.commit({
+      files: { "src/api/invoiceTypes.ts": "export type Invoice = {}\n" },
+      subject: "TEAM-41 revert the Invoice change",
+      author: "Ada Lovelace",
+      date: late,
+    });
+    repos = [api.path, app.path];
+    const result = mineShapes(repos, { minRecurrence: 4, minProposers: 4, minRoles: 2 });
+    shape = result.shapes[0]!;
+    index = readUnitIndex(repos);
+  });
+  afterAll(() => fixture.cleanup());
+
+  it("given corrections that differ in cost, when the packet is built, then the costly ones come first", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    expect(packet.fixes.length).toBeGreaterThan(1);
+    const top = packet.fixes.slice(0, 2);
+    // The revert and the hotfix, both a month late and both outside the core files, outrank the
+    // same-day wording fixes however many of those there are.
+    expect(top.every((fix) => fix.signals.includes("very-late"))).toBe(true);
+    expect(top.some((fix) => fix.signals.includes("revert"))).toBe(true);
+    expect(top.some((fix) => fix.signals.includes("urgent"))).toBe(true);
+    expect(top.some((fix) => fix.signals.includes("multi-repo"))).toBe(true);
+    expect(top.some((fix) => fix.signals.includes("surprise"))).toBe(true);
+    const wording = packet.fixes.filter((fix) => fix.subject.includes("wording"));
+    expect(wording.length).toBeGreaterThan(0);
+    for (const fix of wording) expect(fix.impact).toBeLessThan(top[0]!.impact);
+  });
+
+  it("given more corrections than the packet carries, when built, then the list is capped after ranking", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST, maxFixes: 2 });
+    expect(packet.fixes).toHaveLength(2);
+    expect(packet.fixes.every((fix) => fix.impact >= 4)).toBe(true);
+  });
+
+  it("given a ranked packet, when the prompt is built, then each correction carries its number and its signals", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    const prompt = buildDraftPrompt(packet, [], HOST);
+    expect(prompt).toContain("[fix 1]");
+    expect(prompt).toMatch(/\[fix 1\] \[[a-z-]+( [a-z-]+)*\]/);
+  });
+});
+
+describe("telling the model what it may and may not write", () => {
+  const packet: EvidencePacket = {
+    version: 1,
+    shapeId: "abc123",
+    view: "repo",
+    units: 6,
+    fileMap: [{ role: "acme-api:src/dto/*Request.kt", units: 6, of: 6, share: 1, examples: ["acme-api/src/dto/A.kt"] }],
+    delivery: { order: ["acme-api", "acme-app"], agreement: 1, units: 6 },
+    subjects: ["#1 add a field"],
+    hunks: [],
+    fixes: [{ unit: "#1", subject: "#1 fix the mapping", files: ["src/dto/A.kt"], signals: ["revert"], impact: 3 }],
+    siblings: [],
+    rubric: { support: 6, supportScore: 2.81, coreFiles: 1, roles: 1, repos: 2, testShare: 0.5, authors: 3, coreRepos: 1 },
+    authors: 3,
+    missingUnits: 0,
+    fileMapDropped: 0,
+    dropped: { subjects: 0, hunks: 0, siblings: 0, fileMap: 0, delivery: 0, reasons: {} },
+  };
+
+  it("given any packet, when the prompt is built, then it carries the citation rule and the escape hatch", () => {
+    const prompt = buildDraftPrompt(packet, [], HOST);
+    expect(prompt).toContain("[map 3]");
+    expect(prompt).toContain("Not visible in history");
+    expect(prompt).toContain("A step");
+    expect(prompt).toContain("you cannot cite is a step you may not write");
+  });
+
+  it("given the prompt's own verification examples, when judged by the gate, then the gate agrees with it", () => {
+    const prompt = buildDraftPrompt(packet, [], HOST);
+    // The prompt teaches the rule by example, and the rule is enforced elsewhere. If the two ever
+    // disagreed the model would be shown a passing item that is then rejected, so the examples are
+    // extracted from the prompt text and run through the real rule rather than retyped here.
+    const passing = ["`./gradlew test` exits 0.", "The listing endpoint returns 200 with a non-empty body."];
+    const failing = ["Run the tests.", "Make sure nothing else broke."];
+    for (const item of [...passing, ...failing]) expect(prompt).toContain(item);
+    const build = (items: string[]): string =>
+      [
+        "---",
+        "name: add-widget",
+        "description: >-",
+        "  Adds a widget. Use when a ticket asks for a widget. Also when the widget is missing.",
+        "---",
+        "# add-widget - a widget",
+        "",
+        "## 1. One",
+        "1. Do the thing.",
+        "",
+        "## 2. Two",
+        "1. Do the other thing.",
+        "",
+        "## 3. Three",
+        "1. Do the last thing.",
+        "",
+        "## 4. Verification",
+        ...items.map((item) => `- [ ] ${item}`),
+        "",
+        "## Common mistakes (observed)",
+        "| Mistake | Evidence | Do instead |",
+        "|---|---|---|",
+        "| missed it | #1 | do it |",
+        "",
+      ].join("\n");
+    expect(failedRulesOf(build(passing))).not.toContain("verification-concrete");
+    expect(failedRulesOf(build(failing))).toContain("verification-concrete");
+  });
+
+  it("given a draft with an uncited step, when drafted, then it is rejected and the retry names the rule", async () => {
+    const uncited = [
+      "---",
+      "name: add-entity-field",
+      "description: >-",
+      "  Adds a field to a record type. Use when a ticket asks for a new field. Also when a saved",
+      "  field comes back empty.",
+      "---",
+      "# add-entity-field - add a field",
+      "",
+      "## 1. The service",
+      "1. Add the field to the request type.",
+      "",
+      "## 2. The client",
+      "1. Add the field to the types.",
+      "",
+      "## 3. File map (6 past changes)",
+      "| File (pattern) | Touched in | Note |",
+      "|---|---|---|",
+      "| src/dto/*Request.kt | 6/6 | the request type |",
+      "",
+      "## 4. Verification",
+      "- [ ] Run `npm test`.",
+      "- [ ] The response contains the new field.",
+      "",
+      "## 5. Delivery",
+      "- The service merges first, then the client.",
+      "",
+      "## Common mistakes (observed)",
+      "| Mistake | Evidence | Do instead |",
+      "|---|---|---|",
+      "| Field not mapped | #1 | map it |",
+      "",
+    ].join("\n");
+    const prompts: string[] = [];
+    const result = await draftSkill({ packet, screen: buildScreen([], { host: HOST }) }, async (prompt) => {
+      prompts.push(prompt);
+      return uncited;
+    }, { host: HOST });
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("step-evidence");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("step-evidence");
+    // The retry says what was wrong without quoting the draft back: model output never becomes
+    // an instruction in the second prompt.
+    expect(prompts[1]).not.toContain("Add the field to the request type.");
+  });
+});
+
+describe("drafting a workflow once however many times it was found", () => {
+  const shapeOf = (id: string, units: string[], roles: string[]): Shape =>
+    ({
+      id,
+      view: "repo",
+      coreFiles: roles.map((role) => ({ role, units: units.length, of: units.length, share: 1 })),
+      repos: ["acme-api"],
+      coreRepos: ["acme-api"],
+      recurrence: units.length,
+      authors: 2,
+      firstAt: "2025-01-01T00:00:00Z",
+      lastAt: "2025-06-01T00:00:00Z",
+      sampleSubjects: [],
+      memberUnits: units,
+      testUnits: 0,
+      score: { support: 3, repos: 1, roles: roles.length, authors: 2, total: 3 },
+    }) as unknown as Shape;
+
+  it("given a narrow shape wholly inside a broad one, when grouped, then only the broad one is drafted", () => {
+    const broad = shapeOf("broad", ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"], ["dto/*Request.kt"]);
+    const narrow = shapeOf("narrow", ["a", "b", "c"], ["dto/*Request.kt", "service/*Service.kt"]);
+    const other = shapeOf("other", ["x", "y", "z"], ["ui/*Page.tsx"]);
+    const families = variantFamilies([broad, narrow, other]);
+    expect(families).toHaveLength(2);
+    expect(families[0]!.head.id).toBe("broad");
+    expect(families[0]!.variants.map((s) => s.id)).toEqual(["narrow"]);
+    expect(families[1]!.head.id).toBe("other");
+    expect(families[1]!.variants).toEqual([]);
+  });
+
+  it("given shapes the miner's own Jaccard test leaves apart, when grouped, then containment still joins them", () => {
+    const broad = shapeOf("broad", Array.from({ length: 200 }, (_, i) => `u${i}`), ["dto/*Request.kt"]);
+    const narrow = shapeOf("narrow", Array.from({ length: 50 }, (_, i) => `u${i}`), ["ui/*Page.tsx"]);
+    // Jaccard is 50/200 = 0.25, below the miner's 0.4; containment is 1.
+    expect(variantFamilies([broad, narrow])).toHaveLength(1);
+  });
+
+  it("given shapes that merely share a few units, when grouped, then they stay apart", () => {
+    const one = shapeOf("one", ["a", "b", "c", "d", "e"], ["dto/*Request.kt"]);
+    const two = shapeOf("two", ["e", "f", "g", "h", "i"], ["ui/*Page.tsx"]);
+    expect(variantFamilies([one, two])).toHaveLength(2);
+  });
+});
+
+describe("reporting both denominators for what a map predicted", () => {
+  const indexWith = (paths: string[]): UnitIndex =>
+    new Map([
+      [
+        "TEAM-300",
+        {
+          key: "TEAM-300",
+          firstAt: "2025-02-01T00:00:00Z",
+          authorNames: [],
+          slices: [
+            {
+              repo: "acme-api",
+              repoPath: "/x",
+              firstAt: "2025-02-01T00:00:00Z",
+              commits: [{ sha: "a", subject: "TEAM-300 add a field", date: "2025-02-01T00:00:00Z", paths }],
+            },
+          ],
+        },
+      ],
+    ]);
+  const roleOf = (_repo: string, path: string): string | null => {
+    if (/\/dto\/.*Request\.kt$/.test(path)) return "dto/*Request.kt";
+    if (/\.test\.ts$/.test(path)) return "test/*.test.ts";
+    if (/package-lock\.json$/.test(path)) return "lock/package-lock.json";
+    return null;
+  };
+
+  it("given a lock file and a test among the held-out work, when covered, then only the lock file leaves", () => {
+    const index = indexWith(["src/dto/CreateRefundRequest.kt", "src/dto/x.test.ts", "package-lock.json"]);
+    const result = coverage(["dto/*Request.kt"], ["TEAM-300"], index, roleOf);
+    // Full: three roles touched, one predicted.
+    expect(result.actual).toBe(3);
+    expect(result.recall).toBe(0.33);
+    // Narrowed: the lock file is gone from BOTH sides, the test file stays.
+    expect(result.narrowed.actual).toBe(2);
+    expect(result.narrowed.recall).toBe(0.5);
+    expect(result.narrowed.files).toBe(2);
+    expect(result.files).toBe(3);
+  });
+
+  it("given a predicted role that only ever named a lock file, when covered, then precision loses it too", () => {
+    const index = indexWith(["src/dto/CreateRefundRequest.kt"]);
+    const result = coverage(["dto/*Request.kt", "lock/package-lock.json"], ["TEAM-300"], index, roleOf);
+    expect(result.precision).toBe(0.5);
+    expect(result.narrowed.predicted).toBe(1);
+    expect(result.narrowed.precision).toBe(1);
+  });
+
+  it("given the kinds of path the narrowing names, when judged, then a test is never one of them", () => {
+    expect(isIncidentalPath("package-lock.json")).toBe(true);
+    expect(isIncidentalPath("docs/guide.md")).toBe(true);
+    expect(isIncidentalPath("dist/bundle.js")).toBe(true);
+    expect(isIncidentalPath("src/dto/x.test.ts")).toBe(false);
+    expect(isIncidentalPath("src/test/WidgetTest.kt")).toBe(false);
+  });
+});
+
+describe("telling one workflow from two that share a ticket key", () => {
+  const roleOf = (_repo: string, path: string): string | null => {
+    const match = /^(a|b)\d+\.kt$/.exec(path);
+    return match ? `role-${match[1]}` : null;
+  };
+  const indexOf = (units: Record<string, string[]>): UnitIndex =>
+    new Map(
+      Object.entries(units).map(([key, paths]) => [
+        key,
+        {
+          key,
+          firstAt: "2025-01-01T00:00:00Z",
+          authorNames: [],
+          slices: [
+            {
+              repo: "acme-api",
+              repoPath: "/x",
+              firstAt: "2025-01-01T00:00:00Z",
+              commits: [{ sha: key, subject: `${key} work`, date: "2025-01-01T00:00:00Z", paths }],
+            },
+          ],
+        },
+      ]),
+    );
+  const shapeOf = (roles: string[], units: string[]): Shape =>
+    ({
+      id: "s",
+      view: "repo",
+      coreFiles: roles.map((role) => ({ role, units: units.length, of: units.length, share: 1 })),
+      repos: ["acme-api"],
+      coreRepos: ["acme-api"],
+      recurrence: units.length,
+      authors: 1,
+      firstAt: "2025-01-01T00:00:00Z",
+      lastAt: "2025-01-01T00:00:00Z",
+      sampleSubjects: [],
+      memberUnits: units,
+      testUnits: 0,
+      score: { support: 2, repos: 1, roles: roles.length, authors: 1, total: 2 },
+    }) as unknown as Shape;
+
+  it("given roles that every unit touches together, when measured, then the shape is cohesive", () => {
+    const units = { u1: ["a1.kt", "b1.kt"], u2: ["a2.kt", "b2.kt"], u3: ["a3.kt", "b3.kt"] };
+    const records = Object.keys(units).map((key) => indexOf(units).get(key)!);
+    const result = cohesion(shapeOf(["role-a", "role-b"], Object.keys(units)), records, roleOf);
+    expect(result.score).toBe(1);
+    expect(result.weakest).toBe(1);
+  });
+
+  it("given two groups of roles that never meet, when measured, then the shape scores zero", () => {
+    // Three units do one job, three do another; the key they share is all they share.
+    const units = { u1: ["a1.kt"], u2: ["a2.kt"], u3: ["a3.kt"], u4: ["b1.kt"], u5: ["b2.kt"], u6: ["b3.kt"] };
+    const index = indexOf(units);
+    const records = Object.keys(units).map((key) => index.get(key)!);
+    const result = cohesion(shapeOf(["role-a", "role-b"], Object.keys(units)), records, roleOf);
+    expect(result.score).toBe(0);
+    expect(result.weakest).toBe(0);
   });
 });

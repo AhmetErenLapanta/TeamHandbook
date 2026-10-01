@@ -127,7 +127,17 @@ export interface FormatOptions {
    * drafts of a mined workflow, so the rules ask for a section only when the caller says this
    * draft was supposed to have one, and otherwise judge the section it does have.
    */
-  expects?: { fileMap?: boolean; multiRepo?: boolean };
+  expects?: {
+    fileMap?: boolean;
+    multiRepo?: boolean;
+    /**
+     * How many pieces of each kind the evidence packet offered, so a citation can be resolved.
+     * Without it `step-evidence` cannot tell a reference to the third map row from a reference to
+     * a row that was never there, so the rule asks for nothing at all and the hand-written
+     * fixtures - which cite nothing, having no packet behind them - stay untouched.
+     */
+    citable?: { map?: number; fix?: number; hunk?: number; subject?: number };
+  };
 }
 
 type Line =
@@ -271,6 +281,112 @@ const OBSERVABLE_RE =
   /\b(returns?|shows?|appears?|contains?|equals?|matches?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
 const INLINE_CODE_RE = /`[^`\n]+`/;
 
+/**
+ * A path PATTERN, as opposed to a sentence about one: it carries a separator, a wildcard or a
+ * file extension. A map whose first column holds prose is a map a reader cannot match a file
+ * against, and one such draft cleared the old gate with a coverage of zero.
+ */
+const PATH_TOKEN_RE = /[^\s`|]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|]*/;
+const PATH_TOKEN_ALL_RE = new RegExp(PATH_TOKEN_RE.source, "g");
+/** The number a numbered heading carries, whichever of the three forms it is written in. */
+const HEAD_NUMBER_RE = new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}]+)?(\\p{Nd}+)`, "iu");
+/**
+ * A citation to one piece of the evidence packet. The index alone identifies the piece; the
+ * optional `/N` is the share form the file map's own cells use, accepted so that a draft writing
+ * `[map 3/7]` is not punished for echoing the notation it was given.
+ */
+const CITATION_RE = /\[(map|fix|hunk|subject)[ \t]+(\d+)(?:[ \t]*\/[ \t]*\d+)?\]/g;
+const NOT_VISIBLE_HEAD_RE = ci("not visible in history|not visible in the history");
+const MAP_HEAD_RE = /file map|files? touched/i;
+
+/** The sections a numbered STEP can live in: not the map, the checks, the delivery or the table. */
+function isProcedureSection(title: string): boolean {
+  return !(
+    MAP_HEAD_RE.test(title) ||
+    VERIFY_HEAD_RE.test(title) ||
+    DELIVERY_HEAD_RE.test(title) ||
+    PITFALL_HEAD_RE.test(title) ||
+    NOT_VISIBLE_HEAD_RE.test(title)
+  );
+}
+
+/** A table's DATA rows: everything after the separator, header excluded. */
+function dataRows(body: Line[]): string[] {
+  const out: string[] = [];
+  let afterSeparator = false;
+  for (const line of body) {
+    if (line.kind !== "text") continue;
+    if (TABLE_SEP_RE.test(line.text) && line.text.includes("|")) afterSeparator = true;
+    else if (TABLE_ROW_RE.test(line.text)) {
+      if (afterSeparator) out.push(line.text);
+    } else afterSeparator = false;
+  }
+  return out;
+}
+
+/** A row's first cell, which in the file map is the file pattern the row is about. */
+function firstCell(row: string): string {
+  return row.trim().replace(/^\|/, "").split("|")[0]!.trim();
+}
+
+/**
+ * A file pattern turned into a matcher. `*` and the two placeholder spellings a draft uses for a
+ * varying part (`{locale}`, `<name>`) all stand for "something within one path segment".
+ */
+function patternMatcher(pattern: string): RegExp | null {
+  return matcherFor(pathTokens(pattern)[0] ?? null);
+}
+
+/**
+ * The basename half of the same matcher, for a step that names a file without its directory.
+ *
+ * Split off the RAW token rather than the built pattern: a segment of the built one may end
+ * inside an escape sequence, and a regex cut there either throws or, worse, matches something
+ * else. One measured map cell did exactly that.
+ */
+function baseMatcher(pattern: string): RegExp | null {
+  const token = pathTokens(pattern)[0];
+  if (token === undefined) return null;
+  return matcherFor(token.slice(token.lastIndexOf("/") + 1));
+}
+
+/**
+ * Every path-shaped token a map cell carries, the most path-like first.
+ *
+ * A cell is not just a pattern: the measured drafts write a label beside it, and that label may
+ * itself hold a wildcard - `` `*-service` messages `resources/messages/...` ``. Reading only the
+ * first match made the label the pattern, and the row then matched nothing; one such row was
+ * reported as a step naming an unmapped file while the map listed it all along. A token carrying
+ * a separator is a path and sorts ahead of one that only carries a star or a dot.
+ */
+function pathTokens(cell: string): string[] {
+  const matches = [...cell.replace(/`/g, "").matchAll(PATH_TOKEN_ALL_RE)].map((m) => m[0]);
+  return matches.sort((a, b) => Number(b.includes("/")) - Number(a.includes("/")) || b.length - a.length);
+}
+
+/**
+ * One file pattern as a matcher, anchored at a segment boundary so that `enums/*Widget.kt` matches
+ * `domain/enums/PriceWidget.kt` and not `otherenums/PriceWidget.kt`.
+ *
+ * The cell is text a model wrote, so the built source is handed to the engine inside a guard: an
+ * unbuildable pattern makes the row match nothing, which costs the draft a finding, rather than
+ * throwing out of a checker whose job is to return a verdict on every draft.
+ */
+function matcherFor(token: string | null): RegExp | null {
+  if (!token) return null;
+  const source = token
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\\\{[^}]*\\\}/g, "[^/]*")
+    .replace(/<[^>]*>/g, "[^/]*")
+    .replace(/\*/g, "[^/]*");
+  try {
+    return new RegExp(`(^|/)${source}$`, "i");
+  } catch {
+    return null;
+  }
+}
+
+
 export function checkSkillFormat(text: string, options: FormatOptions = {}): FormatFinding[] {
   const denyTerms = options.denyTerms ?? [];
   const denyUsers = options.denyUsers ?? [];
@@ -354,7 +470,7 @@ function addExtendedFindings(
   findings: FormatFinding[],
   secs: Section[],
   text: string,
-  expects: { fileMap?: boolean; multiRepo?: boolean },
+  expects: NonNullable<FormatOptions["expects"]>,
 ): void {
   const add = (rule: string, ok: unknown, detail: string) =>
     findings.push({ rule, ok: Boolean(ok), required: true, detail });
@@ -404,6 +520,132 @@ function addExtendedFindings(
     all.length > 0 && concrete.length === all.length,
     `verification items=${all.length} with command or observable result=${concrete.length}`,
   );
+
+  addMechanicalFindings(findings, secs, expects);
+}
+
+/**
+ * The four rules that read the draft as a STRUCTURE rather than as prose.
+ *
+ * Each exists because a measured draft cleared every earlier rule while breaking the thing the
+ * rule names: nine of thirty-four reused a section number, one wrote a sentence where the file
+ * map's pattern column belongs and scored a coverage of zero, four named a class of file in a
+ * step that the map never listed, and the drafts as a whole cited nothing at all, so a fabricated
+ * step read exactly like a measured one.
+ */
+function addMechanicalFindings(
+  findings: FormatFinding[],
+  secs: Section[],
+  expects: NonNullable<FormatOptions["expects"]>,
+): void {
+  const add = (rule: string, ok: unknown, detail: string) =>
+    findings.push({ rule, ok: Boolean(ok), required: true, detail });
+
+  const numbers = secs
+    .filter((s) => s.level >= 2 && s.level <= 3 && NUM_HEAD_RE.test(s.title))
+    .map((s) => HEAD_NUMBER_RE.exec(s.title)?.[1])
+    .filter((n): n is string => n !== undefined);
+  const repeated = numbers.filter((n, i) => numbers.indexOf(n) !== i);
+  add(
+    "unique-sections",
+    repeated.length === 0,
+    `numbered sections=${numbers.length} repeated=${JSON.stringify([...new Set(repeated)])}`,
+  );
+
+  const mapSecs = secs.filter((s) => MAP_HEAD_RE.test(s.title));
+  const mapCells = mapSecs.flatMap((s) => dataRows(s.body)).map(firstCell);
+  const prose = mapCells.filter((cell) => !PATH_TOKEN_RE.test(cell.replace(/`/g, "")));
+  add(
+    "file-map-pattern",
+    prose.length === 0,
+    `file-map rows=${mapCells.length} without a path pattern=${prose.length} ${JSON.stringify(prose.slice(0, 2))}`,
+  );
+
+  // A file class a step tells the reader to edit, but that the map never lists: the draft's own
+  // two halves disagree about what this workflow touches, and the half the reader trusts to be
+  // complete is the map.
+  const stepLines = secs
+    .filter((s) => isProcedureSection(s.title))
+    .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
+    .map((line) => (line as { text: string }).text);
+  const matchers = mapCells.map((cell) => [patternMatcher(cell), baseMatcher(cell)] as const);
+  // The extensions the map itself uses. A bare word with a dot in it is a file name in one
+  // language and an attribute chain in another, and nothing in the token says which; the map is
+  // the draft's own statement of what kind of file this workflow is about, so it decides.
+  const mapExtensions = new Set(
+    mapCells.flatMap(pathTokens).map(extensionOf).filter((ext): ext is string => ext !== null),
+  );
+  const named = [...new Set(stepLines.flatMap((line) => fileTokens(line, mapExtensions)))];
+  const unmapped = named.filter(
+    (token) => !matchers.some(([full, base]) => full?.test(token) || base?.test(token)),
+  );
+  add(
+    "step-map-consistency",
+    mapCells.length === 0 || unmapped.length === 0,
+    `files named in steps=${named.length} missing from the map=${unmapped.length} ${JSON.stringify(unmapped.slice(0, 3))}`,
+  );
+
+  // Off unless the caller says what there was to cite: a hand-written skill has no evidence packet
+  // behind it, and asking it for citations would be asking it to invent them.
+  const citable = expects.citable;
+  if (!citable) return;
+  const counts: Record<string, number> = {
+    map: citable.map ?? 0,
+    fix: citable.fix ?? 0,
+    hunk: citable.hunk ?? 0,
+    subject: citable.subject ?? 0,
+  };
+  const numberedSteps = secs
+    .filter((s) => isProcedureSection(s.title))
+    .flatMap((s) => s.body.filter((line) => line.kind === "text" && NUM_ITEM_RE.test(line.text)))
+    .map((line) => (line as { text: string }).text);
+  const uncited = numberedSteps.filter((step) => [...step.matchAll(CITATION_RE)].length === 0);
+  const dangling: string[] = [];
+  for (const step of numberedSteps) {
+    for (const [, kind, index] of step.matchAll(CITATION_RE)) {
+      const n = Number(index);
+      if (n < 1 || n > (counts[kind!] ?? 0)) dangling.push(`${kind} ${index}`);
+    }
+  }
+  add(
+    "step-evidence",
+    numberedSteps.length > 0 && uncited.length === 0 && dangling.length === 0,
+    `steps=${numberedSteps.length} uncited=${uncited.length} dangling=${JSON.stringify([...new Set(dangling)].slice(0, 3))} available=${JSON.stringify(counts)}`,
+  );
+}
+
+/**
+ * The file references a step line names, as opposed to the commands, keys and identifiers it
+ * quotes.
+ *
+ * Measured on thirty-four drafts: read loosely, this flagged twenty-five of them, and most of
+ * what it caught was not a file at all - a message key (`label.<name>.text`), an attribute
+ * chain (`self.connection`), a call (`super().clean`) and a language keyword (`for...of`) all
+ * end in something that looks like an extension. Each exclusion below removes one of those
+ * classes. A path says it is a path by carrying a separator; a bare name has to earn it by
+ * ending the way the draft's own map says files in this workflow end.
+ */
+function fileTokens(line: string, mapExtensions: Set<string>): string[] {
+  const out: string[] = [];
+  for (const [, code] of line.matchAll(/`([^`\n]+)`/g)) {
+    const text = code!.trim();
+    // A command is not a file reference: a step quoting one says how to RUN the workflow rather
+    // than what it edits. An elision means the draft declined to name the file at all.
+    if (/\s/.test(text) || text.includes("...") || /[()]/.test(text)) continue;
+    const ext = extensionOf(text);
+    if (ext === null) continue;
+    if (text.includes("/")) {
+      out.push(text.replace(/^[./]+/, ""));
+    } else if (!/[<>*]/.test(text) && mapExtensions.has(ext)) {
+      out.push(text);
+    }
+  }
+  return out;
+}
+
+/** The trailing extension of a path or file name, lowercased, or null when it has none. */
+function extensionOf(token: string): string | null {
+  return /\.([A-Za-z][A-Za-z0-9]{0,10})$/.exec(token)?.[1]!.toLowerCase() ?? null;
 }
 
 function matchAll(re: RegExp, text: string): string[] {

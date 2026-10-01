@@ -359,6 +359,9 @@ export interface FixNote {
   unit: string;
   subject: string;
   files: string[];
+  /** The impact signals that fired, by name, so a reader can see WHY this one is near the top. */
+  signals: string[];
+  impact: number;
 }
 
 export interface Rubric {
@@ -409,12 +412,18 @@ export interface EvidenceOptions {
   maxSubjects?: number;
   maxHunks?: number;
   maxHunkLines?: number;
+  /**
+   * How many corrections the packet carries after ranking. Uncapped, one measured packet handed
+   * the model 375 of them, and the common-mistakes table was then built from whichever happened
+   * to be read rather than from the ones that cost anything.
+   */
+  maxFixes?: number;
   /** The least share of the TRAINING units a file must appear in to stay on the map. */
   coreShare?: number;
   run?: GitRunner;
 }
 
-const DEFAULTS = { maxSubjects: 20, maxHunks: 3, maxHunkLines: 60, coreShare: 0.6 };
+const DEFAULTS = { maxSubjects: 20, maxHunks: 3, maxHunkLines: 60, coreShare: 0.6, maxFixes: 12 };
 
 export interface Evidence {
   packet: EvidencePacket;
@@ -496,7 +505,7 @@ export function buildEvidence(shape: Shape, index: UnitIndex, options: EvidenceO
     delivery: deployOrder(records, pathScreen, drop),
     subjects: collectSubjects(records, limits.maxSubjects, screen, numbers, drop),
     hunks: collectHunks(rows, records, limits, roleOf, hunkScreen, numbers, drop, options.run),
-    fixes: collectFixes(records, screen, numbers),
+    fixes: collectFixes(records, shape, roleOf, limits.maxFixes, screen, pathScreen, numbers),
     siblings: siblingSeries(records, screen, numbers, drop),
     rubric: {
       support: records.length,
@@ -745,28 +754,99 @@ function collectHunks(
 
 const FIX_RE = /\b(fix|fixes|fixed|resolve|resolves|resolved|revert|reverts|reverted|hotfix|correct|corrects)\b/i;
 
+/** A correction that was urgent, or that undid work rather than adjusting it. */
+const REVERT_RE = /\b(revert|reverts|reverted|roll ?back|rolled back|back ?out)\b/i;
+const URGENT_RE = /\b(hotfix|hot-fix|urgent|critical|emergency|asap|prod(uction)? (issue|down|incident)|incident|p1|sev-?[12])\b/i;
+
+/** A correction that landed this long after the work began was not caught by anyone reviewing it. */
+const LATE_DAYS = 7;
+const VERY_LATE_DAYS = 30;
+
+/**
+ * How much a correction COST, as far as the history can say.
+ *
+ * The common-mistakes table was previously built from whatever the model read first in an
+ * unranked list, and frequency chose for it. Frequency is the wrong selector, and this is the
+ * measured reason: an expensive mistake is fixed ONCE, in a hurry, long after the work, often in
+ * a file nobody expected - while a cheap one is fixed a hundred times the same afternoon.
+ *
+ * The weights order candidates; they are not calibrated against an outcome, and no claim here
+ * depends on their exact values. What is measured is the ranking they produce.
+ */
+function impactOf(signals: string[]): number {
+  const weight: Record<string, number> = {
+    revert: 3,
+    urgent: 3,
+    "multi-repo": 2,
+    "very-late": 2,
+    surprise: 1,
+    late: 1,
+  };
+  return signals.reduce((total, signal) => total + (weight[signal] ?? 0), 0);
+}
+
 /**
  * A follow-up inside the same ticket: the work was done, then something about it had to be put
  * right. That is the only place in the history that says what goes WRONG when this workflow is
  * followed, which is what the common-mistakes section is for.
+ *
+ * KNOWN LIMIT, measured rather than assumed: this sees corrections made inside one unit only.
+ * Of the five hand-written skills these drafts are judged against, four name a number-one
+ * mistake whose own cited evidence is a LATER, SEPARATE ticket - so no ranking of this pool can
+ * surface them. Ranking fixes which of the in-ticket corrections is shown; it does not widen
+ * what is collected.
  */
-function collectFixes(records: UnitRecord[], screen: Screen, numbers: Map<string, number>): FixNote[] {
+function collectFixes(
+  records: UnitRecord[],
+  shape: Shape,
+  roleOf: (repo: string, path: string) => string | null,
+  max: number,
+  screen: Screen,
+  pathScreen: Screen,
+  numbers: Map<string, number>,
+): FixNote[] {
+  const core = new Set(shape.coreFiles.map((file) => file.role));
   const out: FixNote[] = [];
   for (const record of records) {
+    // Whether this ticket needed putting right in more than one repository, which is the shape of
+    // a mistake that escaped the repository it was made in.
+    const fixRepos = new Set(
+      record.slices.filter((slice) => slice.commits.some((c, i) => i > 0 && FIX_RE.test(c.subject))).map((s) => s.repo),
+    );
     for (const slice of record.slices) {
       // Commits are oldest first, so the first is the work and a LATER one saying it puts
       // something right is a correction to what this same ticket had already done.
       slice.commits.forEach((commit, i) => {
         if (i === 0 || !FIX_RE.test(commit.subject) || screen(commit.subject)) return;
+        const days = (Date.parse(commit.date) - Date.parse(record.firstAt)) / 86_400_000;
+        const signals: string[] = [];
+        if (REVERT_RE.test(commit.subject)) signals.push("revert");
+        if (URGENT_RE.test(commit.subject)) signals.push("urgent");
+        if (fixRepos.size > 1) signals.push("multi-repo");
+        // A correction landing outside the files this workflow is ABOUT is the one nobody
+        // predicted from the ticket, which is what makes it expensive.
+        if (commit.paths.some((path) => !core.has(roleOf(slice.repo, path) ?? ""))) signals.push("surprise");
+        if (days >= VERY_LATE_DAYS) signals.push("very-late");
+        else if (days >= LATE_DAYS) signals.push("late");
+        // Paths reach the packet here exactly as they do through the file map, so they are held
+        // to the same screen: a correction's file list is repository content like any other.
+        const files = commit.paths
+          .filter((path) => !pathScreen(`${slice.repo}/${path}`))
+          .slice(0, 5)
+          .map((path) => abstractTickets(path, numbers));
         out.push({
           unit: abstractTickets(record.key, numbers),
           subject: abstractTickets(commit.subject, numbers),
-          files: commit.paths.slice(0, 5).map((path) => abstractTickets(path, numbers)),
+          files,
+          signals,
+          impact: impactOf(signals),
         });
       });
     }
   }
-  return out;
+  // Highest impact first, ties broken by the text so the packet stays byte-identical across runs.
+  out.sort((a, b) => b.impact - a.impact || (a.subject < b.subject ? -1 : a.subject > b.subject ? 1 : 0));
+  return out.slice(0, max);
 }
 
 /**
@@ -824,6 +904,133 @@ function isTestPath(path: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Which shapes are worth a draft
+// ---------------------------------------------------------------------------
+
+export interface VariantFamily {
+  /** The one member that gets drafted: the highest-ranked, which is the highest-scoring. */
+  head: Shape;
+  /** The same workflow found again. Marked, counted, and not drafted. */
+  variants: Shape[];
+}
+
+/**
+ * The default for recognising the same workflow twice. Measured against a hand-made reading of
+ * one ranking's top twenty, where eight distinct workflows accounted for all twenty shapes.
+ */
+const VARIANT_CONTAINMENT = 0.6;
+
+/**
+ * Groups shapes that describe the SAME workflow, so that one of them is drafted and the rest are
+ * marked rather than written out again.
+ *
+ * Containment, not the Jaccard the miner's own variant filter uses. The two are different
+ * questions: the miner asks whether two shapes are interchangeable, and a smaller shape wholly
+ * inside a larger one is not, so it survives that filter correctly. Here the question is whether
+ * a reader handed both would be reading the same workflow twice, and a shape whose every unit is
+ * also a unit of a bigger shape is exactly that. Measured on one ranking's top twenty: of twelve
+ * shapes a reader marked as repeats, the Jaccard test catches few, because a repeat is typically
+ * a narrower cut of a broad workflow - fifty units inside two hundred scores 0.21.
+ *
+ * The head is the member with the MOST EVIDENCE, not the highest-ranked one. Measured both ways on
+ * one ranking's top twenty, against a hand-made reading of it: grouping in rank order agreed with
+ * that reading on 76% of pairs and made a nineteen-unit shape the head of a family whose broadest
+ * member had two hundred and thirty-eight, because containment is symmetric about which set is
+ * inside which. Grouping by evidence agreed on 81% and kept four of the five workflows that have a
+ * hand-written skill to compare against as heads instead of burying them as repeats. The score a
+ * shape ranks by rewards breadth across repositories; the draft is written from units, and the
+ * same measurement round found draft quality tracking how many there were.
+ */
+export function variantFamilies(shapes: Shape[], containment = VARIANT_CONTAINMENT): VariantFamily[] {
+  const byEvidence = [...shapes].sort(
+    (a, b) => b.memberUnits.length - a.memberUnits.length || (a.id < b.id ? -1 : 1),
+  );
+  const families: { family: VariantFamily; units: Set<string> }[] = [];
+  for (const shape of byEvidence) {
+    const units = new Set(shape.memberUnits);
+    const home = families.find(({ units: other }) => overlapCoefficient(units, other) >= containment);
+    if (home) home.family.variants.push(shape);
+    else families.push({ family: { head: shape, variants: [] }, units });
+  }
+  // Families in the order the CALLER ranked their heads, so a reader still meets them in rank order.
+  const rank = new Map(shapes.map((shape, i) => [shape.id, i]));
+  return families
+    .map(({ family }) => family)
+    .sort((a, b) => (rank.get(a.head.id) ?? 0) - (rank.get(b.head.id) ?? 0));
+}
+
+/** The share of the SMALLER set that the two share: 1 when one set contains the other. */
+function overlapCoefficient(a: Set<string>, b: Set<string>): number {
+  const smaller = a.size <= b.size ? a : b;
+  const larger = smaller === a ? b : a;
+  if (smaller.size === 0) return 0;
+  let shared = 0;
+  for (const item of smaller) if (larger.has(item)) shared++;
+  return shared / smaller.size;
+}
+
+export interface Cohesion {
+  /** How much the core roles travel together, 0 to 1. */
+  score: number;
+  /** The core roles the score was computed over. */
+  roles: number;
+  /** The weakest role: the one that shares fewest units with its closest neighbour. */
+  weakest: number;
+}
+
+/**
+ * Whether a shape is ONE workflow or two that happen to share a ticket key.
+ *
+ * A workflow's core files travel together: the ticket that touches the controller also touches
+ * the DTO. Two workflows merged into one shape show up as two groups of roles that each appear
+ * in their own units and rarely in the same one. The number is the average, over every pair of
+ * core roles, of the share of units touching either that touched both - so a shape whose roles
+ * split cleanly in two cannot score above the share of pairs that fall inside a group.
+ *
+ * Reported, not enforced. A threshold here would decide which workflows a team is offered, and
+ * two reference points are not enough to put one in: see the card report for where the measured
+ * shapes actually fall.
+ */
+export function cohesion(
+  shape: Shape,
+  records: UnitRecord[],
+  roleOf: (repo: string, path: string) => string | null,
+): Cohesion {
+  const roles = shape.coreFiles.map((file) => file.role);
+  const unitsOf = new Map<string, Set<string>>(roles.map((role) => [role, new Set<string>()]));
+  for (const record of records) {
+    for (const slice of record.slices) {
+      for (const path of slicePaths(slice)) {
+        const role = roleOf(slice.repo, path);
+        if (role && unitsOf.has(role)) unitsOf.get(role)!.add(record.key);
+      }
+    }
+  }
+  if (roles.length < 2) return { score: 1, roles: roles.length, weakest: 1 };
+  const pairScores: number[] = [];
+  const best = new Map<string, number>(roles.map((role) => [role, 0]));
+  for (let i = 0; i < roles.length; i++) {
+    for (let j = i + 1; j < roles.length; j++) {
+      const a = unitsOf.get(roles[i]!)!;
+      const b = unitsOf.get(roles[j]!)!;
+      let shared = 0;
+      for (const unit of a) if (b.has(unit)) shared++;
+      const union = a.size + b.size - shared;
+      const score = union ? shared / union : 0;
+      pairScores.push(score);
+      best.set(roles[i]!, Math.max(best.get(roles[i]!)!, score));
+      best.set(roles[j]!, Math.max(best.get(roles[j]!)!, score));
+    }
+  }
+  const mean = pairScores.reduce((total, n) => total + n, 0) / pairScores.length;
+  return {
+    score: Number(mean.toFixed(3)),
+    roles: roles.length,
+    weakest: Number(Math.min(...best.values()).toFixed(3)),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Back-testing
 // ---------------------------------------------------------------------------
 
@@ -855,7 +1062,7 @@ export function holdoutSplit(shape: Shape, index: UnitIndex, k = 3): Holdout {
   };
 }
 
-export interface Coverage {
+export interface CoverageScore {
   /** The share of the ROLES the held-out work touched that the map predicted. */
   recall: number;
   /** The share of the map's ROLES that the held-out work actually touched. */
@@ -868,6 +1075,33 @@ export interface Coverage {
   hit: number;
   /** Files behind `actual`, so the two numbers can still be read against the raw work. */
   files: number;
+}
+
+export interface Coverage extends CoverageScore {
+  /**
+   * The same measurement with the files no workflow description is expected to predict taken out
+   * of BOTH sides: a lock file, a generated artefact, a changelog entry.
+   *
+   * Reported beside the full figure rather than instead of it. A recall whose denominator counts
+   * every file a ticket happened to touch answers "did the map predict the whole commit", which
+   * is not what a map is for; a recall that quietly drops the inconvenient files answers nothing
+   * anyone can check. Both, and the reader picks.
+   *
+   * TEST files stay IN. A workflow that is done properly changes a test, and a map that does not
+   * say so is missing a step rather than being charged for noise.
+   */
+  narrowed: CoverageScore;
+}
+
+/**
+ * A file nobody writes a workflow step about: resolved by a tool, generated by a build, or prose.
+ * A test is NOT one of these, deliberately.
+ */
+const INCIDENTAL_PATH_RE =
+  /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum|gradle\.lockfile|deno\.lock)$|\.(md|mdx|rst|txt)$|(^|\/)(docs?|CHANGELOG[^/]*|LICENSE[^/]*)(\/|$)|(^|\/)(dist|build|generated|node_modules|vendor|__generated__)(\/)/i;
+
+export function isIncidentalPath(path: string): boolean {
+  return INCIDENTAL_PATH_RE.test(path);
 }
 
 /**
@@ -891,9 +1125,10 @@ export function coverage(
   // takes the longer one for the dirtier one. A map's rows ARE roles, so roles is the unit that
   // belongs to both. `files` is kept alongside so the raw size of the held-out work is still
   // visible.
-  const predicted = new Set(roles);
   const touchedRoles = new Set<string>();
+  const narrowedRoles = new Set<string>();
   let files = 0;
+  let narrowedFiles = 0;
   for (const key of heldOut) {
     for (const slice of index.get(key)?.slices ?? []) {
       for (const path of slicePaths(slice)) {
@@ -902,15 +1137,30 @@ export function coverage(
         // so it belongs in neither side of this measurement.
         const role = roleOf(slice.repo, path);
         if (role) touchedRoles.add(role);
+        if (isIncidentalPath(path)) continue;
+        narrowedFiles++;
+        if (role) narrowedRoles.add(role);
       }
     }
   }
-  const hit = [...touchedRoles].filter((role) => predicted.has(role)).length;
+  // The SAME exclusion on both sides. Narrowing only the recall denominator would be a way of
+  // raising recall by refusing to look at what the map got wrong: a predicted role that exists
+  // solely to cover a lock file has to leave the precision denominator with it.
+  const narrowedPredicted = roles.filter((role) => !isIncidentalPath(role));
   return {
-    recall: touchedRoles.size ? Number((hit / touchedRoles.size).toFixed(2)) : 0,
+    ...score(roles, touchedRoles, files),
+    narrowed: score(narrowedPredicted, narrowedRoles, narrowedFiles),
+  };
+}
+
+function score(roles: string[], touched: Set<string>, files: number): CoverageScore {
+  const predicted = new Set(roles);
+  const hit = [...touched].filter((role) => predicted.has(role)).length;
+  return {
+    recall: touched.size ? Number((hit / touched.size).toFixed(2)) : 0,
     precision: predicted.size ? Number((hit / predicted.size).toFixed(2)) : 0,
     predicted: predicted.size,
-    actual: touchedRoles.size,
+    actual: touched.size,
     hit,
     files,
   };
@@ -941,24 +1191,32 @@ argument-hint: "[TICKET]"
 - <Whether sibling tickets exist for other product types.>
 
 ## 1. <first repository or layer>
-1. <step>
-2. <step>
+1. <step> [map 1]
+2. <step> [fix 2]
 
 ## 2. <next repository or layer>
-1. <step>
-2. <step>
+1. <step> [hunk 1]
+2. <step> [subject 3]
 
-## 3. File map (<N> past changes)
+## 3. <another layer, and so on - as many numbered sections as the work has layers>
+1. <step> [map 2]
+
+## Not visible in history
+- <Something this workflow needs that no commit records - configuration outside version control,
+  an exploratory check, a conversation. Write it as the open question it is, never as a measured
+  fact. Omit the section when there is nothing to put in it.>
+
+## File map (<N> past changes)
 | File (pattern) | Touched in | Note |
 |---|---|---|
 | <role> | <k>/<N> | <what it is for> |
 
-## 4. Verification
+## Verification
 Run in this order; a green run is a safety net, not proof:
 - [ ] <a command in backticks, or a result someone can observe>
 - [ ] <another>
 
-## 5. Delivery
+## Delivery
 - <Which repository merges first and why, or "single repo" when there is only one.>
 
 ## Common mistakes (observed)
@@ -977,13 +1235,28 @@ const INSTRUCTIONS = [
   "Rules:",
   "- Reply with the SKILL.md and nothing else: no preamble, no code fence around the whole file.",
   "- Follow the template's sections exactly, in order.",
+  "- Number the layer sections 0, 1, 2, 3 ... in sequence, each number used once. The file map,",
+  "  verification, delivery and not-visible sections carry NO number.",
   "- The file map must have one row per file in the evidence, with its k/N cell copied across.",
+  "- EVERY numbered step must end with a citation to the piece of evidence it rests on: [map 3],",
+  "  [fix 7], [hunk 2] or [subject 5], numbered exactly as the evidence below numbers them. A step",
+  "  you cannot cite is a step you may not write.",
+  "- Do not invent. If something you believe belongs to this workflow is not in the evidence, it",
+  "  goes under '## Not visible in history' as an open question, in the words of a question. Never",
+  "  write a guess in the language of a measurement.",
   "- Every verification item must carry a command in backticks or a result someone can observe.",
-  "  'Run the tests' on its own is not a check.",
+  "  These two pass:",
+  "    `./gradlew test` exits 0.",
+  "    The listing endpoint returns 200 with a non-empty body.",
+  "  These two do not:",
+  "    Run the tests.",
+  "    Make sure nothing else broke.",
   "- The description needs at least two sentences that say WHEN to reach for the skill.",
   "- Never name a person. Never write an absolute path, an email address or a ticket key: the",
   "  evidence numbers its tickets #1, #2, and the draft refers to them the same way.",
   "- Write steps someone who has not read this repository could follow.",
+  "- Build the mistakes table from the corrections listed below, highest-cost first, each row",
+  "  citing the correction it came from. Do not invent a mistake that is not in that list.",
   "",
   "The template:",
   TEMPLATE,
@@ -1016,7 +1289,28 @@ const REMEDIES: Record<string, string> = {
   delivery: "Add a delivery section saying which repository goes first, or 'single repo'.",
   "verification-concrete":
     "Every verification item needs a command in backticks or an observable result, not 'run the tests'.",
+  "unique-sections": "Two sections carry the same number; number them in sequence.",
+  "file-map-pattern": "The first column of the file map must hold a file pattern, not a sentence.",
+  "step-map-consistency": "A step names a file the file map has no row for; add the row or drop the step.",
+  "step-evidence":
+    "Every numbered step must cite the evidence it rests on - [map 3], [fix 7], [hunk 2], [subject 5] - and cite only pieces the evidence actually contains.",
 };
+
+/**
+ * How many pieces of each kind a draft written from this packet may cite.
+ *
+ * One definition, exported, because two would be a gate that resolves `[map 4]` against a
+ * different list than the prompt numbered - and the draft would be rejected for citing exactly
+ * what it was shown. The numbering here IS the numbering `buildDraftPrompt` writes.
+ */
+export function citableCounts(packet: EvidencePacket): { map: number; fix: number; hunk: number; subject: number } {
+  return {
+    map: packet.fileMap.length,
+    fix: packet.fixes.length,
+    hunk: packet.hunks.length,
+    subject: packet.subjects.length,
+  };
+}
 
 export interface DraftResult {
   ok: boolean;
@@ -1070,7 +1364,11 @@ export async function draftSkill(
       extended: options.extended !== false,
       // What the evidence says this draft owes: a map of the files it measured, and a delivery
       // order whenever the work really does cross repositories.
-      expects: { fileMap: packet.fileMap.length > 0, multiRepo: (packet.delivery.order?.length ?? 0) > 1 },
+      expects: {
+        fileMap: packet.fileMap.length > 0,
+        multiRepo: (packet.delivery.order?.length ?? 0) > 1,
+        citable: citableCounts(packet),
+      },
     });
     if (!formatPasses(findings)) {
       reasons = failedRules(findings);
@@ -1095,17 +1393,22 @@ export function buildDraftPrompt(evidence: EvidencePacket, failed: string[], hos
   const fields: Record<string, string> = {
     "how often this work happened": String(evidence.rubric.support),
     "files it touches, and in how many of those jobs": evidence.fileMap
-      .map((row) => `${row.role} | ${row.units}/${row.of} | e.g. ${row.examples.join(", ") || "(none)"}`)
+      .map((row, i) => `[map ${i + 1}] ${row.role} | ${row.units}/${row.of} | e.g. ${row.examples.join(", ") || "(none)"}`)
       .join("\n"),
     "the order repositories were changed in": evidence.delivery.order
       ? `${evidence.delivery.order.join(" -> ")} (in ${evidence.delivery.agreement} of ${evidence.delivery.units} multi-repository jobs)`
       : "single repository",
-    "what the tickets were called": evidence.subjects.join("\n"),
+    "what the tickets were called": evidence.subjects.map((subject, i) => `[subject ${i + 1}] ${subject}`).join("\n"),
     "what the changes look like": evidence.hunks
-      .map((hunk) => `--- ${hunk.role} (job ${hunk.unit})${hunk.truncated ? ", trimmed" : ""}\n${hunk.lines.join("\n")}`)
+      .map((hunk, i) => `[hunk ${i + 1}] ${hunk.role} (job ${hunk.unit})${hunk.truncated ? ", trimmed" : ""}\n${hunk.lines.join("\n")}`)
       .join("\n\n"),
-    "corrections made inside the same ticket": evidence.fixes
-      .map((fix) => `${fix.subject} (touched ${fix.files.join(", ")})`)
+    // Most costly first, with the signals that put each one there, so the mistakes table is built
+    // from what a correction COST rather than from how often something like it happened.
+    "corrections made inside the same ticket, costliest first": evidence.fixes
+      .map((fix, i) => {
+        const why = fix.signals.length ? ` [${fix.signals.join(" ")}]` : "";
+        return `[fix ${i + 1}]${why} ${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
+      })
       .join("\n"),
     "the same work repeated per product type": evidence.siblings
       .map((series) => series.variants.join(" / "))
