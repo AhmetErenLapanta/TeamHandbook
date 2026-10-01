@@ -283,10 +283,14 @@ const INLINE_CODE_RE = /`[^`\n]+`/;
 
 /**
  * A path PATTERN, as opposed to a sentence about one: it carries a separator, a wildcard or a
- * file extension. A map whose first column holds prose is a map a reader cannot match a file
- * against, and one such draft cleared the old gate with a coverage of zero.
+ * file extension.
+ *
+ * Brackets end a token rather than belonging to it. A measured map writes its pattern inside a
+ * label - `Server reference docs (docs/Reference/Server.md)` - and reading the bracket as part of
+ * the path built a pattern that matched nothing: eight of fourteen drafts this rule flagged were
+ * flagged for a file their map listed all along.
  */
-const PATH_TOKEN_RE = /[^\s`|]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|]*/;
+const PATH_TOKEN_RE = /[^\s`|()]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|()]*/;
 const PATH_TOKEN_ALL_RE = new RegExp(PATH_TOKEN_RE.source, "g");
 /** The number a numbered heading carries, whichever of the three forms it is written in. */
 const HEAD_NUMBER_RE = new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}]+)?(\\p{Nd}+)`, "iu");
@@ -636,7 +640,9 @@ function fileTokens(line: string, mapExtensions: Set<string>): string[] {
     if (ext === null) continue;
     if (text.includes("/")) {
       out.push(text.replace(/^[./]+/, ""));
-    } else if (!/[<>*]/.test(text) && mapExtensions.has(ext)) {
+    } else if (!/[<>*]/.test(text) && /^[A-Za-z0-9_]/.test(text) && mapExtensions.has(ext)) {
+      // A bare extension names no file: one draft quoted `.po` on its own and the map was
+      // charged for a row it could never have written.
       out.push(text);
     }
   }

@@ -915,8 +915,17 @@ export interface VariantFamily {
 }
 
 /**
- * The default for recognising the same workflow twice. Measured against a hand-made reading of
- * one ranking's top twenty, where eight distinct workflows accounted for all twenty shapes.
+ * The default for recognising the same workflow twice.
+ *
+ * Chosen by sweeping it against a hand-made reading of one ranking's top twenty and keeping the
+ * value that agreed with that reading about the most PAIRS - for every two shapes, whether both
+ * readings put them together. 0.6 agreed on 81%, the best of eight values tried.
+ *
+ * It is not the value that reproduces that reading's COUNT of distinct workflows. Measured: the
+ * reading found eight, this finds five, and three of its eight are swallowed. A merge costs the
+ * team a workflow nobody is offered, so this default trades three such losses for a grouping that
+ * is right about four fifths of pairs; at 0.8 the count is closer and the pair agreement worse.
+ * Raising it is a deliberate choice about which error to prefer, not a tuning detail.
  */
 const VARIANT_CONTAINMENT = 0.6;
 

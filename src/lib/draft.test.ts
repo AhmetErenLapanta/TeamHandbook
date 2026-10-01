@@ -1155,3 +1155,36 @@ describe("telling one workflow from two that share a ticket key", () => {
     expect(result.weakest).toBe(0);
   });
 });
+
+describe("which member of a workflow family gets the draft", () => {
+  const shapeOf = (id: string, units: string[]): Shape =>
+    ({
+      id,
+      view: "repo",
+      coreFiles: [{ role: "dto/*Request.kt", units: units.length, of: units.length, share: 1 }],
+      repos: ["acme-api"],
+      coreRepos: ["acme-api"],
+      recurrence: units.length,
+      authors: 2,
+      firstAt: "2025-01-01T00:00:00Z",
+      lastAt: "2025-06-01T00:00:00Z",
+      sampleSubjects: [],
+      memberUnits: units,
+      testUnits: 0,
+      score: { support: 3, repos: 1, roles: 1, authors: 2, total: 3 },
+    }) as unknown as Shape;
+
+  it("given the top-ranked shape is the SMALLER one, when grouped, then the bigger one is still the head", () => {
+    // The order the caller ranks by is not the order the head is picked by. Measured on one
+    // ranking's top twenty: taking the first-ranked member made a nineteen-unit shape the head of
+    // a family whose broadest member had two hundred and thirty-eight, and the draft was then
+    // written from a fraction of the evidence. Every other test here happens to pass the broad
+    // shape first, so this is the one that would catch a return to rank order.
+    const narrow = shapeOf("narrow-but-top-ranked", ["a", "b", "c"]);
+    const broad = shapeOf("broad", ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]);
+    const families = variantFamilies([narrow, broad]);
+    expect(families).toHaveLength(1);
+    expect(families[0]!.head.id).toBe("broad");
+    expect(families[0]!.variants.map((s) => s.id)).toEqual(["narrow-but-top-ranked"]);
+  });
+});
