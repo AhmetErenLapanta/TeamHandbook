@@ -61,9 +61,10 @@ user clear them in one pass.
      (installs into the `.claude/skills` of the project the skill was captured in, which is
      the one `show` named; commit that repo and the skill travels with the code).
    - **Share with the team** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to team`
-     (pushes a `handbook/<slug>` branch and opens a PR to the team handbook; needs
-     /handbook:init or /handbook:join first - the CLI says so if not). This one commits,
-     so it takes the extra answer in step 8; the first run comes back asking for it.
+     (pushes a branch the reviewer confirms and opens a PR to the team handbook; needs
+     /handbook:init or /handbook:join first - the CLI says so if not). This one commits
+     and pushes, so it takes the extra answers in step 8; the first run comes back asking
+     for them.
    - Plain `approve <slug>` (no --to) follows the candidate's suggested target, which is
      the `suggested:` line `show` prints, not its `scope:`; relay
      where the CLI says it landed. If the output shows an "Open the PR here" link
@@ -105,10 +106,16 @@ user clear them in one pass.
    `--as` and `--update` are alternatives and are refused together, because `--update`
    would land on the name `--as` chose rather than the one that was refused; and `--update`
    takes no value, so write it bare.
-8. **A team approval also needs the commit message, and it is the user's to write.** The
-   first `--to team` run commits nothing: it comes back with `commit message required` and
-   the exact message it proposes. Show them that message, let them approve it, edit it or
-   write their own, and run the same command again with their answer:
+8. **A team approval also needs the branch and the commit message, and both are the
+   user's.** The first `--to team` run commits and pushes nothing: its first line is one
+   question - ``Branch `<name>` · message `<text>` - confirm or change either.`` - followed
+   by `commit message required`. If this machine cannot open the merge request, the
+   same screen says so and offers no delegation. If the reviewer named a branch earlier in
+   this conversation, pass `--branch-hint <that name>` on that first run so the proposal
+   reuses its ticket. Show the question line as printed and ask it as ONE question: they
+   confirm both, or change either. Then run the same command again with their answers:
+   - the branch: `--branch "<name>"`, the proposed one if they confirmed it, otherwise
+     theirs. It is used exactly as given, never suffixed, and never saved as a setting.
    - they approved or wrote a message: `--message "<their wording>"`.
    - they said you decide: `--delegate-message <fingerprint>`, with the fingerprint the
      refusal printed beside the proposal, and nothing else. That is the only way a wording
@@ -119,10 +126,17 @@ user clear them in one pass.
      `gh`/`glab` signed in, and a delegation is an answer about the merge request - so ask
      for the wording rather than retrying.
    Ask it after any `--update` or `--as` answer from step 7, because the proposed message
-   says which of the two the request is. The flag is per candidate, like those two: the CLI
-   refuses it together with `--all` or with several slugs, because one sentence is not a
-   claim about four different skills. A personal or project approval never takes one and
-   says so rather than dropping it: nothing is committed there.
+   says which of the two the request is. Both flags are per candidate, like those two: the
+   CLI refuses them together with `--all` or with several slugs, because one sentence or
+   one branch is not a claim about four different skills. A personal or project approval
+   never takes either and says so rather than dropping it: nothing is pushed there.
+   - **If the push is refused for the branch NAME**, nothing reached the repository and
+     nothing was retried: the error quotes the forge's own sentence and asks the same
+     question with the refused name in it. Relay the sentence, ask again with that name as
+     the starting point for their edit, and run once more with the new `--branch`.
+   - **If the refusal names an unmerged branch that already raises the plugin version**,
+     offer its two ways: run again with `--version-after-open` to go past it, or stop so
+     that branch is merged or closed first.
 9. The name in the CLI's output is the name that was written, and it is not always the one
    in the queue - relay it as printed rather than repeating the slug you asked for.
 10. Finish with a one-line tally: how many kept (personal/project), shared, rejected, and
