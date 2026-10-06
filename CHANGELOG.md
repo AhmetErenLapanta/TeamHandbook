@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.22.0] - 2026-10-06
+
+### Added
+
+- **A slash command kept in a subdirectory can now be shared.** `git/sync.md` is listed as
+  `/git:sync`, screened like any other command, and arrives in the team repository at the
+  same path, so teammates get it under the same name. A `sync.md` beside it stays a
+  separate command. A team repository set up before this release announces such commands
+  to teammates once its scaffold is refreshed with `/handbook:init --upgrade`.
+
+### Changed
+
+- **The `/handbook:demo` description says what the demo does:** it mines a scratch
+  repository's repeating work into a draft skill, rather than harvesting a skill from a
+  session.
+
 ## [0.21.1] - 2026-10-06
 
 - **The code that would let a model grade a draft is in the repository, but it is not
