@@ -384,6 +384,70 @@ export function versionClaimProblem(preview: PushPreview, rerun: string): string
   return preview.claims.length && preview.current ? claimMessage(preview.claims, preview.current, rerun) : null;
 }
 
+/**
+ * What the screen shows for the branch, and what it says about it, for a run that has or
+ * has not been given one. One function for the push decision and for the refresh plan, so
+ * a name the sieve refuses is refused - and a name carrying a trace kept off the screen -
+ * on every screen that could print it.
+ *
+ * `shown` is null when nothing may be put in front of the user: a given name carrying a
+ * trace, or a proposal that cannot be used. `said` is null only for a given name that can
+ * go out as it is.
+ */
+export function branchAnswer(
+  choice: PushChoice,
+  preview: PushPreview,
+  git: GitRunner,
+  repoDir: string,
+  rerun: string,
+): { shown: BranchProposal | null; said: string | null } {
+  if (choice.branch === undefined) {
+    // The proposal is built from names this machine did not write - a server, a skill
+    // directory - so it is screened like a name the user typed, and one that fails is
+    // neither shown nor handed back to be confirmed.
+    const unusable = "branch" in preview.proposal ? branchNameProblem(preview.proposal.branch, git, repoDir) : null;
+    return unusable
+      ? {
+          shown: null,
+          said:
+            `branch name required: the branch this would propose cannot be used (${unusable}), so ask the user for ` +
+            `one and ${rerun} with \`--branch <name>\`.`,
+        }
+      : {
+          shown: preview.proposal,
+          said:
+            "branch name required: nothing is pushed under a name the user has not seen. Show it to them with the " +
+            `message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`,
+        };
+  }
+  const problem = branchNameProblem(choice.branch, git, repoDir);
+  if (problem && branchTrace(choice.branch)) {
+    // Not echoed and not handed back: the name is what carries the trace.
+    return {
+      shown: null,
+      said: `the branch given cannot be used: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`,
+    };
+  }
+  if (problem) {
+    return {
+      shown: { branch: choice.branch },
+      said: `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`,
+    };
+  }
+  if (preview.taken.has(choice.branch)) {
+    // Never suffixed: the user named this branch, and "TEAM-12-2" is not a name they
+    // chose. The branch that is there may carry a request of its own.
+    return {
+      shown: { branch: choice.branch },
+      said:
+        `the team repository already has a branch named "${choice.branch}", which may carry an open request of ` +
+        `its own, so nothing was pushed over it and no other name was picked for you. Ask for another name and ` +
+        `${rerun} with \`--branch <name>\`, or merge or delete that branch first.`,
+    };
+  }
+  return { shown: null, said: null };
+}
+
 export interface PushQuestionInput {
   git: GitRunner;
   forge: ForgeRunner;
@@ -420,37 +484,7 @@ export function decidePush(input: PushQuestionInput): ({ ok: true } & PushPlan) 
     rerun,
     forgeProblem ? noRequestPossible(forgeProblem) : undefined,
   );
-  let branchShown: BranchProposal | null = null;
-  let branchSaid: string | null = null;
-  if (choice.branch === undefined) {
-    // The proposal is built from names this machine did not write - a server, a skill
-    // directory - so it is screened like a name the user typed, and one that fails is
-    // neither shown nor handed back to be confirmed.
-    const unusable = "branch" in preview.proposal ? branchNameProblem(preview.proposal.branch, git, repoDir) : null;
-    branchShown = unusable ? null : preview.proposal;
-    branchSaid = unusable
-      ? `branch name required: the branch this would propose cannot be used (${unusable}), so ask the user for ` +
-        `one and ${rerun} with \`--branch <name>\`.`
-      : "branch name required: nothing is pushed under a name the user has not seen. Show it to them with the " +
-        `message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`;
-  } else {
-    const problem = branchNameProblem(choice.branch, git, repoDir);
-    if (problem && branchTrace(choice.branch)) {
-      // Not echoed and not handed back: the name is what carries the trace.
-      branchSaid = `the branch given cannot be used: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
-    } else if (problem) {
-      branchShown = { branch: choice.branch };
-      branchSaid = `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
-    } else if (preview.taken.has(choice.branch)) {
-      // Never suffixed: the user named this branch, and "TEAM-12-2" is not a name they
-      // chose. The branch that is there may carry a request of its own.
-      branchShown = { branch: choice.branch };
-      branchSaid =
-        `the team repository already has a branch named "${choice.branch}", which may carry an open request of ` +
-        `its own, so nothing was pushed over it and no other name was picked for you. Ask for another name and ` +
-        `${rerun} with \`--branch <name>\`, or merge or delete that branch first.`;
-    }
-  }
+  const { shown: branchShown, said: branchSaid } = branchAnswer(choice, preview, git, repoDir, rerun);
   const claimSaid = choice.versionAfterOpen ? null : versionClaimProblem(preview, rerun);
   if (!("error" in decided) && !branchSaid && !claimSaid) {
     return { ok: true, branch: choice.branch!, subject: decided.subject, claims: preview.claims, forgeProblem };

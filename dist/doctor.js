@@ -598,6 +598,7 @@ function hostFromUrl(url) {
   if (!normalized) return null;
   return normalized.slice(0, normalized.indexOf("/"));
 }
+var FORGE_CHECK_TIMEOUT_MS = 5e3;
 function forgeTool(repoUrl) {
   const host = hostFromUrl(repoUrl);
   return host && host.includes("github") ? "gh" : "glab";
@@ -609,11 +610,12 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   let last = "";
   for (const args of attempts) {
     try {
-      forge(tool, args, repoDir);
+      forge(tool, args, repoDir, FORGE_CHECK_TIMEOUT_MS);
       return null;
     } catch (err) {
       const e = err;
       if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      if (e?.code === "ETIMEDOUT") return "the forge check timed out";
       const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
       last = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
       if (!/unknown (flag|shorthand)/i.test(stderr)) break;
@@ -1458,12 +1460,13 @@ function checkForge(home, run) {
   const team = loadTeamConfig(home);
   if (!team) return null;
   const tool = forgeTool(team.repoUrl);
-  const problem = forgeSignInProblem(team.repoUrl, home, (cli, args) => run(cli, args, 1e4));
+  const problem = forgeSignInProblem(team.repoUrl, home, (cli, args, _cwd, timeoutMs) => run(cli, args, timeoutMs ?? 1e4));
   if (!problem) return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
   const instead = tool === "glab" && hostFromUrl(team.repoUrl) ? "approvals still push a branch asking GitLab to open the request, or print a link" : "approvals still push a branch and print a manual PR link";
   if (problem.includes("not installed")) {
     return warn("forge CLI", `${tool} not installed - ${instead}; install ${tool} to auto-open PRs`);
   }
+  if (problem.includes("timed out")) return warn("forge CLI", `${problem} - ${instead}`);
   return warn("forge CLI", `${problem} - run \`${tool} auth login\` (${instead})`);
 }
 function isPlainObject(value) {

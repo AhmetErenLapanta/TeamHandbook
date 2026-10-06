@@ -12,7 +12,7 @@ import {
   requestPushOptions,
 } from "./branch.js";
 import { approveAndDeliver } from "./deliver.js";
-import { forgeNotice } from "./forge.js";
+import { forgeNotice, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import { loadTeamConfig, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
@@ -814,5 +814,62 @@ describe("a branch named for one share", () => {
     expect(out).toContain("branch: TEAM-12-mine");
     expect(out).toContain("commit: TEAM-1 add my skill");
     expect(md5(join(home, "config.json"))).toBe(before);
+  });
+});
+
+describe("a forge CLI that does not answer", () => {
+  it("given a check that times out, when the sign-in is asked, then it is asked once, briefly, and read as no request possible", () => {
+    const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
+    const hanging: ForgeRunner = (_tool, args, _cwd, timeoutMs) => {
+      calls.push({ args, timeoutMs });
+      const err = new Error("spawnSync gh ETIMEDOUT") as Error & { code: string };
+      err.code = "ETIMEDOUT";
+      throw err;
+    };
+
+    const line = forgeLine(teamFor(GITHUB), hanging, home);
+
+    // one short attempt: the fallback without the host would only double the wait
+    expect(calls).toEqual([{ args: ["auth", "status", "--hostname", "github.com"], timeoutMs: 5_000 }]);
+    expect(line).toContain("This machine cannot open the merge request (the forge check timed out): the branch will be pushed and a link printed.");
+  });
+
+  it("given a CLI that hangs, when the share list asks about it, then the screen waits seconds rather than a minute", () => {
+    // A real process standing in for gh with its host unreachable: it never answers.
+    const bin = temp("handbook-hang-");
+    writeFileSync(join(bin, "gh"), "#!/bin/sh\nsleep 30\n");
+    chmodSync(join(bin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+      const started = Date.now();
+      const line = forgeLine(teamFor(GITHUB), runForge, home);
+
+      expect(Date.now() - started).toBeLessThan(15_000);
+      expect(line).toContain("the forge check timed out");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+});
+
+describe("the refresh plan and a branch the user gave", () => {
+  it("given a branch carrying a home path, when the plan is shown, then it is refused by class and not printed back", () => {
+    const bare = bareHandbook();
+
+    const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge, { branch: "TEAM-1-/home/alice/notes" }));
+
+    expect(text).toContain("the branch given cannot be used: it carries a trace of this machine (home-path)");
+    expect(text).not.toContain("alice");
+    expect(text).toContain("Message `chore: refresh the team handbook scaffold` - confirm or change it.");
+  });
+
+  it("given a branch that can go out, when the plan is shown, then the question carries it as given", () => {
+    const bare = bareHandbook();
+
+    const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge, { branch: "TEAM-12-refresh" }));
+
+    expect(text).toContain("Branch `TEAM-12-refresh` · message `chore: refresh the team handbook scaffold` - confirm or change either.");
+    expect(text).not.toContain("cannot be used");
   });
 });

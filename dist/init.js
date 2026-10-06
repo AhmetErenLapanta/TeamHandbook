@@ -422,13 +422,14 @@ function hostFromUrl(url) {
   return normalized.slice(0, normalized.indexOf("/"));
 }
 var FORGE_TIMEOUT_MS = 6e4;
-function runForge(tool, args, cwd) {
+var FORGE_CHECK_TIMEOUT_MS = 5e3;
+function runForge(tool, args, cwd, timeoutMs = FORGE_TIMEOUT_MS) {
   return execFileSync2(tool, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     env: nonInteractiveEnv(),
-    timeout: FORGE_TIMEOUT_MS
+    timeout: timeoutMs
   });
 }
 function manualPrUrl(repoUrl, branch) {
@@ -454,11 +455,12 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   let last = "";
   for (const args of attempts) {
     try {
-      forge(tool, args, repoDir);
+      forge(tool, args, repoDir, FORGE_CHECK_TIMEOUT_MS);
       return null;
     } catch (err) {
       const e = err;
       if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      if (e?.code === "ETIMEDOUT") return "the forge check timed out";
       const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
       last = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
       if (!/unknown (flag|shorthand)/i.test(stderr)) break;
@@ -667,6 +669,38 @@ function previewPush(git, forge, repoDir, team, slug, hints = {}) {
 function versionClaimProblem(preview, rerun) {
   return preview.claims.length && preview.current ? claimMessage(preview.claims, preview.current, rerun) : null;
 }
+function branchAnswer(choice, preview, git, repoDir, rerun) {
+  if (choice.branch === void 0) {
+    const unusable = "branch" in preview.proposal ? branchNameProblem(preview.proposal.branch, git, repoDir) : null;
+    return unusable ? {
+      shown: null,
+      said: `branch name required: the branch this would propose cannot be used (${unusable}), so ask the user for one and ${rerun} with \`--branch <name>\`.`
+    } : {
+      shown: preview.proposal,
+      said: `branch name required: nothing is pushed under a name the user has not seen. Show it to them with the message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`
+    };
+  }
+  const problem = branchNameProblem(choice.branch, git, repoDir);
+  if (problem && branchTrace(choice.branch)) {
+    return {
+      shown: null,
+      said: `the branch given cannot be used: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`
+    };
+  }
+  if (problem) {
+    return {
+      shown: { branch: choice.branch },
+      said: `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`
+    };
+  }
+  if (preview.taken.has(choice.branch)) {
+    return {
+      shown: { branch: choice.branch },
+      said: `the team repository already has a branch named "${choice.branch}", which may carry an open request of its own, so nothing was pushed over it and no other name was picked for you. Ask for another name and ${rerun} with \`--branch <name>\`, or merge or delete that branch first.`
+    };
+  }
+  return { shown: null, said: null };
+}
 function decidePush(input) {
   const { git, repoDir, team, choice, message, proposedMessage, rerun } = input;
   const preview = previewPush(git, input.forge, repoDir, team, input.slug, choice.hints);
@@ -678,24 +712,7 @@ function decidePush(input) {
     rerun,
     forgeProblem ? noRequestPossible(forgeProblem) : void 0
   );
-  let branchShown = null;
-  let branchSaid = null;
-  if (choice.branch === void 0) {
-    const unusable = "branch" in preview.proposal ? branchNameProblem(preview.proposal.branch, git, repoDir) : null;
-    branchShown = unusable ? null : preview.proposal;
-    branchSaid = unusable ? `branch name required: the branch this would propose cannot be used (${unusable}), so ask the user for one and ${rerun} with \`--branch <name>\`.` : `branch name required: nothing is pushed under a name the user has not seen. Show it to them with the message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`;
-  } else {
-    const problem = branchNameProblem(choice.branch, git, repoDir);
-    if (problem && branchTrace(choice.branch)) {
-      branchSaid = `the branch given cannot be used: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
-    } else if (problem) {
-      branchShown = { branch: choice.branch };
-      branchSaid = `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
-    } else if (preview.taken.has(choice.branch)) {
-      branchShown = { branch: choice.branch };
-      branchSaid = `the team repository already has a branch named "${choice.branch}", which may carry an open request of its own, so nothing was pushed over it and no other name was picked for you. Ask for another name and ${rerun} with \`--branch <name>\`, or merge or delete that branch first.`;
-    }
-  }
+  const { shown: branchShown, said: branchSaid } = branchAnswer(choice, preview, git, repoDir, rerun);
   const claimSaid = choice.versionAfterOpen ? null : versionClaimProblem(preview, rerun);
   if (!("error" in decided) && !branchSaid && !claimSaid) {
     return { ok: true, branch: choice.branch, subject: decided.subject, claims: preview.claims, forgeProblem };
@@ -1790,6 +1807,9 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     const unreadable = unreadableManifests(repoDir, candidates);
     const preview = previewPush(git, forge, repoDir, team, REFRESH_SLUG, choice.hints);
     const versionClaim = versionClaimProblem(preview, "run the refresh again");
+    const answer = branchAnswer(choice, preview, git, repoDir, "run the refresh again");
+    const branch = choice.branch !== void 0 && !answer.said ? { branch: choice.branch } : answer.shown;
+    const branchProblem = choice.branch !== void 0 || !answer.shown ? answer.said : null;
     const plan = {
       ok: true,
       url: team.repoUrl,
@@ -1798,7 +1818,8 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
       version: versionPlan(repoDir),
       proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
       proposalHash: proposalFingerprint(commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE)),
-      branch: choice.branch ? { branch: choice.branch } : preview.proposal,
+      ...branch ? { branch } : {},
+      ...branchProblem ? { branchProblem } : {},
       ...preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {},
       ...versionClaim ? { versionClaim } : {},
       ...!choice.branchExample && !readTeamBranchExample(repoDir).example ? { asksBranchExample: true } : {},
@@ -2024,6 +2045,7 @@ function formatUpgradePlan(plan) {
       pushQuestion(plan.branch ?? null, plan.proposedMessage),
       `That request goes out on that branch and commits as "${plan.proposedMessage}". Pass the branch with`,
       `--branch "<name>" - the one above, if it is confirmed - and the message with --message "<your wording>"` + (plan.forgeProblem ? "." : `, or --delegate-message ${plan.proposalHash} to use the one above as it stands - the fingerprint is what ties that answer to this exact sentence.`),
+      ...plan.branchProblem ? [plan.branchProblem] : [],
       ...plan.forgeProblem ? [forgeNotice(plan.url ?? "", plan.forgeProblem)] : []
     );
   }

@@ -375,7 +375,7 @@ function checkForge(home: string, run: CommandRunner): DoctorCheck | null {
   const team = loadTeamConfig(home);
   if (!team) return null; // solo mode never opens PRs
   const tool = forgeTool(team.repoUrl);
-  const problem = forgeSignInProblem(team.repoUrl, home, (cli, args) => run(cli, args, 10_000));
+  const problem = forgeSignInProblem(team.repoUrl, home, (cli, args, _cwd, timeoutMs) => run(cli, args, timeoutMs ?? 10_000));
   if (!problem) return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
   const instead =
     tool === "glab" && hostFromUrl(team.repoUrl)
@@ -384,6 +384,7 @@ function checkForge(home: string, run: CommandRunner): DoctorCheck | null {
   if (problem.includes("not installed")) {
     return warn("forge CLI", `${tool} not installed - ${instead}; install ${tool} to auto-open PRs`);
   }
+  if (problem.includes("timed out")) return warn("forge CLI", `${problem} - ${instead}`);
   return warn("forge CLI", `${problem} - run \`${tool} auth login\` (${instead})`);
 }
 

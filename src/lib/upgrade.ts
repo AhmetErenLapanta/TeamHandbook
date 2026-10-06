@@ -17,6 +17,7 @@ import {
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion } from "./publish.js";
 import {
+  branchAnswer,
   branchNameProblem,
   branchTrace,
   decidePush,
@@ -358,6 +359,8 @@ export interface UpgradePlan {
   proposalHash?: string;
   /** The branch the refresh would go out on, shown beside the message. */
   branch?: BranchProposal;
+  /** Why the branch given (or the one this would propose) cannot be used. */
+  branchProblem?: string;
   /** Why no merge request can be opened from this machine, when none can. */
   forgeProblem?: string;
   /** Unmerged branches already claiming the version this refresh would raise to. */
@@ -609,6 +612,11 @@ export function planUpgrade(
     // the version in the way are shown here exactly as that run will meet them.
     const preview = previewPush(git, forge, repoDir, team, REFRESH_SLUG, choice.hints);
     const versionClaim = versionClaimProblem(preview, "run the refresh again");
+    // The same sieve the refresh run applies, so a given name carrying a trace is not
+    // printed back on the plan either; a name that can go out is shown as given.
+    const answer = branchAnswer(choice, preview, git, repoDir, "run the refresh again");
+    const branch = choice.branch !== undefined && !answer.said ? { branch: choice.branch } : answer.shown;
+    const branchProblem = choice.branch !== undefined || !answer.shown ? answer.said : null;
     const plan: UpgradePlan = {
       ok: true,
       url: team.repoUrl,
@@ -617,7 +625,8 @@ export function planUpgrade(
       version: versionPlan(repoDir),
       proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
       proposalHash: proposalFingerprint(commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE)),
-      branch: choice.branch ? { branch: choice.branch } : preview.proposal,
+      ...(branch ? { branch } : {}),
+      ...(branchProblem ? { branchProblem } : {}),
       ...(preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {}),
       ...(versionClaim ? { versionClaim } : {}),
       ...(!choice.branchExample && !readTeamBranchExample(repoDir).example ? { asksBranchExample: true } : {}),
@@ -925,6 +934,7 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
         (plan.forgeProblem
           ? "."
           : `, or --delegate-message ${plan.proposalHash} to use the one above as it stands - the fingerprint is what ties that answer to this exact sentence.`),
+      ...(plan.branchProblem ? [plan.branchProblem] : []),
       ...(plan.forgeProblem ? [forgeNotice(plan.url ?? "", plan.forgeProblem)] : []),
     );
   }
