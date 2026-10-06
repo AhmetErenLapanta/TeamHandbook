@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.21.1] - 2026-10-06
+
+- **The code that would let a model grade a draft is in the repository, but it is not
+  used.** It asks whether a draft's citations support its sentences and whether its steps
+  were done in later work. Measured against human labels it did not agree closely enough
+  to be trusted, so drafts are still read by people. Nothing calls it from a command, and
+  the prompt a draft is written from is unchanged.
+
 ## [0.21.0] - 2026-10-06
 
 ### Added
