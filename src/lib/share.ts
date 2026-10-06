@@ -1,9 +1,17 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { auditServer, claudeConfigFile, readLocalServers, refusalMessage, refusalSummary } from "./mcp.js";
+import {
+  auditServer,
+  claudeConfigFile,
+  declaredServers,
+  readLocalServers,
+  refusalMessage,
+  refusalSummary,
+} from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
-import { auditSkillDir, identityPlace } from "./queue.js";
+import { auditSkillDir, screenedRefusal } from "./queue.js";
 import type { SkillAudit } from "./queue.js";
 import { publishTeamSelection } from "./publish.js";
 import type { PublishOptions, SkillShareEntry, TeamAssets, TeamPublishOutcome } from "./publish.js";
@@ -14,6 +22,8 @@ import type { GitRunner, TeamConfig } from "./init.js";
 import { forgeNotice, forgeSignInProblem, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import { unattachedDescriptionLines } from "./branch.js";
+import { listSkillFiles } from "./skill-files.js";
+import { displayPath } from "./display-path.js";
 
 // Taking the setup already on this machine to the team.
 //
@@ -39,7 +49,10 @@ import { unattachedDescriptionLines } from "./branch.js";
 // keeps the job it was built for: the candidates the harvest produced.
 //
 // Everything here reads ~/.claude/skills, ~/.claude/commands, the current project's
-// .claude/skills and .claude/commands, and ~/.claude.json. It writes to none of them.
+// .claude/skills and .claude/commands, and ~/.claude.json - and, to tell which of those the
+// team plugin already carries word for word, that plugin's copy on this machine. It writes
+// to none of them, and it deletes nothing: a copy that became a duplicate is named, with
+// the command that removes it, for the person to run.
 
 export type InventoryScope = "personal" | "project" | "user";
 
@@ -166,10 +179,8 @@ function skillRefusal(audit: SkillAudit): string {
       return "it has no files to share";
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
-    case "identity":
-      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
-      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
+      return screenedRefusal(audit);
   }
 }
 
@@ -291,8 +302,9 @@ function onTeamNote(item: OnTeam): string {
  * `forge` is what the first screen says about how the request will reach the forge, when
  * this machine cannot open it with a CLI. It is said here, before anything is picked,
  * because the alternative was learning it from a result that had already pushed.
+ * `duplicates` are the copies the team plugin here already carries word for word.
  */
-export function formatInventory(inv: Inventory, forge?: string): string {
+export function formatInventory(inv: Inventory, forge?: string, duplicates: Duplicates = NO_DUPLICATES): string {
   if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
     return (
       "No skills, MCP servers or commands are set up on this machine or in this project, so " +
@@ -300,6 +312,20 @@ export function formatInventory(inv: Inventory, forge?: string): string {
     );
   }
   const lines = ["Your local Claude Code setup, as it is on this machine:"];
+  // Said before the list, not after it: past one dialog the reader is choosing between
+  // clicking through rounds and naming what they want, and a person who already knows
+  // their own setup has to see the second way before the first one starts. An escape
+  // printed after a long list is reached only once the dialogs are already under way.
+  const rounds = dialogRounds(inv);
+  if (rounds > 1) {
+    const offered = shareableEntries(inv).length;
+    lines.push(
+      "",
+      `${offered} of these can be shared, and picking them through dialogs takes ${rounds} rounds.`,
+      "Name what you want first instead: type names or patterns such as add-*, all skills or no mcp,",
+      "and the dialogs then cover only what is left.",
+    );
+  }
   if (inv.skills.length) {
     lines.push(
       "",
@@ -351,6 +377,377 @@ export function formatInventory(inv: Inventory, forge?: string): string {
     "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
     "secret cannot.",
     ...(forge ? ["", forge] : []),
+  );
+  if (duplicates.copies.length) lines.push("", formatDuplicateCopies(duplicates));
+  return lines.join("\n");
+}
+
+type ItemKind = "skill" | "mcp" | "command";
+
+const KINDS: readonly ItemKind[] = ["skill", "mcp", "command"];
+
+interface Entry {
+  kind: ItemKind;
+  name: string;
+  shareable: boolean;
+  reason?: string;
+  onTeam?: true;
+}
+
+function entries(inv: Inventory): Entry[] {
+  return [
+    ...inv.skills.map((s) => ({ ...s, kind: "skill" as const })),
+    ...inv.servers.map((s) => ({ ...s, kind: "mcp" as const })),
+    ...inv.commands.map((c) => ({ ...c, kind: "command" as const })),
+  ];
+}
+
+function shareableEntries(inv: Inventory): Entry[] {
+  return entries(inv).filter((e) => e.shareable);
+}
+
+// The question tool's own limits, which commands/share.md works within: four options to a
+// question, four questions to a dialog, and each kind asked in questions of its own.
+const OPTIONS_PER_QUESTION = 4;
+const QUESTIONS_PER_DIALOG = 4;
+
+/** How many dialogs picking from this screen one click at a time would take. */
+export function dialogRounds(inv: Inventory): number {
+  const offered = shareableEntries(inv);
+  const questions = KINDS.map((kind) =>
+    Math.ceil(offered.filter((e) => e.kind === kind).length / OPTIONS_PER_QUESTION),
+  ).reduce((a, b) => a + b, 0);
+  return Math.ceil(questions / QUESTIONS_PER_DIALOG);
+}
+
+const KIND_WORDS: Record<string, ItemKind> = {
+  skill: "skill",
+  skills: "skill",
+  mcp: "mcp",
+  server: "mcp",
+  servers: "mcp",
+  command: "command",
+  commands: "command",
+};
+
+const KIND_LABELS: Record<ItemKind, string> = { skill: "skills", mcp: "MCP servers", command: "commands" };
+
+const KIND_FLAGS: Record<ItemKind, string> = { skill: "--skill", mcp: "--mcp", command: "--command" };
+
+export interface PickResult {
+  /** what the expression picked, by name, ready to be shared as it stands */
+  selection: Selection;
+  /** names the screen could not offer: matched, reported with the reason, never picked */
+  unshareable: Array<{ kind: ItemKind; name: string; reason: string }>;
+  /** names a `no ...` term ruled out */
+  declined: number;
+  /** shareable names the expression left undecided - the only ones a dialog still asks about */
+  remaining: Selection;
+  /** names that will travel as an update to the team's own copy */
+  onTeam: string[];
+  offered: number;
+}
+
+/**
+ * A glob over a name: `*` any run, `?` one character, everything else literal, and the
+ * whole name has to match. Case is ignored, the way the share flags already resolve
+ * "GitLab" to gitlab.
+ */
+function globMatcher(pattern: string): RegExp {
+  const body = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${body}$`, "i");
+}
+
+/**
+ * Turn what a person typed into a selection, deterministically.
+ *
+ * The expression is a list separated by commas: names and globs (`add-*`) pick, `all`
+ * with a kind (`all skills`) or alone picks every shareable entry, and `no` followed by
+ * a kind, a name or a glob rules entries out. The rest is left for the dialogs.
+ *
+ * Every refusal here stops the whole pick rather than skipping a term, because the person
+ * reads the result as what they said: a name that matched nothing is a typo or a thing
+ * that is not on this machine, and dropping it silently would share the other half of
+ * the sentence as if it were all of it. A pattern made of nothing but wildcards is
+ * refused the same way. It would pick everything without the word for everything ever
+ * being typed, and picking everything is the answer this screen exists to stop being the
+ * default - so "all" has to be written out.
+ */
+export function pickByPattern(inv: Inventory, expression: string): PickResult | { error: string } {
+  const all = entries(inv);
+  const key = (e: Entry) => `${e.kind}:${e.name}`;
+  const picked = new Set<string>();
+  const ruledOut = new Set<string>();
+  const segments = expression
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!segments.length) return { error: "nothing to pick: type names or patterns, such as add-* or all skills" };
+  const matching = (word: string): Entry[] | { error: string } => {
+    const name = word.replace(/^\//, "");
+    if (/^[*?]+$/.test(name)) {
+      return {
+        error: `"${word}" on its own would pick everything without saying so; write "all" (or "all skills") if that is what you mean`,
+      };
+    }
+    const re = globMatcher(name);
+    const hits = all.filter((e) => re.test(e.name));
+    return hits.length
+      ? hits
+      : { error: `"${word}" matches nothing on this screen, so nothing was picked; use the names the list printed` };
+  };
+  // "all" and "no" each open a run that lasts to the next of them or to the comma, so
+  // "add-* no mcp" reads the way it is said rather than as a name called "no".
+  for (const segment of segments) {
+    let mode: "pick" | "all" | "no" = "pick";
+    let terms = 0;
+    const close = (): { error: string } | null => {
+      if (mode === "all" && !terms) for (const e of all) if (e.shareable) picked.add(key(e));
+      return mode === "no" && !terms ? { error: `"no" needs a kind, a name or a pattern after it` } : null;
+    };
+    for (const word of segment.split(/\s+/)) {
+      const lower = word.toLowerCase();
+      if (lower === "all" || lower === "no") {
+        const unfinished = close();
+        if (unfinished) return unfinished;
+        mode = lower;
+        terms = 0;
+        continue;
+      }
+      terms += 1;
+      const kind = KIND_WORDS[lower];
+      if (mode === "all") {
+        if (!kind) return { error: `"all" takes skills, mcp or commands, not "${word}"` };
+        for (const e of all) if (e.kind === kind && e.shareable) picked.add(key(e));
+        continue;
+      }
+      const into = mode === "no" ? ruledOut : picked;
+      if (kind && mode === "no") {
+        for (const e of all) if (e.kind === kind) into.add(key(e));
+        continue;
+      }
+      const hits = matching(word);
+      if ("error" in hits) return hits;
+      for (const e of hits) into.add(key(e));
+    }
+    const unfinished = close();
+    if (unfinished) return unfinished;
+  }
+  const chosen = all.filter((e) => picked.has(key(e)) && !ruledOut.has(key(e)));
+  const names = (from: Entry[], kind: ItemKind) => from.filter((e) => e.kind === kind).map((e) => e.name);
+  const going = chosen.filter((e) => e.shareable);
+  const open = all.filter((e) => e.shareable && !picked.has(key(e)) && !ruledOut.has(key(e)));
+  return {
+    selection: { skills: names(going, "skill"), servers: names(going, "mcp"), commands: names(going, "command") },
+    unshareable: chosen
+      .filter((e) => !e.shareable)
+      .map((e) => ({ kind: e.kind, name: e.name, reason: e.reason ?? "it cannot be shared" })),
+    declined: all.filter((e) => e.shareable && ruledOut.has(key(e))).length,
+    remaining: { skills: names(open, "skill"), servers: names(open, "mcp"), commands: names(open, "command") },
+    onTeam: going.filter((e) => e.onTeam).map((e) => e.name),
+    offered: all.filter((e) => e.shareable).length,
+  };
+}
+
+function namesOf(selection: Selection, kind: ItemKind): string[] {
+  return kind === "skill" ? selection.skills : kind === "mcp" ? selection.servers : selection.commands;
+}
+
+function countByKind(selection: Selection): string {
+  return KINDS.filter((kind) => namesOf(selection, kind).length)
+    .map((kind) => `${namesOf(selection, kind).length} ${KIND_LABELS[kind]}`)
+    .join(", ");
+}
+
+/** A word a POSIX shell reads back as itself: bare when it is safe, single-quoted otherwise.
+ * A leading `~/` stays outside the quotes so the shell still expands it. */
+export function shellWord(word: string): string {
+  if (/^[\w@%+=:,./~-]+$/.test(word)) return word;
+  const home = word.startsWith("~/") ? "~/" : "";
+  return `${home}'${word.slice(home.length).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * What a pick resolved to, in the words and numbers the person checks it by, and the one
+ * command that shares exactly that. Every name is printed: the result is what they agree
+ * to, and "4 skills" is not something anyone can agree to without seeing which four.
+ */
+export function formatPick(result: PickResult): string {
+  const { selection } = result;
+  const count = KINDS.reduce((n, kind) => n + namesOf(selection, kind).length, 0);
+  const lines = [
+    count
+      ? `Picked ${count} of the ${result.offered} that can be shared:`
+      : `Nothing picked yet, of the ${result.offered} that can be shared.`,
+  ];
+  for (const kind of KINDS) {
+    const names = namesOf(selection, kind);
+    if (names.length) lines.push(`  ${KIND_LABELS[kind]} (${names.length}): ${names.join(", ")}`);
+  }
+  if (result.onTeam.length) {
+    lines.push(`  already on the team, so picking them sends an update to their copy: ${result.onTeam.join(", ")}`);
+  }
+  if (result.unshareable.length) {
+    lines.push(
+      "",
+      `Matched but not shareable (${result.unshareable.length}), so not picked:`,
+      ...result.unshareable.map((u) => `  ${u.name} - ${u.reason}`),
+    );
+  }
+  if (result.declined) lines.push("", `Ruled out: ${result.declined}.`);
+  const left = countByKind(result.remaining);
+  lines.push(
+    "",
+    left
+      ? `Not decided yet: ${left}. A dialog asks only about these, if you want any of them.`
+      : "Nothing is left to decide.",
+  );
+  if (count) {
+    const flags = KINDS.flatMap((kind) =>
+      namesOf(selection, kind).map((name) => `${KIND_FLAGS[kind]} ${shellWord(name)}`),
+    );
+    lines.push("", "Nothing has been shared. To share exactly these:", `  share.js share ${flags.join(" ")}`);
+  }
+  return lines.join("\n");
+}
+
+export interface DuplicateCopy {
+  kind: ItemKind;
+  name: string;
+  /** the command that removes this machine's own copy: printed for the person, never run */
+  remove: string;
+}
+
+export interface Duplicates {
+  copies: DuplicateCopy[];
+  /**
+   * The team plugin release the comparison was made against. Claude Code pulls the
+   * marketplace in the background and updates the installed plugin separately, so this
+   * copy can be ahead of the one that actually loads; removing yours before the installed
+   * one reaches this version would leave neither. The screen names it so the person can
+   * check that first.
+   */
+  release: { name: string; version: string } | null;
+}
+
+const NO_DUPLICATES: Duplicates = { copies: [], release: null };
+
+function pluginRelease(pluginDir: string): Duplicates["release"] {
+  try {
+    const manifest = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof manifest?.name === "string" && typeof manifest?.version === "string"
+      ? { name: manifest.name, version: manifest.version }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function digest(parts: Array<string | Buffer>): string {
+  const hash = createHash("sha256");
+  for (const part of parts) hash.update(part).update("\0");
+  return hash.digest("hex");
+}
+
+/** A skill directory's content as one hash: every file's path and bytes, in a fixed order.
+ * Null when it cannot all be read, which can only ever mean "not known to be the same". */
+function skillDigest(dir: string): string | null {
+  const { files, skipped } = listSkillFiles(dir);
+  if (skipped.length || !files.length) return null;
+  try {
+    return digest(files.flatMap((file) => [file, readFileSync(join(dir, file))]));
+  } catch {
+    return null;
+  }
+}
+
+function fileDigest(file: string): string | null {
+  try {
+    return digest([readFileSync(file)]);
+  } catch {
+    return null;
+  }
+}
+
+/** A server definition with its keys sorted, so the team file's formatting cannot make two
+ * identical definitions look different. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * The entries this machine now has twice: once as the person's own copy, and once inside
+ * the team plugin, with the same content.
+ *
+ * The same content, not the same name. A name the team carries can hold a different
+ * definition - an older version, a teammate's edit - and a person told "yours is a
+ * duplicate" would remove the copy that was actually theirs. So a skill compares every
+ * file, a command its bytes, a server its whole definition, and anything that cannot be
+ * read is not a duplicate.
+ *
+ * Only copies that live on this machine alone are named. A skill or command in the
+ * project's own .claude directory belongs to that repository and to everyone who works in
+ * it, and removing it there is a change to their setup too; servers are this machine's in
+ * both scopes, since both live in the client's own state file.
+ *
+ * Nothing is removed here. The command is printed because it is the one step the person
+ * would otherwise have to look up, and the decision to take it stays theirs.
+ */
+export function duplicateCopies(inv: Inventory, pluginDir: string, paths: InventoryPaths = {}): Duplicates {
+  const shown = (path: string) => shellWord(displayPath(path, paths.userHome));
+  const found: DuplicateCopy[] = [];
+  for (const skill of inv.skills) {
+    if (skill.scope !== "personal") continue;
+    const theirs = join(pluginDir, "skills", skill.name);
+    if (!isDirectory(theirs)) continue;
+    const mine = skillDigest(skill.dir);
+    if (mine && mine === skillDigest(theirs)) {
+      found.push({ kind: "skill", name: skill.name, remove: `rm -r ${shown(skill.dir)}` });
+    }
+  }
+  let declared: Record<string, unknown> = {};
+  try {
+    declared = declaredServers(readFileSync(join(pluginDir, ".mcp.json"), "utf8"));
+  } catch {
+    // no team servers on this machine, so none of these can be a duplicate
+  }
+  for (const server of inv.servers) {
+    if (!(server.name in declared)) continue;
+    if (canonicalJson(server.entry.config) !== canonicalJson(declared[server.name])) continue;
+    // Claude Code calls the per-project servers in its state file "local"; "project" is
+    // its name for a repository's .mcp.json, which is not what this read.
+    const scope = server.scope === "user" ? "user" : "local";
+    found.push({ kind: "mcp", name: server.name, remove: `claude mcp remove ${shellWord(server.name)} -s ${scope}` });
+  }
+  for (const command of inv.commands) {
+    if (command.scope !== "personal") continue;
+    const mine = fileDigest(command.file);
+    if (mine && mine === fileDigest(join(pluginDir, "commands", `${command.name}.md`))) {
+      found.push({ kind: "command", name: command.name, remove: `rm ${shown(command.file)}` });
+    }
+  }
+  return found.length ? { copies: found, release: pluginRelease(pluginDir) } : NO_DUPLICATES;
+}
+
+/** The duplicates, by name, then the commands - said as an offer, with nothing done. */
+export function formatDuplicateCopies({ copies, release }: Duplicates): string {
+  if (!copies.length) return "";
+  const lines = [`On this machine twice (${copies.length}): the team plugin here carries an identical copy of each.`];
+  for (const kind of KINDS) {
+    const names = copies.filter((d) => d.kind === kind).map((d) => (kind === "command" ? `/${d.name}` : d.name));
+    if (names.length) lines.push(`  ${KIND_LABELS[kind]}: ${names.join(", ")}`);
+  }
+  lines.push(
+    "Nothing was removed, and both copies load until yours goes. Once /plugin shows",
+    release
+      ? `${release.name} installed at ${release.version} or later, these remove your own copies:`
+      : "the team plugin installed and up to date, these remove your own copies:",
+    ...copies.map((d) => `  ${d.remove}`),
   );
   return lines.join("\n");
 }
@@ -505,7 +902,11 @@ export function shareSelection(
  * a command somebody types are not interchangeable, and the manager checking what they
  * just sent reads this line, not the merge request.
  */
-export function formatShareResult(result: ShareResult, marketplaceName?: string): string {
+export function formatShareResult(
+  result: ShareResult,
+  marketplaceName?: string,
+  duplicates: Duplicates = NO_DUPLICATES,
+): string {
   const lines: string[] = [];
   const shared = result.team;
   if (shared?.ok) {
@@ -569,6 +970,15 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
         "    this never writes to ~/.claude/commands, so both names keep working.",
       );
     }
+    // The copies this request makes into duplicates do not exist as duplicates yet: they
+    // become that only once it is merged and the plugin is updated here. So the reader is
+    // told where they will be named, rather than left to find out they have two of each.
+    if (marketplaceName) {
+      lines.push(
+        "  - once it is merged and the plugin is updated here, /handbook:share names each of your copies",
+        "    that became a duplicate, with the command that removes it",
+      );
+    }
     lines.push(...unattachedDescriptionLines(shared.unattachedDescription));
   }
   // Asked for once, about the whole request, because the request is what it is about.
@@ -614,6 +1024,10 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
             "names the user said yes to and no others, and run it again.",
           ]),
     );
+  }
+  if (duplicates.copies.length) {
+    if (lines.length) lines.push("");
+    lines.push(formatDuplicateCopies(duplicates));
   }
   if (!lines.length) return "Nothing was selected, so nothing was shared.";
   return lines.join("\n");

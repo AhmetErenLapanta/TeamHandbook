@@ -262,8 +262,29 @@ function traces(text: string, host: HostIdentity): Trace[] {
 
 /** The class of the first host-identity trace in `text`, or null. */
 export function detectIdentity(text: string, host: HostIdentity = hostIdentity()): IdentityClass | null {
-  return traces(text, host)[0]?.class ?? null;
+  return locateIdentity(text, host)?.class ?? null;
 }
+
+/**
+ * The first trace's class and the offset it starts at, for a refusal that has to say
+ * which line to edit. The offset, not the matched text: the value is what the line is
+ * being edited to remove, and printing it would put it in the transcript of the very
+ * session deciding whether it may travel.
+ */
+export function locateIdentity(
+  text: string,
+  host: HostIdentity = hostIdentity(),
+): { class: IdentityClass; index: number } | null {
+  const first = traces(text, host)[0];
+  return first ? { class: first.class, index: first.index } : null;
+}
+
+/** What each class of trace is, said without the value, for a refusal a person acts on. */
+export const IDENTITY_PHRASE: Record<IdentityClass, string> = {
+  "home-path": "a home directory path",
+  "os-username": "this machine's account name",
+  email: "an email address",
+};
 
 /**
  * The same text with every trace replaced by a neutral stand-in.

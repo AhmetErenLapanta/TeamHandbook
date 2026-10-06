@@ -572,7 +572,7 @@ describe("auditSkillDir", () => {
 
     expect(audit.shareable).toBe(false);
     expect(audit.reason).toBe("identity");
-    expect(audit.identity).toEqual({ class: "home-path", where: "reference/setup.md" });
+    expect(audit.identity).toEqual({ class: "home-path", where: "reference/setup.md", line: 1 });
     const message = skillRefusalMessage("~/skills/rebuild-nightly-report", "rebuild-nightly-report", audit);
     expect(message).toContain("reference/setup.md");
     expect(message).toContain("home-path");

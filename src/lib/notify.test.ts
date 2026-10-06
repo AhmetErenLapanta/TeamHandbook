@@ -19,6 +19,7 @@ import { saveTeamConfig } from "./init.js";
 import { archiveCandidate, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
+import { archiveOlderLessons } from "./review-list.js";
 
 function writeSkill(dir: string, name: string): void {
   const skillDir = join(dir, name);
@@ -323,6 +324,9 @@ describe("harvest headline (v2 session-start ask)", () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "handbook-harvestline-"));
     cwd = mkdtempSync(join(tmpdir(), "handbook-proj2-"));
+    // the headline is what the notice says while the lesson harvest runs; with it off
+    // these candidates are the folded backlog, covered on their own below
+    writeFileSync(join(home, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
   });
   afterEach(() => {
     rmSync(home, { recursive: true, force: true });
@@ -485,6 +489,7 @@ describe("pending queue with a lesson taught again", () => {
 describe("which harvested lesson gets the headline", () => {
   it("given a repeated lesson and a higher-scoring one-off, when announced, then the repeated one leads", () => {
     const home = mkdtempSync(join(tmpdir(), "handbook-headline-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
     const write = (slug: string, total: number, taughtBefore?: number) => {
       mkdirSync(join(home, "candidates", slug), { recursive: true });
       writeFileSync(
@@ -509,5 +514,99 @@ describe("which harvested lesson gets the headline", () => {
     expect(notice).toContain('"said-four-times"');
     expect(notice).toContain("you have now told Claude in 4 sessions");
     rmSync(home, { recursive: true, force: true });
+  });
+});
+
+describe("the notice once the lesson harvest is off", () => {
+  let home: string;
+  let cwd: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-folded-"));
+    cwd = mkdtempSync(join(tmpdir(), "handbook-folded-proj-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // Relative to now: the headline says how long the oldest has waited, and a fixed date
+  // would make the expected text depend on the day the suite runs.
+  const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+
+  function seed(slug: string, overrides: Partial<CandidateMeta>): void {
+    const dir = join(candidatesDir(home), slug);
+    mkdirSync(dir, { recursive: true });
+    writeCandidateMeta(dir, {
+      slug, status: "pending", createdAt: hoursAgo(3), scope: "team",
+      description: `${slug} description`, fingerprint: `fp-${slug}`, sessionId: "s1",
+      gate: { total: 8, scores: {} }, origin: "harvest", kind: "correction",
+      ...overrides,
+    });
+  }
+
+  /** Lessons the harvest left behind, and one draft mined from history after it stopped. */
+  function backlogAndDraft(): void {
+    seed("prefer-config-flags", {});
+    seed("flaky-port-retry", { kind: "error-fix", createdAt: hoursAgo(2) });
+    seed("add-route", { origin: "mine", kind: "procedure", gate: null, createdAt: hoursAgo(1) });
+  }
+
+  it("given the harvest is off, when the notice is built, then it counts the draft and announces the folded lessons once", () => {
+    backlogAndDraft();
+
+    const first = sessionStartNotice(cwd, home)!;
+    const next = sessionStartNotice(cwd, home);
+
+    // the first start also carries the one-time welcome, which is not what this reads
+    expect(first.split("\n").slice(1)).toEqual([
+      "handbook: 1 candidate skill is awaiting your review (add-route - add-route description) - run /handbook:review to approve or reject.",
+      "handbook: 2 older lesson candidates are folded; archive or show them in /handbook:review.",
+    ]);
+    expect(next).toBe(
+      "handbook: 1 candidate skill is awaiting your review (add-route - add-route description) - run /handbook:review to approve or reject.",
+    );
+  });
+
+  it("given the folded lessons were announced and then archived, when fewer new ones are folded, then the notice counts the new ones", () => {
+    backlogAndDraft();
+    sessionStartNotice(cwd, home); // announces the two
+    archiveOlderLessons(home);
+    expect(sessionStartNotice(cwd, home)).not.toContain("folded");
+
+    // fewer than were announced before, which a record kept at its high-water mark would
+    // have taken as already said
+    seed("cache-busting-note", {});
+
+    expect(sessionStartNotice(cwd, home)).toContain(
+      "handbook: 1 older lesson candidate is folded; archive or show them in /handbook:review.",
+    );
+  });
+
+  it("given the harvest is off and only lessons wait, when the notice is built, then no lesson is named", () => {
+    seed("prefer-config-flags", {});
+    seed("flaky-port-retry", { kind: "error-fix" });
+
+    const notice = sessionStartNotice(cwd, home)!;
+
+    expect(notice).toContain("handbook: 2 older lesson candidates are folded; archive or show them in /handbook:review.");
+    expect(notice).not.toContain("prefer-config-flags");
+    expect(notice).not.toContain("flaky-port-retry");
+    expect(notice).not.toContain("skills waiting for your call");
+    expect(notice).not.toContain("TeamHandbook learned");
+  });
+
+  it("given the harvest is on, when the notice is built, then the lesson headline is what it always was and nothing is folded", () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
+    backlogAndDraft();
+    sessionStartNotice(cwd, home); // consume the one-time welcome
+
+    const notice = sessionStartNotice(cwd, home);
+
+    expect(notice).toBe(
+      [
+        'TeamHandbook has 2 skills waiting for your call, newest first: "flaky-port-retry" (error-fix, 8/10) (+1 more) - keep it for yourself, add it to this project, or share it with the team: run /handbook:review.',
+        "handbook: 1 candidate skill is awaiting your review (add-route - add-route description) - run /handbook:review to approve or reject.",
+      ].join("\n"),
+    );
   });
 });

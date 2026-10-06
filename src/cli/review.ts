@@ -18,6 +18,13 @@ import {
   unreadableCandidates,
 } from "../lib/queue.js";
 import { formatSweepReport, sweepQueue } from "../lib/sweep.js";
+import {
+  archiveOlderLessons,
+  foldedAllRefusal,
+  formatLessonArchive,
+  formatReviewQueue,
+  reviewQueue,
+} from "../lib/review-list.js";
 import { loadScoreConfig } from "../lib/score.js";
 import { loadHarvestConfig } from "../lib/harvest.js";
 import { pendingHarvestCount } from "../lib/notify.js";
@@ -30,8 +37,8 @@ import { branchHints } from "../lib/branch.js";
 
 function usage(): never {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
-      "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] " +
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|archive-lessons|restore [manifest]> " +
+      "[--all] [--never] [--archived] [--lessons] [--dry-run] [--to personal|project|team] [--update] [--as <name>] " +
       "[--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] " +
       "[--version-after-open]",
   );
@@ -208,6 +215,7 @@ async function main(): Promise<void> {
   const never = args.includes("--never");
   const all = args.includes("--all");
   const archived = args.includes("--archived");
+  const lessons = args.includes("--lessons");
   const dryRun = args.includes("--dry-run");
   // Accept both `--to personal` and `--to=personal`. Silently ignoring the `=`
   // spelling would fall back to the candidate's suggested target - which is often
@@ -263,18 +271,26 @@ async function main(): Promise<void> {
     restore(home, slugArgs[0]);
     return;
   }
+  if (cmd === "archive-lessons") {
+    console.log(formatLessonArchive(archiveOlderLessons(home)));
+    return;
+  }
   if (cmd === "list") {
     if (archived) {
       listArchived(home);
       return;
     }
-    const pending = listCandidates(home, "pending");
-    console.log(formatCandidateList(pending));
+    const queue = reviewQueue(home);
+    if (lessons) {
+      console.log(formatCandidateList(queue.olderLessons, Date.now(), "Older lesson"));
+      return;
+    }
+    console.log(formatReviewQueue(queue));
     // Said on the same screen as the queue it is missing from. A directory the queue
     // cannot read is counted nowhere, so this is the only place it can surface at all.
     const broken = formatUnreadableCandidates(unreadableCandidates(home));
     if (broken) console.log(`\n${broken}`);
-    if (pending.length === 0) {
+    if (queue.listed.length === 0 && queue.olderLessons.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
         console.log(`(${scoring} session(s) are still being harvested in the background - try again in a minute.)`);
@@ -301,8 +317,17 @@ async function main(): Promise<void> {
     }
     usage();
   }
-  // approve/reject accept one or more slugs, or --all for every pending candidate
-  const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
+  // approve/reject accept one or more slugs, or --all for every candidate the first screen
+  // lists. Not every pending one: with the lesson harvest off, the older lessons are folded
+  // into one line, and a verb that reached them would decide things nobody was shown.
+  const queue = all ? reviewQueue(home) : null;
+  const slugs = queue ? queue.listed.map((c) => c.slug) : slugArgs;
+  const folded = queue ? foldedAllRefusal(queue, cmd) : null;
+  if (folded) {
+    console.error(`error: ${folded}`);
+    process.exitCode = 1;
+    return;
+  }
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
   // Both flags are answers to a refusal about ONE name, so neither may be spread over a
   // batch. A new name would install the last candidate over the ones before it, and

@@ -164,13 +164,17 @@ var GLOBAL_TWIN = new Map(
   ])
 );
 function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;

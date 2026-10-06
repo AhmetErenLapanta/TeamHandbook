@@ -216,7 +216,11 @@ function traces(text, host) {
   return found.sort((a, b) => a.index - b.index);
 }
 function detectIdentity(text, host = hostIdentity()) {
-  return traces(text, host)[0]?.class ?? null;
+  return locateIdentity(text, host)?.class ?? null;
+}
+function locateIdentity(text, host = hostIdentity()) {
+  const first = traces(text, host)[0];
+  return first ? { class: first.class, index: first.index } : null;
 }
 function maskIdentity(text, host = hostIdentity()) {
   const found = traces(text, host);
@@ -579,13 +583,17 @@ var GLOBAL_TWIN = new Map(
   ])
 );
 function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;
@@ -690,10 +698,13 @@ function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = list
     } catch {
       continue;
     }
-    const trace = detectIdentity(content, host);
-    if (trace) return { class: trace, where: file };
+    const trace = locateIdentity(content, host);
+    if (trace) return { class: trace.class, where: file, line: lineAt(content, trace.index) };
   }
   return null;
+}
+function lineAt(text, index) {
+  return text.slice(0, index).split("\n").length;
 }
 function patchPendingCandidate(home, slug, patch) {
   const dir = join5(candidatesDir(home), slug);
@@ -1343,7 +1354,7 @@ function readTranscriptTexts(path) {
 function cap(text, max) {
   return text.length <= max ? text : `${text.slice(0, max)}\u2026`;
 }
-function lineAt(text, offset) {
+function lineAt2(text, offset) {
   const start = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
   const end = text.indexOf("\n", offset);
   return { start, end: end === -1 ? text.length : end };
@@ -1355,7 +1366,7 @@ function capUserTurn(text) {
   return tail ? `${head}\u2026${tail}` : `${head}\u2026`;
 }
 function headWindow(text) {
-  const line = lineAt(text, USER_HEAD);
+  const line = lineAt2(text, USER_HEAD);
   const splitsASecretLine = line.start < USER_HEAD && USER_HEAD < line.end && !!detectSecret(text.slice(line.start, line.end));
   const to = splitsASecretLine ? line.start : USER_HEAD;
   const cut = text.slice(0, to);
@@ -1364,7 +1375,7 @@ function headWindow(text) {
 }
 function tailWindow(text) {
   const from = text.length - USER_TAIL;
-  const line = lineAt(text, from);
+  const line = lineAt2(text, from);
   if (line.start < from && detectSecret(text.slice(line.start, line.end))) {
     return line.end + 1 >= text.length ? "" : text.slice(line.end + 1).trimStart();
   }

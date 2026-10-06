@@ -48,10 +48,14 @@ function configIsBroken(home = handbookHome()) {
   }
 }
 
+// src/cli/share.ts
+import { join as join11 } from "node:path";
+
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
 import { dirname as dirname2, join as join6 } from "node:path";
 
 // src/lib/score.ts
@@ -193,8 +197,17 @@ function traces(text, host) {
   return found.sort((a, b) => a.index - b.index);
 }
 function detectIdentity(text, host = hostIdentity()) {
-  return traces(text, host)[0]?.class ?? null;
+  return locateIdentity(text, host)?.class ?? null;
 }
+function locateIdentity(text, host = hostIdentity()) {
+  const first = traces(text, host)[0];
+  return first ? { class: first.class, index: first.index } : null;
+}
+var IDENTITY_PHRASE = {
+  "home-path": "a home directory path",
+  "os-username": "this machine's account name",
+  email: "an email address"
+};
 
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
@@ -396,13 +409,17 @@ var GLOBAL_TWIN = new Map(
   ])
 );
 function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;
@@ -418,13 +435,13 @@ function listSkillFiles(dir) {
   const files = [];
   const skipped = [];
   const walk = (current, prefix) => {
-    let entries;
+    let entries2;
     try {
-      entries = readdirSync2(current, { withFileTypes: true });
+      entries2 = readdirSync2(current, { withFileTypes: true });
     } catch {
       return;
     }
-    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of [...entries2].sort((a, b) => a.name.localeCompare(b.name))) {
       if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
       const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
       if (entry.isDirectory()) walk(join3(current, entry.name), rel);
@@ -473,9 +490,10 @@ function auditSkillDir(sourceDir, host = hostIdentity()) {
     } catch {
       return { shareable: false, reason: "unreadable", detail: file };
     }
-    const pattern = detectSecret(content);
-    if (pattern) {
-      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    const found = locateSecret(content);
+    if (found) {
+      const secret = { pattern: found.pattern, file, line: lineAt(content, found.index) };
+      return { shareable: false, reason: "secret", detail: found.pattern, secret };
     }
   }
   const trace = identityInSkillDir(sourceDir, name, files, host);
@@ -492,13 +510,31 @@ function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = list
     } catch {
       continue;
     }
-    const trace = detectIdentity(content, host);
-    if (trace) return { class: trace, where: file };
+    const trace = locateIdentity(content, host);
+    if (trace) return { class: trace.class, where: file, line: lineAt(content, trace.index) };
   }
   return null;
 }
-function identityPlace(where) {
-  return where === "name" ? "its name" : `its file "${where}"`;
+function identityPlace(where, line) {
+  if (where === "name") return "its name";
+  return line ? fileLine(where, line) : `its file "${where}"`;
+}
+function fileLine(file, line) {
+  return line ? `${file}:${line}` : `"${file}"`;
+}
+function lineAt(text, index) {
+  return text.slice(0, index).split("\n").length;
+}
+function traceFinding(audit) {
+  const { where = "", line, class: cls } = audit.identity ?? {};
+  const what = cls ? `a trace of this machine, ${IDENTITY_PHRASE[cls]}` : "a trace of this machine";
+  return `${identityPlace(where, line)} carries ${what} (${cls ?? audit.detail})`;
+}
+function screenedRefusal(audit) {
+  if (audit.reason === "identity") {
+    return `${traceFinding(audit)} - ${audit.identity?.where === "name" ? "rename it" : "edit the line"} and run share again`;
+  }
+  return `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}) - take the credential out of that line and run share again`;
 }
 function skillRefusalMessage(shownDir, slug, audit) {
   switch (audit.reason) {
@@ -515,9 +551,9 @@ function skillRefusalMessage(shownDir, slug, audit) {
     case "unreadable":
       return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
     case "identity":
-      return `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
+      return `${slug} was not shared: ${traceFinding(audit)}. A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
     default:
-      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+      return `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
 }
 
@@ -1108,6 +1144,9 @@ function runGit(args, cwd) {
     throw err;
   }
 }
+function marketplacesRoot() {
+  return join6(homedir4(), ".claude", "plugins", "marketplaces");
+}
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
 function teamCommitPrefixFix(team, retry) {
@@ -1175,13 +1214,14 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/share.ts
-import { readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
+import { createHash as createHash2 } from "node:crypto";
+import { readFileSync as readFileSync9, readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
 import { basename as basename4, join as join10 } from "node:path";
 
 // src/lib/mcp.ts
 import { readFileSync as readFileSync6 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 import { join as join7 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
@@ -1190,7 +1230,7 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join7(dir || homedir4(), ".claude.json");
+  return join7(dir || homedir5(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
@@ -1236,14 +1276,14 @@ function urlToken(url) {
   } catch {
     return null;
   }
-  for (const segment of parsed.pathname.split("/")) {
-    if (!segment) continue;
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  for (const [i, segment] of segments.entries()) {
     let decoded = segment;
     try {
       decoded = decodeURIComponent(segment);
     } catch {
     }
-    if (tokenLike(decoded)) return `path segment "${decoded}"`;
+    if (tokenLike(decoded)) return `path segment ${i + 1}`;
   }
   for (const [key, value] of parsed.searchParams) {
     if (tokenLike(value)) return `query parameter "${key}"`;
@@ -1282,7 +1322,8 @@ function auditServer(config) {
   }
   const pattern = detectSecret(JSON.stringify(config));
   if (pattern) {
-    return { ...base, transport, startsProcess, reason: "secret-pattern", detail: pattern };
+    const at = keyHolding(config, detectSecret);
+    return { ...base, transport, startsProcess, reason: "secret-pattern", detail: pattern, ...at ? { at } : {} };
   }
   const embedded = typeof config.url === "string" ? urlToken(config.url) : null;
   if (embedded) {
@@ -1290,9 +1331,22 @@ function auditServer(config) {
   }
   const trace = detectIdentity(JSON.stringify(config));
   if (trace) {
-    return { ...base, transport, startsProcess, reason: "identity", detail: trace, identity: trace };
+    const at = keyHolding(config, (text) => detectIdentity(text));
+    return { ...base, transport, startsProcess, reason: "identity", detail: trace, identity: trace, ...at ? { at } : {} };
   }
   return { migratable: true, requiresEnv, startsProcess, transport };
+}
+function keyHolding(config, finds) {
+  const walk = (value, path, key) => {
+    if (typeof value === "string") return finds(JSON.stringify({ [key]: value })) ? path : void 0;
+    const children = Array.isArray(value) ? value.map((child, i) => [`${path}[${i}]`, child, String(i)]) : isPlainObject(value) ? Object.entries(value).map(([k, child]) => [path ? `${path}.${k}` : k, child, k]) : [];
+    for (const [childPath, child, childKey] of children) {
+      const hit = walk(child, childPath, childKey);
+      if (hit) return hit;
+    }
+    return void 0;
+  };
+  return walk(config, "", "");
 }
 function refusalMessage(name, audit) {
   if (audit.reason === "credential-field") {
@@ -1302,10 +1356,10 @@ function refusalMessage(name, audit) {
     return `"${name}" is not shareable as written: its URL carries what looks like a credential (${audit.detail}). Providers that put the secret in the endpoint hand every teammate the manager's own access, so this stays here. Ask the provider for a URL without the token, or pass the credential in a header as a \${VAR} reference.`;
   }
   if (audit.reason === "secret-pattern") {
-    return `"${name}" is not shareable: its definition contains what looks like a ${audit.detail}. Move the credential into an environment variable and reference it as \${VAR}.`;
+    return `"${name}" is not shareable: ${audit.at ? `its ${audit.at}` : "its definition"} contains what looks like a ${audit.detail}. Move the credential into an environment variable and reference it as \${VAR}.`;
   }
   if (audit.reason === "identity") {
-    return `"${name}" is not shareable as written: its definition carries a trace of this machine (${audit.detail}). A path under your home directory, your account name or your address resolves to nothing on a teammate's machine, so this stays here. Point it at something every machine has, or pass the location as a \${VAR} reference.`;
+    return `"${name}" is not shareable as written: ${definitionTrace(audit)}. A path under your home directory, your account name or your address resolves to nothing on a teammate's machine, so this stays here. Point it at something every machine has, or pass the location as a \${VAR} reference.`;
   }
   return `"${name}" is not a server this command can share (${audit.detail ?? "unsupported shape"}).`;
 }
@@ -1313,12 +1367,15 @@ function serverMap(parsed) {
   return isPlainObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
 }
 function declaredServerNames(existing) {
-  if (!existing || !existing.trim()) return [];
+  return Object.keys(declaredServers(existing));
+}
+function declaredServers(existing) {
+  if (!existing || !existing.trim()) return {};
   try {
     const parsed = JSON.parse(existing);
-    return isPlainObject(parsed) ? Object.keys(serverMap(parsed)) : [];
+    return isPlainObject(parsed) ? serverMap(parsed) : {};
   } catch {
-    return [];
+    return {};
   }
 }
 function mergeServersIntoMcpJson(existing, servers, replaceExisting = () => false) {
@@ -1359,8 +1416,15 @@ function mergeServersIntoMcpJson(existing, servers, replaceExisting = () => fals
 function refusalSummary(audit) {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
-  if (audit.reason === "identity") return `its definition carries a trace of this machine (${audit.detail})`;
+  if (audit.reason === "identity") return `${definitionTrace(audit)} - edit that value and run share again`;
+  if (audit.reason === "secret-pattern") {
+    return `${audit.at ? `its ${audit.at}` : "its definition"} looks like it contains a secret (${audit.detail}) - move it into an environment variable referenced as \${VAR} and run share again`;
+  }
   return String(audit.detail);
+}
+function definitionTrace(audit) {
+  const what = audit.identity ? `a trace of this machine, ${IDENTITY_PHRASE[audit.identity]}` : "a trace of this machine";
+  return `${audit.at ? `its ${audit.at}` : "its definition"} carries ${what} (${audit.detail})`;
 }
 
 // src/lib/publish.ts
@@ -1369,24 +1433,24 @@ import { join as join9 } from "node:path";
 
 // src/lib/commands.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync7 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
+import { homedir as homedir6 } from "node:os";
 import { basename as basename3, join as join8 } from "node:path";
-function localCommandDirs(userHome = homedir5(), cwd = process.cwd()) {
+function localCommandDirs(userHome = homedir6(), cwd = process.cwd()) {
   return [
     { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
     { dir: join8(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
-function readLocalCommands(userHome = homedir5(), cwd = process.cwd()) {
+function readLocalCommands(userHome = homedir6(), cwd = process.cwd()) {
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
-    let entries;
+    let entries2;
     try {
-      entries = readdirSync4(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
+      entries2 = readdirSync4(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
     } catch {
       continue;
     }
-    for (const entry of entries.sort()) {
+    for (const entry of entries2.sort()) {
       const name = basename3(entry, ".md");
       byName.set(name, { name, scope, file: join8(dir, entry) });
     }
@@ -1409,15 +1473,17 @@ function auditCommand(file) {
   } catch {
     return { shareable: false, reason: "unreadable", detail: basename3(file) };
   }
-  const pattern = detectSecret(content);
-  if (pattern) {
-    return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file: basename3(file) } };
+  const found = locateSecret(content);
+  if (found) {
+    const secret = { pattern: found.pattern, file: basename3(file), line: lineAt(content, found.index) };
+    return { shareable: false, reason: "secret", detail: found.pattern, secret };
   }
   const inName = detectIdentity(name);
   if (inName) return { shareable: false, reason: "identity", detail: inName, identity: { class: inName, where: "name" } };
-  const trace = detectIdentity(content);
+  const trace = locateIdentity(content);
   if (trace) {
-    return { shareable: false, reason: "identity", detail: trace, identity: { class: trace, where: basename3(file) } };
+    const identity = { class: trace.class, where: basename3(file), line: lineAt(content, trace.index) };
+    return { shareable: false, reason: "identity", detail: trace.class, identity };
   }
   return { shareable: true, content, description: commandDescription(content) };
 }
@@ -1427,18 +1493,16 @@ function commandRefusalSummary(audit) {
       return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes)`;
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
-    case "identity":
-      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
-      return `it looks like it contains a secret (${audit.detail})`;
+      return screenedRefusal(audit);
   }
 }
 function commandRefusalMessage(name, audit) {
   if (audit.reason === "identity") {
-    return `${name} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A command is merged as it is, and the teammate who types it has no such account or directory; take the trace out and try again.`;
+    return `${name} was not shared: ${traceFinding(audit)}. A command is merged as it is, and the teammate who types it has no such account or directory; take the trace out and try again.`;
   }
   if (audit.reason === "secret") {
-    return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${name} was not shared. Commands are reviewed and merged as they are, and a redacted one would arrive and then misfire; take the credential out of the command and try again.`;
+    return `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}), so ${name} was not shared. Commands are reviewed and merged as they are, and a redacted one would arrive and then misfire; take the credential out of the command and try again.`;
   }
   return commandRefusalSummary(audit);
 }
@@ -1756,13 +1820,13 @@ function teamAssets(team, git = runGit) {
   }
 }
 function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
-  const entries = selection.servers ?? [];
+  const entries2 = selection.servers ?? [];
   const commandEntries = selection.commands ?? [];
   const skillEntries = selection.skills ?? [];
-  const single = entries.length === 1 && !commandEntries.length && !skillEntries.length ? { serverName: entries[0].name } : {};
+  const single = entries2.length === 1 && !commandEntries.length && !skillEntries.length ? { serverName: entries2[0].name } : {};
   const subjects = [];
   const refused = [];
-  for (const entry of entries) {
+  for (const entry of entries2) {
     const audit = auditServer(entry.config);
     if (audit.migratable) subjects.push({ entry, audit });
     else refused.push({ name: entry.name, kind: "mcp", reason: refusalMessage(entry.name, audit) });
@@ -1991,7 +2055,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
 // src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join10(paths.userHome ?? homedir6(), ".claude", "skills"), scope: "personal" },
+    { dir: join10(paths.userHome ?? homedir7(), ".claude", "skills"), scope: "personal" },
     { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
@@ -2016,10 +2080,8 @@ function skillRefusal(audit) {
       return "it has no files to share";
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
-    case "identity":
-      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
-      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail})`;
+      return screenedRefusal(audit);
   }
 }
 function readSkillDir(dir, scope) {
@@ -2048,13 +2110,13 @@ function buildInventory(paths = {}, teamHas = null) {
   const onTeam = (item, names) => names?.includes(item.name) ? { ...item, onTeam: true } : item;
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localSkillDirs(paths)) {
-    let entries;
+    let entries2;
     try {
-      entries = readdirSync6(dir);
+      entries2 = readdirSync6(dir);
     } catch {
       continue;
     }
-    for (const entry of entries.sort()) {
+    for (const entry of entries2.sort()) {
       if (!isDirectory(join10(dir, entry))) continue;
       byName.set(entry, onTeam(readSkillDir(join10(dir, entry), scope), teamHas?.skills));
     }
@@ -2062,7 +2124,7 @@ function buildInventory(paths = {}, teamHas = null) {
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers)
   );
-  const commands = readLocalCommands(paths.userHome ?? homedir6(), paths.cwd ?? process.cwd()).map(
+  const commands = readLocalCommands(paths.userHome ?? homedir7(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands)
   );
   return { skills: [...byName.values()], servers, commands };
@@ -2075,11 +2137,21 @@ function oneLine(text) {
 function onTeamNote(item) {
   return item.onTeam ? "  already on the team: picking it sends an update to their copy" : "";
 }
-function formatInventory(inv, forge) {
+function formatInventory(inv, forge, duplicates = NO_DUPLICATES) {
   if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
     return "No skills, MCP servers or commands are set up on this machine or in this project, so there is nothing to take to the team yet.";
   }
   const lines = ["Your local Claude Code setup, as it is on this machine:"];
+  const rounds = dialogRounds(inv);
+  if (rounds > 1) {
+    const offered = shareableEntries(inv).length;
+    lines.push(
+      "",
+      `${offered} of these can be shared, and picking them through dialogs takes ${rounds} rounds.`,
+      "Name what you want first instead: type names or patterns such as add-*, all skills or no mcp,",
+      "and the dialogs then cover only what is left."
+    );
+  }
   if (inv.skills.length) {
     lines.push(
       "",
@@ -2126,6 +2198,239 @@ function formatInventory(inv, forge) {
     "secret cannot.",
     ...forge ? ["", forge] : []
   );
+  if (duplicates.copies.length) lines.push("", formatDuplicateCopies(duplicates));
+  return lines.join("\n");
+}
+var KINDS = ["skill", "mcp", "command"];
+function entries(inv) {
+  return [
+    ...inv.skills.map((s) => ({ ...s, kind: "skill" })),
+    ...inv.servers.map((s) => ({ ...s, kind: "mcp" })),
+    ...inv.commands.map((c) => ({ ...c, kind: "command" }))
+  ];
+}
+function shareableEntries(inv) {
+  return entries(inv).filter((e) => e.shareable);
+}
+var OPTIONS_PER_QUESTION = 4;
+var QUESTIONS_PER_DIALOG = 4;
+function dialogRounds(inv) {
+  const offered = shareableEntries(inv);
+  const questions = KINDS.map(
+    (kind) => Math.ceil(offered.filter((e) => e.kind === kind).length / OPTIONS_PER_QUESTION)
+  ).reduce((a, b) => a + b, 0);
+  return Math.ceil(questions / QUESTIONS_PER_DIALOG);
+}
+var KIND_WORDS = {
+  skill: "skill",
+  skills: "skill",
+  mcp: "mcp",
+  server: "mcp",
+  servers: "mcp",
+  command: "command",
+  commands: "command"
+};
+var KIND_LABELS = { skill: "skills", mcp: "MCP servers", command: "commands" };
+var KIND_FLAGS = { skill: "--skill", mcp: "--mcp", command: "--command" };
+function globMatcher(pattern) {
+  const body = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${body}$`, "i");
+}
+function pickByPattern(inv, expression) {
+  const all = entries(inv);
+  const key = (e) => `${e.kind}:${e.name}`;
+  const picked = /* @__PURE__ */ new Set();
+  const ruledOut = /* @__PURE__ */ new Set();
+  const segments = expression.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!segments.length) return { error: "nothing to pick: type names or patterns, such as add-* or all skills" };
+  const matching = (word) => {
+    const name = word.replace(/^\//, "");
+    if (/^[*?]+$/.test(name)) {
+      return {
+        error: `"${word}" on its own would pick everything without saying so; write "all" (or "all skills") if that is what you mean`
+      };
+    }
+    const re = globMatcher(name);
+    const hits = all.filter((e) => re.test(e.name));
+    return hits.length ? hits : { error: `"${word}" matches nothing on this screen, so nothing was picked; use the names the list printed` };
+  };
+  for (const segment of segments) {
+    let mode = "pick";
+    let terms = 0;
+    const close = () => {
+      if (mode === "all" && !terms) {
+        for (const e of all) if (e.shareable) picked.add(key(e));
+      }
+      return mode === "no" && !terms ? { error: `"no" needs a kind, a name or a pattern after it` } : null;
+    };
+    for (const word of segment.split(/\s+/)) {
+      const lower = word.toLowerCase();
+      if (lower === "all" || lower === "no") {
+        const unfinished2 = close();
+        if (unfinished2) return unfinished2;
+        mode = lower;
+        terms = 0;
+        continue;
+      }
+      terms += 1;
+      const kind = KIND_WORDS[lower];
+      if (mode === "all") {
+        if (!kind) return { error: `"all" takes skills, mcp or commands, not "${word}"` };
+        for (const e of all) if (e.kind === kind && e.shareable) picked.add(key(e));
+        continue;
+      }
+      const into = mode === "no" ? ruledOut : picked;
+      if (kind && mode === "no") {
+        for (const e of all) if (e.kind === kind) into.add(key(e));
+        continue;
+      }
+      const hits = matching(word);
+      if ("error" in hits) return hits;
+      for (const e of hits) into.add(key(e));
+    }
+    const unfinished = close();
+    if (unfinished) return unfinished;
+  }
+  const chosen = all.filter((e) => picked.has(key(e)) && !ruledOut.has(key(e)));
+  const names = (from, kind) => from.filter((e) => e.kind === kind).map((e) => e.name);
+  const going = chosen.filter((e) => e.shareable);
+  const open = all.filter((e) => e.shareable && !picked.has(key(e)) && !ruledOut.has(key(e)));
+  return {
+    selection: { skills: names(going, "skill"), servers: names(going, "mcp"), commands: names(going, "command") },
+    unshareable: chosen.filter((e) => !e.shareable).map((e) => ({ kind: e.kind, name: e.name, reason: e.reason ?? "it cannot be shared" })),
+    declined: all.filter((e) => e.shareable && ruledOut.has(key(e))).length,
+    remaining: { skills: names(open, "skill"), servers: names(open, "mcp"), commands: names(open, "command") },
+    onTeam: going.filter((e) => e.onTeam).map((e) => e.name),
+    offered: all.filter((e) => e.shareable).length
+  };
+}
+function namesOf(selection, kind) {
+  return kind === "skill" ? selection.skills : kind === "mcp" ? selection.servers : selection.commands;
+}
+function countByKind(selection) {
+  return KINDS.filter((kind) => namesOf(selection, kind).length).map((kind) => `${namesOf(selection, kind).length} ${KIND_LABELS[kind]}`).join(", ");
+}
+function shellWord(word) {
+  if (/^[\w@%+=:,./~-]+$/.test(word)) return word;
+  const home = word.startsWith("~/") ? "~/" : "";
+  return `${home}'${word.slice(home.length).replace(/'/g, `'\\''`)}'`;
+}
+function formatPick(result) {
+  const { selection } = result;
+  const count = KINDS.reduce((n, kind) => n + namesOf(selection, kind).length, 0);
+  const lines = [
+    count ? `Picked ${count} of the ${result.offered} that can be shared:` : `Nothing picked yet, of the ${result.offered} that can be shared.`
+  ];
+  for (const kind of KINDS) {
+    const names = namesOf(selection, kind);
+    if (names.length) lines.push(`  ${KIND_LABELS[kind]} (${names.length}): ${names.join(", ")}`);
+  }
+  if (result.onTeam.length) {
+    lines.push(`  already on the team, so picking them sends an update to their copy: ${result.onTeam.join(", ")}`);
+  }
+  if (result.unshareable.length) {
+    lines.push(
+      "",
+      `Matched but not shareable (${result.unshareable.length}), so not picked:`,
+      ...result.unshareable.map((u) => `  ${u.name} - ${u.reason}`)
+    );
+  }
+  if (result.declined) lines.push("", `Ruled out: ${result.declined}.`);
+  const left = countByKind(result.remaining);
+  lines.push(
+    "",
+    left ? `Not decided yet: ${left}. A dialog asks only about these, if you want any of them.` : "Nothing is left to decide."
+  );
+  if (count) {
+    const flags = KINDS.flatMap(
+      (kind) => namesOf(selection, kind).map((name) => `${KIND_FLAGS[kind]} ${shellWord(name)}`)
+    );
+    lines.push("", "Nothing has been shared. To share exactly these:", `  share.js share ${flags.join(" ")}`);
+  }
+  return lines.join("\n");
+}
+var NO_DUPLICATES = { copies: [], release: null };
+function pluginRelease(pluginDir) {
+  try {
+    const manifest = JSON.parse(readFileSync9(join10(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof manifest?.name === "string" && typeof manifest?.version === "string" ? { name: manifest.name, version: manifest.version } : null;
+  } catch {
+    return null;
+  }
+}
+function digest(parts) {
+  const hash = createHash2("sha256");
+  for (const part of parts) hash.update(part).update("\0");
+  return hash.digest("hex");
+}
+function skillDigest(dir) {
+  const { files, skipped } = listSkillFiles(dir);
+  if (skipped.length || !files.length) return null;
+  try {
+    return digest(files.flatMap((file) => [file, readFileSync9(join10(dir, file))]));
+  } catch {
+    return null;
+  }
+}
+function fileDigest(file) {
+  try {
+    return digest([readFileSync9(file)]);
+  } catch {
+    return null;
+  }
+}
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries2 = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries2.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function duplicateCopies(inv, pluginDir, paths = {}) {
+  const shown = (path) => shellWord(displayPath(path, paths.userHome));
+  const found = [];
+  for (const skill of inv.skills) {
+    if (skill.scope !== "personal") continue;
+    const theirs = join10(pluginDir, "skills", skill.name);
+    if (!isDirectory(theirs)) continue;
+    const mine = skillDigest(skill.dir);
+    if (mine && mine === skillDigest(theirs)) {
+      found.push({ kind: "skill", name: skill.name, remove: `rm -r ${shown(skill.dir)}` });
+    }
+  }
+  let declared = {};
+  try {
+    declared = declaredServers(readFileSync9(join10(pluginDir, ".mcp.json"), "utf8"));
+  } catch {
+  }
+  for (const server of inv.servers) {
+    if (!(server.name in declared)) continue;
+    if (canonicalJson(server.entry.config) !== canonicalJson(declared[server.name])) continue;
+    const scope = server.scope === "user" ? "user" : "local";
+    found.push({ kind: "mcp", name: server.name, remove: `claude mcp remove ${shellWord(server.name)} -s ${scope}` });
+  }
+  for (const command of inv.commands) {
+    if (command.scope !== "personal") continue;
+    const mine = fileDigest(command.file);
+    if (mine && mine === fileDigest(join10(pluginDir, "commands", `${command.name}.md`))) {
+      found.push({ kind: "command", name: command.name, remove: `rm ${shown(command.file)}` });
+    }
+  }
+  return found.length ? { copies: found, release: pluginRelease(pluginDir) } : NO_DUPLICATES;
+}
+function formatDuplicateCopies({ copies, release }) {
+  if (!copies.length) return "";
+  const lines = [`On this machine twice (${copies.length}): the team plugin here carries an identical copy of each.`];
+  for (const kind of KINDS) {
+    const names = copies.filter((d) => d.kind === kind).map((d) => kind === "command" ? `/${d.name}` : d.name);
+    if (names.length) lines.push(`  ${KIND_LABELS[kind]}: ${names.join(", ")}`);
+  }
+  lines.push(
+    "Nothing was removed, and both copies load until yours goes. Once /plugin shows",
+    release ? `${release.name} installed at ${release.version} or later, these remove your own copies:` : "the team plugin installed and up to date, these remove your own copies:",
+    ...copies.map((d) => `  ${d.remove}`)
+  );
   return lines.join("\n");
 }
 function forgeLine(team, forge = runForge, cwd = process.cwd()) {
@@ -2148,11 +2453,11 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
   for (const dir of selection.skillPaths ?? []) {
     skills.push({ name: basename4(dir), dir, namedBy: "user" });
   }
-  const entries = [];
+  const entries2 = [];
   for (const name of selection.servers) {
     const server = inv.servers.find((s) => s.name === name);
     if (!server) result.refused.push({ name, kind: "mcp", reason: "no MCP server of that name is configured here" });
-    else entries.push(server.entry);
+    else entries2.push(server.entry);
   }
   const commands = [];
   for (const name of selection.commands) {
@@ -2160,15 +2465,15 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
     if (!command) result.refused.push({ name, kind: "command", reason: "no command of that name is installed here" });
     else commands.push({ name: command.name, scope: command.scope === "project" ? "project" : "personal", file: command.file });
   }
-  if (!entries.length && !commands.length && !skills.length) return result;
+  if (!entries2.length && !commands.length && !skills.length) return result;
   if (!team) {
     const reason = "no team repository is configured. Run /handbook:init (or /handbook:join <url>) first";
     for (const skill of skills) result.refused.push({ name: skill.name, kind: "skill", reason });
-    for (const entry of entries) result.refused.push({ name: entry.name, kind: "mcp", reason });
+    for (const entry of entries2) result.refused.push({ name: entry.name, kind: "mcp", reason });
     for (const command of commands) result.refused.push({ name: command.name, kind: "command", reason });
     return result;
   }
-  const outcome = publishTeamSelection({ servers: entries, commands, skills }, team, git, forge, options);
+  const outcome = publishTeamSelection({ servers: entries2, commands, skills }, team, git, forge, options);
   result.team = outcome;
   const selectors = new Map(
     skills.map((skill) => [
@@ -2193,7 +2498,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
         result.refused.push({ name: skill.name, kind: "skill", reason: outcome.error });
       }
     }
-    for (const entry of entries) {
+    for (const entry of entries2) {
       if (!judged.has(`mcp:${entry.name}`)) result.refused.push({ name: entry.name, kind: "mcp", reason: outcome.error });
     }
     for (const command of commands) {
@@ -2204,7 +2509,7 @@ function shareSelection(selection, team, paths = {}, git = runGit, forge = runFo
   }
   return result;
 }
-function formatShareResult(result, marketplaceName) {
+function formatShareResult(result, marketplaceName, duplicates = NO_DUPLICATES) {
   const lines = [];
   const shared = result.team;
   if (shared?.ok) {
@@ -2261,6 +2566,12 @@ function formatShareResult(result, marketplaceName) {
         "    this never writes to ~/.claude/commands, so both names keep working."
       );
     }
+    if (marketplaceName) {
+      lines.push(
+        "  - once it is merged and the plugin is updated here, /handbook:share names each of your copies",
+        "    that became a duplicate, with the command that removes it"
+      );
+    }
     lines.push(...unattachedDescriptionLines(shared.unattachedDescription));
   }
   if (shared && !shared.ok && shared.proposedMessage && shared.error) {
@@ -2293,14 +2604,21 @@ function formatShareResult(result, marketplaceName) {
       ]
     );
   }
+  if (duplicates.copies.length) {
+    if (lines.length) lines.push("");
+    lines.push(formatDuplicateCopies(duplicates));
+  }
   if (!lines.length) return "Nothing was selected, so nothing was shared.";
   return lines.join("\n");
 }
 
 // src/cli/share.ts
+function duplicatesOf(inv, team) {
+  return team ? duplicateCopies(inv, join11(marketplacesRoot(), team.marketplaceName)) : void 0;
+}
 function usage() {
   console.error(
-    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>) --branch <name> [--branch-hint <name>] [--version-after-open]"
+    'usage: share.js [list]\n       share.js pick "<names or patterns>"\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>) --branch <name> [--branch-hint <name>] [--version-after-open]'
   );
   process.exit(2);
 }
@@ -2369,11 +2687,23 @@ function main() {
   const update = args.includes(UPDATE);
   const messaged = [MESSAGE, DELEGATE_MESSAGE, BRANCH, BRANCH_HINT, VERSION_AFTER_OPEN].some((flag) => args.includes(flag));
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
+  if (cmd === "pick") {
+    if (!rest.length || selected || update || messaged) usage();
+    const picked = pickByPattern(buildInventory(), rest.join(" "));
+    if ("error" in picked) {
+      console.error(`error: ${picked.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(formatPick(picked));
+    return;
+  }
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
   if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     const config = loadTeamConfig();
-    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null), forgeLine(config)));
+    const inv2 = buildInventory({}, config ? teamAssets(config) : null);
+    console.log(formatInventory(inv2, forgeLine(config), duplicatesOf(inv2, config)));
     if (!config) {
       console.log(
         "\nNo team repository is configured yet, so nothing on this screen has anywhere to go: run /handbook:init (or /handbook:join <url>) first."
@@ -2404,7 +2734,7 @@ function main() {
     hints: branchHints(process.cwd(), runGit, valueOf(args, BRANCH_HINT)),
     ...args.includes(VERSION_AFTER_OPEN) ? { versionAfterOpen: true } : {}
   });
-  console.log(formatShareResult(result, team?.marketplaceName));
+  console.log(formatShareResult(result, team?.marketplaceName, duplicatesOf(inv, team)));
   if (result.refused.length || result.team && !result.team.ok) process.exitCode = 1;
 }
 main();

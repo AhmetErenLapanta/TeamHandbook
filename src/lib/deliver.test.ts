@@ -1012,7 +1012,7 @@ describe("a candidate edited in the queue, approved to the team", () => {
     );
     // then the secret sieve stops it, by the file and the class of what it found
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('"reference.md" looks like it contains a secret (anthropic-api-key)');
+    expect(result.error).toContain("reference.md:1 looks like it contains a secret (anthropic-api-key)");
     expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
     expect(runners.gitCalls).toEqual([]);
     expect(readCandidateMeta(dir)?.status).toBe("pending");
