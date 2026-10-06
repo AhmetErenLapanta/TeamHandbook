@@ -140,6 +140,14 @@ every miss was traced: none reached `/handbook:mine`, so the drop is not the new
 taking other commands' sentences. The control scored 1.0000 on `b2694c9`, its three cases
 for the new command included.
 
+Two things changed between the rows, not one. The band was measured on Claude Code 2.1.282
+and the `b2694c9` runs on a release no older than 2.1.286, the one the development half
+recorded that same morning, and the client builds the prompt the command list sits in. The
+new command is the only routing text that differs between the two trees, but the table
+cannot separate it from the client. The two cases the drop was traced to went from 9/9 to
+6/9 and from 7/9 to 5/9, which at nine runs a side is not a difference this package can
+tell from noise.
+
 ## Giving a sentence something to point at
 
 A run starts in an empty directory with no history. A sentence like "share this" or "the
@@ -204,6 +212,16 @@ here is that type, so without the flag the number quietly measures something els
 The graders are pass/fail, so they do not say which command a miss reached instead. Add
 `--keep-temp` and read the `trace.jsonl` files it leaves behind, then delete the
 `/private/tmp/e-*` directories it leaves on disk.
+
+Read them the same day. Kept directories from an earlier run were found days later with
+`out/` gone and only `sealed/` left, so a run kept for its misses has to be read while its
+traces still exist. A trace records which skill was called and what the model said, but
+not the command list it chose from, and its reasoning is not in it.
+
+For a held-out case, take only the `Skill` tool calls out of `trace.jsonl` and never open
+`sealed/`. The trace does not record the sentence as a turn, but the model's own replies
+in it often restate the request, and `sealed/` holds the home the plugin under test wrote
+to, which can include what its hooks captured from the sentence.
 
 The sharing graders also accept the names that merged into `/handbook:share`: the
 baseline was measured with that pattern, and a retired name cannot be reached anyway.
