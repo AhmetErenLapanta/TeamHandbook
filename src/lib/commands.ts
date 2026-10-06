@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { fileLine, isSafeSlug, lineAt, screenedRefusal, traceFinding } from "./queue.js";
@@ -60,34 +61,47 @@ export function localCommandDirs(
 }
 
 /**
- * The commands configured for THIS machine and THIS project, project scope winning.
+ * Every command under one commands directory, by the name it is typed under.
  *
- * Top-level `.md` files only. Claude Code also namespaces commands by subdirectory, where
- * `git/sync.md` is `/git:sync`, and those are deliberately out of scope here rather than
- * flattened: the name a namespaced command travels under is not the name it is typed
- * under, and guessing which of the two the team wants is not a guess this makes. The
- * listing says so, so a setup that has them is not quietly reported as complete. What the
- * filter drops without comment is the entry that is not a command at all - .DS_Store sits
- * in the real directory this was measured against.
+ * Claude Code namespaces a command by its subdirectory, one segment per level:
+ * `git/sync.md` is `/git:sync`, a different command from a top-level `sync.md`, and inside
+ * a plugin it becomes `/<plugin>:git:sync`. So the name is the relative path with `/`
+ * read as `:`, and commandFile turns it back into the same path in the team repository.
+ * Keying on the file name alone would make `sync.md` and `git/sync.md` one command, and
+ * whichever was read second would quietly stand in for the other. What is dropped without
+ * comment is the entry that is not a command at all - .DS_Store sits in the real directory
+ * this was measured against.
  */
+export function commandsIn(dir: string, namespace: string[] = []): Array<{ name: string; file: string }> {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .flatMap((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return commandsIn(path, [...namespace, entry.name]);
+      if (!entry.isFile() || !entry.name.endsWith(".md")) return [];
+      return [{ name: [...namespace, basename(entry.name, ".md")].join(":"), file: path }];
+    });
+}
+
+/** Where a command of this name lives below a commands directory: `git:sync` is `git/sync.md`. */
+export function commandFile(name: string): string {
+  return `${name.split(":").join("/")}.md`;
+}
+
+/** The commands configured for THIS machine and THIS project, project scope winning. */
 export function readLocalCommands(
   userHome: string = homedir(),
   cwd: string = process.cwd(),
 ): CommandEntry[] {
   const byName = new Map<string, CommandEntry>();
   for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
-    let entries: string[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true })
-        .filter((e) => e.isFile() && e.name.endsWith(".md"))
-        .map((e) => e.name);
-    } catch {
-      continue;
-    }
-    for (const entry of entries.sort()) {
-      const name = basename(entry, ".md");
-      byName.set(name, { name, scope, file: join(dir, entry) });
-    }
+    for (const { name, file } of commandsIn(dir)) byName.set(name, { name, scope, file });
   }
   return [...byName.values()];
 }
@@ -122,22 +136,24 @@ export function commandDescription(content: string): string {
  * blanked out still installs, still reads as complete to the teammate who types it, and
  * fails only when they run it.
  */
-export function auditCommand(file: string): CommandAudit {
-  const name = basename(file, ".md");
-  // The name becomes a path inside the team repository, so it is held to the same rule a
-  // skill's directory is: anything else is a file name we would be constructing a path out
-  // of, not a command name.
-  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+export function auditCommand(file: string, name: string = basename(file, ".md")): CommandAudit {
+  // The name becomes a path inside the team repository, so every segment of it is held to
+  // the same rule a skill's directory is: anything else is a file name we would be
+  // constructing a path out of, not a command name.
+  if (!name.split(":").every(isSafeSlug)) return { shareable: false, reason: "unsafe-name", detail: name };
+  // Named by its path under commands/, so git/sync.md is not reported as a sync.md the
+  // author has to go looking for among the top-level ones.
+  const where = commandFile(name);
   let content: string;
   try {
     content = readFileSync(file, "utf8");
   } catch {
     // unreadable means unscreened, and unscreened must not ship
-    return { shareable: false, reason: "unreadable", detail: basename(file) };
+    return { shareable: false, reason: "unreadable", detail: where };
   }
   const found = locateSecret(content);
   if (found) {
-    const secret = { pattern: found.pattern, file: basename(file), line: lineAt(content, found.index) };
+    const secret = { pattern: found.pattern, file: where, line: lineAt(content, found.index) };
     return { shareable: false, reason: "secret", detail: found.pattern, secret };
   }
   // A command is a file of instructions written on ONE machine, so it is the likeliest of
@@ -148,7 +164,7 @@ export function auditCommand(file: string): CommandAudit {
   if (inName) return { shareable: false, reason: "identity", detail: inName, identity: { class: inName, where: "name" } };
   const trace = locateIdentity(content);
   if (trace) {
-    const identity = { class: trace.class, where: basename(file), line: lineAt(content, trace.index) };
+    const identity = { class: trace.class, where, line: lineAt(content, trace.index) };
     return { shareable: false, reason: "identity", detail: trace.class, identity };
   }
   return { shareable: true, content, description: commandDescription(content) };

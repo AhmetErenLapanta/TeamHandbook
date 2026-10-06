@@ -1095,14 +1095,22 @@ try {
   } catch {}
   // Slash commands merge the same way a skill or server does - one MR, one version bump,
   // every subscribed copy refreshed - so they get the same notice. Read directly from
-  // commands/*.md rather than importing TEAM_COMMANDS_DIR, for the same reason mcp.ts is
+  // commands/ rather than importing TEAM_COMMANDS_DIR, for the same reason mcp.ts is
   // not imported above: this script ships inside the team's plugin, with no dependencies.
+  // A subdirectory is a namespace segment, commands/git/sync.md being git:sync, so a
+  // command shared from a subdirectory is announced like any other instead of arriving
+  // in silence.
+  function commandNames(dir, namespace) {
+    let found = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) found = found.concat(commandNames(join(dir, e.name), namespace + e.name + ":"));
+      else if (e.isFile() && e.name.endsWith(".md")) found.push(namespace + e.name.slice(0, -3));
+    }
+    return found;
+  }
   let commands = [];
   try {
-    commands = readdirSync(join(root, "commands"), { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.endsWith(".md"))
-      .map((e) => e.name.slice(0, -3))
-      .sort();
+    commands = commandNames(join(root, "commands"), "").sort();
   } catch {}
   const seenDir = join(homedir(), ".teamhandbook-consumer");
   const seenFile = join(seenDir, name + ".json");
@@ -1571,11 +1579,11 @@ function formatInitSuccess(result) {
 
 // src/lib/upgrade.ts
 import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname3, join as join6, relative } from "node:path";
+import { dirname as dirname4, join as join6, relative } from "node:path";
 
 // src/lib/publish.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join5 } from "node:path";
+import { dirname as dirname3, join as join5 } from "node:path";
 function bumpPluginVersion(repoDir, past = []) {
   const file = join5(repoDir, ".claude-plugin", "plugin.json");
   try {
@@ -1762,7 +1770,7 @@ function writeCandidates(repoDir, candidates, paths) {
   }
   for (const path of paths) {
     const target = join6(repoDir, path);
-    mkdirSync5(dirname3(target), { recursive: true });
+    mkdirSync5(dirname4(target), { recursive: true });
     writeFileSync4(target, candidates[path]);
   }
   return null;
@@ -1843,7 +1851,7 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
       const cacheinfo = [];
       for (const path of paths) {
         const file = join6(scratch, path);
-        mkdirSync5(dirname3(file), { recursive: true });
+        mkdirSync5(dirname4(file), { recursive: true });
         writeFileSync4(file, candidates.files[path]);
         const sha = String(git(["hash-object", "-w", "--", file], repoDir) ?? "").trim();
         cacheinfo.push("--cacheinfo", `${modes.get(path) ?? "100644"},${sha},${path}`);

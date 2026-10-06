@@ -1,16 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { auditCommand, commandDescription, commandRefusalMessage, readLocalCommands } from "./commands.js";
 
 let userHome: string;
 let project: string;
 
 function writeCommand(root: string, name: string, body: string): string {
-  const dir = join(root, ".claude", "commands");
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, `${name}.md`);
+  const file = join(root, ".claude", "commands", `${name}.md`);
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, body);
   return file;
 }
@@ -52,10 +51,39 @@ describe("readLocalCommands", () => {
     writeCommand(userHome, "explain", "Explain something.\n");
     // the real directory this was measured against has a .DS_Store in it
     writeFileSync(join(userHome, ".claude", "commands", ".DS_Store"), "\u0000junk");
-    mkdirSync(join(userHome, ".claude", "commands", "git"), { recursive: true });
-    writeFileSync(join(userHome, ".claude", "commands", "git", "sync.md"), "Namespaced.\n");
 
     expect(readLocalCommands(userHome, project).map((c) => c.name)).toEqual(["explain"]);
+  });
+
+  it("given a command in a subdirectory, when it is read, then it carries the name Claude Code types it under", () => {
+    const file = writeCommand(userHome, "git/sync", "Sync with upstream.\n");
+    writeCommand(userHome, "release/notes/draft", "Draft the notes.\n");
+
+    const commands = readLocalCommands(userHome, project);
+
+    expect(commands).toEqual([
+      { name: "git:sync", scope: "personal", file },
+      { name: "release:notes:draft", scope: "personal", file: join(userHome, ".claude", "commands", "release", "notes", "draft.md") },
+    ]);
+  });
+
+  it("given sync.md and git/sync.md, when they are read, then they are two commands rather than one standing in for the other", () => {
+    writeCommand(userHome, "sync", "Sync the docs.\n");
+    writeCommand(userHome, "git/sync", "Sync with upstream.\n");
+
+    const commands = readLocalCommands(userHome, project);
+
+    expect(commands.map((c) => c.name)).toEqual(["git:sync", "sync"]);
+    expect(commands.map((c) => auditCommand(c.file, c.name).content)).toEqual(["Sync with upstream.\n", "Sync the docs.\n"]);
+  });
+
+  it("given the same namespaced command in both scopes, when they are read, then the project one wins", () => {
+    writeCommand(userHome, "git/sync", "The personal one.\n");
+    writeCommand(project, "git/sync", "The project one.\n");
+
+    const commands = readLocalCommands(userHome, project);
+
+    expect(commands.map((c) => [c.name, c.scope])).toEqual([["git:sync", "project"]]);
   });
 
   it("given no commands directory at all, when it is read, then it is an empty setup rather than a crash", () => {
@@ -143,6 +171,34 @@ describe("auditCommand", () => {
 
     expect(audit.shareable).toBe(false);
     expect(audit.reason).toBe("unsafe-name");
+  });
+
+  it("given a namespace that is not a safe path component, when it is audited, then it cannot travel under it", () => {
+    const file = writeCommand(userHome, "Git Tools/sync", "Nothing secret here.\n");
+
+    const audit = auditCommand(file, "Git Tools:sync");
+
+    expect(audit.shareable).toBe(false);
+    expect(audit.reason).toBe("unsafe-name");
+  });
+
+  it("given a namespaced command carrying a credential, when it is audited, then the refusal names its path under commands/", () => {
+    const file = writeCommand(userHome, "git/deploy", "Run: curl -H 'Authorization: Bearer ghp_aaaabbbbccccddddeeeeffff'\n");
+
+    const audit = auditCommand(file, "git:deploy");
+
+    expect(audit.reason).toBe("secret");
+    expect(audit.secret?.file).toBe("git/deploy.md");
+    expect(commandRefusalMessage("git:deploy", audit)).toContain("git/deploy.md:1");
+  });
+
+  it("given a namespaced command that says where to run it from, when it is audited, then the same trace refuses it", () => {
+    const homePath = ["", "Users", "alice", "work", "api"].join("/");
+    const file = writeCommand(userHome, "git/deploy", `Run it from ${homePath}.\n`);
+
+    const audit = auditCommand(file, "git:deploy");
+
+    expect(audit.identity).toEqual({ class: "home-path", where: "git/deploy.md", line: 1 });
   });
 
   it("given a command that cannot be read, when it is audited, then unscreened means refused", () => {

@@ -131,6 +131,7 @@ package can see; outside it, something did.
 |---|---|---|---:|---|
 | `ebdce06` | the three runs above | 0.8133, 0.8400, 0.7867 | 0.8133 | |
 | `b2694c9` | `/handbook:mine` joins the commands a sentence can route to | 0.8000, 0.7467, 0.7467 | 0.7645 | inside, near the floor |
+| `e8f5523` | `/handbook:demo` description rewritten (first run that includes it); Claude Code 2.1.291 | 0.8200 | 0.8200 (one run) | inside |
 
 The first `b2694c9` run was taken on an earlier tree whose command descriptions were
 identical to these; only the body of the new command's instructions differed, and a
@@ -139,6 +140,22 @@ below its floor, which is why the package is read on its mean of three. In the t
 every miss was traced: none reached `/handbook:mine`, so the drop is not the new command
 taking other commands' sentences. The control scored 1.0000 on `b2694c9`, its three cases
 for the new command included.
+
+Two things changed between the rows, not one. The band was measured on Claude Code 2.1.282
+and the `b2694c9` runs on a release no older than 2.1.286, the one the development half
+recorded that same morning, and the client builds the prompt the command list sits in. The
+new command is the only routing text that differs between the two trees, but the table
+cannot separate it from the client. The two cases the drop was traced to went from 9/9 to
+6/9 and from 7/9 to 5/9, which at nine runs a side is not a difference this package can
+tell from noise.
+
+The `e8f5523` row is a single run, and two things changed again: it is the first run to
+include the `/handbook:demo` description rewritten to say what the demo now does, and the
+client moved on to 2.1.291. As above, the row cannot separate the two. One of its 75 runs
+never reached the model and is not counted. Its misses were traced the same day by their
+`Skill` calls alone: none reached `/handbook:demo` or `/handbook:mine`. On the same tree and
+client the control scored 1.0000, and the held-out false-positive probes fired nothing in
+any of their runs.
 
 ## Giving a sentence something to point at
 
@@ -204,6 +221,16 @@ here is that type, so without the flag the number quietly measures something els
 The graders are pass/fail, so they do not say which command a miss reached instead. Add
 `--keep-temp` and read the `trace.jsonl` files it leaves behind, then delete the
 `/private/tmp/e-*` directories it leaves on disk.
+
+Read them the same day. Kept directories from an earlier run were found days later with
+`out/` gone and only `sealed/` left, so a run kept for its misses has to be read while its
+traces still exist. A trace records which skill was called and what the model said, but
+not the command list it chose from, and its reasoning is not in it.
+
+For a held-out case, take only the `Skill` tool calls out of `trace.jsonl` and never open
+`sealed/`. The trace does not record the sentence as a turn, but the model's own replies
+in it often restate the request, and `sealed/` holds the home the plugin under test wrote
+to, which can include what its hooks captured from the sentence.
 
 The sharing graders also accept the names that merged into `/handbook:share`: the
 baseline was measured with that pattern, and a retired name cannot be reached anyway.

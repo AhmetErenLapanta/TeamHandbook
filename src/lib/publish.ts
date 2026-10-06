@@ -2,7 +2,7 @@ import { handbookWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import type { GroundedCase } from "./distill.js";
@@ -26,7 +26,7 @@ import { auditSkillDir, identityInSkillDir, isSafeSlug, skillRefusalMessage } fr
 import type { CandidateMeta } from "./queue.js";
 import { auditServer, declaredServerNames, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
 import type { McpAudit, McpServerEntry } from "./mcp.js";
-import { auditCommand, commandRefusalMessage } from "./commands.js";
+import { auditCommand, commandFile, commandRefusalMessage, commandsIn } from "./commands.js";
 import type { CommandEntry } from "./commands.js";
 import { slugifySkillName } from "./distill.js";
 import { displayPath } from "./display-path.js";
@@ -726,7 +726,7 @@ export function buildSelectionPrBody(
     lines.push(
       "",
       `- command: \`/${marketplaceName}:${command.name}\``,
-      `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``,
+      `- file: \`${TEAM_COMMANDS_DIR}/${commandFile(command.name)}\``,
     );
   }
   for (const skill of skills) {
@@ -882,7 +882,7 @@ function collisionMessage(name: string): string {
 
 function commandCollisionMessage(name: string): string {
   return (
-    `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). ` +
+    `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${commandFile(name)}). ` +
     "It was left exactly as it is."
   );
 }
@@ -894,11 +894,11 @@ export interface TeamAssets {
   commands: string[];
 }
 
-function namesIn(dir: string, suffix?: string): string[] {
+function namesIn(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => (suffix ? entry.isFile() && entry.name.endsWith(suffix) : entry.isDirectory()))
-      .map((entry) => (suffix ? entry.name.slice(0, -suffix.length) : entry.name));
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
   } catch {
     return [];
   }
@@ -928,7 +928,7 @@ export function teamAssets(team: TeamConfig, git: GitRunner = runGit): TeamAsset
     return {
       skills: namesIn(join(repoDir, "skills")),
       servers: declaredServerNames(existsSync(mcpFile) ? readFileSync(mcpFile, "utf8") : null),
-      commands: namesIn(join(repoDir, TEAM_COMMANDS_DIR), ".md"),
+      commands: commandsIn(join(repoDir, TEAM_COMMANDS_DIR)).map((command) => command.name),
     };
   } catch {
     return null;
@@ -1018,7 +1018,7 @@ export function publishTeamSelection(
   }
   const commands: CommandSubject[] = [];
   for (const entry of commandEntries) {
-    const audit = auditCommand(entry.file);
+    const audit = auditCommand(entry.file, entry.name);
     if (audit.shareable) commands.push({ name: entry.name, content: audit.content! });
     else refused.push({ name: entry.name, kind: "command", reason: commandRefusalMessage(entry.name, audit) });
   }
@@ -1130,7 +1130,7 @@ export function publishTeamSelection(
     const goingCommands: CommandSubject[] = [];
     const replacedCommands: string[] = [];
     for (const command of commands) {
-      if (existsSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+      if (existsSync(join(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name)))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1215,9 +1215,10 @@ export function publishTeamSelection(
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);
-      if (goingCommands.length) mkdirSync(join(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
       for (const command of goingCommands) {
-        writeFileSync(join(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+        const file = join(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name));
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, command.content);
       }
       for (const skill of goingSkills) {
         const dest = join(repoDir, TEAM_SKILLS_DIR, skill.name);

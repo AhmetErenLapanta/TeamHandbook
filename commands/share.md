@@ -209,8 +209,9 @@ skills is exactly that case five times over, which is why skills travel in this 
 It is also why this command is run once with everything the user picked, rather than once
 per item.
 
-Commands namespaced in a subdirectory (`/git:sync`) cannot travel yet, and the list says so
-rather than leaving them out silently.
+A command in a subdirectory travels at the same path: `git/sync.md` is listed as `/git:sync`,
+lands at `commands/git/sync.md`, and teammates type it as `/<plugin>:git:sync`. A `sync.md`
+beside it is a different command, listed and shared on its own.
 
 If no team repository is configured, nothing on this screen has anywhere to go until
 /handbook:init or /handbook:join has been run. The command says so, and turns back every

@@ -56,7 +56,7 @@ on a protected branch.
 | A draft from your repository's history | `/handbook:review` | that repository's `.claude/skills/<name>/`, committed once you approve the message; or the team repository's `skills/<name>/` |
 | A skill you wrote yourself | `/handbook:share` | the team repository's `skills/<name>/`, with every file it carries |
 | An MCP server already configured on this machine | `/handbook:share` | an entry in the team repository's `.mcp.json` |
-| A slash command already installed on this machine | `/handbook:share` | the team repository's `commands/<name>.md` |
+| A slash command already installed on this machine | `/handbook:share` | the team repository's `commands/<name>.md`, or `commands/<dir>/<name>.md` for one in a subdirectory |
 
 Everything that goes to the team repository travels as a merge request that raises its
 plugin version. That version is Claude Code's signal that the plugin moved, which is what

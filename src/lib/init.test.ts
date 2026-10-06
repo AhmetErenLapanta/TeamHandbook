@@ -263,6 +263,34 @@ describe("skeletonFiles", () => {
     }
   });
 
+  it("given a command merged into a subdirectory, when the notice runs, then it is announced under the name it is typed with", () => {
+    const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
+    const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
+    const run = (): string =>
+      execFileSync("node", ["hooks/notice.mjs"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+      });
+    try {
+      writeSkeleton(dir, skeletonFiles("acme", "git@github.com:a/s.git", "github.com"));
+      mkdirSync(join(dir, "commands"), { recursive: true });
+      writeFileSync(join(dir, "commands", "sync.md"), "sync the docs");
+      expect(run()).toBe("");
+
+      mkdirSync(join(dir, "commands", "git"), { recursive: true });
+      writeFileSync(join(dir, "commands", "git", "sync.md"), "sync with upstream");
+      const notice = run();
+
+      expect(notice).toContain("1 new command(s) since your last session");
+      expect(notice).toContain("/acme:git:sync");
+      expect(notice).not.toContain("/acme:sync");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(consumerHome, { recursive: true, force: true });
+    }
+  });
+
   it("does not announce pre-existing commands as new when the seen-record predates the commands field", () => {
     const dir = mkdtempSync(join(tmpdir(), "handbook-skeleton-"));
     const consumerHome = mkdtempSync(join(tmpdir(), "handbook-consumer-"));
