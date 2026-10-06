@@ -1,15 +1,31 @@
 import { resolve as toAbsolutePath } from "node:path";
 import { configIsBroken } from "../lib/config.js";
-import { loadTeamConfig, runGit } from "../lib/init.js";
-import { buildInventory, forgeLine, formatInventory, formatShareResult, shareSelection } from "../lib/share.js";
-import type { Inventory, Selection } from "../lib/share.js";
+import { join } from "node:path";
+import { loadTeamConfig, marketplacesRoot, runGit } from "../lib/init.js";
+import {
+  buildInventory,
+  duplicateCopies,
+  forgeLine,
+  formatInventory,
+  formatPick,
+  formatShareResult,
+  pickByPattern,
+  shareSelection,
+} from "../lib/share.js";
+import type { Duplicates, Inventory, Selection } from "../lib/share.js";
 import { teamAssets } from "../lib/publish.js";
-import type { CommitMessageChoice } from "../lib/init.js";
+import type { CommitMessageChoice, TeamConfig } from "../lib/init.js";
 import { branchHints } from "../lib/branch.js";
+
+/** The copies of this machine's own setup the team plugin here already carries word for word. */
+function duplicatesOf(inv: Inventory, team: TeamConfig | null): Duplicates | undefined {
+  return team ? duplicateCopies(inv, join(marketplacesRoot(), team.marketplaceName)) : undefined;
+}
 
 function usage(): never {
   console.error(
     "usage: share.js [list]\n" +
+      '       share.js pick "<names or patterns>"\n' +
       "       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... " +
       "[--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>) " +
       "--branch <name> [--branch-hint <name>] [--version-after-open]",
@@ -149,6 +165,20 @@ function main(): void {
   const update = args.includes(UPDATE);
   const messaged = [MESSAGE, DELEGATE_MESSAGE, BRANCH, BRANCH_HINT, VERSION_AFTER_OPEN].some((flag) => args.includes(flag));
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
+  if (cmd === "pick") {
+    // Read-only, like the list: it resolves what the person typed against this machine and
+    // prints the names and the one command that shares them. The share itself stays a run
+    // of explicit names, so what a pattern matched is seen before anything is committed.
+    if (!rest.length || selected || update || messaged) usage();
+    const picked = pickByPattern(buildInventory(), rest.join(" "));
+    if ("error" in picked) {
+      console.error(`error: ${picked.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(formatPick(picked));
+    return;
+  }
   if (rest.length || (cmd !== "list" && cmd !== "share")) usage();
   // A selection passed to the read-only screen would print the list and silently throw
   // the selection away, which reads as "I asked for four and got none". A commit message
@@ -160,7 +190,8 @@ function main(): void {
     // the manager picks knowing, and a repository that cannot be reached simply means no
     // labels rather than a screen that will not open.
     const config = loadTeamConfig();
-    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null), forgeLine(config)));
+    const inv = buildInventory({}, config ? teamAssets(config) : null);
+    console.log(formatInventory(inv, forgeLine(config), duplicatesOf(inv, config)));
     if (!config) {
       console.log(
         "\nNo team repository is configured yet, so nothing on this screen has anywhere to go: " +
@@ -195,7 +226,7 @@ function main(): void {
     hints: branchHints(process.cwd(), runGit, valueOf(args, BRANCH_HINT)),
     ...(args.includes(VERSION_AFTER_OPEN) ? { versionAfterOpen: true } : {}),
   });
-  console.log(formatShareResult(result, team?.marketplaceName));
+  console.log(formatShareResult(result, team?.marketplaceName, duplicatesOf(inv, team)));
   // A refusal is not a crash: some of the selection may have travelled. The exit code says
   // "not everything you asked for happened", and the text above says which part. A request
   // that stopped for want of a commit message refuses no item by name, so it is read off

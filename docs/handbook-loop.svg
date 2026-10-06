@@ -2,15 +2,15 @@
      role="img" aria-labelledby="t d"
      font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
   <title id="t">How the team handbook reaches everyone</title>
-  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine
-    reaches the team repository by one route: you pick it, and everything you picked travels
-    together in a single merge request. Picking it is the approval, so there is no second verdict
-    to give; the one thing that does not start here is a skill TeamHandbook proposed out of a
-    session, which waits for your verdict in /handbook:review. Somebody on the team reviews the
-    request and merges it. That repository is a Claude Code plugin marketplace, and the same merge
-    raises the plugin version, which is Claude Code's signal that the plugin moved. Every
-    teammate's next session refreshes on that version and reports what landed, with nothing
-    installed or configured by hand.</desc>
+  <desc id="d">A skill, an MCP server, or a slash command that is already set up on your machine reaches
+    the team repository by one route: you pick it, and everything you picked travels together in
+    a single merge request. Picking it is the approval, so there is no second verdict to give;
+    the one thing that does not start here is a draft TeamHandbook wrote, which waits for your
+    verdict in /handbook:review. Somebody on the team reviews the request and merges it. That
+    repository is a Claude Code plugin marketplace, and the same merge raises the plugin
+    version, which is Claude Code's signal that the plugin moved. Every teammate's next session
+    refreshes on that version and reports what landed, with nothing installed or configured by
+    hand.</desc>
 
   <!-- No <style> element and no prefers-color-scheme query here, deliberately. GitHub's page theme
        is chosen in the site's own settings, while an SVG loaded through <img> resolves

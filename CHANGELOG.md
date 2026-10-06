@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.20.0] - 2026-10-06
+
+### Changed
+
+- **The README now leads with the work a repository's history repeats.** It says what a
+  draft carries - a skeleton of the steps, a file map the history measured, and a list of
+  what the history cannot show - and that it is not a finished skill. The per-session
+  lesson harvest is described as what it now is: off unless you turn it on.
+- **`/handbook:demo` shows the history miner end to end.** It builds a scratch repository
+  with a history of its own, lists the work that history repeats and queues a draft of it
+  for review. The draft is a recorded one unless you ask for a live one, so the demo makes
+  no model call without your say.
+- **A draft mined from an open-source repository is included** under `docs/examples/`,
+  with where it came from and what it is not.
+- **The marketplace description says what the README says.**
+
+### Fixed
+
+- **A skill the demo produced could be kept for yourself, sent to the team, or, once its
+  scratch repository was deleted, written into whichever project you approved it from.**
+  A demo draft is now marked as one: it can only be added to its own scratch repository or
+  rejected, and with that repository gone it can only be rejected.
+
+## [0.19.0] - 2026-10-06
+
+### Added
+
+- **A long setup can be picked by name or pattern before any dialog.** On the
+  `/handbook:share` screen you can answer in your own words - `add-*`, `all skills`,
+  `no mcp` - and the pick shows what it matched before anything is sent. A bare `*` is
+  refused rather than read as everything.
+- **A refused entry names the file and the line to fix,** with the class of what was found
+  there and never the value itself.
+- **Copies you have twice are named.** Once a share is merged and the team plugin carries
+  an identical copy of your own skill, server or command, the share screen lists those
+  copies with the command that removes yours. Nothing is removed for you.
+- **With the lesson harvest off, older lesson candidates fold into one line** on the first
+  `/handbook:review` screen, behind the drafts mined from repository history. You can show
+  them, leave them, or archive them all with `archive-lessons`, which deletes nothing and
+  prints the command that brings them back.
+
+### Changed
+
+- **`approve --all` and `reject --all` reach only what the review screen listed,** so a
+  folded candidate is never decided without being seen.
+- **The session-start notice no longer points at lesson candidates the review screen
+  folds away.** With the harvest off it says once that older ones were folded, and again
+  only if more are folded later.
+
 ## [0.18.0] - 2026-10-06
 
 ### Added

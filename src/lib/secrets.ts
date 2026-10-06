@@ -216,13 +216,25 @@ const GLOBAL_TWIN = new Map<string, RegExp>(
 );
 
 export function detectSecret(text: string): string | null {
+  return locateSecret(text)?.pattern ?? null;
+}
+
+/**
+ * The secret detectSecret names, and the offset where its match starts - never the match.
+ *
+ * The same loop rather than a second scan, so a refusal that points at a line can never
+ * point somewhere the detector did not look: the author is sent to the line that refused
+ * the file, and the value on it stays out of the message that sends them there.
+ */
+export function locateSecret(text: string): { pattern: string; index: number } | null {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name)!)) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;

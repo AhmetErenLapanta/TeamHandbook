@@ -51,6 +51,11 @@ This document states exactly what it reads, what it writes, and where data goes.
   passed through a stdio server's `args` is not checked at all. The merge request prints
   the endpoint and the full command so a person reads them before the server reaches
   anyone.
+- **The team plugin's copy on this machine, read-only, and only when you run
+  `/handbook:share`:** the skills, commands and `.mcp.json` under
+  `~/.claude/plugins/marketplaces/<team>`, compared by content with your own copies so the
+  screen can name the ones you now have twice. Nothing is removed: the screen prints the
+  command that would remove your copy, and running it is yours to decide.
 
 ## What it writes, and where
 
@@ -100,6 +105,14 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 Approved skills are written **outside** `~/.teamhandbook/`, where Claude Code loads
 them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
 (project), or the team repo via a pull request.
+
+`/handbook:demo` writes one more place: a scratch repository it builds under the system's
+temporary directory (`handbook-demo-*/shop-api`), holding an invented history by invented
+authors. Its draft goes to the same review queue as any other, marked as a demo draft, and
+that mark limits it to two answers: committed into that scratch repository, or rejected.
+Keeping it for yourself or sending it to the team is refused, and once the directory is
+gone, so is adding it to any project - it never falls back to the one you are standing in.
+Nothing deletes the directory for you.
 
 - **A secret in a format the detector recognizes is redacted before anything is
   written - the session files included.** A captured command, error, or edit that
@@ -242,6 +255,11 @@ reaches Anthropic. The evidence is screened piece by piece on the way in, and th
 reply is screened again before anything is kept; a piece that trips a screen is dropped
 and counted, and the packet is built without it rather than abandoned.
 
+`/handbook:demo` drafts the same way from its scratch repository, so its `live` draft sends
+that invented history's screened evidence and nothing of yours. Its `recorded` draft sends
+nothing: a draft that ships with the plugin is put through the same format check and screen
+in place of a model's reply.
+
 The line is drawn between PROSE and IDENTIFIERS, because the same word means different
 things on either side of it:
 
@@ -364,8 +382,10 @@ rm -rf ~/.teamhandbook
 ```
 
 That deletes every byte TeamHandbook itself stores - ledger, queue, per-session state,
-counters, `pipeline.log`, any `abandoned.jsonl`, and notice state. There is no other
-storage location and no remote copy.
+counters, `pipeline.log`, any `abandoned.jsonl`, and notice state. The only other place
+it keeps anything of its own is a scratch repository `/handbook:demo` built, under the
+system's temporary directory as `handbook-demo-*`; delete that the same way. There is no
+remote copy.
 
 Skills you already approved are ordinary files and are **not** removed by that
 command: delete `~/.claude/skills/<slug>/` (personal) or the repo's

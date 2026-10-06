@@ -7,6 +7,7 @@ import { readCounters } from "./counters.js";
 import { loadTeamConfig, teamSkillsDir } from "./init.js";
 import { listCandidates } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
+import { reviewQueue } from "./review-list.js";
 import { readSkillUsage, handbookSkills, summarizeUsage } from "./usage.js";
 import { listExistingSkills } from "./skill-index.js";
 
@@ -100,6 +101,33 @@ function teamNudgeMarkerFile(home: string): string {
 
 function digestMarkerFile(home: string): string {
   return join(home, "last-digest");
+}
+
+function foldedLessonsMarkerFile(home: string): string {
+  return join(home, "noticed-folded-lessons");
+}
+
+/**
+ * How many folded lessons to announce at this session start: all of them the first time,
+ * and none after that. With the lesson harvest off they are a backlog nothing adds to, so
+ * a line repeated at every start would be a nag about a decision the person may well have
+ * made by leaving them. The count is recorded rather than a bare flag, so a backlog that
+ * does grow again - the harvest switched back on and off - is announced once more.
+ *
+ * The record follows the backlog down as well as up. Kept at its high-water mark, an
+ * archived backlog of hundreds would have silenced the next handful folded after it, and
+ * the notice would have called a queue with new lessons in it empty.
+ */
+function foldedLessonsToAnnounce(home: string, folded: number): number {
+  let announced = 0;
+  try {
+    announced = Number.parseInt(readFileSync(foldedLessonsMarkerFile(home), "utf8"), 10) || 0;
+  } catch {
+    // never announced
+  }
+  if (folded === announced) return 0;
+  writeFileAtomic(foldedLessonsMarkerFile(home), `${folded}\n`);
+  return folded > announced ? folded : 0;
 }
 
 const DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -237,6 +265,9 @@ export interface SummaryInputs {
   // the last harvest ran and honestly found nothing worth keeping. Silence here
   // reads as "the product is broken", which is the point most users would quit.
   harvestedNothing?: boolean;
+  // lessons from before the harvest was switched off, which review folds into one line;
+  // non-zero only at the session start that announces them
+  foldedLessons?: number;
   firstRun?: boolean;
   newSkills: string[];
   heartbeat?: HeartbeatDelta | null;
@@ -262,6 +293,7 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
     teamNudge = null,
     digest = null,
     scoring = 0,
+    foldedLessons = 0,
   } = inputs;
   const lines: string[] = [];
   if (inputs.configBroken) {
@@ -321,6 +353,15 @@ export function buildSessionStartSummary(inputs: SummaryInputs): string | null {
         ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.`
         : " - run /handbook:review to approve or reject.";
     lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
+  }
+  // Pointed at the folded line rather than at the lessons themselves: review lists the
+  // drafts and folds these, so a notice naming one of them would send the person to a
+  // screen that does not show it.
+  if (foldedLessons > 0) {
+    lines.push(
+      `handbook: ${foldedLessons} older lesson ${foldedLessons === 1 ? "candidate is" : "candidates are"} folded; ` +
+        "archive or show them in /handbook:review.",
+    );
   }
   if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {
     lines.push(
@@ -409,11 +450,15 @@ export function sessionStartNotice(
 ): string | null {
   const config = loadNotifyConfig(home);
   if (!config.sessionStart) return null;
-  const pendingCandidates = listCandidates(home, "pending");
-  // Freshly harvested lessons get the headline treatment (keep/share/skip); other
-  // pending candidates (manual learns, older items) keep the plain review prompt.
-  const harvestedPending = pendingCandidates.filter((c) => c.origin === "harvest");
-  const rest = pendingCandidates.filter((c) => c.origin !== "harvest");
+  // The same partition the review screen opens on, so the notice never sends anyone to a
+  // candidate that screen does not list. With the lesson harvest on, freshly harvested
+  // lessons get the headline treatment (keep/share/skip) and the rest keep the plain
+  // review prompt. With it off, the harvested ones are the backlog review folds, so they
+  // get no headline: the plain prompt counts what review lists - the drafts mined from
+  // history first - and the folded ones are announced once, as the fold they are in.
+  const queue = reviewQueue(home);
+  const harvestedPending = queue.draftsFirst ? [] : queue.listed.filter((c) => c.origin === "harvest");
+  const rest = queue.listed.filter((c) => c.origin !== "harvest");
   // A lesson the developer keeps re-teaching outranks a higher-scoring one they
   // said once: repetition is their own evidence that it matters, and it is the
   // whole promise on the tin.
@@ -457,5 +502,6 @@ export function sessionStartNotice(
     configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home),
     keptSkills: listCandidates(home, "approved").length,
+    foldedLessons: foldedLessonsToAnnounce(home, queue.olderLessons.length),
   });
 }

@@ -131,10 +131,11 @@ describe("auditServer", () => {
     }
   });
 
-  it("given a token in the endpoint, when it is reported, then the message says where it is", () => {
+  it("given a token in the endpoint, when it is reported, then the message says where it is and not what it is", () => {
     const message = refusalMessage("zapier", auditServer({ type: "http", url: "https://mcp.zapier.com/api/mcp/s/NjM4YTk5ZTQtYjk2Mi00/mcp" }));
 
-    expect(message).toContain("NjM4YTk5ZTQtYjk2Mi00");
+    expect(message).toContain("path segment 4");
+    expect(message).not.toContain("NjM4YTk5ZTQtYjk2Mi00");
     expect(message).toContain("every teammate");
   });
 

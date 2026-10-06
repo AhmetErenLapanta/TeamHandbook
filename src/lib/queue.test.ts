@@ -7,6 +7,7 @@ import {
   candidateMetaFile,
   candidateMetaFromArtifact,
   decideCandidate,
+  demoLines,
   formatCandidateList,
   auditSkillDir,
   identityInSkillDir,
@@ -572,7 +573,7 @@ describe("auditSkillDir", () => {
 
     expect(audit.shareable).toBe(false);
     expect(audit.reason).toBe("identity");
-    expect(audit.identity).toEqual({ class: "home-path", where: "reference/setup.md" });
+    expect(audit.identity).toEqual({ class: "home-path", where: "reference/setup.md", line: 1 });
     const message = skillRefusalMessage("~/skills/rebuild-nightly-report", "rebuild-nightly-report", audit);
     expect(message).toContain("reference/setup.md");
     expect(message).toContain("home-path");
@@ -746,5 +747,36 @@ describe("unreadableCandidates", () => {
     });
 
     expect(unreadableCandidates(home)).toEqual([]);
+  });
+});
+
+describe("a demo draft on the review screen", () => {
+  const demo = (cwd: string) => meta({ slug: "add-resource-endpoints", origin: "mine", demo: true, cwd });
+
+  it("given a demo draft whose scratch repository is there, when it is described, then it is labelled demo with its two answers", () => {
+    // when the label is read for a scratch repository that exists
+    const lines = demoLines(demo("/scratch/shop-api"), () => true);
+
+    // then it names itself and offers exactly what the CLI accepts
+    expect(lines).toEqual([
+      "demo:      a /handbook:demo draft - add it to its scratch repository or reject it; nothing else is accepted",
+    ]);
+  });
+
+  it("given a demo draft whose scratch repository is gone, when it is described, then rejecting is the only answer offered", () => {
+    // when the label is read for a scratch repository that no longer exists
+    const lines = demoLines(demo("/scratch/shop-api"), () => false);
+
+    // then adding it anywhere is not on offer
+    expect(lines).toEqual(["demo:      a /handbook:demo draft whose scratch repository no longer exists - reject it"]);
+  });
+
+  it("given a demo draft in the queue, when the queue is listed, then its line says demo; an ordinary candidate gains nothing", () => {
+    // when a demo draft and an ordinary candidate are listed together
+    const text = formatCandidateList([demo("/nowhere/at/all"), meta()], Date.parse("2026-10-06T00:00:00Z"));
+
+    // then the label appears once, on the demo draft
+    expect(text.match(/demo: {6}a \/handbook:demo draft/g)).toHaveLength(1);
+    expect(demoLines(meta())).toEqual([]);
   });
 });

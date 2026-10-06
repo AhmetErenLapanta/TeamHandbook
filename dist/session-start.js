@@ -21,7 +21,7 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -247,7 +247,7 @@ var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
 var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "node:fs";
 import { basename, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -477,13 +477,17 @@ var GLOBAL_TWIN = new Map(
   ])
 );
 function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;
@@ -605,6 +609,68 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   return team ? join6(root, team.marketplaceName, "skills") : null;
 }
 
+// src/lib/transcript.ts
+var PER_USER_CAP = 1e3;
+var USER_HEAD = 700;
+var USER_TAIL = PER_USER_CAP - USER_HEAD;
+var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
+var WRAPPED_LINE_MIN = 24;
+var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
+
+// src/lib/harvest.ts
+var defaultHarvestConfig = {
+  enabled: true,
+  // Measured, not assumed: on an identical prompt from a real session, haiku
+  // proposed the developer's stated rule 1 time in 3 and sonnet 3 in 3. That is one
+  // prompt, three runs per model - too little to put a rate on, and all the evidence
+  // this default rests on. The whole product is "every session teaches it something";
+  // a default that stays silent two thirds of the time fails that. One call per
+  // session, and {"harvest": {"model": "haiku"}} is still there for whoever wants it
+  // cheaper.
+  model: "sonnet",
+  maxPerSession: 3,
+  minScore: 4,
+  transcriptCharCap: 4e4,
+  // Latency is dominated by how much the model writes, not by the slice: a 31k-char
+  // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
+  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
+  // degrade to a smaller answer, it burns an attempt and can park the session in
+  // abandoned.jsonl. This is the value the yield measurement was run at.
+  timeoutMs: 18e4
+};
+function lessonHarvestEnabled(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
+function loadHarvestConfig(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
+  return {
+    // fail closed on a broken config - see configIsBroken
+    enabled: !configIsBroken(home) && harvest?.enabled !== false,
+    model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
+    maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
+    minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
+    transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
+    timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
+  };
+}
+
+// src/lib/review-list.ts
+function isOlderLesson(meta) {
+  return meta.origin === "harvest";
+}
+function reviewQueue(home = handbookHome()) {
+  const pending = listCandidates(home, "pending");
+  if (lessonHarvestEnabled(home)) return { listed: pending, olderLessons: [], draftsFirst: false };
+  const rest = pending.filter((meta) => !isOlderLesson(meta));
+  return {
+    listed: [...rest.filter((meta) => meta.origin === "mine"), ...rest.filter((meta) => meta.origin !== "mine")],
+    olderLessons: pending.filter(isOlderLesson),
+    draftsFirst: true
+  };
+}
+
 // src/lib/usage.ts
 import { readFileSync as readFileSync6 } from "node:fs";
 import { basename as basename2, join as join7 } from "node:path";
@@ -653,7 +719,7 @@ function welcomeMarkerFile(home) {
 }
 function isFirstRun(home = handbookHome()) {
   const marker = welcomeMarkerFile(home);
-  if (existsSync2(marker)) return false;
+  if (existsSync3(marker)) return false;
   writeFileAtomic(marker, (/* @__PURE__ */ new Date()).toISOString() + "\n");
   return true;
 }
@@ -697,6 +763,20 @@ function teamNudgeMarkerFile(home) {
 function digestMarkerFile(home) {
   return join8(home, "last-digest");
 }
+function foldedLessonsMarkerFile(home) {
+  return join8(home, "noticed-folded-lessons");
+}
+function foldedLessonsToAnnounce(home, folded) {
+  let announced = 0;
+  try {
+    announced = Number.parseInt(readFileSync7(foldedLessonsMarkerFile(home), "utf8"), 10) || 0;
+  } catch {
+  }
+  if (folded === announced) return 0;
+  writeFileAtomic(foldedLessonsMarkerFile(home), `${folded}
+`);
+  return folded > announced ? folded : 0;
+}
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function weeklyDigest(home = handbookHome(), now = Date.now()) {
   const marker = digestMarkerFile(home);
@@ -732,7 +812,7 @@ function weeklyDigest(home = handbookHome(), now = Date.now()) {
 }
 function pendingTeamNudge(home = handbookHome()) {
   if (loadTeamConfig(home)) return null;
-  if (existsSync2(teamNudgeMarkerFile(home))) return null;
+  if (existsSync3(teamNudgeMarkerFile(home))) return null;
   const approved = listCandidates(home, "approved").length;
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), (/* @__PURE__ */ new Date()).toISOString() + "\n");
@@ -789,7 +869,8 @@ function buildSessionStartSummary(inputs) {
     keptSkills = 0,
     teamNudge = null,
     digest = null,
-    scoring = 0
+    scoring = 0,
+    foldedLessons = 0
   } = inputs;
   const lines = [];
   if (inputs.configBroken) {
@@ -819,6 +900,11 @@ function buildSessionStartSummary(inputs) {
     const repeated = inputs.pendingRepeats ?? 0;
     const nag = repeated > 0 ? ` - you have told Claude one of these in ${repeated} sessions now, and it is still waiting: run /handbook:review.` : " - run /handbook:review to approve or reject.";
     lines.push(`handbook: ${pending} ${noun} awaiting your review${preview}${nag}`);
+  }
+  if (foldedLessons > 0) {
+    lines.push(
+      `handbook: ${foldedLessons} older lesson ${foldedLessons === 1 ? "candidate is" : "candidates are"} folded; archive or show them in /handbook:review.`
+    );
   }
   if (harvestedNothing && !harvested && pending === 0 && scoring === 0) {
     lines.push(
@@ -884,9 +970,9 @@ function oldestPendingDays(candidates, now = Date.now()) {
 function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   const config = loadNotifyConfig(home);
   if (!config.sessionStart) return null;
-  const pendingCandidates = listCandidates(home, "pending");
-  const harvestedPending = pendingCandidates.filter((c) => c.origin === "harvest");
-  const rest = pendingCandidates.filter((c) => c.origin !== "harvest");
+  const queue = reviewQueue(home);
+  const harvestedPending = queue.draftsFirst ? [] : queue.listed.filter((c) => c.origin === "harvest");
+  const rest = queue.listed.filter((c) => c.origin !== "harvest");
   const top = harvestedPending.sort(
     (a, b) => (b.taughtBefore ?? 0) - (a.taughtBefore ?? 0) || (b.gate?.total ?? -1) - (a.gate?.total ?? -1)
   )[0];
@@ -917,12 +1003,13 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     digest: weeklyDigest(home),
     configBroken: configIsBroken(home),
     scoring: pendingHarvestCount(home),
-    keptSkills: listCandidates(home, "approved").length
+    keptSkills: listCandidates(home, "approved").length,
+    foldedLessons: foldedLessonsToAnnounce(home, queue.olderLessons.length)
   });
 }
 
 // src/lib/signals.ts
-import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync4, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync8 } from "node:fs";
 import { join as join9 } from "node:path";
 function sanitizeSignalsForPersistence(signals) {
   let redacted = 0;
@@ -976,7 +1063,7 @@ function appendSignals(signals, home = handbookHome()) {
   const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
   appendFileSync(signalsFile(home), lines);
 }
-function signalFromPair(pair, sessionId, ts, fileExists = existsSync3) {
+function signalFromPair(pair, sessionId, ts, fileExists = existsSync4) {
   const persistedEdits = pair.edits.filter(fileExists);
   return {
     ts,
@@ -993,7 +1080,7 @@ function signalFromPair(pair, sessionId, ts, fileExists = existsSync3) {
     resolvedAt: pair.resolvedAt
   };
 }
-function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync3) {
+function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync4) {
   const state = loadSessionState(sessionId, home);
   if (state.resolvedPairs.length === 0) return [];
   const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
@@ -1046,55 +1133,6 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { basename as basename3, join as join10 } from "node:path";
-
-// src/lib/transcript.ts
-var PER_USER_CAP = 1e3;
-var USER_HEAD = 700;
-var USER_TAIL = PER_USER_CAP - USER_HEAD;
-var ROLE_LABEL = new RegExp(`(^|[${LINE_TERMINATOR_CLASS}])(User|Assistant)(\\s*:)`, "gi");
-var WRAPPED_LINE_MIN = 24;
-var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
-
-// src/lib/harvest.ts
-var defaultHarvestConfig = {
-  enabled: true,
-  // Measured, not assumed: on an identical prompt from a real session, haiku
-  // proposed the developer's stated rule 1 time in 3 and sonnet 3 in 3. That is one
-  // prompt, three runs per model - too little to put a rate on, and all the evidence
-  // this default rests on. The whole product is "every session teaches it something";
-  // a default that stays silent two thirds of the time fails that. One call per
-  // session, and {"harvest": {"model": "haiku"}} is still there for whoever wants it
-  // cheaper.
-  model: "sonnet",
-  maxPerSession: 3,
-  minScore: 4,
-  transcriptCharCap: 4e4,
-  // Latency is dominated by how much the model writes, not by the slice: a 31k-char
-  // prompt returning nothing took 9s, a 6k one returning a full skill took 25s. Three
-  // items is the cap, so ~75s is the realistic ceiling - and a timeout here does not
-  // degrade to a smaller answer, it burns an attempt and can park the session in
-  // abandoned.jsonl. This is the value the yield measurement was run at.
-  timeoutMs: 18e4
-};
-function lessonHarvestEnabled(home = handbookHome()) {
-  const harvest = readConfigFile(home).harvest;
-  return !configIsBroken(home) && harvest?.lessons === true;
-}
-function loadHarvestConfig(home = handbookHome()) {
-  const harvest = readConfigFile(home).harvest;
-  const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
-  return {
-    // fail closed on a broken config - see configIsBroken
-    enabled: !configIsBroken(home) && harvest?.enabled !== false,
-    model: typeof harvest?.model === "string" ? harvest.model : defaultHarvestConfig.model,
-    maxPerSession: num(harvest?.maxPerSession, defaultHarvestConfig.maxPerSession),
-    minScore: typeof harvest?.minScore === "number" && harvest.minScore >= 0 && harvest.minScore <= 10 ? harvest.minScore : defaultHarvestConfig.minScore,
-    transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
-    timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
-  };
-}
-
-// src/lib/pipeline.ts
 function pendingDir(home = handbookHome()) {
   return join10(home, "pending");
 }

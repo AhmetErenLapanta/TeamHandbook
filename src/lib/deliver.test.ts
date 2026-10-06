@@ -938,6 +938,61 @@ describe("two answers to one refusal are not one answer twice", () => {
   });
 });
 
+describe("a demo draft, approved anywhere but its scratch repository", () => {
+  function demoDraft(): string {
+    return seedCandidate(meta({ slug: "add-resource-endpoints", origin: "mine", demo: true, suggestedTarget: "project" }));
+  }
+
+  it("given a demo draft, when it is kept for yourself, then it is refused and nothing reaches your own skills", () => {
+    // given a demo draft and an empty personal skills directory
+    const dir = demoDraft();
+    const personal = mkdtempSync(join(tmpdir(), "handbook-personal-"));
+    try {
+      // when it is approved to personal
+      const result = approveAndDeliver(
+        home, "add-resource-endpoints", project, "2026-10-06T00:00:00Z", null, undefined, undefined, "personal", personal,
+      );
+
+      // then it is refused by what it is, the personal directory stays empty, and it still waits
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("a demo draft stays in its scratch repository");
+      expect(readdirSync(personal)).toEqual([]);
+      expect(readCandidateMeta(dir)?.status).toBe("pending");
+    } finally {
+      rmSync(personal, { recursive: true, force: true });
+    }
+  });
+
+  it("given a demo draft and a team, when it is shared with the team, then it is refused before git or the forge is called", () => {
+    // given a configured team and runners that record every call
+    saveTeamConfig({ repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "t" }, home);
+    const dir = demoDraft();
+    const gitCalls: string[][] = [];
+    const forgeCalls: string[][] = [];
+
+    // when it is approved to the team, with a wording already given so nothing else stops it
+    const result = approveAndDeliver(
+      home, "add-resource-endpoints", project, "2026-10-06T00:00:00Z", undefined,
+      (args) => {
+        gitCalls.push(args);
+        return "";
+      },
+      (_tool, args) => {
+        forgeCalls.push(args);
+        return "";
+      },
+      "team", undefined, { commitMessage: { message: "add the add-resource-endpoints skill" } },
+    );
+
+    // then it is refused, and nothing was cloned, pushed or opened
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("a demo draft stays in its scratch repository");
+    expect(gitCalls).toEqual([]);
+    expect(forgeCalls).toEqual([]);
+    expect(readCandidateMeta(dir)?.status).toBe("pending");
+  });
+});
+
 describe("a candidate edited in the queue, approved to the team", () => {
   function recordingRunners(): { git: GitRunner; forge: ForgeRunner; gitCalls: string[][]; forgeCalls: string[][] } {
     const gitCalls: string[][] = [];
@@ -1012,7 +1067,7 @@ describe("a candidate edited in the queue, approved to the team", () => {
     );
     // then the secret sieve stops it, by the file and the class of what it found
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('"reference.md" looks like it contains a secret (anthropic-api-key)');
+    expect(result.error).toContain("reference.md:1 looks like it contains a secret (anthropic-api-key)");
     expect(JSON.stringify(result)).not.toContain(LIVE_KEY);
     expect(runners.gitCalls).toEqual([]);
     expect(readCandidateMeta(dir)?.status).toBe("pending");
@@ -1076,6 +1131,47 @@ describe("a mined draft delivered into the project it came from", () => {
     const said = formatApproveResult("add-entity-field", result);
     expect(said).toContain("It is committed");
     expect(said).not.toContain("Commit this directory");
+  });
+
+  it("given a demo draft whose scratch repository was deleted, when it is approved into the project the reviewer stands in, then it is refused and nothing reaches that project", () => {
+    // given a real repository to approve from, and a demo draft whose scratch repository is gone
+    gitRepo();
+    const scratch = mkdtempSync(join(tmpdir(), "handbook-demo-"));
+    rmSync(scratch, { recursive: true, force: true });
+    seedCandidate(mined({ demo: true, cwd: scratch }));
+
+    // when it is approved into the project, with a wording already decided so nothing else stops it
+    const result = approveAndDeliver(
+      home, "add-entity-field", project, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the add-entity-field skill" } },
+    );
+
+    // then it is refused by what it is, the real repository has neither the file nor a commit,
+    // and the draft is still there to be rejected
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("this demo draft belongs to a scratch repository that no longer exists; reject it");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    expect(execFileSync("git", ["-C", project, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim()).toBe("1");
+    expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+  });
+
+  it("given a demo draft whose scratch repository is still there, when it is approved from another directory, then it is committed into the scratch repository only", () => {
+    // given the scratch repository, and a reviewer standing somewhere else
+    const scratch = gitRepo();
+    const elsewhere = mkdtempSync(join(tmpdir(), "handbook-elsewhere-"));
+    seedCandidate(mined({ demo: true, cwd: scratch }));
+
+    // when it is approved into the project
+    const result = approveAndDeliver(
+      home, "add-entity-field", elsewhere, "2026-10-01T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the add-entity-field skill" } },
+    );
+
+    // then the mark closes only the fallback: the scratch repository takes the commit as before
+    expect(result.ok).toBe(true);
+    expect(log()).toContain("add the add-entity-field skill");
+    expect(existsSync(join(elsewhere, ".claude"))).toBe(false);
+    rmSync(elsewhere, { recursive: true, force: true });
   });
 
   it("given you decide, when it is approved, then it is refused because no merge request is opened here", () => {

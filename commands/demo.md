@@ -2,106 +2,75 @@
 description: Watch TeamHandbook learn something from a real session end to end, in about five minutes: it prepares a piece of real work, harvests a skill out of it, and hands you the approval step. Use when someone wants to see the product actually work before trusting it or rolling it out to a team. Triggers: "show me how this works", "give me a demo", "walk me through it", "let me see it in action", "what does this thing actually do", "I want to try it before I hand it to the team".
 ---
 
-You are setting up TeamHandbook's guided demo. Your job in THIS session is only to
-prepare it and hand the user their next two steps. Do not do the work yourself here.
+You are running TeamHandbook's guided demo. It shows the product's main path on a scratch
+repository: the work a history repeats, listed; one of those drafted as a skill; the draft
+on the review screen. Nothing here reads the user's own repositories, and nothing calls a
+model unless the user picks a live draft.
 
-Why the split, if the user asks: the harvest reads the conversation a session produced.
-A session spent talking about TeamHandbook is a session about TeamHandbook, and a model
-reading it back concludes, correctly, that it was watching a staged exercise rather than
-someone working. On the exact transcript this demo produces, run three times each way:
-the version that narrated itself produced a skill in 1 run out of 3, the version that
-hands off to a clean session produced it 3 out of 3. So the demo hands the work to a
-clean session. That is also the honest thing to show, since it is what the product
-actually does all day.
-
-## Step 0, here: turn the lesson harvest on
-
-This demo shows the per-session lesson harvest, which ships switched OFF - the product's
-main path is now `/handbook:mine`, which reads a repository's history instead of a
-session. So the demo has to turn it on, and say that it did:
+## First, build the scratch repository and list it
 
 ```bash
-node -e 'const f=require("path").join(process.env.TEAMHANDBOOK_HOME||require("path").join(require("os").homedir(),".teamhandbook"),"config.json");const fs=require("fs");fs.mkdirSync(require("path").dirname(f),{recursive:true});let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}c.harvest={...(c.harvest||{}),lessons:true};fs.writeFileSync(f,JSON.stringify(c,null,2));console.log("lesson harvest on")'
+node "${CLAUDE_PLUGIN_ROOT}/dist/demo.js" start
 ```
 
-Tell the user plainly that you switched it on, and that `{"harvest": {"lessons": false}}`
-in their config puts it back. If they only wanted to see the product work and not
-specifically the session harvest, `/handbook:mine` is the shorter demo and costs nothing
-to list.
+This builds an invented shop API under the system's temporary directory, its history
+written to order, and lists the work that history repeats exactly as `/handbook:mine` lists
+a real repository. It makes no model call and sends nothing. Relay the list as it is
+printed: the counts beside each workflow are how a reader recognises their own work, and
+the file map under it is the measured part. Keep the repository path it printed; every step
+below needs it.
 
-## Step 1, here: build the scratch project
+## Then, ask how the draft should be written
 
-Create it with ONE Bash call, exactly as written. One call is deliberate: `mkdir` and
-`chmod` are too generic to count as work, so this session stays under the substance bar
-and never spends a model call harvesting itself. Writing the two files with the Write
-tool instead would cross it.
+One AskUserQuestion, two options, the first marked as recommended:
+
+- **Recorded draft** - a draft written earlier from this same history, put through the
+  format check and screen a fresh one has to pass. No model call, nothing sent.
+- **Live draft** - a fresh one from the user's own `claude` CLI. One model call: the
+  screened evidence for the scratch repository's first workflow is sent, and nothing else.
+
+Run only what they picked, with the repository path from the first step:
 
 ```bash
-mkdir -p /tmp/handbook-demo && cd /tmp/handbook-demo && git init -q -b main 2>/dev/null; git remote remove origin 2>/dev/null; git remote add origin git@example.com:demo/payments.git; cat > config.json <<'EOF'
-{
-  "user_id": "abc-123",
-  "amount": 100
-}
-EOF
-cat > validate.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if grep -q '"user_id"' config.json; then
-  echo "ERROR 400: field 'user_id' unknown - the gateway only accepts camelCase" >&2
-  exit 1
-fi
-echo "config OK"
-EOF
-chmod +x validate.sh && ls
+node "${CLAUDE_PLUGIN_ROOT}/dist/demo.js" recorded "<repository path>"
+node "${CLAUDE_PLUGIN_ROOT}/dist/demo.js" live "<repository path>"
 ```
 
-## Step 2: send the work to a NEW session
+Never run `live` without that answer, and never as a fallback when something else fails:
+the answer is what makes the model call theirs. If a live draft comes back with nothing
+kept, relay the reason as printed - a reply that fails the format check or the screen is
+dropped, not repaired - and offer the recorded one.
 
-Print this, changing nothing inside the code blocks:
+## Last, the review screen
 
-> The scratch project is ready at `/tmp/handbook-demo`: a config using `user_id`, and a
-> validator that rejects it.
->
-> Quit this session with `/exit`, then start Claude Code in that directory:
->
-> ```
-> cd /tmp/handbook-demo && claude
-> ```
->
-> Paste this as your first message and let it work:
->
-> ```
-> we always use camelCase in gateway configs here, never snake_case. run ./validate.sh, fix whatever it rejects, then run it again
-> ```
->
-> When it prints `config OK`, quit that session too. TeamHandbook harvests it as it
-> closes: your rule, the command that failed, and the fix that followed.
+The draft now waits in the user's review queue like any draft from `/handbook:mine`. Show
+it with the slug the previous step printed:
 
-Then stop. Do not offer to do the work here instead, and do not reach for
-`/handbook:learn` as a shortcut: the manual path captures the failure and its fix, so
-the candidate arrives with no `correction` kind and no `you said:` quote, which is the
-half of the demo worth watching.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" show <slug>
+```
 
-## Step 3: tell them what to look for when they come back
+Present it as `/handbook:review` would: what it is (a draft from repository history), its
+file map, and the questions it lists under what the history could not show. Those questions
+are the part a person fills in; do not call the draft a finished skill.
 
-> Start Claude Code in `/tmp/handbook-demo` once more. It should open with:
->
-> ```
-> TeamHandbook learned from your last session: "..." (correction, 8/10) - keep it for
-> yourself, add it to this project, or share it with the team: run /handbook:review.
-> ```
->
-> Run `/handbook:review` and read the candidate:
->
-> - `kind: correction`, which only the session-end path produces
-> - the score, and which of the five criteria earned it
-> - `you said:`, carrying your own sentence, quoted back as the reason the skill exists
->
-> Then keep it, put it in the repo, or skip it.
->
-> If that opening line does not appear, give the background harvest a few seconds and
-> start a session again. `/handbook:status` shows whether it ran, and `/handbook:doctor`
-> says whether it could reach your `claude` CLI at all.
+Then one AskUserQuestion, two options:
 
-Clean up whenever they ask: `rm -rf /tmp/handbook-demo`. Leave it until after the
-review, since the candidate's grounded case points at it.
+- **Add it to the scratch repository** - run
+  `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" approve <slug> --to project`. The first run
+  commits nothing: it comes back with `commit message required` and the message it
+  proposes. Show the user that sentence, let them approve or edit it, and run the same
+  command again with `--message "<their wording>"`. The commit lands in the scratch
+  repository and nowhere else; show it with `git -C "<repository path>" log -1 --stat`.
+- **Reject it** - run `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" reject <slug>`.
+
+Offer nothing else. Keeping it for themselves or sharing it with the team would carry a
+skill about an invented API out of the scratch repository, and leaving it pending lets it
+outlive that repository: approved later from a real project, it would land there instead.
+
+## Afterwards
+
+The scratch repository stays until it is deleted. When the user asks, remove the directory
+the repository sits in (the `handbook-demo-*` one), once the draft has been added or rejected:
+a draft still waiting after that can only be rejected. To do the same on real work, run
+`/handbook:mine` in a real repository.

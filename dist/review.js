@@ -3,14 +3,14 @@ import { readFileSync as readFileSync11 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync4, readFileSync as readFileSync7, rmdirSync, rmSync as rmSync5 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { basename as basename3, dirname as dirname4, join as join10, relative } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join8 } from "node:path";
 
 // src/lib/session-state.ts
@@ -218,8 +218,17 @@ function traces(text, host) {
   return found.sort((a, b) => a.index - b.index);
 }
 function detectIdentity(text, host = hostIdentity()) {
-  return traces(text, host)[0]?.class ?? null;
+  return locateIdentity(text, host)?.class ?? null;
 }
+function locateIdentity(text, host = hostIdentity()) {
+  const first = traces(text, host)[0];
+  return first ? { class: first.class, index: first.index } : null;
+}
+var IDENTITY_PHRASE = {
+  "home-path": "a home directory path",
+  "os-username": "this machine's account name",
+  email: "an email address"
+};
 function maskIdentity(text, host = hostIdentity()) {
   const found = traces(text, host);
   if (found.length === 0) return text;
@@ -347,7 +356,7 @@ ${indent(clean)}`;
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
 import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -545,13 +554,17 @@ var GLOBAL_TWIN = new Map(
   ])
 );
 function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;
@@ -669,9 +682,10 @@ function auditSkillDir(sourceDir, host = hostIdentity()) {
     } catch {
       return { shareable: false, reason: "unreadable", detail: file };
     }
-    const pattern = detectSecret(content);
-    if (pattern) {
-      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    const found = locateSecret(content);
+    if (found) {
+      const secret = { pattern: found.pattern, file, line: lineAt(content, found.index) };
+      return { shareable: false, reason: "secret", detail: found.pattern, secret };
     }
   }
   const trace = identityInSkillDir(sourceDir, name, files, host);
@@ -688,8 +702,8 @@ function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = list
     } catch {
       continue;
     }
-    const trace = detectIdentity(content, host);
-    if (trace) return { class: trace, where: file };
+    const trace = locateIdentity(content, host);
+    if (trace) return { class: trace.class, where: file, line: lineAt(content, trace.index) };
   }
   return null;
 }
@@ -701,10 +715,14 @@ function secretInSkillDir(sourceDir, files = listSkillFiles(sourceDir).files) {
     } catch {
       continue;
     }
-    const pattern = detectSecret(content);
-    if (pattern) return { pattern, file };
+    const found = locateSecret(content);
+    if (found) return { pattern: found.pattern, file };
   }
   return null;
+}
+function demoLines(meta, dirExists = existsSync2) {
+  if (!meta.demo) return [];
+  return meta.cwd && dirExists(meta.cwd) ? ["demo:      a /handbook:demo draft - add it to its scratch repository or reject it; nothing else is accepted"] : ["demo:      a /handbook:demo draft whose scratch repository no longer exists - reject it"];
 }
 function hygieneLines(dir, slug) {
   const lines = [];
@@ -722,8 +740,20 @@ function hygieneLines(dir, slug) {
   }
   return lines;
 }
-function identityPlace(where) {
-  return where === "name" ? "its name" : `its file "${where}"`;
+function identityPlace(where, line) {
+  if (where === "name") return "its name";
+  return line ? fileLine(where, line) : `its file "${where}"`;
+}
+function fileLine(file, line) {
+  return line ? `${file}:${line}` : `"${file}"`;
+}
+function lineAt(text, index) {
+  return text.slice(0, index).split("\n").length;
+}
+function traceFinding(audit) {
+  const { where = "", line, class: cls } = audit.identity ?? {};
+  const what = cls ? `a trace of this machine, ${IDENTITY_PHRASE[cls]}` : "a trace of this machine";
+  return `${identityPlace(where, line)} carries ${what} (${cls ?? audit.detail})`;
 }
 function skillRefusalMessage(shownDir, slug, audit) {
   switch (audit.reason) {
@@ -740,9 +770,9 @@ function skillRefusalMessage(shownDir, slug, audit) {
     case "unreadable":
       return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
     case "identity":
-      return `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
+      return `${slug} was not shared: ${traceFinding(audit)}. A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`;
     default:
-      return `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
+      return `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
 }
 function listCandidates(home = handbookHome(), status) {
@@ -962,9 +992,9 @@ function muteFingerprint(fingerprint, home = handbookHome()) {
   muted.add(fingerprint);
   writeFileAtomic(mutedFile(home), JSON.stringify([...muted].sort(), null, 2) + "\n");
 }
-function formatCandidateList(metas, now = Date.now(), label = "Pending") {
+function formatCandidateList(metas, now = Date.now(), label = "Pending", order = "newest first") {
   if (metas.length === 0) return `No ${label.toLowerCase()} candidates.`;
-  const lines = [`${label} candidates (${metas.length}), newest first:`, ""];
+  const lines = [`${label} candidates (${metas.length}), ${order}:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
     const kind = meta.kind ? `[${meta.kind}]  ` : "";
@@ -973,6 +1003,7 @@ function formatCandidateList(metas, now = Date.now(), label = "Pending") {
     );
     lines.push(`     ${meta.description}`);
     if (meta.origin === "mine") lines.push(`     ${MINE_REVIEW_HEADING}`);
+    for (const line of demoLines(meta)) lines.push(`     ${line}`);
   });
   return lines.join("\n");
 }
@@ -1835,7 +1866,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join9 } from "node:path";
 function buildPrTitle(slug, update = false) {
   return `feat(skill): ${update ? "update" : "add"} ${slug}`;
@@ -2004,7 +2035,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
-    const occupied = existsSync3(join9(repoDir, skillDir));
+    const occupied = existsSync4(join9(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
         ok: false,
@@ -2073,13 +2104,14 @@ function soloSkillsDir(projectCwd) {
 function personalSkillsDir() {
   return join10(homedir4(), ".claude", "skills");
 }
-function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
+function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync5) {
+  if (meta.demo) return meta.cwd ?? "";
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
-function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync4) {
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync5) {
   return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
 }
-function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
+function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync5) {
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
   return `${basename3(origin)}'s .claude/skills (where it was captured, not this project)`;
@@ -2098,6 +2130,13 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
     return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
   }
   const resolved = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  if (meta.demo && resolved !== "project") {
+    return {
+      ok: false,
+      meta,
+      error: "a demo draft stays in its scratch repository: add it to that repository or reject it. Nothing was written."
+    };
+  }
   const wording = options.commitMessage ?? {};
   const commitsLocally = resolved === "project" && meta.origin === "mine";
   if (resolved !== "team" && !commitsLocally && (wording.message !== void 0 || wording.delegated !== void 0)) {
@@ -2130,7 +2169,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
   const target = join10(skillsDir, slug);
-  const occupied = existsSync4(target);
+  const occupied = existsSync5(target);
   const updatedExisting = occupied && mayUpdate(options, slug);
   if (occupied && !updatedExisting) {
     return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
@@ -2234,11 +2273,18 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commit) {
-  const originGone = !!meta.cwd && !existsSync4(meta.cwd);
+  if (meta.demo && !(meta.cwd && existsSync5(meta.cwd))) {
+    return {
+      ok: false,
+      meta,
+      error: "this demo draft belongs to a scratch repository that no longer exists; reject it. Nothing was written and nothing was committed."
+    };
+  }
+  const originGone = !!meta.cwd && !existsSync5(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
-  const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
+  const installedProject = meta.cwd && existsSync5(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename3(installedProject) : void 0;
   const named = options.as ?? meta.slug;
   let subject;
@@ -2408,6 +2454,10 @@ var defaultHarvestConfig = {
   // abandoned.jsonl. This is the value the yield measurement was run at.
   timeoutMs: 18e4
 };
+function lessonHarvestEnabled(home = handbookHome()) {
+  const harvest = readConfigFile(home).harvest;
+  return !configIsBroken(home) && harvest?.lessons === true;
+}
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
@@ -2637,8 +2687,75 @@ function formatSweepReport(report, dryRun) {
   return lines.join("\n");
 }
 
+// src/lib/review-list.ts
+function isOlderLesson(meta) {
+  return meta.origin === "harvest";
+}
+function reviewQueue(home = handbookHome()) {
+  const pending = listCandidates(home, "pending");
+  if (lessonHarvestEnabled(home)) return { listed: pending, olderLessons: [], draftsFirst: false };
+  const rest = pending.filter((meta) => !isOlderLesson(meta));
+  return {
+    listed: [...rest.filter((meta) => meta.origin === "mine"), ...rest.filter((meta) => meta.origin !== "mine")],
+    olderLessons: pending.filter(isOlderLesson),
+    draftsFirst: true
+  };
+}
+function formatReviewQueue(queue, now = Date.now()) {
+  const { listed, olderLessons } = queue;
+  const mixed = queue.draftsFirst && listed.some((m) => m.origin === "mine") && listed.some((m) => m.origin !== "mine");
+  const list = formatCandidateList(listed, now, "Pending", mixed ? "repository drafts first, then newest first" : void 0);
+  if (!olderLessons.length) return list;
+  const n = olderLessons.length;
+  const line = `${n} older lesson ${n === 1 ? "candidate" : "candidates"} from before the harvest was switched off ${n === 1 ? "is" : "are"} not listed: archive ${n === 1 ? "it" : "them all"} with "review.js archive-lessons" (reversible, nothing is deleted) or show ${n === 1 ? "it" : "them"} with "review.js list --lessons".`;
+  return listed.length ? `${list}
+
+${line}` : line;
+}
+function foldedAllRefusal(queue, verb) {
+  if (queue.listed.length || !queue.olderLessons.length) return null;
+  const n = queue.olderLessons.length;
+  return `nothing on the review screen to ${verb}: ${n} older lesson ${n === 1 ? "candidate is" : "candidates are"} folded, and --all reaches only what the screen lists. Show them with "review.js list --lessons" and name the ones to ${verb}, or archive them with "review.js archive-lessons".`;
+}
+var LESSON_ARCHIVE_REASON = "lesson harvest switched off; archived unread from the review screen";
+function archiveOlderLessons(home = handbookHome(), now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+  const at = now();
+  const result = { archived: [], skipped: [] };
+  const entries = [];
+  for (const meta of reviewQueue(home).olderLessons) {
+    const done = archiveCandidate(home, meta.slug, LESSON_ARCHIVE_REASON, at);
+    if (done.ok && done.entry) {
+      entries.push(done.entry);
+      result.archived.push(meta.slug);
+    } else {
+      result.skipped.push({ slug: meta.slug, reason: done.error ?? "could not be archived" });
+    }
+  }
+  if (entries.length) {
+    result.manifestPath = writeArchiveManifest(home, { sweptAt: at, reason: LESSON_ARCHIVE_REASON, entries });
+  }
+  return result;
+}
+function formatLessonArchive(result) {
+  if (!result.archived.length && !result.skipped.length) {
+    return "No older lesson candidates are waiting, so nothing was archived.";
+  }
+  const n = result.archived.length;
+  const lines = [`Archived ${n} older lesson ${n === 1 ? "candidate" : "candidates"} - archived, not deleted.`];
+  if (result.manifestPath) {
+    lines.push(
+      "  list them:          review.js list --archived",
+      `  put them all back:  review.js restore "${result.manifestPath}"`
+    );
+  }
+  if (result.skipped.length) {
+    lines.push("", "Left pending:", ...result.skipped.map((s) => `  ${s.slug} - ${s.reason}`));
+  }
+  return lines.join("\n");
+}
+
 // src/lib/notify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync9, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync6, readFileSync as readFileSync9, readdirSync as readdirSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
@@ -2698,7 +2815,7 @@ function lastPipelineRun(home = handbookHome()) {
 // src/cli/review.ts
 function usage() {
   console.error(
-    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> [--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] [--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] [--version-after-open]"
+    "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|archive-lessons|restore [manifest]> [--all] [--never] [--archived] [--lessons] [--dry-run] [--to personal|project|team] [--update] [--as <name>] [--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] [--version-after-open]"
   );
   process.exit(2);
 }
@@ -2718,6 +2835,7 @@ function showCandidate(home, slug) {
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
   if (meta?.origin === "mine") console.log(`kind:      ${MINE_REVIEW_HEADING}`);
+  if (meta) for (const line of demoLines(meta)) console.log(line);
   for (const line of hygieneLines(dir, slug)) console.log(line);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");
@@ -2822,6 +2940,7 @@ async function main() {
   const never = args.includes("--never");
   const all = args.includes("--all");
   const archived = args.includes("--archived");
+  const lessons = args.includes("--lessons");
   const dryRun = args.includes("--dry-run");
   const consumed = /* @__PURE__ */ new Set();
   const valueOf = (flag) => {
@@ -2860,17 +2979,25 @@ async function main() {
     restore(home, slugArgs[0]);
     return;
   }
+  if (cmd === "archive-lessons") {
+    console.log(formatLessonArchive(archiveOlderLessons(home)));
+    return;
+  }
   if (cmd === "list") {
     if (archived) {
       listArchived(home);
       return;
     }
-    const pending = listCandidates(home, "pending");
-    console.log(formatCandidateList(pending));
+    const queue2 = reviewQueue(home);
+    if (lessons) {
+      console.log(formatCandidateList(queue2.olderLessons, Date.now(), "Older lesson"));
+      return;
+    }
+    console.log(formatReviewQueue(queue2));
     const broken = formatUnreadableCandidates(unreadableCandidates(home));
     if (broken) console.log(`
 ${broken}`);
-    if (pending.length === 0) {
+    if (queue2.listed.length === 0 && queue2.olderLessons.length === 0) {
       const scoring = pendingHarvestCount(home);
       if (scoring > 0) {
         console.log(`(${scoring} session(s) are still being harvested in the background - try again in a minute.)`);
@@ -2894,7 +3021,14 @@ ${broken}`);
     }
     usage();
   }
-  const slugs = all ? listCandidates(home, "pending").map((c) => c.slug) : slugArgs;
+  const queue = all ? reviewQueue(home) : null;
+  const slugs = queue ? queue.listed.map((c) => c.slug) : slugArgs;
+  const folded = queue ? foldedAllRefusal(queue, cmd) : null;
+  if (folded) {
+    console.error(`error: ${folded}`);
+    process.exitCode = 1;
+    return;
+  }
   if (slugs.length === 0 || slugs.some((s) => !isSafeSlug(s))) usage();
   if ((as || update || message !== void 0 || delegateMessage !== void 0 || branch !== void 0 || versionAfterOpen) && (all || slugs.length > 1)) {
     usage();

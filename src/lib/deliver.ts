@@ -49,6 +49,10 @@ function deliveryOrigin(
   fallbackCwd: string,
   dirExists: (path: string) => boolean = existsSync,
 ): string {
+  // A demo draft never borrows the reviewer's project: it describes an invented API, and a
+  // scratch directory under the temporary folder is gone by the next reboot, which is exactly
+  // when a draft left waiting would otherwise be committed into a real repository.
+  if (meta.demo) return meta.cwd ?? "";
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
 
@@ -152,6 +156,17 @@ export function approveAndDeliver(
   // The per-skill decision: an explicit --to wins, then the harvest's suggestion,
   // then the legacy default (team when configured, else the project).
   const resolved: DeliveryTarget = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  // A demo draft describes an invented API: kept for yourself it loads in every real project,
+  // and sent to the team it reaches everyone's. Its scratch repository is the only home it has.
+  if (meta.demo && resolved !== "project") {
+    return {
+      ok: false,
+      meta,
+      error:
+        "a demo draft stays in its scratch repository: add it to that repository or reject it. " +
+        "Nothing was written.",
+    };
+  }
   // A commit message means nothing anywhere but the team, where a commit is made. Said
   // out loud rather than dropped: a reviewer who asked their wording to go somewhere and
   // was told nothing would believe it had. The check is on the RESOLVED target, so a
@@ -393,6 +408,15 @@ function deliverSolo(
   options: DeliveryOptions,
   commit?: GitRunner,
 ): DeliverResult {
+  if (meta.demo && !(meta.cwd && existsSync(meta.cwd))) {
+    return {
+      ok: false,
+      meta,
+      error:
+        "this demo draft belongs to a scratch repository that no longer exists; reject it. " +
+        "Nothing was written and nothing was committed.",
+    };
+  }
   // Surface a fall-back honestly: installing into the wrong project silently is
   // worse than a warning the reviewer can act on.
   const originGone = !!meta.cwd && !existsSync(meta.cwd);

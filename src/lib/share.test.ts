@@ -3,10 +3,20 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildInventory, formatInventory, formatShareResult, shareSelection as shareSelectionDeciding } from "./share.js";
+import {
+  buildInventory,
+  dialogRounds,
+  duplicateCopies,
+  formatInventory,
+  formatPick,
+  formatShareResult,
+  pickByPattern,
+  shareSelection as shareSelectionDeciding,
+} from "./share.js";
 import type { InventoryPaths, Selection, ShareResult } from "./share.js";
 import { formatCandidateList, listCandidates, writeCandidateMeta } from "./queue.js";
 import { sessionStartNotice } from "./notify.js";
+import { formatReviewQueue, reviewQueue } from "./review-list.js";
 import type { CandidateMeta } from "./queue.js";
 import { approveAndDeliver } from "./deliver.js";
 import { candidatesDir } from "./skill-index.js";
@@ -249,7 +259,7 @@ describe("buildInventory", () => {
     const skill = buildInventory(paths()).skills[0]!;
 
     expect(skill.shareable).toBe(false);
-    expect(skill.shareable === false && skill.reason).toContain('its file "reference/setup.md"');
+    expect(skill.shareable === false && skill.reason).toContain("reference/setup.md:1 carries a trace of this machine");
     expect(skill.shareable === false && skill.reason).toContain("home-path");
     expect(JSON.stringify(skill)).not.toContain("alice");
   });
@@ -314,6 +324,344 @@ describe("buildInventory", () => {
     expect(text).toContain("Everything you pick travels together, in one merge request");
     expect(text).not.toContain("nothing leaves this machine");
     expect(text).toContain("Nothing is selected and nothing has been shared.");
+  });
+});
+
+describe("a refused entry says which line to fix, and never what is on it", () => {
+  // Assembled rather than written out: this repository refuses a literal absolute home
+  // path on any line it takes in, a fixture's included.
+  const standIn = "alice";
+  const homePath = ["", "Users", standIn, "work", "api"].join("/");
+  const githubToken = `ghp_${"a1B2c3D4e5".repeat(3)}`;
+
+  it("given a home path on the third line of a skill's script, when the list is read, then it names the file, the line and the class", () => {
+    writeSkill(userHome, "deploy-runbook", {
+      "scripts/helper.sh": `#!/bin/sh\nset -e\ncd ${homePath}\n`,
+    });
+
+    const skill = buildInventory(paths()).skills[0]!;
+
+    expect(skill.shareable).toBe(false);
+    expect(skill.reason).toBe(
+      "scripts/helper.sh:3 carries a trace of this machine, a home directory path (home-path) - " +
+        "edit the line and run share again",
+    );
+  });
+
+  it("given a home path in a skill, when the whole screen is printed, then neither the stand-in nor the path reaches it", () => {
+    writeSkill(userHome, "deploy-runbook", { "scripts/helper.sh": `cd ${homePath}\n` });
+
+    const screen = formatInventory(buildInventory(paths()));
+
+    expect(screen).toContain("scripts/helper.sh:1");
+    expect(screen).not.toContain(standIn);
+    expect(screen).not.toContain(["", "Users", ""].join("/"));
+  });
+
+  it("given a credential on the second line of a skill's file, when the list is read, then it names the line and not the value", () => {
+    writeSkill(userHome, "deploy-runbook", { "scripts/seed.sh": `#!/bin/sh\nexport GITHUB_TOKEN=${githubToken}\n` });
+
+    const skill = buildInventory(paths()).skills[0]!;
+
+    expect(skill.reason).toBe(
+      "scripts/seed.sh:2 looks like it contains a secret (github-token) - " +
+        "take the credential out of that line and run share again",
+    );
+    expect(formatInventory(buildInventory(paths()))).not.toContain(githubToken);
+  });
+
+  it("given a home path on a command's second line, when the list is read, then the command is located the same way", () => {
+    writeCommand(userHome, "deploy", `Deploy the service.\nRun it from ${homePath}.\n`);
+
+    const command = buildInventory(paths()).commands[0]!;
+
+    expect(command.reason).toBe(
+      "deploy.md:2 carries a trace of this machine, a home directory path (home-path) - edit the line and run share again",
+    );
+    expect(command.reason).not.toContain(standIn);
+  });
+
+  it("given a credential in a command, when the list is read, then it names the line and not the value", () => {
+    writeCommand(userHome, "release", `Publish it.\n\nexport GITHUB_TOKEN=${githubToken}\n`);
+
+    const command = buildInventory(paths()).commands[0]!;
+
+    expect(command.reason).toContain("release.md:3 looks like it contains a secret (github-token)");
+    expect(command.reason).not.toContain(githubToken);
+  });
+
+  it("given a server whose arguments carry a home path, when the list is read, then it names the argument and not the path", () => {
+    writeServers({ notes: { command: "node", args: ["--stdio", `${homePath}/servers/notes.js`] } });
+
+    const server = buildInventory(paths()).servers[0]!;
+
+    expect(server.reason).toBe(
+      "its args[1] carries a trace of this machine, a home directory path (home-path) - edit that value and run share again",
+    );
+    expect(`${server.reason} ${server.fullReason}`).not.toContain(standIn);
+  });
+
+  it("given a server whose arguments carry a token, when the list is read, then it names the argument and not the token", () => {
+    writeServers({ repo: { command: "npx", args: ["repo-mcp", githubToken] } });
+
+    const server = buildInventory(paths()).servers[0]!;
+
+    expect(server.reason).toContain("its args[1] looks like it contains a secret (github-token)");
+    expect(`${server.reason} ${server.fullReason}`).not.toContain(githubToken);
+  });
+});
+
+describe("picking by name or pattern before any dialog", () => {
+  // More than one dialog's worth: twenty-five skills, four of which share a prefix, two
+  // servers and two commands - twenty-nine things that can travel.
+  const ADD = ["add-flag", "add-job", "add-migration", "add-route"];
+  const OTHER = Array.from({ length: 21 }, (_, i) => `runbook-${String(i + 1).padStart(2, "0")}`);
+
+  function crowdedSetup(): void {
+    for (const name of [...ADD, ...OTHER]) writeSkill(userHome, name);
+    writeServers({
+      gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+      notes: { command: "notes-mcp" },
+    });
+    writeCommand(userHome, "deploy", "Deploy the service.\n");
+    writeCommand(userHome, "release", "Cut a release.\n");
+  }
+
+  it("given twenty-nine shareable entries, when add-* is typed, then exactly the four add- skills are picked", () => {
+    crowdedSetup();
+
+    const picked = pickByPattern(buildInventory(paths()), "add-*");
+
+    expect("error" in picked).toBe(false);
+    if ("error" in picked) return;
+    expect(picked.offered).toBe(29);
+    expect(picked.selection).toEqual({ skills: ADD, servers: [], commands: [] });
+    expect(picked.remaining.skills).toEqual(OTHER);
+  });
+
+  it("given a pick, when it is printed, then it counts what was picked and hands back the exact share command", () => {
+    crowdedSetup();
+    const picked = pickByPattern(buildInventory(paths()), "add-*, no mcp");
+    if ("error" in picked) throw new Error(picked.error);
+
+    expect(formatPick(picked)).toBe(
+      [
+        "Picked 4 of the 29 that can be shared:",
+        "  skills (4): add-flag, add-job, add-migration, add-route",
+        "",
+        "Ruled out: 2.",
+        "",
+        "Not decided yet: 21 skills, 2 commands. A dialog asks only about these, if you want any of them.",
+        "",
+        "Nothing has been shared. To share exactly these:",
+        "  share.js share --skill add-flag --skill add-job --skill add-migration --skill add-route",
+      ].join("\n"),
+    );
+  });
+
+  it("given a name nothing on this machine answers to, when it is typed, then the whole pick is refused rather than half of it kept", () => {
+    crowdedSetup();
+
+    const picked = pickByPattern(buildInventory(paths()), "add-*, deploy-runbook");
+
+    expect(picked).toEqual({
+      error: '"deploy-runbook" matches nothing on this screen, so nothing was picked; use the names the list printed',
+    });
+  });
+
+  it("given a bare wildcard, when it is typed, then it is refused and all has to be written out", () => {
+    crowdedSetup();
+    const inv = buildInventory(paths());
+
+    for (const bare of ["*", "**", "?*"]) {
+      const picked = pickByPattern(inv, bare);
+      expect("error" in picked && picked.error).toContain('write "all"');
+    }
+    const ruledOut = pickByPattern(inv, "all skills, no *");
+    expect("error" in ruledOut && ruledOut.error).toContain('write "all"');
+  });
+
+  it("given all written out, when it is typed, then it picks every shareable entry of that kind and no other", () => {
+    crowdedSetup();
+    const inv = buildInventory(paths());
+
+    const skills = pickByPattern(inv, "all skills");
+    const everything = pickByPattern(inv, "all");
+
+    if ("error" in skills || "error" in everything) throw new Error("refused");
+    expect(skills.selection).toEqual({ skills: [...ADD, ...OTHER], servers: [], commands: [] });
+    expect(skills.remaining).toEqual({ skills: [], servers: ["gitlab", "notes"], commands: ["deploy", "release"] });
+    expect(everything.selection.skills.length + everything.selection.servers.length + everything.selection.commands.length).toBe(29);
+  });
+
+  it("given a pattern that also matches an entry the screen refuses, when it is typed, then that one is named with its reason and not picked", () => {
+    crowdedSetup();
+    writeSkill(userHome, "add-secret", { "seed.sh": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n" });
+
+    const picked = pickByPattern(buildInventory(paths()), "add-*");
+
+    if ("error" in picked) throw new Error(picked.error);
+    expect(picked.selection.skills).toEqual(ADD);
+    expect(picked.unshareable).toEqual([
+      {
+        kind: "skill",
+        name: "add-secret",
+        reason: "seed.sh:1 looks like it contains a secret (aws-access-key) - take the credential out of that line and run share again",
+      },
+    ]);
+  });
+
+  it("given a ruling-out typed without a comma, when it is read, then it means what it would with one", () => {
+    crowdedSetup();
+    const inv = buildInventory(paths());
+
+    const spoken = pickByPattern(inv, "add-* no mcp");
+
+    expect(spoken).toEqual(pickByPattern(inv, "add-*, no mcp"));
+    expect("error" in spoken).toBe(false);
+  });
+
+  it("given a kind ruled out and a name ruled out, when they are typed, then neither is picked nor left for a dialog", () => {
+    crowdedSetup();
+
+    const picked = pickByPattern(buildInventory(paths()), "add-*, no add-route, no commands");
+
+    if ("error" in picked) throw new Error(picked.error);
+    expect(picked.selection.skills).toEqual(["add-flag", "add-job", "add-migration"]);
+    expect(picked.declined).toBe(3);
+    expect(picked.remaining.commands).toEqual([]);
+    expect(picked.remaining.skills).toEqual(OTHER);
+  });
+
+  it("given more than one dialog's worth, when the first screen is printed, then the typed way in comes before the first entry", () => {
+    crowdedSetup();
+    const inv = buildInventory(paths());
+
+    const screen = formatInventory(inv);
+
+    expect(dialogRounds(inv)).toBe(3);
+    expect(screen.split("\n").slice(0, 5)).toEqual([
+      "Your local Claude Code setup, as it is on this machine:",
+      "",
+      "29 of these can be shared, and picking them through dialogs takes 3 rounds.",
+      "Name what you want first instead: type names or patterns such as add-*, all skills or no mcp,",
+      "and the dialogs then cover only what is left.",
+    ]);
+    expect(screen.indexOf("add-*")).toBeLessThan(screen.indexOf("1. add-flag"));
+  });
+
+  it("given a setup one dialog holds, when the first screen is printed, then it opens on the list as before", () => {
+    writeSkill(userHome, "deploy-runbook");
+    writeServers({ gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+
+    const screen = formatInventory(buildInventory(paths()));
+
+    expect(screen).not.toContain("type names or patterns");
+    expect(screen.split("\n").slice(0, 3)).toEqual([
+      "Your local Claude Code setup, as it is on this machine:",
+      "",
+      "Skills (1) - the ones you pick go out as part of ONE merge request to the team repository",
+    ]);
+  });
+});
+
+describe("a copy the team plugin already carries", () => {
+  let pluginDir: string;
+
+  beforeEach(() => {
+    pluginDir = mkdtempSync(join(tmpdir(), "handbook-plugin-"));
+  });
+
+  afterEach(() => {
+    rmSync(pluginDir, { recursive: true, force: true });
+  });
+
+  /** The team plugin's copy on this machine, laid out the way the team repository is. */
+  function inPlugin(path: string, content: string): void {
+    mkdirSync(join(pluginDir, dirname(path)), { recursive: true });
+    writeFileSync(join(pluginDir, path), content);
+  }
+
+  function skillMd(name: string, body = "Body."): string {
+    return `---\nname: ${name}\ndescription: What ${name} is for.\n---\n\n${body}\n`;
+  }
+
+  function countFiles(dir: string): number {
+    return execFileSync("find", [dir, "-type", "f"], { encoding: "utf8" }).split("\n").filter(Boolean).length;
+  }
+
+  function mixedSetup(): void {
+    inPlugin(".claude-plugin/plugin.json", JSON.stringify({ name: "acme", version: "1.4.0" }));
+    writeSkill(userHome, "deploy-runbook", { "scripts/run.sh": "make deploy\n" });
+    inPlugin("skills/deploy-runbook/SKILL.md", skillMd("deploy-runbook"));
+    inPlugin("skills/deploy-runbook/scripts/run.sh", "make deploy\n");
+    // the same name, but the team's copy has moved on: removing yours would lose your version
+    writeSkill(userHome, "repo-conventions");
+    inPlugin("skills/repo-conventions/SKILL.md", skillMd("repo-conventions", "A teammate's edit."));
+    writeSkill(userHome, "only-mine");
+    // a project's skill belongs to that repository, so it is never offered for removal
+    writeSkill(project, "project-rules");
+    inPlugin("skills/project-rules/SKILL.md", skillMd("project-rules"));
+    const notes = { command: "notes-mcp", args: ["--stdio"] };
+    writeServers({ notes, gitlab: { type: "http", url: "https://gitlab.com/api/v4/mcp" } });
+    inPlugin(
+      ".mcp.json",
+      JSON.stringify({ mcpServers: { notes: { args: ["--stdio"], command: "notes-mcp" }, gitlab: { type: "http", url: "https://gitlab.example.com/mcp" } } }),
+    );
+    writeCommand(userHome, "deploy", "Deploy the service.\n");
+    inPlugin("commands/deploy.md", "Deploy the service.\n");
+    writeCommand(userHome, "release", "Cut a release.\n");
+    inPlugin("commands/release.md", "Cut a release, then tag it.\n");
+  }
+
+  it("given copies that match the team's and copies that only share a name, when they are compared, then only the identical ones are named", () => {
+    mixedSetup();
+
+    const duplicates = duplicateCopies(buildInventory(paths()), pluginDir, paths());
+
+    expect(duplicates.copies).toEqual([
+      { kind: "skill", name: "deploy-runbook", remove: "rm -r ~/.claude/skills/deploy-runbook" },
+      { kind: "mcp", name: "notes", remove: "claude mcp remove notes -s user" },
+      { kind: "command", name: "deploy", remove: "rm ~/.claude/commands/deploy.md" },
+    ]);
+    // the release they were compared against, since the copy that loads can lag behind it
+    expect(duplicates.release).toEqual({ name: "acme", version: "1.4.0" });
+  });
+
+  it("given duplicates, when the list and a share result are printed, then they name them and offer the commands without running any", () => {
+    mixedSetup();
+    const before = countFiles(userHome) + countFiles(pluginDir) + countFiles(project);
+
+    const inv = buildInventory(paths());
+    const duplicates = duplicateCopies(inv, pluginDir, paths());
+    const screen = formatInventory(inv, undefined, duplicates);
+    const result = formatShareResult({ refused: [] }, "acme", duplicates);
+
+    const offer = [
+      "On this machine twice (3): the team plugin here carries an identical copy of each.",
+      "  skills: deploy-runbook",
+      "  MCP servers: notes",
+      "  commands: /deploy",
+      "Nothing was removed, and both copies load until yours goes. Once /plugin shows",
+      "acme installed at 1.4.0 or later, these remove your own copies:",
+      "  rm -r ~/.claude/skills/deploy-runbook",
+      "  claude mcp remove notes -s user",
+      "  rm ~/.claude/commands/deploy.md",
+    ].join("\n");
+    expect(screen.endsWith(offer)).toBe(true);
+    expect(result).toBe(offer);
+    expect(countFiles(userHome) + countFiles(pluginDir) + countFiles(project)).toBe(before);
+    expect(existsSync(join(userHome, ".claude", "skills", "deploy-runbook", "SKILL.md"))).toBe(true);
+  });
+
+  it("given no team plugin on this machine, when the copies are compared, then nothing is a duplicate", () => {
+    writeSkill(userHome, "deploy-runbook");
+    writeCommand(userHome, "deploy", "Deploy the service.\n");
+
+    const duplicates = duplicateCopies(buildInventory(paths()), join(pluginDir, "absent"), paths());
+
+    expect(duplicates).toEqual({ copies: [], release: null });
+    expect(formatInventory(buildInventory(paths()), undefined, duplicates)).not.toContain("On this machine twice");
   });
 });
 
@@ -1143,6 +1491,7 @@ describe("share and review meet in one team repository", () => {
   });
 
   it("given the session notice counts pending candidates, when review lists them, then both name the same set", () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ harvest: { lessons: true } }));
     seedCandidate(harvested("incident-drill"));
     // the shape the nine stranded skills are really in: no candidate.json, synthesized
     const strandedDir = join(candidatesDir(home), "jira-task");
@@ -1151,7 +1500,7 @@ describe("share and review meet in one team repository", () => {
 
     // the two screens, each built the way its own command builds it
     const notice = sessionStartNotice(project, home)!;
-    const reviewList = formatCandidateList(listCandidates(home, "pending"));
+    const reviewList = formatReviewQueue(reviewQueue(home));
 
     // A candidate the notice sends the user to review MUST be one review can show them.
     // The counts are split by origin - the harvested one leads, the rest are counted
@@ -1163,5 +1512,23 @@ describe("share and review meet in one team repository", () => {
     expect(notice).toContain("jira-task");
     expect(reviewList).toContain("jira-task");
     expect(reviewList).toContain("Pending candidates (2)");
+  });
+
+  it("given the lesson harvest is off, when the notice and review are built, then neither names the folded lesson and both name the rest", () => {
+    seedCandidate(harvested("incident-drill"));
+    const strandedDir = join(candidatesDir(home), "jira-task");
+    mkdirSync(strandedDir, { recursive: true });
+    writeFileSync(join(strandedDir, "SKILL.md"), "---\nname: jira-task\ndescription: hand written\n---\n");
+
+    const notice = sessionStartNotice(project, home)!;
+    const reviewList = formatReviewQueue(reviewQueue(home));
+
+    expect(notice).not.toContain("incident-drill");
+    expect(reviewList).not.toContain("incident-drill");
+    expect(notice).toContain("1 older lesson candidate is folded");
+    expect(reviewList).toContain("1 older lesson candidate from before the harvest was switched off");
+    expect(notice).toContain("1 candidate skill is awaiting your review");
+    expect(notice).toContain("jira-task");
+    expect(reviewList).toContain("jira-task");
   });
 });

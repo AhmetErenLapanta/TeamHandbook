@@ -263,7 +263,7 @@ var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
 var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync4, readdirSync as readdirSync3 } from "node:fs";
 import { basename, join as join6 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -567,34 +567,8 @@ function summarizeUsage(usage, known) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync2, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
 import { join as join9 } from "node:path";
-function loadNotifyConfig(home = handbookHome()) {
-  const notify = readConfigFile(home).notify;
-  return {
-    sessionStart: notify?.sessionStart !== false,
-    heartbeat: notify?.heartbeat !== false
-  };
-}
-var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
-function pendingHarvestCount(home = handbookHome()) {
-  let entries;
-  try {
-    entries = readdirSync4(join9(home, "pending"));
-  } catch {
-    return 0;
-  }
-  let total = 0;
-  for (const entry of entries) {
-    if (!entry.includes(".json")) continue;
-    try {
-      const parsed = JSON.parse(readFileSync6(join9(home, "pending", entry), "utf8"));
-      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
-    } catch {
-    }
-  }
-  return total;
-}
 
 // src/lib/transcript.ts
 var PER_USER_CAP = 1e3;
@@ -637,6 +611,34 @@ function loadHarvestConfig(home = handbookHome()) {
     transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
     timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
   };
+}
+
+// src/lib/notify.ts
+function loadNotifyConfig(home = handbookHome()) {
+  const notify = readConfigFile(home).notify;
+  return {
+    sessionStart: notify?.sessionStart !== false,
+    heartbeat: notify?.heartbeat !== false
+  };
+}
+var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
+function pendingHarvestCount(home = handbookHome()) {
+  let entries;
+  try {
+    entries = readdirSync4(join9(home, "pending"));
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (!entry.includes(".json")) continue;
+    try {
+      const parsed = JSON.parse(readFileSync6(join9(home, "pending", entry), "utf8"));
+      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
+    } catch {
+    }
+  }
+  return total;
 }
 
 // src/lib/pipeline.ts
