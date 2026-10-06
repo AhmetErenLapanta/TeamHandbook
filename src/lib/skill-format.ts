@@ -593,7 +593,14 @@ function addExtendedFindings(
   // the steps of `## 1. Defaults and validation schema` and `## 4. Features and tests` - and every
   // line of a draft titled after its validator - as checks, and three of the eleven drafts it
   // rejected had no unconcrete item in their checks section at all.
-  const verifySecs = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
+  //
+  // The template's checks section is unnumbered, and a numbered `## 4. Verification` is read as
+  // one only in a draft that has no unnumbered checks section - the form drafts took before the
+  // template, which numbered every section. A draft with `## Verification` that also writes
+  // `## 3. Tests` is using the number to say Tests is one of its layers, and its steps are steps.
+  const checks = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
+  const unnumbered = checks.filter((s) => !NUM_HEAD_RE.test(s.title));
+  const verifySecs = unnumbered.length > 0 ? unnumbered : checks;
   const verifyItems = verifySecs
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);

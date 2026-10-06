@@ -484,6 +484,14 @@ describe("which items the concrete-checks rule judges", () => {
     expect(concrete(text)).toBe(true);
   });
 
+  it("given a numbered layer called exactly Tests beside the unnumbered checks section, when its steps carry no command, then they are steps", () => {
+    const text = DRAFT.replace("## 3. Both sides", "## 3. Tests").replace(
+      "1. Compare the two paths before opening the request. [map 3]",
+      "1. Add a case for the new route next to the existing ones. [map 3]",
+    );
+    expect(concrete(text)).toBe(true);
+  });
+
   it("given a top-level title naming a validator, when checked, then the whole document is not read as checks", () => {
     const text = DRAFT.replace("# add-widget-route - a new widget route", "# add-widget-route - route, validator and tests");
     expect(concrete(text)).toBe(true);
