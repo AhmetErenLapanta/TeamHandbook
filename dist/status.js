@@ -569,32 +569,6 @@ function summarizeUsage(usage, known) {
 // src/lib/notify.ts
 import { existsSync as existsSync3, readFileSync as readFileSync6, readdirSync as readdirSync4 } from "node:fs";
 import { join as join9 } from "node:path";
-function loadNotifyConfig(home = handbookHome()) {
-  const notify = readConfigFile(home).notify;
-  return {
-    sessionStart: notify?.sessionStart !== false,
-    heartbeat: notify?.heartbeat !== false
-  };
-}
-var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
-function pendingHarvestCount(home = handbookHome()) {
-  let entries;
-  try {
-    entries = readdirSync4(join9(home, "pending"));
-  } catch {
-    return 0;
-  }
-  let total = 0;
-  for (const entry of entries) {
-    if (!entry.includes(".json")) continue;
-    try {
-      const parsed = JSON.parse(readFileSync6(join9(home, "pending", entry), "utf8"));
-      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
-    } catch {
-    }
-  }
-  return total;
-}
 
 // src/lib/transcript.ts
 var PER_USER_CAP = 1e3;
@@ -637,6 +611,34 @@ function loadHarvestConfig(home = handbookHome()) {
     transcriptCharCap: num(harvest?.transcriptCharCap, defaultHarvestConfig.transcriptCharCap),
     timeoutMs: num(harvest?.timeoutMs, defaultHarvestConfig.timeoutMs)
   };
+}
+
+// src/lib/notify.ts
+function loadNotifyConfig(home = handbookHome()) {
+  const notify = readConfigFile(home).notify;
+  return {
+    sessionStart: notify?.sessionStart !== false,
+    heartbeat: notify?.heartbeat !== false
+  };
+}
+var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
+function pendingHarvestCount(home = handbookHome()) {
+  let entries;
+  try {
+    entries = readdirSync4(join9(home, "pending"));
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (!entry.includes(".json")) continue;
+    try {
+      const parsed = JSON.parse(readFileSync6(join9(home, "pending", entry), "utf8"));
+      if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
+    } catch {
+    }
+  }
+  return total;
 }
 
 // src/lib/pipeline.ts

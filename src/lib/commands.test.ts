@@ -117,7 +117,7 @@ describe("auditCommand", () => {
 
     expect(audit.shareable).toBe(false);
     expect(audit.reason).toBe("identity");
-    expect(audit.identity).toEqual({ class: "home-path", where: "deploy.md" });
+    expect(audit.identity).toEqual({ class: "home-path", where: "deploy.md", line: 1 });
     const message = commandRefusalMessage("deploy", audit);
     expect(message).toContain("home-path");
     expect(message).toContain("deploy.md");

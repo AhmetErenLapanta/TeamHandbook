@@ -14,14 +14,28 @@ up to four questions in one dialog, so ask about up to four candidates at a time
 user clear them in one pass.
 
 1. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" list`
-2. If there are no pending candidates, tell the user so - but if the CLI notes that sessions
-   are still being harvested in the background, relay that they should try again shortly -
-   then stop.
+2. If there are no pending candidates and no line about older lesson candidates, tell the
+   user so - but if the CLI notes that sessions are still being harvested in the
+   background, relay that they should try again shortly - then stop.
 3. Show the whole queue first, one line each: name, kind, score, age, and the description's
    first line. The user decides what to spend attention on; drip-feeding them one candidate
    at a time hides how much is waiting. If that list is longer than the user can work
    through in one sitting, offer the sweep at the end of this file before starting the
    batches.
+   **When the lesson harvest is off, the list ends with one line** counting the older lesson
+   candidates from before it was switched off, and the drafts mined from repository history
+   are what it lists, first. Relay that line as printed, then ask about it once, with
+   AskUserQuestion, before or beside the first batch:
+   - **Archive them all** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" archive-lessons`.
+     Say before they pick that this deletes nothing and can be undone: every candidate
+     stays where it is, marked archived, `review.js list --archived` lists them, and the
+     result prints the restore command that puts them all back. Relay that result as
+     printed.
+   - **Show them** → `node "${CLAUDE_PLUGIN_ROOT}/dist/review.js" list --lessons`, and take
+     them in batches like the rest.
+   - **Leave them** → nothing; they stay pending, folded into that line.
+   Never archive without that answer. `--all` reaches only what the list shows, so it never
+   decides one of the folded ones either.
 4. Then take them in batches of up to four. Run `show` and write the summary for every
    candidate in the batch FIRST, and only then open a single dialog carrying one question
    per candidate. One dialog per candidate is the thing this replaces: it is the same

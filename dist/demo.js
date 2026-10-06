@@ -24,13 +24,17 @@ function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
 function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
   for (const { name, re, reject } of SECRET_PATTERNS) {
     if (!reject) {
-      if (re.test(text)) return name;
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
       continue;
     }
     for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return name;
+      if (!reject(match[0])) return { pattern: name, index: match.index };
     }
   }
   return null;
@@ -240,7 +244,11 @@ function traces(text, host) {
   return found.sort((a, b) => a.index - b.index);
 }
 function detectIdentity(text, host = hostIdentity()) {
-  return traces(text, host)[0]?.class ?? null;
+  return locateIdentity(text, host)?.class ?? null;
+}
+function locateIdentity(text, host = hostIdentity()) {
+  const first = traces(text, host)[0];
+  return first ? { class: first.class, index: first.index } : null;
 }
 function maskIdentity(text, host = hostIdentity()) {
   const found = traces(text, host);
@@ -1073,10 +1081,13 @@ function identityInSkillDir(sourceDir, name = basename3(sourceDir), files = list
     } catch {
       continue;
     }
-    const trace = detectIdentity(content, host);
-    if (trace) return { class: trace, where: file };
+    const trace = locateIdentity(content, host);
+    if (trace) return { class: trace.class, where: file, line: lineAt(content, trace.index) };
   }
   return null;
+}
+function lineAt(text, index) {
+  return text.slice(0, index).split("\n").length;
 }
 var init_queue = __esm({
   "src/lib/queue.ts"() {

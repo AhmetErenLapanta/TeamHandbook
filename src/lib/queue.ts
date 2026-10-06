@@ -4,8 +4,8 @@ import { handbookHome } from "./session-state.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
-import { detectSecret } from "./secrets.js";
-import { detectIdentity, hostIdentity } from "./identity.js";
+import { locateSecret } from "./secrets.js";
+import { IDENTITY_PHRASE, detectIdentity, hostIdentity, locateIdentity } from "./identity.js";
 import type { HostIdentity, IdentityClass } from "./identity.js";
 import { listSkillFiles } from "./skill-files.js";
 import type { SkillArtifact } from "./distill.js";
@@ -170,9 +170,9 @@ export interface SkillAudit {
   files?: string[];
   /** the frontmatter this directory parsed as, which a listing shows instead of re-reading it */
   summary?: SkillSummary;
-  secret?: { pattern: string; file: string };
+  secret?: { pattern: string; file: string; line?: number };
   /** the class of host-identity trace that refused it, and where it sits - never the value */
-  identity?: { class: IdentityClass; where: string };
+  identity?: { class: IdentityClass; where: string; line?: number };
 }
 
 /**
@@ -222,9 +222,10 @@ export function auditSkillDir(sourceDir: string, host: HostIdentity = hostIdenti
       // unreadable means unscreened, and unscreened must not ship
       return { shareable: false, reason: "unreadable", detail: file };
     }
-    const pattern = detectSecret(content);
-    if (pattern) {
-      return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file } };
+    const found = locateSecret(content);
+    if (found) {
+      const secret = { pattern: found.pattern, file, line: lineAt(content, found.index) };
+      return { shareable: false, reason: "secret", detail: found.pattern, secret };
     }
   }
   const trace = identityInSkillDir(sourceDir, name, files, host);
@@ -255,7 +256,7 @@ export function identityInSkillDir(
   name: string = basename(sourceDir),
   files: string[] = listSkillFiles(sourceDir).files,
   host: HostIdentity = hostIdentity(),
-): { class: IdentityClass; where: string } | null {
+): { class: IdentityClass; where: string; line?: number } | null {
   const inName = detectIdentity(name, host);
   if (inName) return { class: inName, where: "name" };
   for (const file of files) {
@@ -265,8 +266,8 @@ export function identityInSkillDir(
     } catch {
       continue;
     }
-    const trace = detectIdentity(content, host);
-    if (trace) return { class: trace, where: file };
+    const trace = locateIdentity(content, host);
+    if (trace) return { class: trace.class, where: file, line: lineAt(content, trace.index) };
   }
   return null;
 }
@@ -289,8 +290,8 @@ export function secretInSkillDir(
     } catch {
       continue;
     }
-    const pattern = detectSecret(content);
-    if (pattern) return { pattern, file };
+    const found = locateSecret(content);
+    if (found) return { pattern: found.pattern, file };
   }
   return null;
 }
@@ -339,9 +340,52 @@ export function hygieneLines(dir: string, slug: string): string[] {
   return lines;
 }
 
-/** Where the trace sits, in a form both refusal messages can read - the place, never the value. */
-export function identityPlace(where: string): string {
-  return where === "name" ? "its name" : `its file "${where}"`;
+/** Where the trace sits, in a form both refusal messages can read - the place, never the value.
+ * With a line it is the file and line as an editor opens it, so nobody has to search for it. */
+export function identityPlace(where: string, line?: number): string {
+  if (where === "name") return "its name";
+  return line ? fileLine(where, line) : `its file "${where}"`;
+}
+
+/** `scripts/helper.sh:12`, or the quoted file alone when no line is known. */
+export function fileLine(file: string, line?: number): string {
+  return line ? `${file}:${line}` : `"${file}"`;
+}
+
+/** The 1-based line an offset into `text` falls on. */
+export function lineAt(text: string, index: number): number {
+  return text.slice(0, index).split("\n").length;
+}
+
+/** What a refused trace is and where, said the way every refusal of one says it: place,
+ * class in words, class by name - and never the value the line holds. */
+export function traceFinding(audit: {
+  detail?: string;
+  identity?: { class: IdentityClass; where: string; line?: number };
+}): string {
+  const { where = "", line, class: cls } = audit.identity ?? {};
+  const what = cls ? `a trace of this machine, ${IDENTITY_PHRASE[cls]}` : "a trace of this machine";
+  return `${identityPlace(where, line)} carries ${what} (${cls ?? audit.detail})`;
+}
+
+/**
+ * How the share screen lists a skill or a command its screening refused: where, what, and
+ * the way out. The way out is offered in words, because the list is where the author
+ * decides whether to fix it, and the file is theirs - nothing here edits it.
+ */
+export function screenedRefusal(audit: {
+  reason?: string;
+  detail?: string;
+  identity?: { class: IdentityClass; where: string; line?: number };
+  secret?: { pattern: string; file: string; line?: number };
+}): string {
+  if (audit.reason === "identity") {
+    return `${traceFinding(audit)} - ${audit.identity?.where === "name" ? "rename it" : "edit the line"} and run share again`;
+  }
+  return (
+    `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret ` +
+    `(${audit.detail}) - take the credential out of that line and run share again`
+  );
 }
 
 /**
@@ -368,13 +412,12 @@ export function skillRefusalMessage(shownDir: string, slug: string, audit: Skill
       return `cannot read "${audit.detail}" in ${shownDir}; nothing was shared`;
     case "identity":
       return (
-        `${slug} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of ` +
-        `this machine (${audit.detail}). A skill travels as it is, and the teammate who installs it ` +
-        `keeps the trace; take it out and try again.`
+        `${slug} was not shared: ${traceFinding(audit)}. ` +
+        `A skill travels as it is, and the teammate who installs it keeps the trace; take it out and try again.`
       );
     default:
       return (
-        `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${slug} was ` +
+        `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}), so ${slug} was ` +
         `not shared. Skills are reviewed and shared as they are, and a redacted one would install ` +
         `and then fail; take the credential out of the skill and try again.`
       );
@@ -770,9 +813,10 @@ export function formatCandidateList(
   metas: CandidateMeta[],
   now: number = Date.now(),
   label = "Pending",
+  order = "newest first",
 ): string {
   if (metas.length === 0) return `No ${label.toLowerCase()} candidates.`;
-  const lines = [`${label} candidates (${metas.length}), newest first:`, ""];
+  const lines = [`${label} candidates (${metas.length}), ${order}:`, ""];
   metas.forEach((meta, i) => {
     const gate = meta.gate ? `gate ${meta.gate.total}/10` : "gate n/a";
     const kind = meta.kind ? `[${meta.kind}]  ` : "";

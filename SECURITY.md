@@ -51,6 +51,11 @@ This document states exactly what it reads, what it writes, and where data goes.
   passed through a stdio server's `args` is not checked at all. The merge request prints
   the endpoint and the full command so a person reads them before the server reaches
   anyone.
+- **The team plugin's copy on this machine, read-only, and only when you run
+  `/handbook:share`:** the skills, commands and `.mcp.json` under
+  `~/.claude/plugins/marketplaces/<team>`, compared by content with your own copies so the
+  screen can name the ones you now have twice. Nothing is removed: the screen prints the
+  command that would remove your copy, and running it is yours to decide.
 
 ## What it writes, and where
 

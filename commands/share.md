@@ -5,8 +5,9 @@ argument-hint: [optional path to a skill directory that is not installed on this
 
 You are running TeamHandbook's sharing flow: what is already on this machine, chosen from
 and carried to the team. It reads `~/.claude/skills`, `~/.claude/commands`, this project's
-`.claude/skills` and `.claude/commands`, and `~/.claude.json`. It writes to none of them,
-and the copies the user already uses keep working untouched.
+`.claude/skills` and `.claude/commands`, and `~/.claude.json`, and the team plugin's copy
+under `~/.claude/plugins/marketplaces` to tell which of those it already carries word for
+word. It writes to none of them, and the copies the user already uses keep working untouched.
 
 This is the only command for sharing something that already exists here, and it always
 opens the selection screen, including when the user names a single server or a single
@@ -40,9 +41,24 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    to the commit message on this machine. The user hears it before picking, not after a push.
 2. Say that consequence in one line, then ask. Everything on this screen is seen by other
    people once it is picked, a skill no less than a server.
-3. Ask with the multiple-choice question tool (AskUserQuestion), `multiSelect` enabled,
-   the same way /handbook:review asks for verdicts. **Nothing is pre-selected and
-   nothing is recommended.** Do not mark an option as recommended, do not pre-tick, and
+3. **If the list opens by saying how many rounds the dialogs would take, ask in words
+   first.** Before any dialog, ask the user to name what they want: names, patterns
+   (`add-*`), `all skills`, `no mcp`, separated by commas. Pass their answer verbatim, in
+   quotes, to the read-only resolver:
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" pick "<their words, exactly>"`
+   Never expand a pattern yourself, translate their words or add a name to them: the CLI
+   matches them against this machine the same way every time, and that is what makes the
+   result theirs. It refuses a name that matches nothing, and a bare `*` (picking
+   everything has to be said with the word "all") - relay the error and ask again rather
+   than guessing which name they meant. Relay what it prints as printed: how many were
+   picked and which, anything a pattern matched that cannot be shared and why, and how
+   many are not decided yet. Then ask once whether they want any of the undecided ones;
+   only if they do, open the dialogs below over those entries alone. The command it printed
+   at the end is the share for step 4, with any dialog picks added to it.
+   Otherwise, and for what a pick left undecided, ask with the multiple-choice question
+   tool (AskUserQuestion), `multiSelect` enabled, the same way /handbook:review asks for
+   verdicts. **Nothing is pre-selected and nothing is recommended.** Do not mark an option
+   as recommended, do not pre-tick, and
    never treat "all of them" as the default: the user asked for this command precisely
    because sharing everything is the wrong answer.
    - Put the MCP servers in their own question, and the commands in their own, since a
@@ -59,9 +75,9 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      read, so its absence never proves the team does not have it - the share itself makes
      the real check and turns the selection back if it does.
    - Say once, before the first dialog, that they can answer in free text instead
-     ("the three gitlab ones", "all of the servers, none of the skills") if they already
-     know what they want. Twenty skills is six dialogs, and a person who knows their own
-     setup should not have to click through them.
+     ("gitlab-*", "all servers, no skills") if they already know what they want, and
+     resolve that answer with `pick` exactly as above. Twenty skills is six dialogs, and a
+     person who knows their own setup should not have to click through them.
    - If the user is naming one single thing and nothing else, still show the list and still
      ask: confirming one entry is one click, and it is what stops a near-miss on a name
      from sharing the wrong server.
@@ -87,9 +103,15 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
 6. **If something is refused, relay the reason as-is and stop there.** Each one names what
    to fix, and none of them is worked around:
    - a secret in one of a skill's files, or in a command's body. That one is NOT shared.
-     Tell them which file, and that taking the credential out is the fix. Never offer to
-     redact it: a skill with a blanked-out script installs and then fails, and a command
-     with its token blanked out is typed and then misfires.
+     The reason names the file and the line (`scripts/seed.sh:2`) and the kind of secret,
+     never the value; relay it as printed, and that taking the credential out of that line
+     is the fix. Never offer to redact it: a skill with a blanked-out script installs and
+     then fails, and a command with its token blanked out is typed and then misfires.
+   - a trace of this machine - a home directory path, the account name, an email address -
+     in a skill's or a command's file. The reason names the file, the line and the kind of
+     trace, never the value, and offers the fix in words: edit the line and run share
+     again. Relay that offer; do not edit the file yourself. For a server it names the key
+     in its definition (`args[1]`) instead of a line.
    - a literal in a server's `headers` or `env`, or a credential in its URL. The message
      names the exact key. The fix is to rewrite it as `${VAR}` in their own config, where
      the name travels and the value does not. Never offer to redact it either.
@@ -150,6 +172,11 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    got a COPY, so the skill the user already uses is untouched and keeps working. When
    GitLab opened the request from the push, the output ends with the request's description
    to paste into it: a push cannot carry one, and the reviewer needs it.
+   **If the list or the result names copies that are on this machine twice** - the user's
+   own and an identical one inside the team plugin, which is what a merged share leaves
+   behind - relay that block as printed, commands included. Those commands are the user's
+   to run: never run them yourself, and never remove anything on their behalf. Keeping
+   their own copy is a choice they are allowed to make.
 9. **If it fails because the forge refuses the branch NAME**, nothing reached the
    repository and nothing was retried. The error quotes the forge's own sentence and then
    the same one question, with the refused name in it. Relay the sentence exactly, then ask

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { detectSecret } from "./secrets.js";
-import { detectIdentity } from "./identity.js";
+import { IDENTITY_PHRASE, detectIdentity } from "./identity.js";
 import type { IdentityClass } from "./identity.js";
 
 // Reading the manager's own Claude Code setup, and deciding which of its MCP servers may
@@ -35,6 +35,8 @@ export interface McpAudit {
   transport: string;
   /** the class of host-identity trace that refused it - never the value */
   identity?: IdentityClass;
+  /** the key inside the definition that holds a trace or a secret (`args[1]`), when one does */
+  at?: string;
 }
 
 /**
@@ -167,15 +169,17 @@ export function urlToken(url: string): string | null {
   } catch {
     return null; // not a URL we can take apart; detectSecret still saw the raw string
   }
-  for (const segment of parsed.pathname.split("/")) {
-    if (!segment) continue;
+  // Counted, not quoted: the segment IS the token, and a refusal that printed it would put
+  // the credential in the transcript of the session deciding whether it may travel.
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  for (const [i, segment] of segments.entries()) {
     let decoded = segment;
     try {
       decoded = decodeURIComponent(segment);
     } catch {
       // a malformed escape is not a reason to stop looking at the rest
     }
-    if (tokenLike(decoded)) return `path segment "${decoded}"`;
+    if (tokenLike(decoded)) return `path segment ${i + 1}`;
   }
   for (const [key, value] of parsed.searchParams) {
     if (tokenLike(value)) return `query parameter "${key}"`;
@@ -229,7 +233,8 @@ export function auditServer(config: unknown): McpAudit {
   // the URL shape below is one both of them missed.
   const pattern = detectSecret(JSON.stringify(config));
   if (pattern) {
-    return { ...base, transport, startsProcess, reason: "secret-pattern", detail: pattern };
+    const at = keyHolding(config, detectSecret);
+    return { ...base, transport, startsProcess, reason: "secret-pattern", detail: pattern, ...(at ? { at } : {}) };
   }
   const embedded = typeof config.url === "string" ? urlToken(config.url) : null;
   if (embedded) {
@@ -242,9 +247,37 @@ export function auditServer(config: unknown): McpAudit {
   // broken. The whole definition is read, `args` and `env` values included.
   const trace = detectIdentity(JSON.stringify(config));
   if (trace) {
-    return { ...base, transport, startsProcess, reason: "identity", detail: trace, identity: trace };
+    const at = keyHolding(config, (text) => detectIdentity(text));
+    return { ...base, transport, startsProcess, reason: "identity", detail: trace, identity: trace, ...(at ? { at } : {}) };
   }
   return { migratable: true, requiresEnv, startsProcess, transport };
+}
+
+/**
+ * The key inside a server definition where a finding sits - `args[1]`, `env.NOTES_DIR` - so
+ * a refusal can name what to edit without printing the value. A definition has no lines
+ * worth naming; it is one entry in the client's state file, and its keys are the address.
+ *
+ * Each value is screened beside its own key, which is how it sits in the text the whole
+ * definition was screened as: a pattern that reads the key name (`api_key: ...`) still
+ * matches. A finding that only exists across two values has no single key and comes back
+ * without one, so the refusal falls back to naming the definition rather than a wrong key.
+ */
+function keyHolding(config: Record<string, unknown>, finds: (text: string) => unknown): string | undefined {
+  const walk = (value: unknown, path: string, key: string): string | undefined => {
+    if (typeof value === "string") return finds(JSON.stringify({ [key]: value })) ? path : undefined;
+    const children: Array<[string, unknown, string]> = Array.isArray(value)
+      ? value.map((child, i) => [`${path}[${i}]`, child, String(i)])
+      : isPlainObject(value)
+        ? Object.entries(value).map(([k, child]) => [path ? `${path}.${k}` : k, child, k])
+        : [];
+    for (const [childPath, child, childKey] of children) {
+      const hit = walk(child, childPath, childKey);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  return walk(config, "", "");
 }
 
 export function refusalMessage(name: string, audit: McpAudit): string {
@@ -266,14 +299,14 @@ export function refusalMessage(name: string, audit: McpAudit): string {
   }
   if (audit.reason === "secret-pattern") {
     return (
-      `"${name}" is not shareable: its definition contains what looks like a ${audit.detail}. ` +
+      `"${name}" is not shareable: ${audit.at ? `its ${audit.at}` : "its definition"} contains what looks like a ${audit.detail}. ` +
       "Move the credential into an environment variable and reference it as ${VAR}."
     );
   }
   if (audit.reason === "identity") {
     return (
-      `"${name}" is not shareable as written: its definition carries a trace of this machine ` +
-      `(${audit.detail}). A path under your home directory, your account name or your address ` +
+      `"${name}" is not shareable as written: ${definitionTrace(audit)}. ` +
+      "A path under your home directory, your account name or your address " +
       "resolves to nothing on a teammate's machine, so this stays here. Point it at something " +
       "every machine has, or pass the location as a ${VAR} reference."
     );
@@ -303,12 +336,17 @@ function serverMap(parsed: Record<string, unknown>): Record<string, unknown> {
  * or absent file means "nothing is known", never "nothing is there" - the caller uses this
  * to label a screen, and the refusal that matters is made against the real file later. */
 export function declaredServerNames(existing: string | null): string[] {
-  if (!existing || !existing.trim()) return [];
+  return Object.keys(declaredServers(existing));
+}
+
+/** The same declarations with their definitions, under the same best-effort reading. */
+export function declaredServers(existing: string | null): Record<string, unknown> {
+  if (!existing || !existing.trim()) return {};
   try {
     const parsed: unknown = JSON.parse(existing);
-    return isPlainObject(parsed) ? Object.keys(serverMap(parsed)) : [];
+    return isPlainObject(parsed) ? serverMap(parsed) : {};
   } catch {
-    return [];
+    return {};
   }
 }
 
@@ -369,8 +407,20 @@ export function mergeServersIntoMcpJson(
 export function refusalSummary(audit: McpAudit): string {
   if (audit.reason === "credential-field") return `${audit.detail} holds a literal value`;
   if (audit.reason === "url-token") return `its URL carries what looks like a credential (${audit.detail})`;
-  if (audit.reason === "identity") return `its definition carries a trace of this machine (${audit.detail})`;
+  if (audit.reason === "identity") return `${definitionTrace(audit)} - edit that value and run share again`;
+  if (audit.reason === "secret-pattern") {
+    return (
+      `${audit.at ? `its ${audit.at}` : "its definition"} looks like it contains a secret (${audit.detail}) - ` +
+      "move it into an environment variable referenced as ${VAR} and run share again"
+    );
+  }
   return String(audit.detail);
+}
+
+/** Where a server's trace sits and what it is, never the value - the key when one holds it. */
+function definitionTrace(audit: McpAudit): string {
+  const what = audit.identity ? `a trace of this machine, ${IDENTITY_PHRASE[audit.identity]}` : "a trace of this machine";
+  return `${audit.at ? `its ${audit.at}` : "its definition"} carries ${what} (${audit.detail})`;
 }
 
 /**

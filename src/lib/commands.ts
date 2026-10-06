@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { identityPlace, isSafeSlug } from "./queue.js";
-import { detectSecret } from "./secrets.js";
-import { detectIdentity } from "./identity.js";
+import { fileLine, isSafeSlug, lineAt, screenedRefusal, traceFinding } from "./queue.js";
+import { locateSecret } from "./secrets.js";
+import { detectIdentity, locateIdentity } from "./identity.js";
 import type { IdentityClass } from "./identity.js";
 
 // Reading the slash commands this machine has, and deciding which of them may travel to a
@@ -36,9 +36,9 @@ export interface CommandAudit {
   /** only on a clean audit: the text that was screened, which is the text that gets copied */
   content?: string;
   description?: string;
-  secret?: { pattern: string; file: string };
+  secret?: { pattern: string; file: string; line?: number };
   /** the class of host-identity trace that refused it, and where - never the value */
-  identity?: { class: IdentityClass; where: string };
+  identity?: { class: IdentityClass; where: string; line?: number };
 }
 
 /**
@@ -135,9 +135,10 @@ export function auditCommand(file: string): CommandAudit {
     // unreadable means unscreened, and unscreened must not ship
     return { shareable: false, reason: "unreadable", detail: basename(file) };
   }
-  const pattern = detectSecret(content);
-  if (pattern) {
-    return { shareable: false, reason: "secret", detail: pattern, secret: { pattern, file: basename(file) } };
+  const found = locateSecret(content);
+  if (found) {
+    const secret = { pattern: found.pattern, file: basename(file), line: lineAt(content, found.index) };
+    return { shareable: false, reason: "secret", detail: found.pattern, secret };
   }
   // A command is a file of instructions written on ONE machine, so it is the likeliest of
   // the three kinds to say "run it from here" with an absolute path in it. The teammate who
@@ -145,9 +146,10 @@ export function auditCommand(file: string): CommandAudit {
   // command that cannot work where it lands.
   const inName = detectIdentity(name);
   if (inName) return { shareable: false, reason: "identity", detail: inName, identity: { class: inName, where: "name" } };
-  const trace = detectIdentity(content);
+  const trace = locateIdentity(content);
   if (trace) {
-    return { shareable: false, reason: "identity", detail: trace, identity: { class: trace, where: basename(file) } };
+    const identity = { class: trace.class, where: basename(file), line: lineAt(content, trace.index) };
+    return { shareable: false, reason: "identity", detail: trace.class, identity };
   }
   return { shareable: true, content, description: commandDescription(content) };
 }
@@ -159,10 +161,8 @@ export function commandRefusalSummary(audit: CommandAudit): string {
       return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes)`;
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
-    case "identity":
-      return `${identityPlace(audit.identity?.where ?? "")} carries a trace of this machine (${audit.detail})`;
     default:
-      return `it looks like it contains a secret (${audit.detail})`;
+      return screenedRefusal(audit);
   }
 }
 
@@ -170,14 +170,13 @@ export function commandRefusalSummary(audit: CommandAudit): string {
 export function commandRefusalMessage(name: string, audit: CommandAudit): string {
   if (audit.reason === "identity") {
     return (
-      `${name} was not shared: ${identityPlace(audit.identity?.where ?? "")} carries a trace of ` +
-      `this machine (${audit.detail}). A command is merged as it is, and the teammate who types ` +
-      `it has no such account or directory; take the trace out and try again.`
+      `${name} was not shared: ${traceFinding(audit)}. A command is merged as it is, and the ` +
+      `teammate who types it has no such account or directory; take the trace out and try again.`
     );
   }
   if (audit.reason === "secret") {
     return (
-      `"${audit.secret?.file}" looks like it contains a secret (${audit.detail}), so ${name} was not ` +
+      `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}), so ${name} was not ` +
       `shared. Commands are reviewed and merged as they are, and a redacted one would arrive and ` +
       `then misfire; take the credential out of the command and try again.`
     );
