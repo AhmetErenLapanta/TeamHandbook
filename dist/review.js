@@ -5,7 +5,7 @@ import { join as join14 } from "node:path";
 // src/lib/deliver.ts
 import { existsSync as existsSync5, readFileSync as readFileSync7, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename3, dirname as dirname4, join as join10, relative } from "node:path";
+import { basename as basename3, dirname as dirname5, join as join10, relative } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
@@ -1867,7 +1867,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 
 // src/lib/publish.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join9 } from "node:path";
+import { dirname as dirname4, join as join9 } from "node:path";
 function buildPrTitle(slug, update = false) {
   return `feat(skill): ${update ? "update" : "add"} ${slug}`;
 }
@@ -2371,7 +2371,7 @@ function commitProjectSkill(git, repoDir, target, subject) {
 }
 function uninstall(target, skillsDir) {
   rmSync5(target, { recursive: true, force: true });
-  for (const dir of [skillsDir, dirname4(skillsDir)]) {
+  for (const dir of [skillsDir, dirname5(skillsDir)]) {
     try {
       rmdirSync(dir);
     } catch {

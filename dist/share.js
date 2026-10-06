@@ -1429,7 +1429,7 @@ function definitionTrace(audit) {
 
 // src/lib/publish.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join9 } from "node:path";
+import { dirname as dirname3, join as join9 } from "node:path";
 
 // src/lib/commands.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync7 } from "node:fs";
@@ -1441,19 +1441,27 @@ function localCommandDirs(userHome = homedir6(), cwd = process.cwd()) {
     { dir: join8(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
+function commandsIn(dir, namespace = []) {
+  let entries2;
+  try {
+    entries2 = readdirSync4(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries2.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap((entry) => {
+    const path = join8(dir, entry.name);
+    if (entry.isDirectory()) return commandsIn(path, [...namespace, entry.name]);
+    if (!entry.isFile() || !entry.name.endsWith(".md")) return [];
+    return [{ name: [...namespace, basename3(entry.name, ".md")].join(":"), file: path }];
+  });
+}
+function commandFile(name) {
+  return `${name.split(":").join("/")}.md`;
+}
 function readLocalCommands(userHome = homedir6(), cwd = process.cwd()) {
   const byName = /* @__PURE__ */ new Map();
   for (const { dir, scope } of localCommandDirs(userHome, cwd)) {
-    let entries2;
-    try {
-      entries2 = readdirSync4(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
-    } catch {
-      continue;
-    }
-    for (const entry of entries2.sort()) {
-      const name = basename3(entry, ".md");
-      byName.set(name, { name, scope, file: join8(dir, entry) });
-    }
+    for (const { name, file } of commandsIn(dir)) byName.set(name, { name, scope, file });
   }
   return [...byName.values()];
 }
@@ -1464,25 +1472,25 @@ function commandDescription(content) {
   const body = frontmatter ? content.slice(frontmatter[0].length) : content;
   return body.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#")) ?? "";
 }
-function auditCommand(file) {
-  const name = basename3(file, ".md");
-  if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+function auditCommand(file, name = basename3(file, ".md")) {
+  if (!name.split(":").every(isSafeSlug)) return { shareable: false, reason: "unsafe-name", detail: name };
+  const where = commandFile(name);
   let content;
   try {
     content = readFileSync7(file, "utf8");
   } catch {
-    return { shareable: false, reason: "unreadable", detail: basename3(file) };
+    return { shareable: false, reason: "unreadable", detail: where };
   }
   const found = locateSecret(content);
   if (found) {
-    const secret = { pattern: found.pattern, file: basename3(file), line: lineAt(content, found.index) };
+    const secret = { pattern: found.pattern, file: where, line: lineAt(content, found.index) };
     return { shareable: false, reason: "secret", detail: found.pattern, secret };
   }
   const inName = detectIdentity(name);
   if (inName) return { shareable: false, reason: "identity", detail: inName, identity: { class: inName, where: "name" } };
   const trace = locateIdentity(content);
   if (trace) {
-    const identity = { class: trace.class, where: basename3(file), line: lineAt(content, trace.index) };
+    const identity = { class: trace.class, where, line: lineAt(content, trace.index) };
     return { shareable: false, reason: "identity", detail: trace.class, identity };
   }
   return { shareable: true, content, description: commandDescription(content) };
@@ -1674,7 +1682,7 @@ function buildSelectionPrBody(subjects, commands, marketplaceName, updated = NOT
     lines.push(
       "",
       `- command: \`/${marketplaceName}:${command.name}\``,
-      `- file: \`${TEAM_COMMANDS_DIR}/${command.name}.md\``
+      `- file: \`${TEAM_COMMANDS_DIR}/${commandFile(command.name)}\``
     );
   }
   for (const skill of skills) {
@@ -1788,11 +1796,11 @@ function collisionMessage(name) {
   return `the team repository already declares an MCP server named "${name}". It was left exactly as it is.`;
 }
 function commandCollisionMessage(name) {
-  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${name}.md). It was left exactly as it is.`;
+  return `the team repository already has a command named "${name}" (${TEAM_COMMANDS_DIR}/${commandFile(name)}). It was left exactly as it is.`;
 }
-function namesIn(dir, suffix) {
+function namesIn(dir) {
   try {
-    return readdirSync5(dir, { withFileTypes: true }).filter((entry) => suffix ? entry.isFile() && entry.name.endsWith(suffix) : entry.isDirectory()).map((entry) => suffix ? entry.name.slice(0, -suffix.length) : entry.name);
+    return readdirSync5(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch {
     return [];
   }
@@ -1811,7 +1819,7 @@ function teamAssets(team, git = runGit) {
     return {
       skills: namesIn(join9(repoDir, "skills")),
       servers: declaredServerNames(existsSync4(mcpFile) ? readFileSync8(mcpFile, "utf8") : null),
-      commands: namesIn(join9(repoDir, TEAM_COMMANDS_DIR), ".md")
+      commands: commandsIn(join9(repoDir, TEAM_COMMANDS_DIR)).map((command) => command.name)
     };
   } catch {
     return null;
@@ -1833,7 +1841,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
   }
   const commands = [];
   for (const entry of commandEntries) {
-    const audit = auditCommand(entry.file);
+    const audit = auditCommand(entry.file, entry.name);
     if (audit.shareable) commands.push({ name: entry.name, content: audit.content });
     else refused.push({ name: entry.name, kind: "command", reason: commandRefusalMessage(entry.name, audit) });
   }
@@ -1928,7 +1936,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingCommands = [];
     const replacedCommands = [];
     for (const command of commands) {
-      if (existsSync4(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+      if (existsSync4(join9(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name)))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1997,9 +2005,10 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync3(target, merged);
-      if (goingCommands.length) mkdirSync5(join9(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
       for (const command of goingCommands) {
-        writeFileSync3(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+        const file = join9(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name));
+        mkdirSync5(dirname3(file), { recursive: true });
+        writeFileSync3(file, command.content);
       }
       for (const skill of goingSkills) {
         const dest = join9(repoDir, TEAM_SKILLS_DIR, skill.name);
@@ -2125,7 +2134,7 @@ function buildInventory(paths = {}, teamHas = null) {
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers)
   );
   const commands = readLocalCommands(paths.userHome ?? homedir7(), paths.cwd ?? process.cwd()).map(
-    (entry) => onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands)
+    (entry) => onTeam(commandItem(entry, auditCommand(entry.file, entry.name)), teamHas?.commands)
   );
   return { skills: [...byName.values()], servers, commands };
 }
@@ -2179,7 +2188,7 @@ function formatInventory(inv, forge, duplicates = NO_DUPLICATES) {
   if (inv.commands.length) {
     lines.push(
       "",
-      `Commands (${inv.commands.length}) - the ones you pick travel in that SAME merge request, as commands/<name>.md`,
+      `Commands (${inv.commands.length}) - the ones you pick travel in that SAME merge request, at the same path under commands/`,
       ""
     );
     inv.commands.forEach((command, i) => {
@@ -2187,7 +2196,6 @@ function formatInventory(inv, forge, duplicates = NO_DUPLICATES) {
       lines.push(`  ${i + 1}. /${command.name}  [${command.scope}]${state}`);
       if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
     });
-    lines.push("", "  Commands namespaced in a subdirectory (/git:sync) cannot travel yet and are not listed.");
   }
   lines.push(
     "",
@@ -2413,7 +2421,7 @@ function duplicateCopies(inv, pluginDir, paths = {}) {
   for (const command of inv.commands) {
     if (command.scope !== "personal") continue;
     const mine = fileDigest(command.file);
-    if (mine && mine === fileDigest(join10(pluginDir, "commands", `${command.name}.md`))) {
+    if (mine && mine === fileDigest(join10(pluginDir, "commands", commandFile(command.name)))) {
       found.push({ kind: "command", name: command.name, remove: `rm ${shown(command.file)}` });
     }
   }

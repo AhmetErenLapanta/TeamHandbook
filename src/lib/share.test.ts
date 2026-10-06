@@ -91,9 +91,9 @@ function writeSkill(root: string, name: string, files: Record<string, string> = 
 }
 
 function writeCommand(root: string, name: string, body: string): void {
-  const dir = join(root, ".claude", "commands");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.md`), body);
+  const file = join(root, ".claude", "commands", `${name}.md`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, body);
 }
 
 function writeServers(servers: Record<string, unknown>): void {
@@ -1111,6 +1111,111 @@ describe("shareSelection carries commands", () => {
     expect(gitIn(remote, ["show", `${branch}:commands/explain.md`])).toBe("---\ndescription: Deep-dive.\n---\n\nBody.\n");
     // the one nobody picked is still only on this machine
     expect(() => gitIn(remote, ["show", `${branch}:commands/fix-tests.md`])).toThrow();
+  });
+
+  it("given a command in a subdirectory, when the list is read, then it is offered under the name it is typed with", () => {
+    writeCommand(userHome, "git/sync", "---\ndescription: Sync with upstream.\n---\n\nBody.\n");
+    writeCommand(userHome, "sync", "Sync the docs.\n");
+
+    const inv = buildInventory(paths());
+
+    expect(inv.commands.map((c) => [c.name, c.shareable])).toEqual([
+      ["git:sync", true],
+      ["sync", true],
+    ]);
+    const text = formatInventory(inv);
+    expect(text).toContain("  1. /git:sync  [personal]");
+    expect(text).toContain("     Sync with upstream.");
+    expect(text).not.toContain("cannot travel");
+  });
+
+  it("given git/sync.md and sync.md were selected, when the selection runs, then each lands at its own path in the team repo", () => {
+    remote = teamRepo();
+    writeCommand(userHome, "git/sync", "Sync with upstream.\n");
+    writeCommand(userHome, "sync", "Sync the docs.\n");
+
+    const result = shareSelection(select({ commands: ["git:sync", "sync"] }), team(), paths(), undefined, forge);
+
+    expect(result.team).toMatchObject({ ok: true, commandNames: ["git:sync", "sync"] });
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["show", `${branch}:commands/git/sync.md`])).toBe("Sync with upstream.\n");
+    expect(gitIn(remote, ["show", `${branch}:commands/sync.md`])).toBe("Sync the docs.\n");
+    expect(formatShareResult(result, "acme")).toContain("git:sync");
+  });
+
+  it("given the team already has sync.md, when git/sync.md is shared, then the two are not a collision", () => {
+    remote = teamRepo({ "commands/sync.md": "The team's own sync.\n" });
+    writeCommand(userHome, "git/sync", "Sync with upstream.\n");
+
+    const result = shareSelection(select({ commands: ["git:sync"] }), team(), paths(), undefined, forge);
+
+    expect(result.team).toMatchObject({ ok: true, commandNames: ["git:sync"] });
+    expect(result.refused).toEqual([]);
+    const branch = result.team!.branch!;
+    expect(gitIn(remote, ["show", `${branch}:commands/sync.md`])).toBe("The team's own sync.\n");
+  });
+
+  it("given the team already has git/sync.md, when another git/sync.md is shared, then it collides at that path", () => {
+    remote = teamRepo({ "commands/git/sync.md": "The team's own sync.\n" });
+    writeCommand(userHome, "git/sync", "My sync.\n");
+
+    const result = shareSelection(select({ commands: ["git:sync"] }), team(), paths(), undefined, forge);
+
+    expect(result.team?.ok).toBe(false);
+    expect(result.refused).toMatchObject([
+      { name: "git:sync", kind: "command", collision: true, reason: expect.stringContaining("commands/git/sync.md") },
+    ]);
+  });
+
+  it("given a namespaced command merged into the team repo, when this machine installs it, then it sits at the same path and reads as on the team", () => {
+    remote = teamRepo();
+    writeCommand(userHome, "git/sync", "Sync with upstream.\n");
+    const shared = shareSelection(select({ commands: ["git:sync"] }), team(), paths(), undefined, forge);
+    const merge = mkdtempSync(join(tmpdir(), "handbook-merge-"));
+    const installed = mkdtempSync(join(tmpdir(), "handbook-installed-"));
+    try {
+      execFileSync("git", ["clone", "-q", remote, merge]);
+      gitIn(merge, ["-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", `origin/${shared.team!.branch!}`]);
+      gitIn(merge, ["push", "-q", "origin", "main"]);
+      // what the marketplace subscription installs is a checkout of the team repository
+      execFileSync("git", ["clone", "-q", remote, join(installed, "acme")]);
+
+      const pluginDir = join(installed, "acme");
+      expect(readFileSync(join(pluginDir, "commands", "git", "sync.md"), "utf8")).toBe("Sync with upstream.\n");
+      const assets = teamAssets(team());
+      expect(assets?.commands).toEqual(["git:sync"]);
+      const inv = buildInventory(paths(), assets);
+      expect(inv.commands[0]).toMatchObject({ name: "git:sync", onTeam: true });
+      expect(duplicateCopies(inv, pluginDir, paths()).copies).toEqual([
+        { kind: "command", name: "git:sync", remove: "rm ~/.claude/commands/git/sync.md" },
+      ]);
+    } finally {
+      rmSync(merge, { recursive: true, force: true });
+      rmSync(installed, { recursive: true, force: true });
+    }
+  });
+
+  it("given a namespaced command hides a credential, when it is selected, then it is refused before git runs", () => {
+    const calls: string[][] = [];
+    const recordingGit: GitRunner = (args) => {
+      calls.push(args);
+      return "";
+    };
+    writeCommand(userHome, "git/deploy", SECRET_COMMAND);
+
+    const inv = buildInventory(paths());
+    const result = shareSelection(
+      select({ commands: ["git:deploy"] }),
+      { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "acme" },
+      paths(),
+      recordingGit,
+      forge,
+    );
+
+    expect(inv.commands[0]).toMatchObject({ name: "git:deploy", shareable: false });
+    expect(calls).toEqual([]);
+    expect(result.refused[0]).toMatchObject({ name: "git:deploy", kind: "command" });
+    expect(result.refused[0]!.reason).toContain("git/deploy.md");
   });
 
   it("given every kind was selected, when the selection runs, then ONE request carries them and claims ONE version", () => {

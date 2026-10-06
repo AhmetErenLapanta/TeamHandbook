@@ -15,7 +15,7 @@ import { auditSkillDir, screenedRefusal } from "./queue.js";
 import type { SkillAudit } from "./queue.js";
 import { publishTeamSelection } from "./publish.js";
 import type { PublishOptions, SkillShareEntry, TeamAssets, TeamPublishOutcome } from "./publish.js";
-import { auditCommand, commandRefusalSummary, readLocalCommands } from "./commands.js";
+import { auditCommand, commandFile, commandRefusalSummary, readLocalCommands } from "./commands.js";
 import type { CommandAudit, CommandEntry } from "./commands.js";
 import { runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
@@ -265,7 +265,7 @@ export function buildInventory(paths: InventoryPaths = {}, teamHas: TeamAssets |
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers),
   );
   const commands = readLocalCommands(paths.userHome ?? homedir(), paths.cwd ?? process.cwd()).map((entry) =>
-    onTeam(commandItem(entry, auditCommand(entry.file)), teamHas?.commands),
+    onTeam(commandItem(entry, auditCommand(entry.file, entry.name)), teamHas?.commands),
   );
   return { skills: [...byName.values()], servers, commands };
 }
@@ -357,7 +357,7 @@ export function formatInventory(inv: Inventory, forge?: string, duplicates: Dupl
   if (inv.commands.length) {
     lines.push(
       "",
-      `Commands (${inv.commands.length}) - the ones you pick travel in that SAME merge request, as commands/<name>.md`,
+      `Commands (${inv.commands.length}) - the ones you pick travel in that SAME merge request, at the same path under commands/`,
       "",
     );
     inv.commands.forEach((command, i) => {
@@ -365,9 +365,6 @@ export function formatInventory(inv: Inventory, forge?: string, duplicates: Dupl
       lines.push(`  ${i + 1}. /${command.name}  [${command.scope}]${state}`);
       if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
     });
-    // Said once, in the list, rather than left for the person who wonders later why
-    // /git:sync is missing: what is not offered here is not a setup this screen judged.
-    lines.push("", "  Commands namespaced in a subdirectory (/git:sync) cannot travel yet and are not listed.");
   }
   lines.push(
     "",
@@ -727,7 +724,7 @@ export function duplicateCopies(inv: Inventory, pluginDir: string, paths: Invent
   for (const command of inv.commands) {
     if (command.scope !== "personal") continue;
     const mine = fileDigest(command.file);
-    if (mine && mine === fileDigest(join(pluginDir, "commands", `${command.name}.md`))) {
+    if (mine && mine === fileDigest(join(pluginDir, "commands", commandFile(command.name)))) {
       found.push({ kind: "command", name: command.name, remove: `rm ${shown(command.file)}` });
     }
   }

@@ -193,10 +193,11 @@ These, and only these:
    give. Nothing is shared with your team before one of these two.
    - Whatever you pick on the `/handbook:share` screen is screened for those same traces
      first, and all three kinds are screened: a skill (every file it carries, and its
-     name), a slash command (its body and its name) and an MCP server (its whole
-     definition, `command`, `args` and `env` included). Anything one is found in is
-     refused rather than sent, and the refusal names the class and where it sits without
-     printing the trace itself; the rest of your selection still goes.
+     name), a slash command (its body and its name, the subdirectory it sits in included)
+     and an MCP server (its whole definition, `command`, `args` and `env` included).
+     Anything one is found in is refused rather than sent, and the refusal names the class
+     and where it sits without printing the trace itself; the rest of your selection still
+     goes.
    - `/handbook:review` screens a candidate the same way and prints what it finds before
      you choose where it goes. Approving it to the team, or into a project - where it is
      committed with the repository - is refused on those grounds. Keeping it for yourself
