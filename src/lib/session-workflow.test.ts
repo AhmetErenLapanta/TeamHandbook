@@ -315,6 +315,16 @@ describe("what is not recorded", () => {
     expect(readCounters(home).workflowSkippedHygiene).toBe(1);
   });
 
+  it("given a path carrying someone's home directory, when the session would be recognized, then no line is written and the skip is counted", () => {
+    recordWorkflowEvent(edit(join(api, "fixtures/home/quinella/RefundSample.kt")), home, deps());
+    recordWorkflowEvent(edit(join(api, "src/dto/CreateRefundRequest.kt")), home, deps());
+    recordWorkflowEvent(bash("npm test"), home, deps());
+
+    expect(finishWorkflowSession({ session_id: "s1" }, loadSessionState("s1", home), home, deps())).toBeNull();
+    expect(existsSync(workflowsFile(home))).toBe(false);
+    expect(readCounters(home).workflowSkippedHygiene).toBe(1);
+  });
+
   it("given a path carrying a token, when the session would be recognized, then no line is written and the skip is counted", () => {
     const token = `glpat-${"x1".repeat(12)}`;
     recordWorkflowEvent(edit(join(api, `src/${token}/ConfigService.kt`)), home, deps());
