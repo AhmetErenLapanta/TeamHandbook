@@ -63,7 +63,13 @@ export function createFixture(): Fixture {
     mkdirSync(path, { recursive: true });
     const git = (args: string[], date = nextDate()) =>
       execFileSync("git", ["-C", path, ...args], { encoding: "utf8", env: gitEnv(date), stdio: ["ignore", "pipe", "pipe"] });
-    git(["init", "-q", "-b", "master"]);
+    const created = nextDate();
+    git(["init", "-q", "-b", "master"], created);
+    // Automatic maintenance off: a commit can start a background gc that is still writing under
+    // .git/objects while cleanup deletes the tree, and the delete then fails with ENOTEMPTY. Set
+    // at the init's own time, so the clock every commit date is read from does not move.
+    git(["config", "gc.auto", "0"], created);
+    git(["config", "maintenance.auto", "false"], created);
 
     const commit = (change: FixtureCommit): string => {
       for (const [from, to] of Object.entries(change.renames ?? {})) {
@@ -113,7 +119,9 @@ export function createFixture(): Fixture {
   return {
     root,
     repo,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    // Retried briefly for the same race, in case a git process these settings do not reach is
+    // still finishing when the tree goes.
+    cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
   };
 }
 
