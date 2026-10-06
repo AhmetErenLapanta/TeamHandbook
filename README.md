@@ -274,7 +274,9 @@ The per-session harvest **ships switched off.** Turn it on, or the rest off, in
 All three fail **closed** if the file cannot be parsed. Capture keeps running whatever
 they say: the hooks that record errors and activity write to your machine and send
 nothing. `/handbook:mine`, which reads git history rather than a session, is unaffected
-by any of them. Secrets are redacted before anything
+by any of them. Separately, TeamHandbook notes on your machine, as hashes and never as names
+or paths, when a session looks like a piece of repeated work, so `/handbook:status` can say
+how often that happens; `{ "sessions": { "detect": false } }` turns it off. Secrets are redacted before anything
 is written or sent, though detection is pattern matching - eyeball a candidate before
 approving it.
 
