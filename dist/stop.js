@@ -280,6 +280,8 @@ var FIELDS = [
   "gateAbandoned",
   "workflowSessions",
   "workflowSkippedAutonomous",
+  "workflowEntrypointSeen",
+  "workflowEntrypointMissing",
   "workflowDetectedShape",
   "workflowDetectedCandidate",
   "workflowSkippedHygiene"
@@ -297,6 +299,8 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0,
     workflowSessions: 0,
     workflowSkippedAutonomous: 0,
+    workflowEntrypointSeen: 0,
+    workflowEntrypointMissing: 0,
     workflowDetectedShape: 0,
     workflowDetectedCandidate: 0,
     workflowSkippedHygiene: 0

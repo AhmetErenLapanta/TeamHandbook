@@ -117,6 +117,16 @@ describe("detectWorkflow", () => {
     expect(detectWorkflow(files, record)).toMatchObject({ match: "shape", shape: "shape0000001" });
   });
 
+  it("given exactly half of a mined workflow's core, when detected, then it is a candidate and not that shape", () => {
+    const wide: MinedRecord = {
+      ...record,
+      shapes: [{ id: "shape0000002", core: ["acme-api:dto/*Request.kt", "acme-api:service/*Service.kt", "acme-app:api/*Types.ts", "acme-app:forms/*Form.tsx"], recurrence: 6 }],
+    };
+    const files = [file("/r/acme-api", "src/dto/CreateRefundRequest.kt"), file("/r/acme-api", "src/service/RefundService.kt")];
+
+    expect(detectWorkflow(files, wide)).toMatchObject({ match: "candidate", shape: null });
+  });
+
   it("given two roles that no mined workflow holds, when detected, then it is a candidate", () => {
     const files = [file("/r/acme-api", "src/util/HelperUtil.kt"), file("/r/acme-api", "README.md")];
 
@@ -358,6 +368,20 @@ describe("what is not recorded", () => {
     finishWorkflowSession({ session_id: "s1" }, loadSessionState("s1", home), home, scripted);
 
     expect(existsSync(workflowsFile(home))).toBe(false);
-    expect(readCounters(home)).toMatchObject({ workflowSessions: 0, workflowSkippedAutonomous: 1 });
+    expect(readCounters(home)).toMatchObject({ workflowSessions: 0, workflowSkippedAutonomous: 1, workflowEntrypointSeen: 1 });
+  });
+
+  it("given a session whose entry point was never reported, when it ends, then it is counted as attended and the missing entry point is counted too", () => {
+    const unreported = deps({ entrypoint: "" });
+    recordWorkflowEvent(edit(join(api, "src/dto/CreateRefundRequest.kt")), home, unreported);
+
+    finishWorkflowSession({ session_id: "s1" }, loadSessionState("s1", home), home, unreported);
+
+    expect(readCounters(home)).toMatchObject({
+      workflowSessions: 1,
+      workflowSkippedAutonomous: 0,
+      workflowEntrypointSeen: 0,
+      workflowEntrypointMissing: 1,
+    });
   });
 });

@@ -284,9 +284,11 @@ or a move), whether it runs a test or a build, and whether it commits, together 
 exit status Claude Code reports for the whole command. At a commit and at the end of a
 session it also reads, for each repository written in: where its `.git` points, so a
 worktree counts as the repository it belongs to; which of the written paths git ignores
-(`git check-ignore`); and the current branch, from `.git/HEAD`. It reads the
-`CLAUDE_CODE_ENTRYPOINT` variable to leave out sessions started in print mode or through
-an agent SDK, which nobody is at the keyboard for; those are counted, not recorded.
+(`git check-ignore`); and the current branch, from `.git/HEAD`. When Claude Code reports
+an entry point in the `CLAUDE_CODE_ENTRYPOINT` variable, a session started in print mode or
+through an agent SDK, which nobody is at the keyboard for, is left out and counted rather
+than recorded. That variable is not a documented one, so whether it arrived is counted too:
+a session it did not arrive for is treated as attended, and shows up in that count.
 
 **What it keeps while the session runs.** The session's file under `sessions/` gains the
 absolute paths of the files written inside a repository, whether the latest test or build
@@ -334,8 +336,9 @@ named in the miner's own roles without reading any history. It is not written wh
 detection is off, and it never leaves the machine.
 
 **Counters.** `counters.json` gains how many attended sessions ended with detection on,
-how many unattended ones were left out, what detection made of the sessions at their end
-whether or not a signal fired, and how many lines screening dropped.
+how many unattended ones were left out, how many sessions reported their entry point and
+how many did not, what detection made of the sessions at their end whether or not a signal
+fired, and how many lines screening dropped.
 
 ## Removing your data
 

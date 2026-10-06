@@ -22,6 +22,10 @@ export interface Counters {
   workflowSessions: number;
   // sessions nobody was driving (print mode, an SDK): left out of that denominator, but counted
   workflowSkippedAutonomous: number;
+  // sessions that ended with the entry point reported, and without: the split above is only as
+  // good as the first of these
+  workflowEntrypointSeen: number;
+  workflowEntrypointMissing: number;
   // what detection made of those sessions at their end, whether or not a signal fired and wrote a
   // line: a mined workflow, or a role set of its own
   workflowDetectedShape: number;
@@ -40,6 +44,8 @@ const FIELDS: Array<keyof Counters> = [
   "gateAbandoned",
   "workflowSessions",
   "workflowSkippedAutonomous",
+  "workflowEntrypointSeen",
+  "workflowEntrypointMissing",
   "workflowDetectedShape",
   "workflowDetectedCandidate",
   "workflowSkippedHygiene",
@@ -59,6 +65,8 @@ export function readCounters(home: string = handbookHome()): Counters {
     gateAbandoned: 0,
     workflowSessions: 0,
     workflowSkippedAutonomous: 0,
+    workflowEntrypointSeen: 0,
+    workflowEntrypointMissing: 0,
     workflowDetectedShape: 0,
     workflowDetectedCandidate: 0,
     workflowSkippedHygiene: 0,

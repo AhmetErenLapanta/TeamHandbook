@@ -353,6 +353,7 @@ export function isCommit(cmd: SimpleCommand): boolean {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowDeps {
+  /** The entry point Claude Code reports; an empty string is one it did not report. */
   entrypoint?: string;
   locator?: RepoLocator;
   host?: HostIdentity;
@@ -446,7 +447,12 @@ export function finishWorkflowSession(
   deps: WorkflowDeps = {},
 ): WorkflowLine | null {
   if (!input.session_id || !sessionDetectEnabled(home)) return null;
-  if (isAutonomous(deps.entrypoint ?? process.env.CLAUDE_CODE_ENTRYPOINT)) {
+  const entrypoint = deps.entrypoint ?? process.env.CLAUDE_CODE_ENTRYPOINT;
+  // The variable that tells an unattended session apart is not a documented one. Counting whether
+  // it arrived is what keeps "no scripted sessions" distinguishable from "nothing said which they
+  // were", which would otherwise put every scripted session in the denominator without a trace.
+  bumpCounter(entrypoint ? "workflowEntrypointSeen" : "workflowEntrypointMissing", home);
+  if (isAutonomous(entrypoint)) {
     bumpCounter("workflowSkippedAutonomous", home);
     return null;
   }
@@ -625,7 +631,8 @@ export function recentWorkflowSessions(
     } catch {
       continue;
     }
-    if (typeof line.session !== "string" || Date.parse(line.ts ?? "") < since) continue;
+    const at = Date.parse(line.ts ?? "");
+    if (typeof line.session !== "string" || !Number.isFinite(at) || at < since) continue;
     if (line.match && COUNTED_MATCHES.has(line.match)) recognized.add(line.session);
     if (line.match === "shape") matched.add(line.session);
   }

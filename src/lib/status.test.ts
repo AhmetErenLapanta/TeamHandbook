@@ -222,6 +222,16 @@ describe("recognized workflow sessions", () => {
     expect(line).toMatchInlineSnapshot(`"Workflows:       1 workflow session recognized in the last 30 days (1 matched a mined workflow)"`);
   });
 
+  it("given a matched line whose time cannot be read, when status is printed, then it is not counted as recent", () => {
+    mkdirSync(home, { recursive: true });
+    const { ts: _ts, ...untimed } = JSON.parse(workflowLine("d", "shape", ""));
+    writeFileSync(join(home, "workflows.jsonl"), [workflowLine("e", "shape", "not a time"), JSON.stringify(untimed)].join("\n") + "\n");
+
+    const line = formatStatus(gatherStatus(home)).split("\n").find((l) => l.startsWith("Workflows:"));
+
+    expect(line).toMatchInlineSnapshot(`"Workflows:       0 workflow sessions recognized in the last 30 days (0 matched a mined workflow)"`);
+  });
+
   it("given only candidate sessions, when status is printed, then neither number moves", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "workflows.jsonl"), workflowLine("b", "candidate", new Date().toISOString()) + "\n");
