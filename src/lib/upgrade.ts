@@ -18,6 +18,7 @@ import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion } from "./publish.js";
 import {
   branchNameProblem,
+  branchTrace,
   decidePush,
   openRequest,
   previewPush,
@@ -658,7 +659,10 @@ export function planUpgrade(
 function branchExampleError(example: string | undefined, git: GitRunner, repoDir: string): string | null {
   if (example === undefined) return null;
   const problem = branchNameProblem(example, git, repoDir);
-  return problem ? `"${example}" cannot be recorded as the example branch name: ${problem}. Nothing was changed.` : null;
+  if (!problem) return null;
+  // A traced example is described, never quoted, for the reason branchTrace gives.
+  const named = branchTrace(example) ? "that example" : `"${example}"`;
+  return `${named} cannot be recorded as the example branch name: ${problem}. Nothing was changed.`;
 }
 
 /**

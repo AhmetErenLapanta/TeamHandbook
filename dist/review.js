@@ -1338,16 +1338,21 @@ function branchNameProblem(name, git, cwd) {
   if (!name.trim() || name !== name.trim()) return "it is empty or starts or ends with a space";
   if (name.length > BRANCH_NAME_MAX) return `it is longer than ${BRANCH_NAME_MAX} characters`;
   if (/\p{C}/u.test(name)) return "it carries a control character";
-  const identity = detectIdentity(name);
-  if (identity) return `it carries a trace of this machine (${identity}), and every teammate reads the branch list`;
-  const secret = detectSecret(name);
-  if (secret) return `it carries what looks like a ${secret}, and every teammate reads the branch list`;
+  const trace = branchTrace(name);
+  if (trace) return trace;
   if (name.startsWith("-") || name.includes("@{")) return "git does not accept it as a branch name";
   try {
     git(["check-ref-format", "--branch", name], cwd);
   } catch {
     return "git does not accept it as a branch name";
   }
+  return null;
+}
+function branchTrace(name) {
+  const identity = detectIdentity(name);
+  if (identity) return `it carries a trace of this machine (${identity}), and every teammate reads the branch list`;
+  const secret = detectSecret(name);
+  if (secret) return `it carries what looks like a ${secret}, and every teammate reads the branch list`;
   return null;
 }
 var BRANCH_EXAMPLE_MAX = 100;
@@ -1487,7 +1492,9 @@ function decidePush(input) {
     branchSaid = unusable ? `branch name required: the branch this would propose cannot be used (${unusable}), so ask the user for one and ${rerun} with \`--branch <name>\`.` : `branch name required: nothing is pushed under a name the user has not seen. Show it to them with the message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`;
   } else {
     const problem = branchNameProblem(choice.branch, git, repoDir);
-    if (problem) {
+    if (problem && branchTrace(choice.branch)) {
+      branchSaid = `the branch given cannot be used: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
+    } else if (problem) {
       branchShown = { branch: choice.branch };
       branchSaid = `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
     } else if (preview.taken.has(choice.branch)) {

@@ -127,10 +127,8 @@ export function branchNameProblem(name: string, git: GitRunner, cwd: string): st
   if (!name.trim() || name !== name.trim()) return "it is empty or starts or ends with a space";
   if (name.length > BRANCH_NAME_MAX) return `it is longer than ${BRANCH_NAME_MAX} characters`;
   if (/\p{C}/u.test(name)) return "it carries a control character";
-  const identity = detectIdentity(name);
-  if (identity) return `it carries a trace of this machine (${identity}), and every teammate reads the branch list`;
-  const secret = detectSecret(name);
-  if (secret) return `it carries what looks like a ${secret}, and every teammate reads the branch list`;
+  const trace = branchTrace(name);
+  if (trace) return trace;
   // A leading dash would be read as an option, and `--branch` expands "@{-1}" into whatever
   // branch was checked out before - a name that passes the check by turning into another.
   if (name.startsWith("-") || name.includes("@{")) return "git does not accept it as a branch name";
@@ -139,6 +137,19 @@ export function branchNameProblem(name: string, git: GitRunner, cwd: string): st
   } catch {
     return "git does not accept it as a branch name";
   }
+  return null;
+}
+
+/**
+ * Why `name` would carry this machine or a credential to everyone who reads the branch
+ * list, or null. Said by class, never by quoting the name: a refusal that printed the
+ * trace would put it on the screen the sieve exists to keep it off.
+ */
+export function branchTrace(name: string): string | null {
+  const identity = detectIdentity(name);
+  if (identity) return `it carries a trace of this machine (${identity}), and every teammate reads the branch list`;
+  const secret = detectSecret(name);
+  if (secret) return `it carries what looks like a ${secret}, and every teammate reads the branch list`;
   return null;
 }
 
@@ -424,7 +435,10 @@ export function decidePush(input: PushQuestionInput): ({ ok: true } & PushPlan) 
         `message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`;
   } else {
     const problem = branchNameProblem(choice.branch, git, repoDir);
-    if (problem) {
+    if (problem && branchTrace(choice.branch)) {
+      // Not echoed and not handed back: the name is what carries the trace.
+      branchSaid = `the branch given cannot be used: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
+    } else if (problem) {
       branchShown = { branch: choice.branch };
       branchSaid = `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
     } else if (preview.taken.has(choice.branch)) {

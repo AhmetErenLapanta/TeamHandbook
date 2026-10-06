@@ -249,6 +249,9 @@ describe.each(ROUTES)("$name, against a project that polices branch names", ({ p
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("trace of this machine (home-path)");
+    // named by class, never by quoting the name that carries it
+    expect(result.error).not.toContain("alice");
+    expect(result.proposedBranch).toBeUndefined();
     expect(repo.branches()).toEqual(["master"]);
   });
 });
@@ -703,7 +706,8 @@ describe("the example branch a team records", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("cannot be recorded as the example branch name");
+    expect(result.error).toContain("that example cannot be recorded as the example branch name");
+    expect(result.error).not.toContain("alice");
     expect(execFileSync("git", ["-C", bare, "branch", "--list"], { encoding: "utf8" })).not.toContain("TEAM-12");
   });
 });
