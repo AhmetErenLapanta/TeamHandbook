@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSkillUsage, recordSkillUse, handbookSkills, summarizeUsage, usageFile } from "./usage.js";
+import { readSkillUsage, recordSkillCall, recordSkillUse, handbookSkills, summarizeUsage, usageFile, usesSince } from "./usage.js";
 
 let home: string;
 
@@ -19,7 +19,7 @@ describe("recordSkillUse", () => {
     recordSkillUse("no-db-mocks", home, "2026-08-11T10:00:00.000Z");
 
     expect(readSkillUsage(home)).toEqual({
-      "no-db-mocks": { count: 1, lastAt: "2026-08-11T10:00:00.000Z" },
+      "no-db-mocks": { count: 1, lastAt: "2026-08-11T10:00:00.000Z", days: { "2026-08-11": 1 } },
     });
   });
 
@@ -30,11 +30,47 @@ describe("recordSkillUse", () => {
     expect(readSkillUsage(home)["no-db-mocks"]).toEqual({
       count: 2,
       lastAt: "2026-08-12T09:00:00.000Z",
+      days: { "2026-08-11": 1, "2026-08-12": 1 },
     });
+  });
+
+  it("given calls spread over two months, when counted, then only the last 30 days count and older days are not kept", () => {
+    recordSkillUse("no-db-mocks", home, "2026-08-01T10:00:00.000Z");
+    recordSkillUse("no-db-mocks", home, "2026-09-20T10:00:00.000Z");
+    recordSkillUse("no-db-mocks", home, "2026-09-25T10:00:00.000Z");
+
+    const use = readSkillUsage(home)["no-db-mocks"];
+
+    expect(use?.count).toBe(3);
+    expect(use?.days).toEqual({ "2026-09-20": 1, "2026-09-25": 1 });
+    expect(usesSince(use, "2026-10-06T12:00:00.000Z")).toBe(2);
+    expect(usesSince(use, "2026-10-30T12:00:00.000Z")).toBe(0);
   });
 
   it("given a hook payload without a skill name, when recording, then nothing is written", () => {
     recordSkillUse("", home);
+
+    expect(readSkillUsage(home)).toEqual({});
+  });
+
+  it("given a skill value that is text rather than a name, when recording, then nothing is written", () => {
+    recordSkillUse("please fix the login bug", home);
+
+    expect(readSkillUsage(home)).toEqual({});
+  });
+
+  it("given session recording switched off, when a skill fires, then nothing is written", () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ sessions: { detect: false } }));
+
+    recordSkillUse("no-db-mocks", home);
+
+    expect(readSkillUsage(home)).toEqual({});
+  });
+
+  it("given a config file that cannot be parsed, when a skill fires, then nothing is written", () => {
+    writeFileSync(join(home, "config.json"), "{ sessions: ");
+
+    recordSkillUse("no-db-mocks", home);
 
     expect(readSkillUsage(home)).toEqual({});
   });
@@ -51,6 +87,31 @@ describe("recordSkillUse", () => {
     writeFileSync(usageFile(home), JSON.stringify({ good: { count: 3, lastAt: "x" }, bad: 7 }));
 
     expect(readSkillUsage(home)).toEqual({ good: { count: 3, lastAt: "x" } });
+  });
+});
+
+describe("recordSkillCall", () => {
+  it("given a call that carries the user's request as arguments, when recorded, then only the name and the day reach the file", () => {
+    recordSkillCall(
+      {
+        session_id: "s1",
+        tool_name: "Skill",
+        tool_input: { skill: "add-endpoint", args: "expose GET /orders for order 4711 with key sk-live-abc123" },
+      },
+      home,
+      "2026-10-06T09:30:00.000Z",
+    );
+
+    const raw = readFileSync(usageFile(home), "utf8");
+
+    expect(JSON.parse(raw)).toEqual({ "add-endpoint": { count: 1, lastAt: "2026-10-06T09:30:00.000Z", days: { "2026-10-06": 1 } } });
+    for (const trace of ["args", "orders", "4711", "sk-live", "s1"]) expect(raw).not.toContain(trace);
+  });
+
+  it("given a call whose skill field is not a string, when recorded, then nothing is written", () => {
+    recordSkillCall({ tool_name: "Skill", tool_input: { skill: { name: "x" } } }, home);
+
+    expect(readSkillUsage(home)).toEqual({});
   });
 });
 

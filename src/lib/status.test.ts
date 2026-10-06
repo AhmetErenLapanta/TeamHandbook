@@ -106,7 +106,8 @@ describe("gatherStatus / formatStatus", () => {
       workflows: { recognized: 0, matched: 0 },
       scoringNow: 0,
       abandoned: 0,
-      usage: { fired: 0, totalUses: 0, topSkill: null, known: 0 },
+      usage: { fired: 0, totalUses: 0, topSkill: null, known: 0, recording: true },
+      skillHealth: [],
       config: {
         harvestModel: "sonnet",
         harvestEnabled: true,
@@ -258,5 +259,79 @@ describe("the archive is counted, not hidden", () => {
       readdirSync(candidatesDir(home)).length,
     );
     expect(formatStatus(gatherStatus(home))).toContain("2 pending, 1 approved, 1 rejected, 3 archived");
+  });
+});
+
+describe("skill health", () => {
+  it("given two delivered skills, one with a stale map and a falling fit, when status is printed, then each has its line and the one suggestion follows", () => {
+    const health = () => [
+      { name: "add-error-code", map: { rows: 3, checked: 3, stale: 0 }, uses: 4, workflowSessions: 3, trend: "flat" as const, overlaps: [] },
+      { name: "add-server-option", map: { rows: 5, checked: 5, stale: 2 }, uses: 0, workflowSessions: 3, trend: "down" as const, overlaps: [] },
+    ];
+
+    const lines = formatStatus(gatherStatus(home, () => null, health)).split("\n");
+    const start = lines.findIndex((l) => l.startsWith("Skill health:"));
+
+    expect(lines.slice(start, start + 4).join("\n")).toMatchInlineSnapshot(`
+      "Skill health:    last 30 days; nothing here is changed for you
+        add-error-code     map 0/3 stale · used 4 · workflow done 3× · fit to new work →
+        add-server-option  map 2/5 stale · used 0 · workflow done 3× · fit to new work ↓
+        Stale map or falling fit: run /handbook:mine and draft that workflow again. Overlap: reword one of the two descriptions."
+    `);
+  });
+
+  it("given session recording switched off and a delivered skill, when status is printed, then no count is promised or shown", () => {
+    seedCandidate("add-route", "approved");
+    const dir = join(candidatesDir(home), "add-route");
+    writeCandidateMeta(dir, {
+      slug: "add-route",
+      status: "approved",
+      createdAt: "2026-08-08T00:00:00Z",
+      scope: "personal",
+      description: "d",
+      fingerprint: "mine:abc",
+      sessionId: "",
+      gate: null,
+      deliveredMode: "personal",
+      deliveredTo: dir,
+    });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: add-route\ndescription: Adds a route. Use when asked.\n---\n# add-route\n");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ sessions: { detect: false } }));
+
+    const text = formatStatus(gatherStatus(home, () => null));
+
+    expect(text.split("\n").filter((l) => l.startsWith("Skills in use:") || l.includes("add-route  "))).toEqual([
+      "Skills in use:   usage not recorded while session recording is off",
+      "  add-route  no file map · usage not recorded",
+    ]);
+  });
+
+  it("given calls counted before session recording was switched off, when status is printed, then the old totals are not shown beside the health lines", () => {
+    seedCandidate("add-route", "approved");
+    const dir = join(candidatesDir(home), "add-route");
+    writeCandidateMeta(dir, {
+      slug: "add-route",
+      status: "approved",
+      createdAt: "2026-08-08T00:00:00Z",
+      scope: "personal",
+      description: "d",
+      fingerprint: "abc",
+      sessionId: "",
+      gate: null,
+      deliveredMode: "personal",
+      deliveredTo: dir,
+    });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: add-route\ndescription: Adds a route. Use when asked.\n---\n# add-route\n");
+    writeFileSync(join(home, "skill-usage.json"), JSON.stringify({ "add-route": { count: 5, lastAt: new Date().toISOString() } }));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ sessions: { detect: false } }));
+
+    const text = formatStatus(gatherStatus(home, () => null));
+
+    expect(text).toContain("Skills in use:   usage not recorded while session recording is off");
+    expect(text).not.toContain("have fired");
+  });
+
+  it("given no delivered skills, when status is printed, then there is no skill health section", () => {
+    expect(formatStatus(gatherStatus(home, () => null))).not.toContain("Skill health:");
   });
 });

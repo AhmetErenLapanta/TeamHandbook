@@ -7,3 +7,5 @@ Show the user the current state of TeamHandbook.
 1. Run: `node "${CLAUDE_PLUGIN_ROOT}/dist/status.js"`
 2. Present the output as-is in a code block. Do not editorialize beyond one short sentence;
    if there are pending candidates, remind the user that /handbook:review handles them.
+3. The "Skill health" lines only report. Do not edit, redraft or delete a skill because of
+   them; the suggestion line under them is the user's to act on.

@@ -1,15 +1,19 @@
-// src/cli/share.ts
-import { resolve as toAbsolutePath } from "node:path";
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
 
-// src/lib/config.ts
-import { existsSync, readFileSync as readFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+// src/lib/fs-atomic.ts
+var init_fs_atomic = __esm({
+  "src/lib/fs-atomic.ts"() {
+    "use strict";
+  }
+});
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
@@ -22,10 +26,20 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
-var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
-var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
+var EDIT_ATTACH_WINDOW_MS, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
+var init_session_state = __esm({
+  "src/lib/session-state.ts"() {
+    "use strict";
+    init_fs_atomic();
+    EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+    SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+    SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
+  }
+});
 
 // src/lib/config.ts
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
 function configFile(home = handbookHome()) {
   return join2(home, "config.json");
 }
@@ -47,92 +61,17 @@ function configIsBroken(home = handbookHome()) {
     return true;
   }
 }
-
-// src/cli/share.ts
-import { join as join11 } from "node:path";
-
-// src/lib/init.ts
-import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { dirname as dirname2, join as join6 } from "node:path";
-
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+var init_config = __esm({
+  "src/lib/config.ts"() {
+    "use strict";
+    init_session_state();
+  }
+});
 
 // src/lib/identity.ts
 import { execFileSync } from "node:child_process";
 import { homedir as homedir2, userInfo } from "node:os";
 import { basename } from "node:path";
-var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
-  "user",
-  "users",
-  "username",
-  "you",
-  "me",
-  "home",
-  "root",
-  "admin",
-  "administrator",
-  "runner",
-  "ubuntu",
-  "debian",
-  "alpine",
-  "docker",
-  "container",
-  "node",
-  "vscode",
-  "devcontainer",
-  "codespace",
-  "shared",
-  "public",
-  "dev",
-  "developer",
-  "test",
-  "build",
-  "builder",
-  "ci",
-  "jenkins",
-  "deploy",
-  "app",
-  "service",
-  "worker",
-  "git",
-  "www-data",
-  "nobody"
-]);
-var MIN_NAME_CHARS = 4;
-var HOME_PATH = new RegExp(
-  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
-  "g"
-);
-var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
-var ROLE_MAILBOX = /* @__PURE__ */ new Set([
-  "admin",
-  "bot",
-  "build",
-  "builder",
-  "ci",
-  "deploy",
-  "git",
-  "infra",
-  "jenkins",
-  "no-reply",
-  "noreply",
-  "ops",
-  "platform",
-  "release",
-  "root",
-  "security",
-  "support",
-  "team"
-]);
-var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
-var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
-var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
-var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function usableName(name) {
   return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
 }
@@ -169,7 +108,6 @@ function readHostIdentity() {
   }
   return { names };
 }
-var cached = null;
 function hostIdentity() {
   if (!cached) cached = readHostIdentity();
   return cached;
@@ -203,23 +141,101 @@ function locateIdentity(text, host = hostIdentity()) {
   const first = traces(text, host)[0];
   return first ? { class: first.class, index: first.index } : null;
 }
-var IDENTITY_PHRASE = {
-  "home-path": "a home directory path",
-  "os-username": "this machine's account name",
-  email: "an email address"
-};
+var GENERIC_ACCOUNT, MIN_NAME_CHARS, HOME_PATH, EMAIL, ROLE_MAILBOX, RESERVED_DOMAIN, ROLE_MAILBOX_DOMAIN, FORGE_OWNER_BEFORE, escapeRe, cached, IDENTITY_PHRASE;
+var init_identity = __esm({
+  "src/lib/identity.ts"() {
+    "use strict";
+    GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+      "user",
+      "users",
+      "username",
+      "you",
+      "me",
+      "home",
+      "root",
+      "admin",
+      "administrator",
+      "runner",
+      "ubuntu",
+      "debian",
+      "alpine",
+      "docker",
+      "container",
+      "node",
+      "vscode",
+      "devcontainer",
+      "codespace",
+      "shared",
+      "public",
+      "dev",
+      "developer",
+      "test",
+      "build",
+      "builder",
+      "ci",
+      "jenkins",
+      "deploy",
+      "app",
+      "service",
+      "worker",
+      "git",
+      "www-data",
+      "nobody"
+    ]);
+    MIN_NAME_CHARS = 4;
+    HOME_PATH = new RegExp(
+      "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+      "g"
+    );
+    EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+    ROLE_MAILBOX = /* @__PURE__ */ new Set([
+      "admin",
+      "bot",
+      "build",
+      "builder",
+      "ci",
+      "deploy",
+      "git",
+      "infra",
+      "jenkins",
+      "no-reply",
+      "noreply",
+      "ops",
+      "platform",
+      "release",
+      "root",
+      "security",
+      "support",
+      "team"
+    ]);
+    RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+    ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+    FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+    escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    cached = null;
+    IDENTITY_PHRASE = {
+      "home-path": "a home directory path",
+      "os-username": "this machine's account name",
+      email: "an email address"
+    };
+  }
+});
 
 // src/lib/prompt-safety.ts
-var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
-var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
-var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
-
-// src/lib/queue.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
-import { basename as basename2, join as join4 } from "node:path";
+var LINE_TERMINATOR_CLASS, LINE_TERMINATORS, LABEL_BREAKS;
+var init_prompt_safety = __esm({
+  "src/lib/prompt-safety.ts"() {
+    "use strict";
+    init_identity();
+    LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+    LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+    LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+  }
+});
 
 // src/lib/skill-index.ts
-var BLOCK_SCALAR = /^[|>][-+]?\d*$/;
+import { readdirSync as readdirSync2, readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
 function foldBlockScalar(lines, start, folded) {
   const body = [];
   let i = start;
@@ -261,10 +277,47 @@ function parseSkillFrontmatter(md) {
   const scope = fields.get("scope");
   return { name, description, ...scope ? { scope } : {} };
 }
+function isDecidedCandidate(dir, entry) {
+  try {
+    const meta = JSON.parse(readFileSync3(join3(dir, entry, "candidate.json"), "utf8"));
+    return meta?.status === "rejected" || meta?.status === "approved";
+  } catch {
+    return false;
+  }
+}
+function listExistingSkills(dirs) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const dir of dirs) {
+    let entries2;
+    try {
+      entries2 = readdirSync2(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries2) {
+      if (isDecidedCandidate(dir, entry)) continue;
+      let raw;
+      try {
+        raw = readFileSync3(join3(dir, entry, "SKILL.md"), "utf8");
+      } catch {
+        continue;
+      }
+      const summary = parseSkillFrontmatter(raw);
+      if (summary && !byName.has(summary.name)) byName.set(summary.name, summary);
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+var BLOCK_SCALAR;
+var init_skill_index = __esm({
+  "src/lib/skill-index.ts"() {
+    "use strict";
+    init_session_state();
+    BLOCK_SCALAR = /^[|>][-+]?\d*$/;
+  }
+});
 
 // src/lib/secrets.ts
-var PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
-var unquote = (value) => value.replace(/^["']|["']$/g, "");
 function isPlaceholderAssignment(match) {
   return PLACEHOLDER_VALUE.test(unquote(match.slice(match.search(/[=:]/) + 1).trim()));
 }
@@ -276,138 +329,9 @@ function isFilePath(value) {
   if (!/^(?:\.{1,2}\/|~\/|\/)/.test(value)) return false;
   return value.lastIndexOf("/") > 0 || /\.[A-Za-z0-9]{1,8}$/.test(value);
 }
-var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
-var SECRET_PATTERNS = [
-  // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
-  // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
-  // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
-  // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
-  { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
-  // PuTTY .ppk keys are not PEM-armored at all. The header used to be anchored to the start
-  // of a line, which excluded the two shapes a session actually shows a key file in: a diff
-  // prefixes every line with `+`, and `cat -n` prefixes it with a number and a tab. Dropping
-  // the anchor without asking for the rest of the FORMAT made the header's name enough, so
-  // prose that merely mentions it became a secret - including two lines of this repository's
-  // own source, which cost a session working on TeamHandbook its own signal.
-  {
-    name: "putty-key",
-    re: /PuTTY-User-Key-File-\d+:[ \t]*\S|Private-Lines:[ \t]*\d|Private-MAC:[ \t]*[0-9a-fA-F]{16}/
-  },
-  { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
-  // Before `aws-access-key`, which would otherwise claim any line carrying the id and hide
-  // that the secret half travelled with it - the credentials CSV the console hands out puts
-  // them in adjacent columns and spells the header with spaces, so no keyword sits next to
-  // the value. The 40-character run has no shape of its own, so it counts only in the
-  // company of an id AND only when it mixes case and digits the way base64 does; a
-  // lowercase sha1 in a release log does not.
-  {
-    name: "aws-secret-near-access-key",
-    re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b[\s\S]{0,300}?(?=[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/]))(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*\d)[A-Za-z0-9+/]{40}/
-  },
-  { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
-  { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
-  { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "gitlab-deploy-token", re: /\bgldt-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "gitlab-runner-token", re: /\bglrt-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
-  { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
-  { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
-  // Before `openai-key`: both open with `sk-`, and whichever runs first is the name the
-  // redaction marker carries. Left second, an Anthropic key - the credential a Claude Code
-  // plugin is likeliest to meet - reads in the log as an OpenAI key and its own rule never
-  // fires, so nobody can tell from the marker whether it is covered at all.
-  { name: "anthropic-api-key", re: /\bsk-ant-[a-z0-9]{3,}-[A-Za-z0-9_-]{20,}\b/ },
-  // The digit is what separates an issued key from a hyphenated English phrase: every key
-  // carries one and "sk-cross-validation-and-scaling" carries none.
-  { name: "openai-key", re: /\bsk-(?:proj-)?(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}\b/ },
-  { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
-  { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
-  // The body excludes `_`, so `hf_hub_download` - the library's own function name - is three
-  // characters long to this rule rather than thirty.
-  { name: "huggingface-token", re: /\bhf_[A-Za-z0-9]{30,}\b/ },
-  { name: "digitalocean-token", re: /\bdop_v1_[a-f0-9]{60,}\b/ },
-  // An issued token is base62 and mixes case with digits; a backup file named after the same
-  // prefix is not - unless it is named in camel case with a year in it, which is why the
-  // extension has to be excluded as well as the lowercase body. (The corpus carries both
-  // filenames; neither is spelled out here, because a prefix followed by a contiguous run is
-  // the shape this repository refuses to hold.)
-  {
-    name: "vault-token",
-    re: /\bhvs\.(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}(?!\.[A-Za-z0-9]{1,8})\b/
-  },
-  { name: "linear-api-key", re: /\blin_api_[A-Za-z0-9]{32,}\b/ },
-  // A lookbehind rather than \b: the token's own home is inside a URL path (`/bot<id>:AA…`),
-  // where the digits follow a letter and \b never matches between two word characters.
-  { name: "telegram-bot-token", re: /(?<!\d)\d{8,10}:AA[A-Za-z0-9_-]{30,}\b/ },
-  // Azure AD writes a fixed `8Q~` into a client secret, three characters in and thirty-four
-  // from the end; the delimiters keep it from matching inside a longer run.
-  {
-    name: "azure-client-secret",
-    re: /(?:^|[\s'"`>=:(,])[A-Za-z0-9_~.-]{3}8Q~[A-Za-z0-9_~.-]{34}(?:$|[\s'"`<),;])/
-  },
-  { name: "azure-storage-key", re: /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/ },
-  { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
-  { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
-  { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
-  // common credential shapes the generic keyword rule misses
-  { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
-  { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
-  { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
-  // Fields whose NAME carries the shape. The value inside them is a bare blob nothing else
-  // here could tell from a digest; the field is what makes it a credential, so the rule asks
-  // for the field and lets the value be shapeless.
-  // The host is what separates the file from a sentence. Asking only for the three words in
-  // order made "Each machine needs login and password set before the first deploy" a
-  // credential, which cost the prompt that carried it, the slice line that quoted it, and
-  // the share of any skill whose documentation said it.
-  //
-  // The dot is a TRADE, not a definition: `machine localhost` and `machine gitlab` are
-  // valid `.netrc` entries and this rule does not see them. It buys that miss because the
-  // sentence shape is common and its cost is silent - a candidate dropped, a skill refused
-  // with "secret" - while a single-label netrc host is a machine-local credential. The
-  // corpus carries the missed shape so the trade stays visible rather than forgotten.
-  {
-    name: "netrc-credential",
-    re: /\bmachine\s+\S*\.\S+\s+login\s+\S+\s+password\s+\S+/i,
-    reject: (m) => isSubstitute(lastToken(m))
-  },
-  { name: "docker-auth-field", re: /["']auth["']\s*:\s*["'][A-Za-z0-9+/]{20,}={0,2}["']/ },
-  { name: "kubeconfig-key-data", re: /\bclient-key-data:\s*[A-Za-z0-9+/]{40,}={0,2}/ },
-  {
-    name: "gcp-private-key-field",
-    re: /["']private_key["']\s*:\s*["'][^"']{40,}["']/,
-    reject: (m) => isSubstitute(m.slice(m.indexOf(":") + 1).trim())
-  },
-  {
-    name: "aws-secret-key",
-    re: /\baws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*["']?[A-Za-z0-9+/]{30,}/i
-  },
-  // A credential handed to a CLI as a flag. `--token-file` and its kind are excluded by the
-  // `[= ]`: a flag NAME that continues past the keyword is a different flag.
-  {
-    name: "cli-credential-flag",
-    re: /\s--?(?:auth[_-]?token|api[_-]?key|access[_-]?token|registration[_-]?token|token|password|secret)[= ]\S{16,}/i,
-    reject: (m) => isSubstitute(lastToken(m))
-  },
-  {
-    // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
-    // which \b cannot match between two word chars.
-    name: "assigned-secret",
-    re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i,
-    reject: isPlaceholderAssignment
-  }
-];
-var GLOBAL_TWIN = new Map(
-  SECRET_PATTERNS.filter((p) => p.reject).map((p) => [
-    p.name,
-    new RegExp(p.re.source, p.re.flags + "g")
-  ])
-);
 function detectSecret(text) {
   return locateSecret(text)?.pattern ?? null;
 }
@@ -424,10 +348,147 @@ function locateSecret(text) {
   }
   return null;
 }
+var PLACEHOLDER_VALUE, unquote, lastToken, SECRET_PATTERNS, GLOBAL_TWIN;
+var init_secrets = __esm({
+  "src/lib/secrets.ts"() {
+    "use strict";
+    PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
+    unquote = (value) => value.replace(/^["']|["']$/g, "");
+    lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
+    SECRET_PATTERNS = [
+      // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
+      // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
+      // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
+      // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
+      { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
+      // PuTTY .ppk keys are not PEM-armored at all. The header used to be anchored to the start
+      // of a line, which excluded the two shapes a session actually shows a key file in: a diff
+      // prefixes every line with `+`, and `cat -n` prefixes it with a number and a tab. Dropping
+      // the anchor without asking for the rest of the FORMAT made the header's name enough, so
+      // prose that merely mentions it became a secret - including two lines of this repository's
+      // own source, which cost a session working on TeamHandbook its own signal.
+      {
+        name: "putty-key",
+        re: /PuTTY-User-Key-File-\d+:[ \t]*\S|Private-Lines:[ \t]*\d|Private-MAC:[ \t]*[0-9a-fA-F]{16}/
+      },
+      { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
+      // Before `aws-access-key`, which would otherwise claim any line carrying the id and hide
+      // that the secret half travelled with it - the credentials CSV the console hands out puts
+      // them in adjacent columns and spells the header with spaces, so no keyword sits next to
+      // the value. The 40-character run has no shape of its own, so it counts only in the
+      // company of an id AND only when it mixes case and digits the way base64 does; a
+      // lowercase sha1 in a release log does not.
+      {
+        name: "aws-secret-near-access-key",
+        re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b[\s\S]{0,300}?(?=[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/]))(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*\d)[A-Za-z0-9+/]{40}/
+      },
+      { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+      { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
+      { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
+      { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
+      { name: "gitlab-deploy-token", re: /\bgldt-[A-Za-z0-9_-]{20,}\b/ },
+      { name: "gitlab-runner-token", re: /\bglrt-[A-Za-z0-9_-]{20,}\b/ },
+      { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+      { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
+      { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
+      // Before `openai-key`: both open with `sk-`, and whichever runs first is the name the
+      // redaction marker carries. Left second, an Anthropic key - the credential a Claude Code
+      // plugin is likeliest to meet - reads in the log as an OpenAI key and its own rule never
+      // fires, so nobody can tell from the marker whether it is covered at all.
+      { name: "anthropic-api-key", re: /\bsk-ant-[a-z0-9]{3,}-[A-Za-z0-9_-]{20,}\b/ },
+      // The digit is what separates an issued key from a hyphenated English phrase: every key
+      // carries one and "sk-cross-validation-and-scaling" carries none.
+      { name: "openai-key", re: /\bsk-(?:proj-)?(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}\b/ },
+      { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
+      { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
+      // The body excludes `_`, so `hf_hub_download` - the library's own function name - is three
+      // characters long to this rule rather than thirty.
+      { name: "huggingface-token", re: /\bhf_[A-Za-z0-9]{30,}\b/ },
+      { name: "digitalocean-token", re: /\bdop_v1_[a-f0-9]{60,}\b/ },
+      // An issued token is base62 and mixes case with digits; a backup file named after the same
+      // prefix is not - unless it is named in camel case with a year in it, which is why the
+      // extension has to be excluded as well as the lowercase body. (The corpus carries both
+      // filenames; neither is spelled out here, because a prefix followed by a contiguous run is
+      // the shape this repository refuses to hold.)
+      {
+        name: "vault-token",
+        re: /\bhvs\.(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}(?!\.[A-Za-z0-9]{1,8})\b/
+      },
+      { name: "linear-api-key", re: /\blin_api_[A-Za-z0-9]{32,}\b/ },
+      // A lookbehind rather than \b: the token's own home is inside a URL path (`/bot<id>:AA…`),
+      // where the digits follow a letter and \b never matches between two word characters.
+      { name: "telegram-bot-token", re: /(?<!\d)\d{8,10}:AA[A-Za-z0-9_-]{30,}\b/ },
+      // Azure AD writes a fixed `8Q~` into a client secret, three characters in and thirty-four
+      // from the end; the delimiters keep it from matching inside a longer run.
+      {
+        name: "azure-client-secret",
+        re: /(?:^|[\s'"`>=:(,])[A-Za-z0-9_~.-]{3}8Q~[A-Za-z0-9_~.-]{34}(?:$|[\s'"`<),;])/
+      },
+      { name: "azure-storage-key", re: /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/ },
+      { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
+      { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
+      { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
+      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+      // common credential shapes the generic keyword rule misses
+      { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
+      { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
+      { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
+      // Fields whose NAME carries the shape. The value inside them is a bare blob nothing else
+      // here could tell from a digest; the field is what makes it a credential, so the rule asks
+      // for the field and lets the value be shapeless.
+      // The host is what separates the file from a sentence. Asking only for the three words in
+      // order made "Each machine needs login and password set before the first deploy" a
+      // credential, which cost the prompt that carried it, the slice line that quoted it, and
+      // the share of any skill whose documentation said it.
+      //
+      // The dot is a TRADE, not a definition: `machine localhost` and `machine gitlab` are
+      // valid `.netrc` entries and this rule does not see them. It buys that miss because the
+      // sentence shape is common and its cost is silent - a candidate dropped, a skill refused
+      // with "secret" - while a single-label netrc host is a machine-local credential. The
+      // corpus carries the missed shape so the trade stays visible rather than forgotten.
+      {
+        name: "netrc-credential",
+        re: /\bmachine\s+\S*\.\S+\s+login\s+\S+\s+password\s+\S+/i,
+        reject: (m) => isSubstitute(lastToken(m))
+      },
+      { name: "docker-auth-field", re: /["']auth["']\s*:\s*["'][A-Za-z0-9+/]{20,}={0,2}["']/ },
+      { name: "kubeconfig-key-data", re: /\bclient-key-data:\s*[A-Za-z0-9+/]{40,}={0,2}/ },
+      {
+        name: "gcp-private-key-field",
+        re: /["']private_key["']\s*:\s*["'][^"']{40,}["']/,
+        reject: (m) => isSubstitute(m.slice(m.indexOf(":") + 1).trim())
+      },
+      {
+        name: "aws-secret-key",
+        re: /\baws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*["']?[A-Za-z0-9+/]{30,}/i
+      },
+      // A credential handed to a CLI as a flag. `--token-file` and its kind are excluded by the
+      // `[= ]`: a flag NAME that continues past the keyword is a different flag.
+      {
+        name: "cli-credential-flag",
+        re: /\s--?(?:auth[_-]?token|api[_-]?key|access[_-]?token|registration[_-]?token|token|password|secret)[= ]\S{16,}/i,
+        reject: (m) => isSubstitute(lastToken(m))
+      },
+      {
+        // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
+        // which \b cannot match between two word chars.
+        name: "assigned-secret",
+        re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i,
+        reject: isPlaceholderAssignment
+      }
+    ];
+    GLOBAL_TWIN = new Map(
+      SECRET_PATTERNS.filter((p) => p.reject).map((p) => [
+        p.name,
+        new RegExp(p.re.source, p.re.flags + "g")
+      ])
+    );
+  }
+});
 
 // src/lib/skill-files.ts
-import { copyFileSync, mkdirSync as mkdirSync2, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname, join as join3 } from "node:path";
+import { copyFileSync, mkdirSync as mkdirSync2, readdirSync as readdirSync3, writeFileSync } from "node:fs";
+import { dirname, join as join4 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -437,14 +498,14 @@ function listSkillFiles(dir) {
   const walk = (current, prefix) => {
     let entries2;
     try {
-      entries2 = readdirSync2(current, { withFileTypes: true });
+      entries2 = readdirSync3(current, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of [...entries2].sort((a, b) => a.name.localeCompare(b.name))) {
       if (prefix === "" && isQueueBookkeeping(entry.name)) continue;
       const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-      if (entry.isDirectory()) walk(join3(current, entry.name), rel);
+      if (entry.isDirectory()) walk(join4(current, entry.name), rel);
       else if (entry.isFile()) files.push(rel);
       else skipped.push(rel);
     }
@@ -454,16 +515,23 @@ function listSkillFiles(dir) {
 }
 function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
   mkdirSync2(destDir, { recursive: true });
-  writeFileSync(join3(destDir, "SKILL.md"), skillMd);
+  writeFileSync(join4(destDir, "SKILL.md"), skillMd);
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
-    const target = join3(destDir, rel);
+    const target = join4(destDir, rel);
     mkdirSync2(dirname(target), { recursive: true });
-    copyFileSync(join3(srcDir, rel), target);
+    copyFileSync(join4(srcDir, rel), target);
   }
 }
+var init_skill_files = __esm({
+  "src/lib/skill-files.ts"() {
+    "use strict";
+  }
+});
 
 // src/lib/queue.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync4 } from "node:fs";
+import { basename as basename2, join as join5 } from "node:path";
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
 }
@@ -472,7 +540,7 @@ function auditSkillDir(sourceDir, host = hostIdentity()) {
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let skillMd;
   try {
-    skillMd = readFileSync3(join4(sourceDir, "SKILL.md"), "utf8");
+    skillMd = readFileSync4(join5(sourceDir, "SKILL.md"), "utf8");
   } catch {
     return { shareable: false, reason: "no-skill-md" };
   }
@@ -486,7 +554,7 @@ function auditSkillDir(sourceDir, host = hostIdentity()) {
   for (const file of files) {
     let content;
     try {
-      content = readFileSync3(join4(sourceDir, file), "utf8");
+      content = readFileSync4(join5(sourceDir, file), "utf8");
     } catch {
       return { shareable: false, reason: "unreadable", detail: file };
     }
@@ -506,7 +574,7 @@ function identityInSkillDir(sourceDir, name = basename2(sourceDir), files = list
   for (const file of files) {
     let content;
     try {
-      content = readFileSync3(join4(sourceDir, file), "utf8");
+      content = readFileSync4(join5(sourceDir, file), "utf8");
     } catch {
       continue;
     }
@@ -556,11 +624,102 @@ function skillRefusalMessage(shownDir, slug, audit) {
       return `${fileLine(audit.secret?.file ?? "", audit.secret?.line)} looks like it contains a secret (${audit.detail}), so ${slug} was not shared. Skills are reviewed and shared as they are, and a redacted one would install and then fail; take the credential out of the skill and try again.`;
   }
 }
+var init_queue = __esm({
+  "src/lib/queue.ts"() {
+    "use strict";
+    init_session_state();
+    init_fs_atomic();
+    init_skill_index();
+    init_secrets();
+    init_identity();
+    init_skill_files();
+  }
+});
 
 // src/lib/score.ts
-var execFileAsync = promisify(execFile);
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync;
+var init_score = __esm({
+  "src/lib/score.ts"() {
+    "use strict";
+    init_session_state();
+    init_config();
+    init_prompt_safety();
+    init_queue();
+    execFileAsync = promisify(execFile);
+  }
+});
+
+// src/lib/skill-format.ts
+function ci(source) {
+  return new RegExp(source, "iu");
+}
+var WORD_CHAR, SPACE, WB2, XML_RE, TRIGGER_RE, ABBREV_RE, SENTENCE_SPLIT_RE, HEAD_RE, FENCE_RE, NUM_HEAD_RE, NUM_ITEM_RE, LIST_ITEM_RE, TABLE_ROW_RE, TABLE_SEP_RE, VERIFY_HEAD_RE, DELIVERY_HEAD_RE, COMMAND_RE, PITFALL_HEAD_RE, ABS_PATH_RE, EMAIL_RE, PATH_TOKEN_RE, PATH_TOKEN_ALL_RE, HEAD_NUMBER_RE, NOT_VISIBLE_HEAD_RE, OPEN_QUESTION_RE, EXEMPT_EXACT_RE;
+var init_skill_format = __esm({
+  "src/lib/skill-format.ts"() {
+    "use strict";
+    WORD_CHAR = "\\p{L}\\p{N}_";
+    SPACE = "\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+    WB2 = `(?:(?<=[${WORD_CHAR}])(?![${WORD_CHAR}])|(?<![${WORD_CHAR}])(?=[${WORD_CHAR}]))`;
+    XML_RE = new RegExp(`<[${SPACE}]*/?[${SPACE}]*[A-Za-z][${WORD_CHAR}-]*([${SPACE}][^<>]*)?>`, "u");
+    TRIGGER_RE = ci(
+      `${WB2}(use when|use whenever|use this when|use for|also when|also use when|should be used when|when the user|triggers?[${SPACE}]*:)`
+    );
+    ABBREV_RE = new RegExp(`${WB2}(e\\.g|i\\.e|etc|vs|cf)\\.`, "giu");
+    SENTENCE_SPLIT_RE = new RegExp(`(?<=[.!?])[${SPACE}]+`, "u");
+    HEAD_RE = new RegExp(`^(#{1,6})[${SPACE}]+(.*)$`, "u");
+    FENCE_RE = new RegExp(`^[${SPACE}]*(\`\`\`|~~~)`, "u");
+    NUM_HEAD_RE = ci(`^[${SPACE}]*(\\p{Nd}+[.)]|step[${SPACE}]+\\p{Nd}+|phase[${SPACE}]+\\p{Nd}+)`);
+    NUM_ITEM_RE = new RegExp(`^[${SPACE}]*\\p{Nd}+[.)][${SPACE}]+[^${SPACE}]`, "u");
+    LIST_ITEM_RE = new RegExp(`^[${SPACE}]*([-*+]|\\p{Nd}+[.)])[${SPACE}]+[^${SPACE}]`, "u");
+    TABLE_ROW_RE = new RegExp(`^[${SPACE}]*\\|.*\\|[${SPACE}]*$`, "u");
+    TABLE_SEP_RE = new RegExp(
+      `^[${SPACE}]*\\|?[${SPACE}]*:?-{3,}:?[${SPACE}]*(\\|[${SPACE}]*:?-{3,}:?[${SPACE}]*)*\\|?[${SPACE}]*$`,
+      "u"
+    );
+    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB2}test`);
+    DELIVERY_HEAD_RE = ci(`deliver|hand-?off|${WB2}done${WB2}|finish`);
+    COMMAND_RE = ci(
+      "```|`[^`\\n]*" + WB2 + "(run|gradlew|npm|npx|pytest|make|git|python3?|node|mvn|go|cargo|bash|\\./)[^`\\n]*`"
+    );
+    PITFALL_HEAD_RE = ci(
+      "pitfall|mistake|gotcha|common (errors|failures|problems)|anti-?pattern|red flags"
+    );
+    ABS_PATH_RE = new RegExp(`(/(?:Users|home)/[^/${SPACE}]+|[A-Za-z]:\\\\Users\\\\)`, "u");
+    EMAIL_RE = new RegExp(`[${WORD_CHAR}.+-]+@[${WORD_CHAR}-]+\\.[A-Za-z]{2,}`, "u");
+    PATH_TOKEN_RE = /[^\s`|()]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|()]*/;
+    PATH_TOKEN_ALL_RE = new RegExp(PATH_TOKEN_RE.source, "g");
+    HEAD_NUMBER_RE = new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}]+)?(\\p{Nd}+)`, "iu");
+    NOT_VISIBLE_HEAD_RE = ci("not visible in history|not visible in the history");
+    OPEN_QUESTION_RE = ci(
+      "\\?|not (recorded|measured|visible|captured|in the evidence|known)|no commit|nothing (in the )?(history|evidence)|does not (say|record|show)|unknown|unclear|is not stated"
+    );
+    EXEMPT_EXACT_RE = ci(
+      "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$"
+    );
+  }
+});
+
+// src/cli/share.ts
+init_config();
+import { resolve as toAbsolutePath } from "node:path";
+import { join as join12 } from "node:path";
+
+// src/lib/init.ts
+import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname2, join as join7 } from "node:path";
 
 // src/lib/distill.ts
+init_session_state();
+init_config();
+init_score();
+init_skill_index();
+init_prompt_safety();
+init_secrets();
 function normalizeRemoteUrl(raw) {
   let s = raw.trim();
   if (!s) return null;
@@ -680,8 +839,10 @@ function forgeNotice(repoUrl, problem) {
 }
 
 // src/lib/branch.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join6 } from "node:path";
+init_identity();
+init_secrets();
 var TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+/;
 function ticketKey(name) {
   return name?.trim().match(TICKET_KEY)?.[0];
@@ -746,7 +907,7 @@ function branchExampleProblem(value) {
 function readTeamBranchExample(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
+    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
   } catch {
     return {};
   }
@@ -780,7 +941,7 @@ function compareVersions(a, b) {
 }
 function readPluginVersion(repoDir) {
   try {
-    const version = JSON.parse(readFileSync4(join5(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
+    const version = JSON.parse(readFileSync5(join6(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
     return typeof version === "string" ? version : void 0;
   } catch {
     return void 0;
@@ -966,6 +1127,11 @@ function unattachedDescriptionLines(description) {
   ];
 }
 
+// src/lib/init.ts
+init_session_state();
+init_config();
+init_fs_atomic();
+
 // src/lib/display-path.ts
 import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
@@ -978,6 +1144,7 @@ function displayPath(path, userHome = homedir3()) {
 }
 
 // src/lib/init.ts
+init_secrets();
 var REMOTE_HELPER = /^[A-Za-z][A-Za-z0-9+.-]*::/;
 function assertSafeGitUrl(url) {
   const u = url.trim();
@@ -1083,7 +1250,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync6(join7(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -1145,7 +1312,11 @@ function runGit(args, cwd) {
   }
 }
 function marketplacesRoot() {
-  return join6(homedir4(), ".claude", "plugins", "marketplaces");
+  return join7(homedir4(), ".claude", "plugins", "marketplaces");
+}
+function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  return team ? join7(root, team.marketplaceName, "skills") : null;
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
@@ -1215,14 +1386,16 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 
 // src/lib/share.ts
 import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync9, readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
+import { readFileSync as readFileSync10, readdirSync as readdirSync7, statSync as statSync2 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { basename as basename4, join as join10 } from "node:path";
+import { basename as basename4, join as join11 } from "node:path";
 
 // src/lib/mcp.ts
-import { readFileSync as readFileSync6 } from "node:fs";
+init_secrets();
+init_identity();
+import { readFileSync as readFileSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
 function isPlainObject(value) {
@@ -1230,12 +1403,12 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join7(dir || homedir5(), ".claude.json");
+  return join8(dir || homedir5(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync6(file, "utf8"));
+    parsed = JSON.parse(readFileSync7(file, "utf8"));
   } catch {
     return [];
   }
@@ -1427,29 +1600,38 @@ function definitionTrace(audit) {
   return `${audit.at ? `its ${audit.at}` : "its definition"} carries ${what} (${audit.detail})`;
 }
 
+// src/lib/share.ts
+init_queue();
+
 // src/lib/publish.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join9 } from "node:path";
+init_session_state();
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, join as join10 } from "node:path";
+init_skill_files();
+init_queue();
 
 // src/lib/commands.ts
-import { readdirSync as readdirSync4, readFileSync as readFileSync7 } from "node:fs";
+init_queue();
+init_secrets();
+init_identity();
+import { readdirSync as readdirSync5, readFileSync as readFileSync8 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename3, join as join8 } from "node:path";
+import { basename as basename3, join as join9 } from "node:path";
 function localCommandDirs(userHome = homedir6(), cwd = process.cwd()) {
   return [
-    { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
-    { dir: join8(cwd, ".claude", "commands"), scope: "project" }
+    { dir: join9(userHome, ".claude", "commands"), scope: "personal" },
+    { dir: join9(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
 function commandsIn(dir, namespace = []) {
   let entries2;
   try {
-    entries2 = readdirSync4(dir, { withFileTypes: true });
+    entries2 = readdirSync5(dir, { withFileTypes: true });
   } catch {
     return [];
   }
   return entries2.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap((entry) => {
-    const path = join8(dir, entry.name);
+    const path = join9(dir, entry.name);
     if (entry.isDirectory()) return commandsIn(path, [...namespace, entry.name]);
     if (!entry.isFile() || !entry.name.endsWith(".md")) return [];
     return [{ name: [...namespace, basename3(entry.name, ".md")].join(":"), file: path }];
@@ -1477,7 +1659,7 @@ function auditCommand(file, name = basename3(file, ".md")) {
   const where = commandFile(name);
   let content;
   try {
-    content = readFileSync7(file, "utf8");
+    content = readFileSync8(file, "utf8");
   } catch {
     return { shareable: false, reason: "unreadable", detail: where };
   }
@@ -1520,9 +1702,9 @@ function mayUpdate(options, name) {
   return options.update === true || Array.isArray(options.update) && options.update.includes(name);
 }
 function bumpPluginVersion(repoDir, past = []) {
-  const file = join9(repoDir, ".claude-plugin", "plugin.json");
+  const file = join10(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const plugin = JSON.parse(readFileSync8(file, "utf8"));
+    const plugin = JSON.parse(readFileSync9(file, "utf8"));
     const current = String(plugin.version ?? "0.1.0");
     const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
@@ -1800,7 +1982,7 @@ function commandCollisionMessage(name) {
 }
 function namesIn(dir) {
   try {
-    return readdirSync5(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    return readdirSync6(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch {
     return [];
   }
@@ -1812,14 +1994,14 @@ function teamAssets(team, git = runGit) {
     return null;
   }
   const workdir = handbookWorkdir("handbook-index-");
-  const repoDir = join9(workdir, "repo");
+  const repoDir = join10(workdir, "repo");
   try {
     if (cloneTeamRepo(git, team.repoUrl, repoDir, workdir)) return null;
-    const mcpFile = join9(repoDir, TEAM_MCP_FILE);
+    const mcpFile = join10(repoDir, TEAM_MCP_FILE);
     return {
-      skills: namesIn(join9(repoDir, "skills")),
-      servers: declaredServerNames(existsSync4(mcpFile) ? readFileSync8(mcpFile, "utf8") : null),
-      commands: commandsIn(join9(repoDir, TEAM_COMMANDS_DIR)).map((command) => command.name)
+      skills: namesIn(join10(repoDir, "skills")),
+      servers: declaredServerNames(existsSync4(mcpFile) ? readFileSync9(mcpFile, "utf8") : null),
+      commands: commandsIn(join10(repoDir, TEAM_COMMANDS_DIR)).map((command) => command.name)
     };
   } catch {
     return null;
@@ -1906,20 +2088,20 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, refused, error: identity.error };
   const workdir = handbookWorkdir("handbook-mcp-");
-  const repoDir = join9(workdir, "repo");
+  const repoDir = join10(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
-    const target = join9(repoDir, TEAM_MCP_FILE);
+    const target = join10(repoDir, TEAM_MCP_FILE);
     let merged = "";
     let collided = [];
     let replacedServers = [];
     if (subjects.length) {
       try {
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
-          existsSync4(target) ? readFileSync8(target, "utf8") : null,
+          existsSync4(target) ? readFileSync9(target, "utf8") : null,
           subjects.map((s) => s.entry),
           (name) => mayUpdate(options, name)
         ));
@@ -1936,7 +2118,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingCommands = [];
     const replacedCommands = [];
     for (const command of commands) {
-      if (existsSync4(join9(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name)))) {
+      if (existsSync4(join10(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name)))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1954,7 +2136,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingSkills = [];
     const replacedSkills = [];
     for (const skill of skills) {
-      if (existsSync4(join9(repoDir, TEAM_SKILLS_DIR, skill.name))) {
+      if (existsSync4(join10(repoDir, TEAM_SKILLS_DIR, skill.name))) {
         if (!mayUpdate(options, skill.name)) {
           collisions.push(skillCollisionMessage(skill.name, false));
           refused.push({
@@ -2006,12 +2188,12 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync3(target, merged);
       for (const command of goingCommands) {
-        const file = join9(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name));
+        const file = join10(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name));
         mkdirSync5(dirname3(file), { recursive: true });
         writeFileSync3(file, command.content);
       }
       for (const skill of goingSkills) {
-        const dest = join9(repoDir, TEAM_SKILLS_DIR, skill.name);
+        const dest = join10(repoDir, TEAM_SKILLS_DIR, skill.name);
         if (replacedSkills.includes(skill.name)) rmSync2(dest, { recursive: true, force: true });
         copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
@@ -2061,11 +2243,98 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
   }
 }
 
+// src/lib/draft.ts
+init_identity();
+init_prompt_safety();
+
+// src/lib/mine.ts
+init_secrets();
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/draft.ts
+init_secrets();
+var WORD = "\\p{L}\\p{N}_";
+var WB = `(?:(?<=[${WORD}])(?![${WORD}])|(?<![${WORD}])(?=[${WORD}]))`;
+
+// src/lib/skill-health.ts
+init_queue();
+init_session_state();
+
+// src/lib/session-workflow.ts
+init_config();
+
+// src/lib/counters.ts
+init_session_state();
+init_fs_atomic();
+
+// src/lib/session-workflow.ts
+init_identity();
+init_secrets();
+
+// src/lib/signals.ts
+init_session_state();
+init_secrets();
+
+// src/lib/session-workflow.ts
+init_fs_atomic();
+init_session_state();
+
+// src/lib/skill-health.ts
+init_skill_format();
+init_skill_index();
+
+// src/lib/usage.ts
+init_fs_atomic();
+init_queue();
+init_session_state();
+init_skill_index();
+
+// src/lib/skill-health.ts
+var FILLER = new Set(
+  "a about after again all also an and any are as at be been before being both but by can could did do does doing done each either for from had has have having how if in into is it its itself just may might more most must no nor not now of off on once one only or other our out over own same should so some such than that the their them then there these they this those through to too under until up upon very was we were what when whenever where whether which while who whom why will with within without would you your yours use used uses using also trigger triggers skill skills request requests asks asked something someone thing things way e g eg etc via new instead like want wants need needs make makes made get gets".split(" ")
+);
+function triggerWords(description) {
+  const words = /* @__PURE__ */ new Set();
+  for (const match of description.toLowerCase().matchAll(/[\p{L}\p{N}]+/gu)) {
+    let word = match[0];
+    if (word.length < 3 || FILLER.has(word)) continue;
+    if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) word = word.slice(0, -1);
+    words.add(word);
+  }
+  return words;
+}
+function wordOverlap(a, b) {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const word of a) if (b.has(word)) shared++;
+  return Number((shared / (a.size + b.size - shared)).toFixed(3));
+}
+var OVERLAP_THRESHOLD = 0.25;
+function overlappingSkills(named, others, threshold = OVERLAP_THRESHOLD) {
+  const words = /* @__PURE__ */ new Map();
+  const wordsOf = (skill) => {
+    let set = words.get(skill.description);
+    if (!set) words.set(skill.description, set = triggerWords(skill.description));
+    return set;
+  };
+  const result = /* @__PURE__ */ new Map();
+  for (const skill of named) {
+    const hits = others.filter((other) => other.name !== skill.name).map((other) => ({ name: other.name, score: wordOverlap(wordsOf(skill), wordsOf(other)) })).filter((hit) => hit.score >= threshold).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    result.set(skill.name, [...new Set(hits.map((hit) => hit.name))]);
+  }
+  return result;
+}
+
 // src/lib/share.ts
+init_skill_index();
+init_skill_files();
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join10(paths.userHome ?? homedir7(), ".claude", "skills"), scope: "personal" },
-    { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
+    { dir: join11(paths.userHome ?? homedir7(), ".claude", "skills"), scope: "personal" },
+    { dir: join11(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
 function isDirectory(path) {
@@ -2121,14 +2390,21 @@ function buildInventory(paths = {}, teamHas = null) {
   for (const { dir, scope } of localSkillDirs(paths)) {
     let entries2;
     try {
-      entries2 = readdirSync6(dir);
+      entries2 = readdirSync7(dir);
     } catch {
       continue;
     }
     for (const entry of entries2.sort()) {
-      if (!isDirectory(join10(dir, entry))) continue;
-      byName.set(entry, onTeam(readSkillDir(join10(dir, entry), scope), teamHas?.skills));
+      if (!isDirectory(join11(dir, entry))) continue;
+      byName.set(entry, onTeam(readSkillDir(join11(dir, entry), scope), teamHas?.skills));
     }
+  }
+  const skills = [...byName.values()];
+  const others = [...skills, ...paths.teamSkills ? listExistingSkills([paths.teamSkills]) : []];
+  const overlaps = overlappingSkills(skills.filter((s) => s.shareable), others);
+  for (const skill of skills) {
+    const names = overlaps.get(skill.name);
+    if (names?.length) skill.overlaps = names;
   }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers)
@@ -2136,7 +2412,7 @@ function buildInventory(paths = {}, teamHas = null) {
   const commands = readLocalCommands(paths.userHome ?? homedir7(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(commandItem(entry, auditCommand(entry.file, entry.name)), teamHas?.commands)
   );
-  return { skills: [...byName.values()], servers, commands };
+  return { skills, servers, commands };
 }
 var DESCRIPTION_CHARS = 150;
 function oneLine(text) {
@@ -2171,6 +2447,9 @@ function formatInventory(inv, forge, duplicates = NO_DUPLICATES) {
       const state = skill.shareable ? onTeamNote(skill) : `  not shareable: ${skill.reason}`;
       lines.push(`  ${i + 1}. ${skill.name}  [${skill.scope}]${state}`);
       if (skill.shareable) lines.push(`     ${oneLine(skill.description) || "(no description)"}`);
+      if (skill.overlaps?.length) {
+        lines.push(`     overlaps ${skill.overlaps.join(", ")}: a request that reaches one may reach the other`);
+      }
     });
   }
   if (inv.servers.length) {
@@ -2360,7 +2639,7 @@ function formatPick(result) {
 var NO_DUPLICATES = { copies: [], release: null };
 function pluginRelease(pluginDir) {
   try {
-    const manifest = JSON.parse(readFileSync9(join10(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync10(join11(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
     return typeof manifest?.name === "string" && typeof manifest?.version === "string" ? { name: manifest.name, version: manifest.version } : null;
   } catch {
     return null;
@@ -2375,14 +2654,14 @@ function skillDigest(dir) {
   const { files, skipped } = listSkillFiles(dir);
   if (skipped.length || !files.length) return null;
   try {
-    return digest(files.flatMap((file) => [file, readFileSync9(join10(dir, file))]));
+    return digest(files.flatMap((file) => [file, readFileSync10(join11(dir, file))]));
   } catch {
     return null;
   }
 }
 function fileDigest(file) {
   try {
-    return digest([readFileSync9(file)]);
+    return digest([readFileSync10(file)]);
   } catch {
     return null;
   }
@@ -2400,7 +2679,7 @@ function duplicateCopies(inv, pluginDir, paths = {}) {
   const found = [];
   for (const skill of inv.skills) {
     if (skill.scope !== "personal") continue;
-    const theirs = join10(pluginDir, "skills", skill.name);
+    const theirs = join11(pluginDir, "skills", skill.name);
     if (!isDirectory(theirs)) continue;
     const mine = skillDigest(skill.dir);
     if (mine && mine === skillDigest(theirs)) {
@@ -2409,7 +2688,7 @@ function duplicateCopies(inv, pluginDir, paths = {}) {
   }
   let declared = {};
   try {
-    declared = declaredServers(readFileSync9(join10(pluginDir, ".mcp.json"), "utf8"));
+    declared = declaredServers(readFileSync10(join11(pluginDir, ".mcp.json"), "utf8"));
   } catch {
   }
   for (const server of inv.servers) {
@@ -2421,7 +2700,7 @@ function duplicateCopies(inv, pluginDir, paths = {}) {
   for (const command of inv.commands) {
     if (command.scope !== "personal") continue;
     const mine = fileDigest(command.file);
-    if (mine && mine === fileDigest(join10(pluginDir, "commands", commandFile(command.name)))) {
+    if (mine && mine === fileDigest(join11(pluginDir, "commands", commandFile(command.name)))) {
       found.push({ kind: "command", name: command.name, remove: `rm ${shown(command.file)}` });
     }
   }
@@ -2622,7 +2901,7 @@ function formatShareResult(result, marketplaceName, duplicates = NO_DUPLICATES) 
 
 // src/cli/share.ts
 function duplicatesOf(inv, team) {
-  return team ? duplicateCopies(inv, join11(marketplacesRoot(), team.marketplaceName)) : void 0;
+  return team ? duplicateCopies(inv, join12(marketplacesRoot(), team.marketplaceName)) : void 0;
 }
 function usage() {
   console.error(
@@ -2710,7 +2989,7 @@ function main() {
   if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     const config = loadTeamConfig();
-    const inv2 = buildInventory({}, config ? teamAssets(config) : null);
+    const inv2 = buildInventory({ teamSkills: teamSkillsDir() }, config ? teamAssets(config) : null);
     console.log(formatInventory(inv2, forgeLine(config), duplicatesOf(inv2, config)));
     if (!config) {
       console.log(

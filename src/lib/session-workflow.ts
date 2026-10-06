@@ -638,3 +638,38 @@ export function recentWorkflowSessions(
   }
   return { recognized: recognized.size, matched: matched.size };
 }
+
+/**
+ * Recognized sessions per mined workflow over the last `days`, each session counted once. What
+ * lets a skill drafted from a workflow say "the work was done n times" beside "the skill was
+ * called m times", so a skill that never fires can be told from work that never happened.
+ */
+export function sessionsByShape(
+  home: string = handbookHome(),
+  now: number = Date.now(),
+  days = 30,
+): Map<string, number> {
+  let raw: string;
+  try {
+    raw = readFileSync(workflowsFile(home), "utf8");
+  } catch {
+    return new Map();
+  }
+  const since = now - days * 86_400_000;
+  const sessions = new Map<string, Set<string>>();
+  for (const text of raw.split("\n")) {
+    if (!text.trim()) continue;
+    let line: Partial<WorkflowLine>;
+    try {
+      line = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    const at = Date.parse(line.ts ?? "");
+    if (typeof line.session !== "string" || typeof line.shape !== "string" || !Number.isFinite(at) || at < since) continue;
+    const seen = sessions.get(line.shape) ?? new Set<string>();
+    seen.add(line.session);
+    sessions.set(line.shape, seen);
+  }
+  return new Map([...sessions].map(([shape, seen]) => [shape, seen.size]));
+}

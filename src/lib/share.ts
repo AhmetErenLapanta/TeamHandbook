@@ -22,6 +22,8 @@ import type { GitRunner, TeamConfig } from "./init.js";
 import { forgeNotice, forgeSignInProblem, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import { unattachedDescriptionLines } from "./branch.js";
+import { overlappingSkills } from "./skill-health.js";
+import { listExistingSkills } from "./skill-index.js";
 import { listSkillFiles } from "./skill-files.js";
 import { displayPath } from "./display-path.js";
 
@@ -78,6 +80,8 @@ export interface SkillItem extends OnTeam {
   shareable: boolean;
   /** why it cannot travel as it stands, phrased for someone reading a list */
   reason?: string;
+  /** other skills, here or on the team, whose descriptions answer the same requests */
+  overlaps?: string[];
 }
 
 export interface ServerItem extends OnTeam {
@@ -140,6 +144,11 @@ export interface InventoryPaths {
   userHome?: string;
   /** Claude Code's own config file, which holds the MCP servers */
   configFile?: string;
+  /**
+   * The team repository's skills as this machine's copy of it holds them, for the overlap
+   * warning. Read from disk rather than asked of the repository, so the warning costs no request.
+   */
+  teamSkills?: string | null;
 }
 
 /**
@@ -261,13 +270,22 @@ export function buildInventory(paths: InventoryPaths = {}, teamHas: TeamAssets |
       byName.set(entry, onTeam(readSkillDir(join(dir, entry), scope), teamHas?.skills));
     }
   }
+  // A warning, never a refusal: two skills that answer the same sentence split the routing
+  // between them, and which one should give way is the manager's call, made on this screen.
+  const skills = [...byName.values()];
+  const others = [...skills, ...(paths.teamSkills ? listExistingSkills([paths.teamSkills]) : [])];
+  const overlaps = overlappingSkills(skills.filter((s) => s.shareable), others);
+  for (const skill of skills) {
+    const names = overlaps.get(skill.name);
+    if (names?.length) skill.overlaps = names;
+  }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(serverItem(entry, auditServer(entry.config)), teamHas?.servers),
   );
   const commands = readLocalCommands(paths.userHome ?? homedir(), paths.cwd ?? process.cwd()).map((entry) =>
     onTeam(commandItem(entry, auditCommand(entry.file, entry.name)), teamHas?.commands),
   );
-  return { skills: [...byName.values()], servers, commands };
+  return { skills, servers, commands };
 }
 
 // Long enough to tell two skills apart, short enough that twenty-two of them still read
@@ -336,6 +354,9 @@ export function formatInventory(inv: Inventory, forge?: string, duplicates: Dupl
       const state = skill.shareable ? onTeamNote(skill) : `  not shareable: ${skill.reason}`;
       lines.push(`  ${i + 1}. ${skill.name}  [${skill.scope}]${state}`);
       if (skill.shareable) lines.push(`     ${oneLine(skill.description) || "(no description)"}`);
+      if (skill.overlaps?.length) {
+        lines.push(`     overlaps ${skill.overlaps.join(", ")}: a request that reaches one may reach the other`);
+      }
     });
   }
   if (inv.servers.length) {

@@ -1,13 +1,19 @@
-// src/lib/doctor.ts
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join10 } from "node:path";
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+
+// src/lib/fs-atomic.ts
+var init_fs_atomic = __esm({
+  "src/lib/fs-atomic.ts"() {
+    "use strict";
+  }
+});
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
@@ -20,10 +26,640 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
-var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
-var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
+var EDIT_ATTACH_WINDOW_MS, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
+var init_session_state = __esm({
+  "src/lib/session-state.ts"() {
+    "use strict";
+    init_fs_atomic();
+    EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+    SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+    SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
+  }
+});
+
+// src/lib/config.ts
+import { existsSync, readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join3(home, "config.json");
+}
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync3(configFile(home), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync3(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
+  }
+}
+var init_config = __esm({
+  "src/lib/config.ts"() {
+    "use strict";
+    init_session_state();
+  }
+});
+
+// src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return locateIdentity(text, host)?.class ?? null;
+}
+function locateIdentity(text, host = hostIdentity()) {
+  const first = traces(text, host)[0];
+  return first ? { class: first.class, index: first.index } : null;
+}
+var GENERIC_ACCOUNT, MIN_NAME_CHARS, HOME_PATH, EMAIL, ROLE_MAILBOX, RESERVED_DOMAIN, ROLE_MAILBOX_DOMAIN, FORGE_OWNER_BEFORE, escapeRe, cached;
+var init_identity = __esm({
+  "src/lib/identity.ts"() {
+    "use strict";
+    GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+      "user",
+      "users",
+      "username",
+      "you",
+      "me",
+      "home",
+      "root",
+      "admin",
+      "administrator",
+      "runner",
+      "ubuntu",
+      "debian",
+      "alpine",
+      "docker",
+      "container",
+      "node",
+      "vscode",
+      "devcontainer",
+      "codespace",
+      "shared",
+      "public",
+      "dev",
+      "developer",
+      "test",
+      "build",
+      "builder",
+      "ci",
+      "jenkins",
+      "deploy",
+      "app",
+      "service",
+      "worker",
+      "git",
+      "www-data",
+      "nobody"
+    ]);
+    MIN_NAME_CHARS = 4;
+    HOME_PATH = new RegExp(
+      "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+      "g"
+    );
+    EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+    ROLE_MAILBOX = /* @__PURE__ */ new Set([
+      "admin",
+      "bot",
+      "build",
+      "builder",
+      "ci",
+      "deploy",
+      "git",
+      "infra",
+      "jenkins",
+      "no-reply",
+      "noreply",
+      "ops",
+      "platform",
+      "release",
+      "root",
+      "security",
+      "support",
+      "team"
+    ]);
+    RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+    ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+    FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+    escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    cached = null;
+  }
+});
+
+// src/lib/prompt-safety.ts
+var LINE_TERMINATOR_CLASS, LINE_TERMINATORS, LABEL_BREAKS;
+var init_prompt_safety = __esm({
+  "src/lib/prompt-safety.ts"() {
+    "use strict";
+    init_identity();
+    LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+    LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+    LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+  }
+});
+
+// src/lib/skill-index.ts
+var init_skill_index = __esm({
+  "src/lib/skill-index.ts"() {
+    "use strict";
+    init_session_state();
+  }
+});
+
+// src/lib/secrets.ts
+function isPlaceholderAssignment(match) {
+  return PLACEHOLDER_VALUE.test(unquote(match.slice(match.search(/[=:]/) + 1).trim()));
+}
+function isSubstitute(value) {
+  const bare = unquote(value);
+  return /^[$<{]/.test(bare) || /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(bare) || isFilePath(bare);
+}
+function isFilePath(value) {
+  if (!/^(?:\.{1,2}\/|~\/|\/)/.test(value)) return false;
+  return value.lastIndexOf("/") > 0 || /\.[A-Za-z0-9]{1,8}$/.test(value);
+}
+function isWordsNotToken(match) {
+  return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
+}
+function detectSecret(text) {
+  return locateSecret(text)?.pattern ?? null;
+}
+function locateSecret(text) {
+  for (const { name, re, reject } of SECRET_PATTERNS) {
+    if (!reject) {
+      const match = re.exec(text);
+      if (match) return { pattern: name, index: match.index };
+      continue;
+    }
+    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
+      if (!reject(match[0])) return { pattern: name, index: match.index };
+    }
+  }
+  return null;
+}
+var PLACEHOLDER_VALUE, unquote, lastToken, SECRET_PATTERNS, GLOBAL_TWIN;
+var init_secrets = __esm({
+  "src/lib/secrets.ts"() {
+    "use strict";
+    PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
+    unquote = (value) => value.replace(/^["']|["']$/g, "");
+    lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
+    SECRET_PATTERNS = [
+      // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
+      // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
+      // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
+      // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
+      { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
+      // PuTTY .ppk keys are not PEM-armored at all. The header used to be anchored to the start
+      // of a line, which excluded the two shapes a session actually shows a key file in: a diff
+      // prefixes every line with `+`, and `cat -n` prefixes it with a number and a tab. Dropping
+      // the anchor without asking for the rest of the FORMAT made the header's name enough, so
+      // prose that merely mentions it became a secret - including two lines of this repository's
+      // own source, which cost a session working on TeamHandbook its own signal.
+      {
+        name: "putty-key",
+        re: /PuTTY-User-Key-File-\d+:[ \t]*\S|Private-Lines:[ \t]*\d|Private-MAC:[ \t]*[0-9a-fA-F]{16}/
+      },
+      { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
+      // Before `aws-access-key`, which would otherwise claim any line carrying the id and hide
+      // that the secret half travelled with it - the credentials CSV the console hands out puts
+      // them in adjacent columns and spells the header with spaces, so no keyword sits next to
+      // the value. The 40-character run has no shape of its own, so it counts only in the
+      // company of an id AND only when it mixes case and digits the way base64 does; a
+      // lowercase sha1 in a release log does not.
+      {
+        name: "aws-secret-near-access-key",
+        re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b[\s\S]{0,300}?(?=[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/]))(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*\d)[A-Za-z0-9+/]{40}/
+      },
+      { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+      { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
+      { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
+      { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
+      { name: "gitlab-deploy-token", re: /\bgldt-[A-Za-z0-9_-]{20,}\b/ },
+      { name: "gitlab-runner-token", re: /\bglrt-[A-Za-z0-9_-]{20,}\b/ },
+      { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+      { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
+      { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
+      // Before `openai-key`: both open with `sk-`, and whichever runs first is the name the
+      // redaction marker carries. Left second, an Anthropic key - the credential a Claude Code
+      // plugin is likeliest to meet - reads in the log as an OpenAI key and its own rule never
+      // fires, so nobody can tell from the marker whether it is covered at all.
+      { name: "anthropic-api-key", re: /\bsk-ant-[a-z0-9]{3,}-[A-Za-z0-9_-]{20,}\b/ },
+      // The digit is what separates an issued key from a hyphenated English phrase: every key
+      // carries one and "sk-cross-validation-and-scaling" carries none.
+      { name: "openai-key", re: /\bsk-(?:proj-)?(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}\b/ },
+      { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
+      { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
+      // The body excludes `_`, so `hf_hub_download` - the library's own function name - is three
+      // characters long to this rule rather than thirty.
+      { name: "huggingface-token", re: /\bhf_[A-Za-z0-9]{30,}\b/ },
+      { name: "digitalocean-token", re: /\bdop_v1_[a-f0-9]{60,}\b/ },
+      // An issued token is base62 and mixes case with digits; a backup file named after the same
+      // prefix is not - unless it is named in camel case with a year in it, which is why the
+      // extension has to be excluded as well as the lowercase body. (The corpus carries both
+      // filenames; neither is spelled out here, because a prefix followed by a contiguous run is
+      // the shape this repository refuses to hold.)
+      {
+        name: "vault-token",
+        re: /\bhvs\.(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}(?!\.[A-Za-z0-9]{1,8})\b/
+      },
+      { name: "linear-api-key", re: /\blin_api_[A-Za-z0-9]{32,}\b/ },
+      // A lookbehind rather than \b: the token's own home is inside a URL path (`/bot<id>:AA…`),
+      // where the digits follow a letter and \b never matches between two word characters.
+      { name: "telegram-bot-token", re: /(?<!\d)\d{8,10}:AA[A-Za-z0-9_-]{30,}\b/ },
+      // Azure AD writes a fixed `8Q~` into a client secret, three characters in and thirty-four
+      // from the end; the delimiters keep it from matching inside a longer run.
+      {
+        name: "azure-client-secret",
+        re: /(?:^|[\s'"`>=:(,])[A-Za-z0-9_~.-]{3}8Q~[A-Za-z0-9_~.-]{34}(?:$|[\s'"`<),;])/
+      },
+      { name: "azure-storage-key", re: /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/ },
+      { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
+      { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
+      { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
+      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+      // common credential shapes the generic keyword rule misses
+      { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
+      { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
+      { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
+      // Fields whose NAME carries the shape. The value inside them is a bare blob nothing else
+      // here could tell from a digest; the field is what makes it a credential, so the rule asks
+      // for the field and lets the value be shapeless.
+      // The host is what separates the file from a sentence. Asking only for the three words in
+      // order made "Each machine needs login and password set before the first deploy" a
+      // credential, which cost the prompt that carried it, the slice line that quoted it, and
+      // the share of any skill whose documentation said it.
+      //
+      // The dot is a TRADE, not a definition: `machine localhost` and `machine gitlab` are
+      // valid `.netrc` entries and this rule does not see them. It buys that miss because the
+      // sentence shape is common and its cost is silent - a candidate dropped, a skill refused
+      // with "secret" - while a single-label netrc host is a machine-local credential. The
+      // corpus carries the missed shape so the trade stays visible rather than forgotten.
+      {
+        name: "netrc-credential",
+        re: /\bmachine\s+\S*\.\S+\s+login\s+\S+\s+password\s+\S+/i,
+        reject: (m) => isSubstitute(lastToken(m))
+      },
+      { name: "docker-auth-field", re: /["']auth["']\s*:\s*["'][A-Za-z0-9+/]{20,}={0,2}["']/ },
+      { name: "kubeconfig-key-data", re: /\bclient-key-data:\s*[A-Za-z0-9+/]{40,}={0,2}/ },
+      {
+        name: "gcp-private-key-field",
+        re: /["']private_key["']\s*:\s*["'][^"']{40,}["']/,
+        reject: (m) => isSubstitute(m.slice(m.indexOf(":") + 1).trim())
+      },
+      {
+        name: "aws-secret-key",
+        re: /\baws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*["']?[A-Za-z0-9+/]{30,}/i
+      },
+      // A credential handed to a CLI as a flag. `--token-file` and its kind are excluded by the
+      // `[= ]`: a flag NAME that continues past the keyword is a different flag.
+      {
+        name: "cli-credential-flag",
+        re: /\s--?(?:auth[_-]?token|api[_-]?key|access[_-]?token|registration[_-]?token|token|password|secret)[= ]\S{16,}/i,
+        reject: (m) => isSubstitute(lastToken(m))
+      },
+      {
+        // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
+        // which \b cannot match between two word chars.
+        name: "assigned-secret",
+        re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i,
+        reject: isPlaceholderAssignment
+      }
+    ];
+    GLOBAL_TWIN = new Map(
+      SECRET_PATTERNS.filter((p) => p.reject).map((p) => [
+        p.name,
+        new RegExp(p.re.source, p.re.flags + "g")
+      ])
+    );
+  }
+});
+
+// src/lib/skill-files.ts
+var init_skill_files = __esm({
+  "src/lib/skill-files.ts"() {
+    "use strict";
+  }
+});
+
+// src/lib/queue.ts
+var init_queue = __esm({
+  "src/lib/queue.ts"() {
+    "use strict";
+    init_session_state();
+    init_fs_atomic();
+    init_skill_index();
+    init_secrets();
+    init_identity();
+    init_skill_files();
+  }
+});
+
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join4 } from "node:path";
+import { promisify } from "node:util";
+function loadScoreConfig(home = handbookHome()) {
+  const gate = readConfigFile(home).gate;
+  return {
+    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
+    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
+    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
+  };
+}
+function declaredOptions(helpText) {
+  const rows = [];
+  for (const line of helpText.split("\n")) {
+    const match = /^(\s*)-\S/.exec(line);
+    if (match) rows.push({ indent: match[1].length, text: line });
+  }
+  if (rows.length === 0) return /* @__PURE__ */ new Set();
+  const column = Math.min(...rows.map((r) => r.indent));
+  const options = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    if (row.indent > column + 1) continue;
+    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
+    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
+  }
+  return options;
+}
+function childIsolationArgsFor(helpText) {
+  const declared = declaredOptions(helpText);
+  if (declared.size === 0) {
+    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
+  }
+  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
+}
+function helpFormatRecognized(helpText) {
+  return declaredOptions(helpText).size > 0;
+}
+function childEnv(source = process.env) {
+  const env = {};
+  const designated = source.CLAUDE_CODE_HOST_AUTH_ENV_VAR;
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    if (CHILD_ENV_NEVER.includes(name)) continue;
+    if (name.startsWith("CLAUDE_")) {
+      if (CHILD_ENV_CLAUDE_ALLOW.has(name)) env[name] = value;
+      continue;
+    }
+    if (CHILD_ENV_EXACT.has(name) || name === designated || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p))) {
+      env[name] = value;
+    }
+  }
+  return env;
+}
+function childInvocation(input) {
+  const args = ["-p", input.prompt];
+  if (input.model) args.push("--model", input.model);
+  args.push(...childIsolationArgsFor(input.helpText));
+  const cwd = mkdtempSync2(join4(tmpdir2(), "teamhandbook-child-"));
+  return {
+    args,
+    env: childEnv(),
+    cwd,
+    done: () => rmSync2(cwd, { recursive: true, force: true })
+  };
+}
+var execFileAsync, defaultScoreConfig, CHILD_ISOLATION_ARGS, CHILD_ISOLATION_FLAGS, CHILD_ENV_EXACT, CHILD_ENV_PREFIXES, CHILD_ENV_CLAUDE_ALLOW, CHILD_ENV_NEVER;
+var init_score = __esm({
+  "src/lib/score.ts"() {
+    "use strict";
+    init_session_state();
+    init_config();
+    init_prompt_safety();
+    init_queue();
+    execFileAsync = promisify(execFile);
+    defaultScoreConfig = {
+      model: "haiku",
+      threshold: 7,
+      timeoutMs: 6e4
+    };
+    CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
+    CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
+    CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
+      // where the CLI, node and its config live
+      "PATH",
+      "HOME",
+      "USER",
+      "SHELL",
+      "TMPDIR",
+      "LANG",
+      "TZ",
+      // the Windows spelling of the same things
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "SystemRoot",
+      "SystemDrive",
+      "COMSPEC",
+      "PATHEXT",
+      // Windows spells the temp directory with these, not TMPDIR
+      "TEMP",
+      "TMP",
+      // how it reaches the network at all, on a machine behind a proxy
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      // how it trusts that network, where TLS is intercepted by a corporate CA
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "NODE_EXTRA_CA_CERTS",
+      "REQUESTS_CA_BUNDLE",
+      // which region a Vertex deployment answers on
+      "CLOUD_ML_REGION",
+      // which handbook home this call belongs to
+      "TEAMHANDBOOK_HOME"
+    ]);
+    CHILD_ENV_PREFIXES = [
+      "LC_",
+      "ANTHROPIC_",
+      "AWS_",
+      "GOOGLE_",
+      "GCLOUD_",
+      "CLOUDSDK_",
+      "AZURE_"
+    ];
+    CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
+      // which backend answers at all
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      // where the CLI's own config lives
+      "CLAUDE_CONFIG_DIR",
+      // the credentials it presents
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+      "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+      "CLAUDE_CODE_CLIENT_KEY",
+      "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+      "CLAUDE_CODE_HOST_CREDS_FILE",
+      // names ANOTHER variable that holds the credential; the name it points at is allowed
+      // too, below, because the CLI itself designates it
+      "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+      // a gateway in front of the backend: the token it wants, and the six switches that say
+      // "do not sign this request yourself, the gateway did". Without these a gateway install
+      // tries to sign with SigV4 it does not have and the call fails - measured as the failure
+      // mode of the previous, shorter list.
+      "CLAUDE_CODE_GATEWAY_TOKEN",
+      "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+      "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+      "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+      "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+      "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+      "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+      "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+      // which endpoint, and how to get through the proxy in front of it
+      "CLAUDE_CODE_API_BASE_URL",
+      "CLAUDE_CODE_HTTP_PROXY",
+      "CLAUDE_CODE_HTTPS_PROXY",
+      "CLAUDE_CODE_PROXY_AUTHENTICATE",
+      "CLAUDE_CODE_ENABLE_PROXY_AUTH_HELPER"
+    ]);
+    CHILD_ENV_NEVER = [
+      "NODE_OPTIONS",
+      "NODE_TLS_REJECT_UNAUTHORIZED"
+    ];
+  }
+});
+
+// src/lib/skill-format.ts
+function ci(source) {
+  return new RegExp(source, "iu");
+}
+var WORD_CHAR, SPACE, WB2, XML_RE, TRIGGER_RE, ABBREV_RE, SENTENCE_SPLIT_RE, HEAD_RE, FENCE_RE, NUM_HEAD_RE, NUM_ITEM_RE, LIST_ITEM_RE, TABLE_ROW_RE, TABLE_SEP_RE, VERIFY_HEAD_RE, DELIVERY_HEAD_RE, COMMAND_RE, PITFALL_HEAD_RE, ABS_PATH_RE, EMAIL_RE, PATH_TOKEN_RE, PATH_TOKEN_ALL_RE, HEAD_NUMBER_RE, NOT_VISIBLE_HEAD_RE, OPEN_QUESTION_RE, EXEMPT_EXACT_RE;
+var init_skill_format = __esm({
+  "src/lib/skill-format.ts"() {
+    "use strict";
+    WORD_CHAR = "\\p{L}\\p{N}_";
+    SPACE = "\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+    WB2 = `(?:(?<=[${WORD_CHAR}])(?![${WORD_CHAR}])|(?<![${WORD_CHAR}])(?=[${WORD_CHAR}]))`;
+    XML_RE = new RegExp(`<[${SPACE}]*/?[${SPACE}]*[A-Za-z][${WORD_CHAR}-]*([${SPACE}][^<>]*)?>`, "u");
+    TRIGGER_RE = ci(
+      `${WB2}(use when|use whenever|use this when|use for|also when|also use when|should be used when|when the user|triggers?[${SPACE}]*:)`
+    );
+    ABBREV_RE = new RegExp(`${WB2}(e\\.g|i\\.e|etc|vs|cf)\\.`, "giu");
+    SENTENCE_SPLIT_RE = new RegExp(`(?<=[.!?])[${SPACE}]+`, "u");
+    HEAD_RE = new RegExp(`^(#{1,6})[${SPACE}]+(.*)$`, "u");
+    FENCE_RE = new RegExp(`^[${SPACE}]*(\`\`\`|~~~)`, "u");
+    NUM_HEAD_RE = ci(`^[${SPACE}]*(\\p{Nd}+[.)]|step[${SPACE}]+\\p{Nd}+|phase[${SPACE}]+\\p{Nd}+)`);
+    NUM_ITEM_RE = new RegExp(`^[${SPACE}]*\\p{Nd}+[.)][${SPACE}]+[^${SPACE}]`, "u");
+    LIST_ITEM_RE = new RegExp(`^[${SPACE}]*([-*+]|\\p{Nd}+[.)])[${SPACE}]+[^${SPACE}]`, "u");
+    TABLE_ROW_RE = new RegExp(`^[${SPACE}]*\\|.*\\|[${SPACE}]*$`, "u");
+    TABLE_SEP_RE = new RegExp(
+      `^[${SPACE}]*\\|?[${SPACE}]*:?-{3,}:?[${SPACE}]*(\\|[${SPACE}]*:?-{3,}:?[${SPACE}]*)*\\|?[${SPACE}]*$`,
+      "u"
+    );
+    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB2}test`);
+    DELIVERY_HEAD_RE = ci(`deliver|hand-?off|${WB2}done${WB2}|finish`);
+    COMMAND_RE = ci(
+      "```|`[^`\\n]*" + WB2 + "(run|gradlew|npm|npx|pytest|make|git|python3?|node|mvn|go|cargo|bash|\\./)[^`\\n]*`"
+    );
+    PITFALL_HEAD_RE = ci(
+      "pitfall|mistake|gotcha|common (errors|failures|problems)|anti-?pattern|red flags"
+    );
+    ABS_PATH_RE = new RegExp(`(/(?:Users|home)/[^/${SPACE}]+|[A-Za-z]:\\\\Users\\\\)`, "u");
+    EMAIL_RE = new RegExp(`[${WORD_CHAR}.+-]+@[${WORD_CHAR}-]+\\.[A-Za-z]{2,}`, "u");
+    PATH_TOKEN_RE = /[^\s`|()]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|()]*/;
+    PATH_TOKEN_ALL_RE = new RegExp(PATH_TOKEN_RE.source, "g");
+    HEAD_NUMBER_RE = new RegExp(`^[${SPACE}]*(?:step[${SPACE}]+|phase[${SPACE}]+)?(\\p{Nd}+)`, "iu");
+    NOT_VISIBLE_HEAD_RE = ci("not visible in history|not visible in the history");
+    OPEN_QUESTION_RE = ci(
+      "\\?|not (recorded|measured|visible|captured|in the evidence|known)|no commit|nothing (in the )?(history|evidence)|does not (say|record|show)|unknown|unclear|is not stated"
+    );
+    EXEMPT_EXACT_RE = ci(
+      "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$"
+    );
+  }
+});
+
+// src/lib/doctor.ts
+init_session_state();
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join10 } from "node:path";
 
 // src/lib/counters.ts
+init_session_state();
+init_fs_atomic();
 import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, writeFileSync } from "node:fs";
 import { join as join2 } from "node:path";
 var FIELDS = [
@@ -73,510 +709,13 @@ import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as rea
 import { homedir as homedir4 } from "node:os";
 import { dirname, join as join6 } from "node:path";
 
-// src/lib/config.ts
-import { existsSync, readFileSync as readFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
-function configFile(home = handbookHome()) {
-  return join3(home, "config.json");
-}
-function readConfigFile(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync3(configFile(home), "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function configIsBroken(home = handbookHome()) {
-  const file = configFile(home);
-  if (!existsSync(file)) return false;
-  try {
-    const parsed = JSON.parse(readFileSync3(file, "utf8"));
-    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
-  } catch {
-    return true;
-  }
-}
-
-// src/lib/score.ts
-import { execFile } from "node:child_process";
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { join as join4 } from "node:path";
-import { promisify } from "node:util";
-
-// src/lib/identity.ts
-import { execFileSync } from "node:child_process";
-import { homedir as homedir2, userInfo } from "node:os";
-import { basename } from "node:path";
-var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
-  "user",
-  "users",
-  "username",
-  "you",
-  "me",
-  "home",
-  "root",
-  "admin",
-  "administrator",
-  "runner",
-  "ubuntu",
-  "debian",
-  "alpine",
-  "docker",
-  "container",
-  "node",
-  "vscode",
-  "devcontainer",
-  "codespace",
-  "shared",
-  "public",
-  "dev",
-  "developer",
-  "test",
-  "build",
-  "builder",
-  "ci",
-  "jenkins",
-  "deploy",
-  "app",
-  "service",
-  "worker",
-  "git",
-  "www-data",
-  "nobody"
-]);
-var MIN_NAME_CHARS = 4;
-var HOME_PATH = new RegExp(
-  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
-  "g"
-);
-var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
-var ROLE_MAILBOX = /* @__PURE__ */ new Set([
-  "admin",
-  "bot",
-  "build",
-  "builder",
-  "ci",
-  "deploy",
-  "git",
-  "infra",
-  "jenkins",
-  "no-reply",
-  "noreply",
-  "ops",
-  "platform",
-  "release",
-  "root",
-  "security",
-  "support",
-  "team"
-]);
-var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
-var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
-var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
-var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function usableName(name) {
-  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
-}
-function gitConfig(key) {
-  try {
-    return execFileSync("git", ["config", "--get", key], {
-      stdio: ["ignore", "pipe", "ignore"],
-      encoding: "utf8",
-      timeout: 2e3
-    }).trim() || null;
-  } catch {
-    return null;
-  }
-}
-function gitAuthorName() {
-  const name = gitConfig("user.name");
-  return name && /\s/.test(name) ? name : null;
-}
-function readHostIdentity() {
-  const candidates = [];
-  try {
-    candidates.push(userInfo().username);
-  } catch {
-  }
-  try {
-    candidates.push(basename(homedir2()));
-  } catch {
-  }
-  candidates.push(gitAuthorName());
-  const names = [];
-  for (const name of candidates) {
-    if (!name || !usableName(name)) continue;
-    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
-  }
-  return { names };
-}
-var cached = null;
-function hostIdentity() {
-  if (!cached) cached = readHostIdentity();
-  return cached;
-}
-function traces(text, host) {
-  const found = [];
-  for (const match of text.matchAll(HOME_PATH)) {
-    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
-    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
-  }
-  for (const match of text.matchAll(EMAIL)) {
-    const local = (match[1] ?? "").toLowerCase();
-    if (ROLE_MAILBOX.has(local)) continue;
-    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
-    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
-  }
-  if (host.names.length > 0) {
-    const ordered = [...host.names].sort((a, b) => b.length - a.length);
-    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
-    for (const match of text.matchAll(names)) {
-      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
-      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
-    }
-  }
-  return found.sort((a, b) => a.index - b.index);
-}
-function detectIdentity(text, host = hostIdentity()) {
-  return locateIdentity(text, host)?.class ?? null;
-}
-function locateIdentity(text, host = hostIdentity()) {
-  const first = traces(text, host)[0];
-  return first ? { class: first.class, index: first.index } : null;
-}
-
-// src/lib/prompt-safety.ts
-var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
-var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
-var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
-
-// src/lib/secrets.ts
-var PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
-var unquote = (value) => value.replace(/^["']|["']$/g, "");
-function isPlaceholderAssignment(match) {
-  return PLACEHOLDER_VALUE.test(unquote(match.slice(match.search(/[=:]/) + 1).trim()));
-}
-function isSubstitute(value) {
-  const bare = unquote(value);
-  return /^[$<{]/.test(bare) || /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(bare) || isFilePath(bare);
-}
-function isFilePath(value) {
-  if (!/^(?:\.{1,2}\/|~\/|\/)/.test(value)) return false;
-  return value.lastIndexOf("/") > 0 || /\.[A-Za-z0-9]{1,8}$/.test(value);
-}
-var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
-function isWordsNotToken(match) {
-  return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
-}
-var SECRET_PATTERNS = [
-  // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
-  // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
-  // Deliberately NOT the generic /-----BEGIN [A-Z ]+-----/: that swallows
-  // -----BEGIN CERTIFICATE-----, which is public and routine in TLS work.
-  { name: "private-key", re: /-{4,5}\s?BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s?-{4,5}/ },
-  // PuTTY .ppk keys are not PEM-armored at all. The header used to be anchored to the start
-  // of a line, which excluded the two shapes a session actually shows a key file in: a diff
-  // prefixes every line with `+`, and `cat -n` prefixes it with a number and a tab. Dropping
-  // the anchor without asking for the rest of the FORMAT made the header's name enough, so
-  // prose that merely mentions it became a secret - including two lines of this repository's
-  // own source, which cost a session working on TeamHandbook its own signal.
-  {
-    name: "putty-key",
-    re: /PuTTY-User-Key-File-\d+:[ \t]*\S|Private-Lines:[ \t]*\d|Private-MAC:[ \t]*[0-9a-fA-F]{16}/
-  },
-  { name: "age-key", re: /\bAGE-SECRET-KEY-1[0-9A-Z]{50,}/ },
-  // Before `aws-access-key`, which would otherwise claim any line carrying the id and hide
-  // that the secret half travelled with it - the credentials CSV the console hands out puts
-  // them in adjacent columns and spells the header with spaces, so no keyword sits next to
-  // the value. The 40-character run has no shape of its own, so it counts only in the
-  // company of an id AND only when it mixes case and digits the way base64 does; a
-  // lowercase sha1 in a release log does not.
-  {
-    name: "aws-secret-near-access-key",
-    re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b[\s\S]{0,300}?(?=[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/]))(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*\d)[A-Za-z0-9+/]{40}/
-  },
-  { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
-  { name: "github-token", re: /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/ },
-  { name: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "gitlab-deploy-token", re: /\bgldt-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "gitlab-runner-token", re: /\bglrt-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
-  { name: "slack-webhook", re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
-  { name: "stripe-key", re: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/ },
-  // Before `openai-key`: both open with `sk-`, and whichever runs first is the name the
-  // redaction marker carries. Left second, an Anthropic key - the credential a Claude Code
-  // plugin is likeliest to meet - reads in the log as an OpenAI key and its own rule never
-  // fires, so nobody can tell from the marker whether it is covered at all.
-  { name: "anthropic-api-key", re: /\bsk-ant-[a-z0-9]{3,}-[A-Za-z0-9_-]{20,}\b/ },
-  // The digit is what separates an issued key from a hyphenated English phrase: every key
-  // carries one and "sk-cross-validation-and-scaling" carries none.
-  { name: "openai-key", re: /\bsk-(?:proj-)?(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}\b/ },
-  { name: "google-api-key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/ },
-  { name: "npm-token", re: /\bnpm_[A-Za-z0-9]{30,}\b/ },
-  // The body excludes `_`, so `hf_hub_download` - the library's own function name - is three
-  // characters long to this rule rather than thirty.
-  { name: "huggingface-token", re: /\bhf_[A-Za-z0-9]{30,}\b/ },
-  { name: "digitalocean-token", re: /\bdop_v1_[a-f0-9]{60,}\b/ },
-  // An issued token is base62 and mixes case with digits; a backup file named after the same
-  // prefix is not - unless it is named in camel case with a year in it, which is why the
-  // extension has to be excluded as well as the lowercase body. (The corpus carries both
-  // filenames; neither is spelled out here, because a prefix followed by a contiguous run is
-  // the shape this repository refuses to hold.)
-  {
-    name: "vault-token",
-    re: /\bhvs\.(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}(?!\.[A-Za-z0-9]{1,8})\b/
-  },
-  { name: "linear-api-key", re: /\blin_api_[A-Za-z0-9]{32,}\b/ },
-  // A lookbehind rather than \b: the token's own home is inside a URL path (`/bot<id>:AA…`),
-  // where the digits follow a letter and \b never matches between two word characters.
-  { name: "telegram-bot-token", re: /(?<!\d)\d{8,10}:AA[A-Za-z0-9_-]{30,}\b/ },
-  // Azure AD writes a fixed `8Q~` into a client secret, three characters in and thirty-four
-  // from the end; the delimiters keep it from matching inside a longer run.
-  {
-    name: "azure-client-secret",
-    re: /(?:^|[\s'"`>=:(,])[A-Za-z0-9_~.-]{3}8Q~[A-Za-z0-9_~.-]{34}(?:$|[\s'"`<),;])/
-  },
-  { name: "azure-storage-key", re: /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/ },
-  { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
-  { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
-  { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
-  // common credential shapes the generic keyword rule misses
-  { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
-  { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
-  { name: "mysql-inline-password", re: /\bmysql\b[^\n]*\s-p\S+/i },
-  // Fields whose NAME carries the shape. The value inside them is a bare blob nothing else
-  // here could tell from a digest; the field is what makes it a credential, so the rule asks
-  // for the field and lets the value be shapeless.
-  // The host is what separates the file from a sentence. Asking only for the three words in
-  // order made "Each machine needs login and password set before the first deploy" a
-  // credential, which cost the prompt that carried it, the slice line that quoted it, and
-  // the share of any skill whose documentation said it.
-  //
-  // The dot is a TRADE, not a definition: `machine localhost` and `machine gitlab` are
-  // valid `.netrc` entries and this rule does not see them. It buys that miss because the
-  // sentence shape is common and its cost is silent - a candidate dropped, a skill refused
-  // with "secret" - while a single-label netrc host is a machine-local credential. The
-  // corpus carries the missed shape so the trade stays visible rather than forgotten.
-  {
-    name: "netrc-credential",
-    re: /\bmachine\s+\S*\.\S+\s+login\s+\S+\s+password\s+\S+/i,
-    reject: (m) => isSubstitute(lastToken(m))
-  },
-  { name: "docker-auth-field", re: /["']auth["']\s*:\s*["'][A-Za-z0-9+/]{20,}={0,2}["']/ },
-  { name: "kubeconfig-key-data", re: /\bclient-key-data:\s*[A-Za-z0-9+/]{40,}={0,2}/ },
-  {
-    name: "gcp-private-key-field",
-    re: /["']private_key["']\s*:\s*["'][^"']{40,}["']/,
-    reject: (m) => isSubstitute(m.slice(m.indexOf(":") + 1).trim())
-  },
-  {
-    name: "aws-secret-key",
-    re: /\baws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*["']?[A-Za-z0-9+/]{30,}/i
-  },
-  // A credential handed to a CLI as a flag. `--token-file` and its kind are excluded by the
-  // `[= ]`: a flag NAME that continues past the keyword is a different flag.
-  {
-    name: "cli-credential-flag",
-    re: /\s--?(?:auth[_-]?token|api[_-]?key|access[_-]?token|registration[_-]?token|token|password|secret)[= ]\S{16,}/i,
-    reject: (m) => isSubstitute(lastToken(m))
-  },
-  {
-    // keyword may be preceded by a word boundary OR an underscore (AWS_SECRET_KEY=...),
-    // which \b cannot match between two word chars.
-    name: "assigned-secret",
-    re: /(?:\b|_)(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key)["']?\s*[=:]\s*["']?[A-Za-z0-9+/_.-]{8,}/i,
-    reject: isPlaceholderAssignment
-  }
-];
-var GLOBAL_TWIN = new Map(
-  SECRET_PATTERNS.filter((p) => p.reject).map((p) => [
-    p.name,
-    new RegExp(p.re.source, p.re.flags + "g")
-  ])
-);
-function detectSecret(text) {
-  return locateSecret(text)?.pattern ?? null;
-}
-function locateSecret(text) {
-  for (const { name, re, reject } of SECRET_PATTERNS) {
-    if (!reject) {
-      const match = re.exec(text);
-      if (match) return { pattern: name, index: match.index };
-      continue;
-    }
-    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
-      if (!reject(match[0])) return { pattern: name, index: match.index };
-    }
-  }
-  return null;
-}
-
-// src/lib/score.ts
-var execFileAsync = promisify(execFile);
-var defaultScoreConfig = {
-  model: "haiku",
-  threshold: 7,
-  timeoutMs: 6e4
-};
-function loadScoreConfig(home = handbookHome()) {
-  const gate = readConfigFile(home).gate;
-  return {
-    model: typeof gate?.model === "string" ? gate.model : defaultScoreConfig.model,
-    threshold: typeof gate?.threshold === "number" && gate.threshold >= 0 && gate.threshold <= 10 ? gate.threshold : defaultScoreConfig.threshold,
-    timeoutMs: typeof gate?.timeoutMs === "number" && gate.timeoutMs > 0 ? gate.timeoutMs : defaultScoreConfig.timeoutMs
-  };
-}
-var CHILD_ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--restricted"];
-var CHILD_ISOLATION_FLAGS = ["--tools", "--strict-mcp-config", "--restricted"];
-function declaredOptions(helpText) {
-  const rows = [];
-  for (const line of helpText.split("\n")) {
-    const match = /^(\s*)-\S/.exec(line);
-    if (match) rows.push({ indent: match[1].length, text: line });
-  }
-  if (rows.length === 0) return /* @__PURE__ */ new Set();
-  const column = Math.min(...rows.map((r) => r.indent));
-  const options = /* @__PURE__ */ new Set();
-  for (const row of rows) {
-    if (row.indent > column + 1) continue;
-    const flagColumn = row.text.trim().split(/\s{2,}/)[0] ?? "";
-    for (const flag of flagColumn.match(/--[a-zA-Z0-9][a-zA-Z0-9-]*/g) ?? []) options.add(flag);
-  }
-  return options;
-}
-function childIsolationArgsFor(helpText) {
-  const declared = declaredOptions(helpText);
-  if (declared.size === 0) {
-    return CHILD_ISOLATION_FLAGS.every((flag) => helpText.includes(flag)) ? CHILD_ISOLATION_ARGS : [];
-  }
-  return CHILD_ISOLATION_FLAGS.every((flag) => declared.has(flag)) ? CHILD_ISOLATION_ARGS : [];
-}
-function helpFormatRecognized(helpText) {
-  return declaredOptions(helpText).size > 0;
-}
-var CHILD_ENV_EXACT = /* @__PURE__ */ new Set([
-  // where the CLI, node and its config live
-  "PATH",
-  "HOME",
-  "USER",
-  "SHELL",
-  "TMPDIR",
-  "LANG",
-  "TZ",
-  // the Windows spelling of the same things
-  "USERPROFILE",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "SystemRoot",
-  "SystemDrive",
-  "COMSPEC",
-  "PATHEXT",
-  // Windows spells the temp directory with these, not TMPDIR
-  "TEMP",
-  "TMP",
-  // how it reaches the network at all, on a machine behind a proxy
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-  "no_proxy",
-  // how it trusts that network, where TLS is intercepted by a corporate CA
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-  "REQUESTS_CA_BUNDLE",
-  // which region a Vertex deployment answers on
-  "CLOUD_ML_REGION",
-  // which handbook home this call belongs to
-  "TEAMHANDBOOK_HOME"
-]);
-var CHILD_ENV_PREFIXES = [
-  "LC_",
-  "ANTHROPIC_",
-  "AWS_",
-  "GOOGLE_",
-  "GCLOUD_",
-  "CLOUDSDK_",
-  "AZURE_"
-];
-var CHILD_ENV_CLAUDE_ALLOW = /* @__PURE__ */ new Set([
-  // which backend answers at all
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  // where the CLI's own config lives
-  "CLAUDE_CONFIG_DIR",
-  // the credentials it presents
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
-  "CLAUDE_CODE_CLIENT_KEY",
-  "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
-  "CLAUDE_CODE_HOST_CREDS_FILE",
-  // names ANOTHER variable that holds the credential; the name it points at is allowed
-  // too, below, because the CLI itself designates it
-  "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
-  // a gateway in front of the backend: the token it wants, and the six switches that say
-  // "do not sign this request yourself, the gateway did". Without these a gateway install
-  // tries to sign with SigV4 it does not have and the call fails - measured as the failure
-  // mode of the previous, shorter list.
-  "CLAUDE_CODE_GATEWAY_TOKEN",
-  "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
-  "CLAUDE_CODE_SKIP_VERTEX_AUTH",
-  "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
-  "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
-  "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
-  "CLAUDE_CODE_SKIP_MANTLE_AUTH",
-  // which endpoint, and how to get through the proxy in front of it
-  "CLAUDE_CODE_API_BASE_URL",
-  "CLAUDE_CODE_HTTP_PROXY",
-  "CLAUDE_CODE_HTTPS_PROXY",
-  "CLAUDE_CODE_PROXY_AUTHENTICATE",
-  "CLAUDE_CODE_ENABLE_PROXY_AUTH_HELPER"
-]);
-var CHILD_ENV_NEVER = [
-  "NODE_OPTIONS",
-  "NODE_TLS_REJECT_UNAUTHORIZED"
-];
-function childEnv(source = process.env) {
-  const env = {};
-  const designated = source.CLAUDE_CODE_HOST_AUTH_ENV_VAR;
-  for (const [name, value] of Object.entries(source)) {
-    if (value === void 0) continue;
-    if (CHILD_ENV_NEVER.includes(name)) continue;
-    if (name.startsWith("CLAUDE_")) {
-      if (CHILD_ENV_CLAUDE_ALLOW.has(name)) env[name] = value;
-      continue;
-    }
-    if (CHILD_ENV_EXACT.has(name) || name === designated || CHILD_ENV_PREFIXES.some((p) => name.startsWith(p))) {
-      env[name] = value;
-    }
-  }
-  return env;
-}
-function childInvocation(input) {
-  const args = ["-p", input.prompt];
-  if (input.model) args.push("--model", input.model);
-  args.push(...childIsolationArgsFor(input.helpText));
-  const cwd = mkdtempSync2(join4(tmpdir2(), "teamhandbook-child-"));
-  return {
-    args,
-    env: childEnv(),
-    cwd,
-    done: () => rmSync2(cwd, { recursive: true, force: true })
-  };
-}
-
 // src/lib/distill.ts
+init_session_state();
+init_config();
+init_score();
+init_skill_index();
+init_prompt_safety();
+init_secrets();
 var defaultDistillConfig = {
   model: "",
   timeoutMs: 12e4
@@ -649,6 +788,8 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
 // src/lib/branch.ts
 import { readFileSync as readFileSync4 } from "node:fs";
 import { join as join5 } from "node:path";
+init_identity();
+init_secrets();
 var BRANCH_EXAMPLE_MAX = 100;
 function branchExampleProblem(value) {
   if (value.length > BRANCH_EXAMPLE_MAX) return `longer than ${BRANCH_EXAMPLE_MAX} characters`;
@@ -672,6 +813,11 @@ function readTeamBranchExample(repoDir) {
   return problem ? { problem } : { example: value };
 }
 
+// src/lib/init.ts
+init_session_state();
+init_config();
+init_fs_atomic();
+
 // src/lib/display-path.ts
 import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
@@ -684,6 +830,7 @@ function displayPath(path, userHome = homedir3()) {
 }
 
 // src/lib/init.ts
+init_secrets();
 function commitMessagePrefix(prefix) {
   return prefix?.trim() ? `${prefix.trim()} ` : "";
 }
@@ -986,6 +1133,23 @@ function marketplacesRoot() {
 // src/lib/upgrade.ts
 import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname2, join as join7, relative } from "node:path";
+
+// src/lib/publish.ts
+init_session_state();
+init_skill_files();
+init_queue();
+
+// src/lib/mcp.ts
+init_secrets();
+init_identity();
+
+// src/lib/commands.ts
+init_queue();
+init_secrets();
+init_identity();
+
+// src/lib/upgrade.ts
+init_session_state();
 var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
 var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
 var CI_MARKER = "scripts/bump-version.mjs";
@@ -1114,7 +1278,28 @@ function countStaleSkeleton(repoDir, team) {
   };
 }
 
+// src/lib/doctor.ts
+init_score();
+
+// src/lib/harvest.ts
+init_session_state();
+init_config();
+init_prompt_safety();
+init_secrets();
+init_identity();
+init_score();
+
+// src/lib/teachings.ts
+init_fs_atomic();
+init_session_state();
+
+// src/lib/harvest.ts
+init_skill_index();
+init_queue();
+
 // src/lib/transcript.ts
+init_secrets();
+init_prompt_safety();
 var PER_USER_CAP = 1e3;
 var USER_HEAD = 700;
 var USER_TAIL = PER_USER_CAP - USER_HEAD;
@@ -1123,6 +1308,7 @@ var WRAPPED_LINE_MIN = 24;
 var BLOB_LINE = new RegExp(`^[A-Za-z0-9+/]{${WRAPPED_LINE_MIN},}={0,2}$`);
 
 // src/lib/harvest.ts
+init_skill_index();
 var defaultHarvestConfig = {
   enabled: true,
   // Measured, not assumed: on an identical prompt from a real session, haiku
@@ -1158,16 +1344,72 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/status.ts
+init_session_state();
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFileSync as readFileSync7 } from "node:fs";
 import { basename as basename3, dirname as dirname3, join as join9, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// src/lib/signals.ts
+init_session_state();
+init_secrets();
+
+// src/lib/usage.ts
+init_fs_atomic();
+init_queue();
+init_session_state();
+
+// src/lib/session-workflow.ts
+init_config();
+init_identity();
+init_secrets();
+init_fs_atomic();
+init_session_state();
+
+// src/lib/mine.ts
+init_secrets();
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/usage.ts
+init_skill_index();
+
+// src/lib/status.ts
+init_queue();
+
 // src/lib/notify.ts
+init_fs_atomic();
+init_session_state();
+init_config();
+init_queue();
+
+// src/lib/review-list.ts
+init_queue();
+init_session_state();
+
+// src/lib/notify.ts
+init_skill_index();
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
+
+// src/lib/status.ts
+init_score();
 
 // src/lib/pipeline.ts
 import { basename as basename2, join as join8 } from "node:path";
+init_fs_atomic();
+init_session_state();
+init_secrets();
+
+// src/lib/gate.ts
+init_session_state();
+init_secrets();
+
+// src/lib/pipeline.ts
+init_score();
+init_skill_index();
+init_queue();
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
   return join8(home, "pipeline.log");
@@ -1175,9 +1417,21 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
-// src/lib/git-log.ts
-var MAX_OUTPUT_BYTES = 1 << 28;
-var MAX_BLOB_BYTES = 1 << 20;
+// src/lib/draft.ts
+init_identity();
+init_prompt_safety();
+init_secrets();
+var WORD = "\\p{L}\\p{N}_";
+var WB = `(?:(?<=[${WORD}])(?![${WORD}])|(?<![${WORD}])(?=[${WORD}]))`;
+
+// src/lib/skill-health.ts
+init_queue();
+init_session_state();
+init_skill_format();
+init_skill_index();
+var FILLER = new Set(
+  "a about after again all also an and any are as at be been before being both but by can could did do does doing done each either for from had has have having how if in into is it its itself just may might more most must no nor not now of off on once one only or other our out over own same should so some such than that the their them then there these they this those through to too under until up upon very was we were what when whenever where whether which while who whom why will with within without would you your yours use used uses using also trigger triggers skill skills request requests asks asked something someone thing things way e g eg etc via new instead like want wants need needs make makes made get gets".split(" ")
+);
 
 // src/lib/status.ts
 function pluginVersion() {

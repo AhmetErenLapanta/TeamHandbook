@@ -1,7 +1,7 @@
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
 import { captureBashFailure, captureBashSuccess, captureFileEdit, recordActivity } from "../lib/capture.js";
 import { bumpCounter, maybeDumpPayload } from "../lib/counters.js";
-import { recordSkillUse } from "../lib/usage.js";
+import { recordSkillCall } from "../lib/usage.js";
 import { handbookHome } from "../lib/session-state.js";
 import { recordWorkflowEvent } from "../lib/session-workflow.js";
 
@@ -14,8 +14,7 @@ async function main(): Promise<void> {
   // an installed skill firing is the one piece of evidence that a kept lesson is
   // doing anything; it is not session evidence, so it short-circuits the rest
   if (input.tool_name === "Skill") {
-    const slug = typeof input.tool_input?.skill === "string" ? input.tool_input.skill : "";
-    recordSkillUse(slug);
+    recordSkillCall(input);
     return;
   }
   // Before the returns below: a failed check and a commit that resolves a pair are both part of
