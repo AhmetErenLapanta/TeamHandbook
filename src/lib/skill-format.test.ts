@@ -444,6 +444,65 @@ describe("the exemptions the structural rules promise", () => {
   });
 });
 
+/**
+ * The concrete-checks rule reads the checks section and nothing else. It used to read every heading
+ * its pattern matched, the document's title and numbered layers included, and judged their steps
+ * as checks.
+ */
+describe("which items the concrete-checks rule judges", () => {
+  const citable = { map: 3, fix: 1, hunk: 0, subject: 0 };
+  const ext = { ...options, extended: true, expects: { fileMap: true, multiRepo: true, citable } };
+  const concrete = (text: string): boolean => !failedRules(checkSkillFormat(text, ext)).includes("verification-concrete");
+
+  /**
+   * The fixtures this rule was never written for, read with every rule on. Measured with the gate
+   * as it stood before the rule was scoped: these six failed it, and no fixture failed any other
+   * extended rule. Scoping must not move a single one of the twenty-four.
+   */
+  const FAILS_CONCRETE = ["verification-missing", "no-email", "no-username", "no-org-term", "skeleton-empty", "skeleton-trivial"];
+  it.each([...dump.mustPass, ...dump.broken].map((f) => [f.label, f.text] as const))(
+    "given the %s fixture, when checked with the extended rules, then it gets the verdict it had before",
+    (label, text) => {
+      const plain = failedRules(checkSkillFormat(text, options));
+      const extended = failedRules(checkSkillFormat(text, { ...options, extended: true }));
+      expect(extended.filter((rule) => !plain.includes(rule))).toEqual(
+        FAILS_CONCRETE.includes(label) ? ["verification-concrete"] : [],
+      );
+    },
+  );
+
+  it.each(["## Verification", "## 4. Verification"])(
+    "given a check that only says to run the tests under %s, when checked, then it still fails",
+    (heading) => {
+      const text = DRAFT.replace("## Verification", heading).replace("- [ ] `./gradlew test` exits 0.", "- [ ] Run the tests.");
+      expect(concrete(text)).toBe(false);
+    },
+  );
+
+  it("given a numbered layer whose title names validation, when its steps carry no command, then they are not judged as checks", () => {
+    const text = DRAFT.replace("## 2. Gateway", "## 2. Gateway validation schema");
+    expect(concrete(text)).toBe(true);
+  });
+
+  it("given a top-level title naming a validator, when checked, then the whole document is not read as checks", () => {
+    const text = DRAFT.replace("# add-widget-route - a new widget route", "# add-widget-route - route, validator and tests");
+    expect(concrete(text)).toBe(true);
+  });
+
+  it("given a numbered layer with a checks word and no checks section at all, when checked, then there is nothing concrete to find", () => {
+    const text = DRAFT.replace("## 2. Gateway", "## 2. Gateway tests").replace(
+      "## Verification\n- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.\n",
+      "",
+    );
+    expect(concrete(text)).toBe(false);
+  });
+
+  it("given a check saying two things match, when checked, then the comparison counts as a result", () => {
+    const text = DRAFT.replace("- [ ] `./gradlew test` exits 0.", "- [ ] The method on both sides and the route match.");
+    expect(concrete(text)).toBe(true);
+  });
+});
+
 describe("the one section a draft may write without evidence", () => {
   const citable = { map: 3, fix: 1, hunk: 0, subject: 0 };
   const ext = { ...options, extended: true, expects: { fileMap: true, multiRepo: true, citable } };

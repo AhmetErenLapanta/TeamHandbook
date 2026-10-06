@@ -296,7 +296,7 @@ const SHARE_CELL_RE = /\b\d+\s*\/\s*\d+\b/;
  * outcome at all, and seeing a thing on a page is an outcome.
  */
 const OBSERVABLE_RE =
-  /\b(returns?|shows?|appears?|contains?|equals?|matches?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
+  /\b(returns?|shows?|appears?|contains?|equals?|match(?:es)?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
 const INLINE_CODE_RE = /`[^`\n]+`/;
 
 /**
@@ -586,7 +586,14 @@ function addExtendedFindings(
   // proof that the workflow was done: an item has to carry one or the other to count as a check.
   // A fenced command block counts as an item here exactly as it does for the fill rules, because
   // a checklist written as a shell block is still a checklist.
-  const verifySecs = secs.filter((s) => VERIFY_HEAD_RE.test(s.title));
+  //
+  // Only the checks section is read, by the two guards `isProcedureSection` already draws: never
+  // the top-level title, whose body is the whole document, and never a numbered layer whose title
+  // merely contains a checks word. Measured on recorded drafts, reading those made this rule judge
+  // the steps of `## 1. Defaults and validation schema` and `## 4. Features and tests` - and every
+  // line of a draft titled after its validator - as checks, and three of the eleven drafts it
+  // rejected had no unconcrete item in their checks section at all.
+  const verifySecs = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
   const verifyItems = verifySecs
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);
