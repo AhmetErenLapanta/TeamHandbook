@@ -33,7 +33,7 @@ import {
   utimesSync,
   writeFileSync as writeFileSync3
 } from "node:fs";
-import { basename, join as join5 } from "node:path";
+import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -58,6 +58,17 @@ function writeFileAtomic(file, data) {
 
 // src/lib/session-state.ts
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+function parseWorkflowTrail(value) {
+  if (typeof value !== "object" || value === null) return void 0;
+  const raw = value;
+  if (!Array.isArray(raw.edits) || !Array.isArray(raw.fired)) return void 0;
+  return {
+    edits: raw.edits.filter((e) => typeof e === "string"),
+    green: raw.green === true,
+    masked: raw.masked === true,
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+  };
+}
 function emptySessionState(sessionId) {
   return { sessionId, openErrors: [], resolvedPairs: [] };
 }
@@ -75,6 +86,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const workflow = parseWorkflowTrail(parsed.workflow);
     const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
     return {
       sessionId,
@@ -85,7 +97,8 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
-      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {},
+      ...workflow ? { workflow } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -134,10 +147,142 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 // src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
 var HOME_PATH = new RegExp(
   "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
   "g"
 );
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
 
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
@@ -358,7 +503,14 @@ var FIELDS = [
   "bashFailuresCaptured",
   "pairsResolved",
   "gateErrors",
-  "gateAbandoned"
+  "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowEntrypointSeen",
+  "workflowEntrypointMissing",
+  "workflowDetectedShape",
+  "workflowDetectedCandidate",
+  "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
   return join3(home, "counters.json");
@@ -370,7 +522,14 @@ function readCounters(home = handbookHome()) {
     bashFailuresCaptured: 0,
     pairsResolved: 0,
     gateErrors: 0,
-    gateAbandoned: 0
+    gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowEntrypointSeen: 0,
+    workflowEntrypointMissing: 0,
+    workflowDetectedShape: 0,
+    workflowDetectedCandidate: 0,
+    workflowSkippedHygiene: 0
   };
   try {
     const parsed = JSON.parse(readFileSync3(countersFile(home), "utf8"));
@@ -484,6 +643,23 @@ function flushSessionEnd(sessionId, home = handbookHome(), ts = (/* @__PURE__ */
   deleteSessionState(sessionId, home);
   return signals;
 }
+function sessionSignalCount(sessionId, home = handbookHome()) {
+  let raw;
+  try {
+    raw = readFileSync4(signalsFile(home), "utf8");
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      if (JSON.parse(line)?.sessionId === sessionId) count += 1;
+    } catch {
+    }
+  }
+  return count;
+}
 function ledgerPairsForSession(sessionId, home = handbookHome()) {
   let raw;
   try {
@@ -591,6 +767,445 @@ function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
   child.unref();
 }
 
+// src/lib/session-workflow.ts
+import { createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync6, realpathSync, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename3, dirname as dirname2, join as join6, relative, resolve, sep } from "node:path";
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/mine.ts
+var LOCK = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum|gradle\.lockfile|deno\.lock)$/;
+var DOC = /(\.md|\.mdx|\.rst|\.txt|LICENSE|CHANGELOG[^/]*)$/i;
+var isDocPath = (path) => DOC.test(path);
+var TEST = /(^|\/)(src\/test\/|test\/|tests\/|__tests__\/|spec\/)|\.(test|spec)\.[a-z]+$|_test\.(go|py)$|Test\.(kt|java)$/;
+var NOT_A_TICKET = /* @__PURE__ */ new Set([
+  "UTF",
+  "ISO",
+  "CVE",
+  "SHA",
+  "RFC",
+  "HTTP",
+  "HTTPS",
+  "MD",
+  "AES",
+  "RSA",
+  "TLS",
+  "SSL",
+  "IPV",
+  "UTC",
+  "GMT",
+  "JDK",
+  "ES",
+  "EC",
+  "PEP",
+  "ADR",
+  "RGB",
+  "SQL"
+]);
+var KEY_CANDIDATE = /\b([A-Z]{2,})-(\d+)\b/g;
+function stemSuffix(base) {
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot + 1) : "";
+  const parts = stem.split(/[._-]/);
+  const last = parts[parts.length - 1] || stem;
+  const camel = last.match(/[A-Z][a-z0-9]+|[A-Z]+(?![a-z])|[a-z0-9]+/g);
+  return { suffix: camel ? camel[camel.length - 1] : last, ext };
+}
+function buildRoleResolver(paths, options = {}) {
+  const minSiblings = options.minSiblings ?? 5;
+  const mirrorShare = options.mirrorShare ?? 0.6;
+  const mirrorMinFiles = options.mirrorMinFiles ?? 10;
+  const all = [...paths];
+  const siblings = /* @__PURE__ */ new Map();
+  const areaDirs = /* @__PURE__ */ new Map();
+  const topLevel = /* @__PURE__ */ new Map();
+  for (const path of all) {
+    const segments = path.split("/");
+    if (segments.length >= 3) {
+      const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
+      let dirs = siblings.get(key);
+      if (!dirs) siblings.set(key, dirs = /* @__PURE__ */ new Set());
+      dirs.add(segments[segments.length - 2]);
+      const area = areaKey(segments);
+      let areas2 = areaDirs.get(area);
+      if (!areas2) areaDirs.set(area, areas2 = /* @__PURE__ */ new Set());
+      areas2.add(segments[segments.length - 2]);
+    }
+    if (segments.length >= 2) {
+      const top = segments[0];
+      let rest = topLevel.get(top);
+      if (!rest) topLevel.set(top, rest = /* @__PURE__ */ new Set());
+      rest.add(segments.slice(1).join("/"));
+    }
+  }
+  const templates = /* @__PURE__ */ new Map();
+  for (const [key, dirs] of siblings) {
+    if (dirs.size < minSiblings) continue;
+    const [parentPath, base] = key.split("\0");
+    const grandparent = parentPath.split("/").pop() || parentPath;
+    templates.set(key, `${grandparent}/*/${base}`);
+  }
+  const areas = /* @__PURE__ */ new Map();
+  if (options.areaTemplates ?? true) {
+    for (const [key, dirs] of areaDirs) {
+      if (dirs.size < minSiblings) continue;
+      const [parentPath, kind] = key.split("\0");
+      const grandparent = parentPath.split("/").pop() || parentPath;
+      areas.set(key, `${grandparent}/${kind}`);
+    }
+  }
+  const mirrors = /* @__PURE__ */ new Set();
+  for (const [name, files] of topLevel) {
+    if (files.size < mirrorMinFiles) continue;
+    for (const [other, otherFiles] of topLevel) {
+      if (other === name || files.size > otherFiles.size) continue;
+      let shared = 0;
+      for (const f of files) if (otherFiles.has(f)) shared++;
+      if (shared / files.size >= mirrorShare) {
+        mirrors.add(name);
+        break;
+      }
+    }
+  }
+  const filters = options.filters ?? true;
+  const compiled = filters ? compiledRoles(all, namer(templates, areas), options.binaryPaths) : /* @__PURE__ */ new Set();
+  return resolverFrom(mirrors, templates, areas, compiled, filters);
+}
+function restoreRoleResolver(saved) {
+  return resolverFrom(new Set(saved.mirrors), new Map(saved.templates), new Map(saved.areas), new Set(saved.compiled), true);
+}
+function namer(templates, areas) {
+  return (path) => {
+    const segments = path.split("/");
+    if (segments.length >= 3) {
+      const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
+      const template = templates.get(key) ?? areas.get(areaKey(segments));
+      if (template) return template;
+    }
+    const base = segments[segments.length - 1];
+    const parent = segments.length > 1 ? segments[segments.length - 2] : ".";
+    const localized = localeFree(base);
+    if (localized) return `${parent}/${localized}`;
+    const { suffix, ext } = stemSuffix(base);
+    return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
+  };
+}
+function resolverFrom(mirrors, templates, areas, compiled, filters) {
+  const named = namer(templates, areas);
+  const resolve2 = (path) => {
+    const segments = path.split("/");
+    if (filters) {
+      if (TEST.test(path)) return "test";
+      if (LOCK.test(path)) return "lock";
+      if (CREDITS.test(path)) return "credits";
+      if (segments.length >= 2 && mirrors.has(segments[0])) return "mirror";
+      const role = named(path);
+      if (compiled.has(role)) return "compiled";
+      return role;
+    }
+    return named(path);
+  };
+  resolve2.mirrors = mirrors;
+  resolve2.templates = templates;
+  resolve2.areas = areas;
+  resolve2.compiled = compiled;
+  return resolve2;
+}
+var LOCALES = /* @__PURE__ */ new Set([
+  "en",
+  "tr",
+  "de",
+  "fr",
+  "es",
+  "it",
+  "pt",
+  "nl",
+  "ru",
+  "ar",
+  "zh",
+  "ja",
+  "ko",
+  "pl",
+  "sv",
+  "da",
+  "fi",
+  "nb",
+  "cs",
+  "hu",
+  "ro",
+  "el",
+  "he",
+  "uk",
+  "bg",
+  "hr",
+  "sk",
+  "sl",
+  "sr",
+  "et",
+  "lv",
+  "lt",
+  "fa",
+  "hi",
+  "th",
+  "vi"
+]);
+var LOCALIZED = /^(.*?[._-])?([a-z]{2})([_-][A-Z]{2})?\.([A-Za-z0-9]+)$/;
+function localeFree(base) {
+  const match = LOCALIZED.exec(base);
+  if (!match || !LOCALES.has(match[2])) return null;
+  return `${match[1] ?? ""}{locale}.${match[4]}`;
+}
+function areaKey(segments) {
+  const { suffix, ext } = stemSuffix(segments[segments.length - 1]);
+  return `${segments.slice(0, -2).join("/")}\0${ext ? `*${suffix}.${ext}` : segments[segments.length - 1]}`;
+}
+var CREDITS = /(^|\/)(AUTHORS|CONTRIBUTORS|MAINTAINERS|CODEOWNERS|THANKS|\.mailmap)(\.[A-Za-z]+)?$/;
+function compiledRoles(paths, named, binary) {
+  const compiled = /* @__PURE__ */ new Set();
+  if (!binary?.size) return compiled;
+  const textual = /* @__PURE__ */ new Set();
+  const byStem = /* @__PURE__ */ new Map();
+  for (const path of paths) {
+    const role = named(path);
+    const stem = role.replace(/\.[A-Za-z0-9]+$/, "");
+    let roles = byStem.get(stem);
+    if (!roles) byStem.set(stem, roles = /* @__PURE__ */ new Set());
+    roles.add(role);
+    if (!binary.has(path)) textual.add(role);
+  }
+  for (const roles of byStem.values()) {
+    if (roles.size < 2 || ![...roles].some((role) => textual.has(role))) continue;
+    for (const role of roles) if (!textual.has(role)) compiled.add(role);
+  }
+  return compiled;
+}
+var IGNORED_ROLES = /* @__PURE__ */ new Set(["test", "lock", "mirror", "credits", "compiled"]);
+
+// src/lib/session-workflow.ts
+var SHAPE_SHARE = 0.6;
+var MIN_ROLES = 2;
+function workflowsFile(home = handbookHome()) {
+  return join6(home, "workflows.jsonl");
+}
+function minedRecordFile(home = handbookHome()) {
+  return join6(home, "mined-workflows.json");
+}
+function sessionDetectEnabled(home = handbookHome()) {
+  const sessions = readConfigFile(home).sessions;
+  return !configIsBroken(home) && sessions?.detect !== false;
+}
+function isAutonomous(entrypoint) {
+  return !!entrypoint && entrypoint.startsWith("sdk");
+}
+function repositoryOf(dir) {
+  let at = resolve(dir);
+  for (; ; ) {
+    const dotgit = join6(at, ".git");
+    try {
+      const stat = statSync3(dotgit);
+      if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
+      if (stat.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync6(dotgit, "utf8"));
+        if (pointer) {
+          const gitdir = resolve(at, pointer[1].trim());
+          const marker = `${sep}.git${sep}worktrees${sep}`;
+          const cut = gitdir.lastIndexOf(marker);
+          return { repo: realpathSync(cut >= 0 ? gitdir.slice(0, cut) : at), checkout: at, gitdir };
+        }
+      }
+    } catch {
+    }
+    const up = dirname2(at);
+    if (up === at) return null;
+    at = up;
+  }
+}
+var diskLocator = {
+  locate(path) {
+    const found = repositoryOf(dirname2(path));
+    if (!found) return null;
+    const rel = relative(found.checkout, path).split(sep).join("/");
+    if (!rel || rel.startsWith("../") || rel === ".git" || rel.startsWith(".git/")) return null;
+    return { repo: found.repo, checkout: found.checkout, path: rel };
+  },
+  ignored(checkout, paths) {
+    if (paths.length === 0) return /* @__PURE__ */ new Set();
+    const result = spawnSync("git", ["-C", checkout, "check-ignore", "--stdin"], {
+      input: paths.join("\n"),
+      encoding: "utf8",
+      timeout: 2e3
+    });
+    if (result.status !== 0 || typeof result.stdout !== "string") return /* @__PURE__ */ new Set();
+    return new Set(result.stdout.split("\n").filter(Boolean));
+  },
+  branch(checkout) {
+    const found = repositoryOf(checkout);
+    if (!found) return null;
+    try {
+      const head = readFileSync6(join6(found.gitdir, "HEAD"), "utf8");
+      return /^ref:\s*refs\/heads\/(.+)$/m.exec(head)?.[1]?.trim() ?? null;
+    } catch {
+      return null;
+    }
+  }
+};
+function loadMinedRecord(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync6(minedRecordFile(home), "utf8"));
+    if (parsed?.version !== 1 || !Array.isArray(parsed.repos) || !Array.isArray(parsed.shapes)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function detectWorkflow(files, mined) {
+  if (files.length === 0) return null;
+  const resolver = mined ? restoreRoleResolver(mined.resolver) : buildRoleResolver(files.map((f) => f.path));
+  const worked = new Set(files.filter((f) => !isDocPath(f.path)).map((f) => f.repo));
+  const pairs = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    if (!worked.has(file.repo)) continue;
+    const role = resolver(file.path);
+    if (IGNORED_ROLES.has(role)) continue;
+    pairs.set(`${file.repo}\0${role}`, { repo: file.repo, role });
+  }
+  if (pairs.size < MIN_ROLES) return null;
+  const list = [...pairs.values()];
+  const shape = mined ? bestShape(list, mined) : null;
+  return { match: shape ? "shape" : "candidate", shape, pairs: list };
+}
+function bestShape(pairs, mined) {
+  const names = new Map(mined.repos.map((r) => [r.root, r]));
+  const held = /* @__PURE__ */ new Set();
+  for (const { repo, role } of pairs) {
+    const named = names.get(repo);
+    if (!named) continue;
+    held.add(`${named.label}:${role}`);
+    held.add(`${named.family}:${role}`);
+  }
+  let best = null;
+  for (const shape of mined.shapes) {
+    if (shape.core.length === 0) continue;
+    const share = shape.core.filter((role) => held.has(role)).length / shape.core.length;
+    if (share < SHAPE_SHARE) continue;
+    if (!best || share > best.share || share === best.share && shape.recurrence > best.recurrence) {
+      best = { id: shape.id, share, recurrence: shape.recurrence };
+    }
+  }
+  return best?.id ?? null;
+}
+function finishWorkflowSession(input, state, home = handbookHome(), deps = {}) {
+  if (!input.session_id || !sessionDetectEnabled(home)) return null;
+  const entrypoint = deps.entrypoint ?? process.env.CLAUDE_CODE_ENTRYPOINT;
+  bumpCounter(entrypoint ? "workflowEntrypointSeen" : "workflowEntrypointMissing", home);
+  if (isAutonomous(entrypoint)) {
+    bumpCounter("workflowSkippedAutonomous", home);
+    return null;
+  }
+  bumpCounter("workflowSessions", home);
+  const trail = state.workflow;
+  if (!trail?.edits.length) return null;
+  const found = detectTrail(trail, home, deps);
+  if (!found) return null;
+  bumpCounter(found.detection.match === "shape" ? "workflowDetectedShape" : "workflowDetectedCandidate", home);
+  if (!trail.green || trail.fired.includes("S2")) return null;
+  const outcome = writeLine(state, trail, "S2", found, home, deps);
+  return outcome === "hygiene" ? null : outcome;
+}
+function detectTrail(trail, home, deps) {
+  const files = trailFiles(trail.edits, deps.locator ?? diskLocator);
+  const mined = loadMinedRecord(home);
+  const detection = detectWorkflow(files, mined);
+  return detection ? { files, mined, detection } : null;
+}
+function writeLine(state, trail, signal, { files, mined, detection }, home, deps) {
+  const locator = deps.locator ?? diskLocator;
+  const work = workKey(files, locator, mined?.prefixes ?? []);
+  const host = deps.host ?? hostIdentity();
+  const material = [...files.map((f) => f.path), ...detection.pairs.map((p) => p.role), ...work ? [work] : []];
+  if (material.some((text) => traced(text, host))) {
+    bumpCounter("workflowSkippedHygiene", home);
+    return "hygiene";
+  }
+  const salt = installSalt(home);
+  const line = {
+    ts: deps.now?.() ?? (/* @__PURE__ */ new Date()).toISOString(),
+    session: saltedHash(salt, "session", state.sessionId),
+    signal,
+    match: detection.match,
+    shape: detection.shape,
+    roles: [...new Set(detection.pairs.map((p) => saltedHash(salt, "role", `${p.repo}\0${p.role}`)))].sort(),
+    repos: [...new Set(detection.pairs.map((p) => saltedHash(salt, "repo", p.repo)))].sort(),
+    rolesEdited: detection.pairs.length,
+    signals: sessionSignalCount(state.sessionId, home) + state.resolvedPairs.length + state.openErrors.length,
+    ticket: work ? saltedHash(salt, "ticket", work) : null,
+    maskedCheck: trail.masked
+  };
+  const serialized = JSON.stringify(line);
+  if (traced(serialized, host)) {
+    bumpCounter("workflowSkippedHygiene", home);
+    return "hygiene";
+  }
+  mkdirSync6(home, { recursive: true });
+  appendFileSync3(workflowsFile(home), `${serialized}
+`);
+  return line;
+}
+function traced(text, host) {
+  return detectIdentity(text, host) !== null || detectSecret(text) !== null;
+}
+function trailFiles(edits, locator) {
+  const byCheckout = /* @__PURE__ */ new Map();
+  for (const edit of edits) {
+    const file = locator.locate(edit);
+    if (!file) continue;
+    const list = byCheckout.get(file.checkout) ?? [];
+    list.push(file);
+    byCheckout.set(file.checkout, list);
+  }
+  const files = [];
+  for (const [checkout, list] of byCheckout) {
+    const ignored = locator.ignored(checkout, list.map((f) => f.path));
+    files.push(...list.filter((f) => !ignored.has(f.path)));
+  }
+  return files;
+}
+var DEFAULT_BRANCHES = /* @__PURE__ */ new Set(["main", "master", "develop", "dev", "trunk", "HEAD"]);
+function workKey(files, locator, prefixes) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const file of files) counts.set(file.checkout, (counts.get(file.checkout) ?? 0) + 1);
+  const checkout = [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0];
+  const branch = checkout ? locator.branch(checkout) : null;
+  if (!branch || DEFAULT_BRANCHES.has(branch)) return null;
+  for (const match of branch.matchAll(KEY_CANDIDATE)) {
+    const prefix = match[1];
+    if (NOT_A_TICKET.has(prefix) || prefixes.length > 0 && !prefixes.includes(prefix)) continue;
+    return match[0];
+  }
+  return branch;
+}
+function installSalt(home) {
+  const file = join6(home, "workflow-salt");
+  try {
+    return Buffer.from(readFileSync6(file, "utf8").trim(), "hex");
+  } catch {
+    mkdirSync6(home, { recursive: true });
+    try {
+      writeFileSync4(file, randomBytes(16).toString("hex"), { flag: "wx", mode: 384 });
+    } catch {
+    }
+    return Buffer.from(readFileSync6(file, "utf8").trim(), "hex");
+  }
+}
+function saltedHash(salt, kind, value) {
+  return createHash("sha256").update(salt).update(kind).update("\0").update(value).digest("hex").slice(0, 16);
+}
+
 // src/hooks/session-end.ts
 async function main() {
   const input = parseHookInput(await readStdin());
@@ -599,6 +1214,7 @@ async function main() {
   const substance = sessionHasSubstance(state);
   const alreadyHarvested = !!state.harvestedAt;
   const transcriptPath = state.transcriptPath ?? input.transcript_path;
+  finishWorkflowSession(input, state);
   flushSessionEnd(input.session_id);
   if (!substance || alreadyHarvested) return;
   if (!gateAutoEnabled() || !loadHarvestConfig().enabled || !lessonHarvestEnabled()) return;

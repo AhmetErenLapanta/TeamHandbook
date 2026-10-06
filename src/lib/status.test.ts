@@ -103,6 +103,7 @@ describe("gatherStatus / formatStatus", () => {
       detector: { postToolUse: 0, bashFailuresCaptured: 0, pairsResolved: 0 },
       lastRun: null,
       pipeline: { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 },
+      workflows: { recognized: 0, matched: 0 },
       scoringNow: 0,
       abandoned: 0,
       usage: { fired: 0, totalUses: 0, topSkill: null, known: 0 },
@@ -192,6 +193,52 @@ describe("gatherStatus / formatStatus", () => {
     const text = formatStatus(gatherStatus(home));
     expect(text).toContain("Abandoned:");
     expect(text).toContain("2 session harvest(s) given up");
+  });
+});
+
+describe("recognized workflow sessions", () => {
+  function workflowLine(session: string, match: "shape" | "candidate", ts: string): string {
+    return JSON.stringify({
+      ts, session, signal: "S1", match, shape: match === "shape" ? "0123456789ab" : null,
+      roles: ["r1", "r2"], repos: ["p1"], rolesEdited: 2, signals: 0, ticket: null,
+    });
+  }
+
+  it("given a matched session, a candidate-only session and a matched one from last year, when status is printed, then only the recent matched session is counted", () => {
+    const now = new Date().toISOString();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "workflows.jsonl"),
+      [
+        workflowLine("a", "shape", now),
+        workflowLine("a", "shape", now),
+        workflowLine("b", "candidate", now),
+        workflowLine("c", "shape", "2025-01-01T00:00:00.000Z"),
+      ].join("\n") + "\n",
+    );
+
+    const line = formatStatus(gatherStatus(home)).split("\n").find((l) => l.startsWith("Workflows:"));
+
+    expect(line).toMatchInlineSnapshot(`"Workflows:       1 workflow session recognized in the last 30 days (1 matched a mined workflow)"`);
+  });
+
+  it("given a matched line whose time cannot be read, when status is printed, then it is not counted as recent", () => {
+    mkdirSync(home, { recursive: true });
+    const { ts: _ts, ...untimed } = JSON.parse(workflowLine("d", "shape", ""));
+    writeFileSync(join(home, "workflows.jsonl"), [workflowLine("e", "shape", "not a time"), JSON.stringify(untimed)].join("\n") + "\n");
+
+    const line = formatStatus(gatherStatus(home)).split("\n").find((l) => l.startsWith("Workflows:"));
+
+    expect(line).toMatchInlineSnapshot(`"Workflows:       0 workflow sessions recognized in the last 30 days (0 matched a mined workflow)"`);
+  });
+
+  it("given only candidate sessions, when status is printed, then neither number moves", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "workflows.jsonl"), workflowLine("b", "candidate", new Date().toISOString()) + "\n");
+
+    const line = formatStatus(gatherStatus(home)).split("\n").find((l) => l.startsWith("Workflows:"));
+
+    expect(line).toMatchInlineSnapshot(`"Workflows:       0 workflow sessions recognized in the last 30 days (0 matched a mined workflow)"`);
   });
 });
 

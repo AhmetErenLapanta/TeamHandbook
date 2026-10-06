@@ -179,6 +179,26 @@ export function flushSessionEnd(
   return signals;
 }
 
+/** How many ledger signals, resolved or not, a session has flushed so far. */
+export function sessionSignalCount(sessionId: string, home: string = handbookHome()): number {
+  let raw: string;
+  try {
+    raw = readFileSync(signalsFile(home), "utf8");
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      if (JSON.parse(line)?.sessionId === sessionId) count += 1;
+    } catch {
+      // skip malformed lines; the ledger is append-only and best-effort
+    }
+  }
+  return count;
+}
+
 /**
  * Evidence for the harvest: this session's resolved pairs as recorded in the
  * ledger. Stop flushes pairs turn by turn, so at session end the ledger - not the

@@ -11,6 +11,8 @@ import {
   mineShapes,
   repoFamilies,
   repoLabels,
+  restoreRoleResolver,
+  saveRoleResolver,
   shapesFromUnits,
   stemSuffix,
   unitKeyOf,
@@ -426,6 +428,26 @@ describe("roles", () => {
 
     // then the area directory is the role's directory
     expect(role("src/controller/orders/XController.kt")).toBe("orders/*Controller.kt");
+  });
+
+  it("names every path the same way after being written down and read back", () => {
+    // given a resolver that learned a mirror, a sibling template and an area layout
+    const areas = ["orders", "billing", "shipping", "catalog", "users"];
+    const paths = [
+      ...Array.from({ length: 12 }, (_, i) => `src/lib/f${i}.ts`),
+      ...Array.from({ length: 12 }, (_, i) => `deno_dist/lib/f${i}.ts`),
+      ...areas.map((a) => `src/middleware/${a}/index.ts`),
+      ...areas.map((a) => `src/controller/${a}/${a}Controller.kt`),
+    ];
+    const built = buildRoleResolver(paths);
+
+    // when it is saved as JSON and restored
+    const restored = restoreRoleResolver(JSON.parse(JSON.stringify(saveRoleResolver(built))));
+
+    // then each path, and one the history never had, resolves to the same role
+    for (const path of [...paths, "src/controller/refunds/RefundsController.kt", "package-lock.json"]) {
+      expect(restored(path)).toBe(built(path));
+    }
   });
 });
 

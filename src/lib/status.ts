@@ -16,6 +16,7 @@ import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
 import { displayPath } from "./display-path.js";
 import { marketplacesRoot, nonInteractiveEnv } from "./init.js";
+import { recentWorkflowSessions } from "./session-workflow.js";
 
 /**
  * The installed plugin's version, for support/bug reports. The bundle runs from
@@ -219,6 +220,7 @@ export interface StatusReport {
   detector: { postToolUse: number; bashFailuresCaptured: number; pairsResolved: number };
   lastRun: (PipelineSummary & { ts: string }) | null;
   pipeline: PipelineAggregate;
+  workflows: { recognized: number; matched: number };
   scoringNow: number;
   // captured pairs given up on after repeated gate failures - never silent
   abandoned: number;
@@ -279,6 +281,7 @@ export function gatherStatus(home: string = handbookHome(), release: (installed:
     },
     lastRun: lastPipelineRun(home),
     pipeline: pipelineAggregate(home),
+    workflows: recentWorkflowSessions(home),
     scoringNow: pendingHarvestCount(home),
     abandoned: counters.gateAbandoned,
     usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length },
@@ -342,6 +345,7 @@ export function formatStatus(report: StatusReport): string {
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
     `Harvest runs:    ${report.pipeline.runs} run(s) in log - ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    `Workflows:       ${report.workflows.recognized} workflow session${report.workflows.recognized === 1 ? "" : "s"} recognized in the last 30 days (${report.workflows.matched} matched a mined workflow)`,
     ...(report.usage.known > 0
       ? [
           report.usage.totalUses > 0
