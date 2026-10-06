@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.17.0] - 2026-10-06
+
+- **TeamHandbook now notices when a session looks like a piece of repeated work, and keeps a
+  local record of it,** so `/handbook:status` can say how often that happens and how many of
+  those sessions matched a workflow `/handbook:mine` listed. The record holds times, counts
+  and hashes only: no file names, commands or text, and nothing leaves the machine. It asks
+  nothing, drafts nothing and makes no model call. Turn it off with
+  `{"sessions": {"detect": false}}` in `config.json`.
+
 ## [0.16.0] - 2026-10-01
 
 ### Added

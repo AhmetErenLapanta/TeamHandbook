@@ -1812,7 +1812,12 @@ function buildRoleResolver(paths, options = {}) {
       }
     }
   }
-  const named = (path) => {
+  const filters = options.filters ?? true;
+  const compiled = filters ? compiledRoles(all, namer(templates, areas), options.binaryPaths) : /* @__PURE__ */ new Set();
+  return resolverFrom(mirrors, templates, areas, compiled, filters);
+}
+function namer(templates, areas) {
+  return (path) => {
     const segments = path.split("/");
     if (segments.length >= 3) {
       const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
@@ -1826,8 +1831,9 @@ function buildRoleResolver(paths, options = {}) {
     const { suffix, ext } = stemSuffix(base);
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
   };
-  const filters = options.filters ?? true;
-  const compiled = filters ? compiledRoles(all, named, options.binaryPaths) : /* @__PURE__ */ new Set();
+}
+function resolverFrom(mirrors, templates, areas, compiled, filters) {
+  const named = namer(templates, areas);
   const resolve = (path) => {
     const segments = path.split("/");
     if (filters) {
@@ -1843,6 +1849,7 @@ function buildRoleResolver(paths, options = {}) {
   };
   resolve.mirrors = mirrors;
   resolve.templates = templates;
+  resolve.areas = areas;
   resolve.compiled = compiled;
   return resolve;
 }

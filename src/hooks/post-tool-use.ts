@@ -3,6 +3,7 @@ import { captureBashFailure, captureBashSuccess, captureFileEdit, recordActivity
 import { bumpCounter, maybeDumpPayload } from "../lib/counters.js";
 import { recordSkillUse } from "../lib/usage.js";
 import { handbookHome } from "../lib/session-state.js";
+import { recordWorkflowEvent } from "../lib/session-workflow.js";
 
 async function main(): Promise<void> {
   const raw = await readStdin();
@@ -17,6 +18,9 @@ async function main(): Promise<void> {
     recordSkillUse(slug);
     return;
   }
+  // Before the returns below: a failed check and a commit that resolves a pair are both part of
+  // the trail, and each of those paths ends the hook early.
+  recordWorkflowEvent(input);
   recordActivity(input);
   if (captureBashFailure(input)) {
     bumpCounter("bashFailuresCaptured");

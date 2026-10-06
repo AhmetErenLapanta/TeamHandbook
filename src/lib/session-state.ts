@@ -28,6 +28,40 @@ export interface ResolvedPair extends OpenError {
   resolvedCommand: string;
 }
 
+/**
+ * S1: a green check after the last write, then a commit. S2: the session ended and the last check
+ * after the last write was green. Both are recorded so the two can be compared; neither asks
+ * anything.
+ */
+export type WorkflowSignal = "S1" | "S2";
+
+/** What a session has done so far that bears on whether it was a piece of workflow. */
+export interface WorkflowTrail {
+  /** Files written inside a repository, by the edit tools and through the shell, first seen first. */
+  edits: string[];
+  /** Whether the latest check since the last of those writes passed, by the exit status of its line. */
+  green: boolean;
+  /**
+   * Whether that check's own status was hidden by what followed it (`npm test | tail`), so the
+   * line's status is the tail's. Kept so a green read that way can be told apart later.
+   */
+  masked: boolean;
+  /** Signals already recorded for this session: each is written at most once. */
+  fired: WorkflowSignal[];
+}
+
+function parseWorkflowTrail(value: unknown): WorkflowTrail | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (!Array.isArray(raw.edits) || !Array.isArray(raw.fired)) return undefined;
+  return {
+    edits: raw.edits.filter((e): e is string => typeof e === "string"),
+    green: raw.green === true,
+    masked: raw.masked === true,
+    fired: raw.fired.filter((s): s is WorkflowSignal => s === "S1" || s === "S2"),
+  };
+}
+
 export interface SessionState {
   sessionId: string;
   openErrors: OpenError[];
@@ -53,6 +87,8 @@ export interface SessionState {
   // ask apart from the model invoking the same command on its own initiative via
   // the Skill tool, which produces no UserPromptSubmit event at all.
   explicitLearnPending?: boolean;
+  // what bears on whether this session was a piece of workflow (session-workflow.ts)
+  workflow?: WorkflowTrail;
 }
 
 export function emptySessionState(sessionId: string): SessionState {
@@ -94,6 +130,7 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const workflow = parseWorkflowTrail(parsed.workflow);
     const activity =
       typeof parsed.activity === "object" &&
       parsed.activity !== null &&
@@ -115,6 +152,7 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
       ...(typeof parsed.explicitLearnPending === "boolean"
         ? { explicitLearnPending: parsed.explicitLearnPending }
         : {}),
+      ...(workflow ? { workflow } : {}),
     };
   } catch {
     return emptySessionState(sessionId);

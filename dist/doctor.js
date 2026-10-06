@@ -32,7 +32,14 @@ var FIELDS = [
   "bashFailuresCaptured",
   "pairsResolved",
   "gateErrors",
-  "gateAbandoned"
+  "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowEntrypointSeen",
+  "workflowEntrypointMissing",
+  "workflowDetectedShape",
+  "workflowDetectedCandidate",
+  "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
   return join2(home, "counters.json");
@@ -44,7 +51,14 @@ function readCounters(home = handbookHome()) {
     bashFailuresCaptured: 0,
     pairsResolved: 0,
     gateErrors: 0,
-    gateAbandoned: 0
+    gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowEntrypointSeen: 0,
+    workflowEntrypointMissing: 0,
+    workflowDetectedShape: 0,
+    workflowDetectedCandidate: 0,
+    workflowSkippedHygiene: 0
   };
   try {
     const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
@@ -936,6 +950,10 @@ function pipelineLogFile(home = handbookHome()) {
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
 
 // src/lib/status.ts
 function pluginVersion() {

@@ -2440,6 +2440,10 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
 // src/lib/status.ts
 function lastPipelineRun(home = handbookHome()) {
   let raw;

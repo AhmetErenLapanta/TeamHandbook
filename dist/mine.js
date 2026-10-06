@@ -1461,7 +1461,7 @@ var init_score = __esm({
 });
 
 // src/cli/mine.ts
-import { writeFileSync as writeFileSync4 } from "node:fs";
+import { writeFileSync as writeFileSync5 } from "node:fs";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // src/lib/mine.ts
@@ -1806,7 +1806,20 @@ function buildRoleResolver(paths, options = {}) {
       }
     }
   }
-  const named = (path) => {
+  const filters = options.filters ?? true;
+  const compiled = filters ? compiledRoles(all, namer(templates, areas), options.binaryPaths) : /* @__PURE__ */ new Set();
+  return resolverFrom(mirrors, templates, areas, compiled, filters);
+}
+function saveRoleResolver(resolver) {
+  return {
+    mirrors: [...resolver.mirrors].sort(),
+    templates: [...resolver.templates].sort(),
+    areas: [...resolver.areas].sort(),
+    compiled: [...resolver.compiled].sort()
+  };
+}
+function namer(templates, areas) {
+  return (path) => {
     const segments = path.split("/");
     if (segments.length >= 3) {
       const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
@@ -1820,9 +1833,10 @@ function buildRoleResolver(paths, options = {}) {
     const { suffix, ext } = stemSuffix(base);
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
   };
-  const filters = options.filters ?? true;
-  const compiled = filters ? compiledRoles(all, named, options.binaryPaths) : /* @__PURE__ */ new Set();
-  const resolve = (path) => {
+}
+function resolverFrom(mirrors, templates, areas, compiled, filters) {
+  const named = namer(templates, areas);
+  const resolve2 = (path) => {
     const segments = path.split("/");
     if (filters) {
       if (TEST.test(path)) return "test";
@@ -1835,10 +1849,11 @@ function buildRoleResolver(paths, options = {}) {
     }
     return named(path);
   };
-  resolve.mirrors = mirrors;
-  resolve.templates = templates;
-  resolve.compiled = compiled;
-  return resolve;
+  resolve2.mirrors = mirrors;
+  resolve2.templates = templates;
+  resolve2.areas = areas;
+  resolve2.compiled = compiled;
+  return resolve2;
 }
 var LOCALES = /* @__PURE__ */ new Set([
   "en",
@@ -3527,9 +3542,80 @@ var defaultDraftRunner = async (prompt) => {
 var DRAFT_MODEL = "sonnet";
 var DRAFT_TIMEOUT_MS = 3e5;
 
+// src/lib/session-workflow.ts
+import { appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync3, realpathSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
+init_config();
+import { basename as basename4, dirname as dirname3, join as join7, relative, resolve, sep } from "node:path";
+
+// src/lib/counters.ts
+init_session_state();
+init_fs_atomic();
+
+// src/lib/session-workflow.ts
+init_identity();
+init_secrets();
+
+// src/lib/signals.ts
+init_session_state();
+init_secrets();
+
+// src/lib/session-workflow.ts
+init_fs_atomic();
+init_session_state();
+function minedRecordFile(home = handbookHome()) {
+  return join7(home, "mined-workflows.json");
+}
+function sessionDetectEnabled(home = handbookHome()) {
+  const sessions = readConfigFile(home).sessions;
+  return !configIsBroken(home) && sessions?.detect !== false;
+}
+function repositoryOf(dir) {
+  let at = resolve(dir);
+  for (; ; ) {
+    const dotgit = join7(at, ".git");
+    try {
+      const stat = statSync(dotgit);
+      if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
+      if (stat.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync3(dotgit, "utf8"));
+        if (pointer) {
+          const gitdir = resolve(at, pointer[1].trim());
+          const marker = `${sep}.git${sep}worktrees${sep}`;
+          const cut = gitdir.lastIndexOf(marker);
+          return { repo: realpathSync(cut >= 0 ? gitdir.slice(0, cut) : at), checkout: at, gitdir };
+        }
+      }
+    } catch {
+    }
+    const up = dirname3(at);
+    if (up === at) return null;
+    at = up;
+  }
+}
+function saveMinedRecord(repoPaths2, collection, shapes, home = handbookHome(), now = (/* @__PURE__ */ new Date()).toISOString()) {
+  const unreadable = new Set(collection.unreadable.map((u) => u.path));
+  const labels = repoLabels(repoPaths2);
+  const repos = [];
+  for (const path of repoPaths2) {
+    if (unreadable.has(path)) continue;
+    const found = repositoryOf(path);
+    const label = labels.get(path);
+    if (found) repos.push({ root: found.repo, label, family: collection.families.get(label) ?? label });
+  }
+  const record = {
+    version: 1,
+    at: now,
+    repos,
+    resolver: saveRoleResolver(collection.resolver),
+    prefixes: [...collection.prefixes].sort(),
+    shapes: shapes.map((s) => ({ id: s.id, core: s.coreFiles.map((f) => f.role), recurrence: s.recurrence }))
+  };
+  writeFileAtomic(minedRecordFile(home), JSON.stringify(record));
+}
+
 // src/lib/mine-command.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -3672,10 +3758,10 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     return { ok: false, rank: workflow.rank, reasons: ["no-frontmatter"] };
   }
   const base = candidatesDir(home);
-  const slug = uniqueSlug(summary.name, (s) => existsSync2(join7(base, s)));
-  const dir = join7(base, slug);
-  mkdirSync4(dir, { recursive: true });
-  writeFileSync3(join7(dir, "SKILL.md"), result.skill);
+  const slug = uniqueSlug(summary.name, (s) => existsSync2(join8(base, s)));
+  const dir = join8(base, slug);
+  mkdirSync5(dir, { recursive: true });
+  writeFileSync4(join8(dir, "SKILL.md"), result.skill);
   const trace = identityInSkillDir(dir);
   const meta = {
     slug,
@@ -3768,6 +3854,12 @@ ${USAGE}`);
   const options = deps.options ?? {};
   const collection = collectUnits(paths, options);
   const mined = shapesFromUnits(collection, options);
+  if (sessionDetectEnabled(deps.home)) {
+    try {
+      saveMinedRecord(paths, collection, mined.shapes, deps.home);
+    } catch {
+    }
+  }
   const families = variantFamilies(mined.shapes);
   const asked = verb === "draft" ? positionals[0] : void 0;
   const reach = asked !== void 0 && /^\d+$/.test(asked) ? Math.max(limit, Number(asked)) : limit;
@@ -3929,7 +4021,7 @@ ${USAGE2}`);
   const result = mineShapes(positionals, options);
   const json = `${JSON.stringify(result, null, 2)}
 `;
-  if (values.out) writeFileSync4(values.out, json);
+  if (values.out) writeFileSync5(values.out, json);
   else process.stdout.write(json);
   const { stats } = result;
   for (const { path, reason } of stats.unreadableRepos) console.error(`skipped ${path}: ${reason}`);

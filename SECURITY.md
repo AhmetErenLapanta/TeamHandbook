@@ -57,8 +57,8 @@ This document states exactly what it reads, what it writes, and where data goes.
 All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 
 - `sessions/` - per-session working state: the failing command and its fix, the
-  transcript path, and any flagged teachings. Kept until the session ends or is
-  salvaged.
+  transcript path, any flagged teachings, and the paths of files written inside a
+  repository. Kept until the session ends or is salvaged.
 - `signals.jsonl` - the evidence ledger of captured error→fix pairs.
 - `pending/` - harvest jobs waiting for the background runner: one file per session
   holding its id, cwd, the **path** to its transcript, and the captured evidence.
@@ -92,6 +92,10 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 - `abandoned.jsonl` - a harvest job that failed to reach `claude` three times is
   parked here rather than dropped silently, so the session's evidence stays
   recoverable. It persists until you delete it; `/handbook:status` reports the count.
+- `workflows.jsonl`, `workflow-salt`, `mined-workflows.json` - the sessions recognized
+  as a piece of workflow, the salt their hashes use, and the last `/handbook:mine` run
+  they are named against. Field by field in
+  [Recognizing a workflow in a session](#recognizing-a-workflow-in-a-session).
 
 Approved skills are written **outside** `~/.teamhandbook/`, where Claude Code loads
 them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
@@ -276,6 +280,76 @@ is the one delivery that makes a commit without opening a merge request - so the
 message is asked for first and never invented. It is screened for secrets and for traces
 of this machine before that commit is made, and a failure to commit removes what was
 written and leaves the candidate waiting.
+
+## Recognizing a workflow in a session
+
+TeamHandbook notes when a session looks like a piece of repeated work, so that how often
+that happens can be counted before anything is built on it. It asks nothing, drafts
+nothing, makes no model call and opens no network connection. It is on by default;
+`{"sessions": {"detect": false}}` in `config.json` turns it off, and a config file that
+cannot be parsed counts as off.
+
+**What it reads.** The `PostToolUse` input described above: the path an edit tool wrote,
+and a shell command, parsed for the files it writes (a redirect, `tee`, `sed -i`, a copy
+or a move), whether it runs a test or a build, and whether it commits, together with the
+exit status Claude Code reports for the whole command. At a commit and at the end of a
+session it also reads, for each repository written in: where its `.git` points, so a
+worktree counts as the repository it belongs to; which of the written paths git ignores
+(`git check-ignore`); and the current branch, from `.git/HEAD`. When Claude Code reports
+an entry point in the `CLAUDE_CODE_ENTRYPOINT` variable, a session started in print mode or
+through an agent SDK, which nobody is at the keyboard for, is left out and counted rather
+than recorded. That variable is not a documented one, so whether it arrived is counted too:
+a session it did not arrive for is treated as attended, and shows up in that count.
+
+**What it keeps while the session runs.** The session's file under `sessions/` gains the
+absolute paths of the files written inside a repository, whether the latest test or build
+since the last of them passed, and which signals have already fired. It goes when the
+rest of that file goes.
+
+**What one recognized session writes.** A line in `workflows.jsonl` when a signal fires -
+a passing test or build after the last write and then a commit, or the end of the session
+with the latest such check passing - holding exactly:
+
+- the time;
+- a hash of the session id;
+- which of the two signals fired;
+- whether the files match a workflow `/handbook:mine` listed, and if so that workflow's id
+  (itself a hash), or form a set of roles of their own;
+- one hash per (repository, role) pair written, one hash per repository, and how many
+  pairs there were;
+- how many error and fix signals the session left in `signals.jsonl`;
+- a hash of the ticket key in the branch name, or of the branch name when it carries none;
+- whether the passing check's own exit status was hidden by what followed it on its line
+  (`npm test | tail`), in which case the line's status was read in its place.
+
+**What it never writes.** No file name, path, directory name or role; no command and no
+output; no prompt or anything else you typed; no branch name or ticket key; no repository
+name; no session id. The roles are hashed rather than kept because a role is made of a
+path - for a file with no extension it is the file's own name.
+
+**The hashes.** Each is salted with a random value made once per install and kept in
+`workflow-salt`. A stable salt is what lets the same ticket, or the same set of roles,
+hash alike across sessions, which is how repeated work gets counted. It sits on the same
+disk as the hashes, and a ticket key is easy to guess: someone holding the whole
+directory can test guesses against a hash. A hash here keeps a value out of a file that
+is copied on its own, not away from someone who has your home directory.
+
+**Screening.** Before a line is written, the repository-relative paths, the roles and the
+branch it is built from are scanned for a trace of this machine's identity and for
+secrets, and the finished line is scanned again. A hit drops the whole line rather than
+masking part of it, and a counter in `counters.json` says how many were dropped.
+
+**The mined record.** `/handbook:mine` keeps its last listing in `mined-workflows.json`:
+each mined repository's absolute root with the label it was mined under, the role
+resolver's layout tables (repository-relative directory paths), the ticket prefixes the
+history uses, and each listed workflow's id and core roles. It is what lets a session be
+named in the miner's own roles without reading any history. It is not written while
+detection is off, and it never leaves the machine.
+
+**Counters.** `counters.json` gains how many attended sessions ended with detection on,
+how many unattended ones were left out, how many sessions reported their entry point and
+how many did not, what detection made of the sessions at their end whether or not a signal
+fired, and how many lines screening dropped.
 
 ## Removing your data
 

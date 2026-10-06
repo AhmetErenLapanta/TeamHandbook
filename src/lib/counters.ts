@@ -17,6 +17,22 @@ export interface Counters {
   // captured pairs given up on after MAX_GATE_ATTEMPTS failed gate runs - surfaced
   // in status/doctor so the loss is never silent (originals kept in abandoned.jsonl)
   gateAbandoned: number;
+  // interactive sessions that reached their end with workflow detection on - the denominator
+  // the recognized sessions in workflows.jsonl are read against
+  workflowSessions: number;
+  // sessions nobody was driving (print mode, an SDK): left out of that denominator, but counted
+  workflowSkippedAutonomous: number;
+  // sessions that ended with the entry point reported, and without: the split above is only as
+  // good as the first of these
+  workflowEntrypointSeen: number;
+  workflowEntrypointMissing: number;
+  // what detection made of those sessions at their end, whether or not a signal fired and wrote a
+  // line: a mined workflow, or a role set of its own
+  workflowDetectedShape: number;
+  workflowDetectedCandidate: number;
+  // recognized sessions whose record was not written because something in it traced the person
+  // or a secret
+  workflowSkippedHygiene: number;
 }
 
 const FIELDS: Array<keyof Counters> = [
@@ -26,6 +42,13 @@ const FIELDS: Array<keyof Counters> = [
   "pairsResolved",
   "gateErrors",
   "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowEntrypointSeen",
+  "workflowEntrypointMissing",
+  "workflowDetectedShape",
+  "workflowDetectedCandidate",
+  "workflowSkippedHygiene",
 ];
 
 export function countersFile(home: string = handbookHome()): string {
@@ -40,6 +63,13 @@ export function readCounters(home: string = handbookHome()): Counters {
     pairsResolved: 0,
     gateErrors: 0,
     gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowEntrypointSeen: 0,
+    workflowEntrypointMissing: 0,
+    workflowDetectedShape: 0,
+    workflowDetectedCandidate: 0,
+    workflowSkippedHygiene: 0,
   };
   try {
     const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
