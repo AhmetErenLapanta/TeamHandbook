@@ -888,7 +888,11 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
   return { manualUrl, prError: forgeProblem };
 }
 function pushFailure(repoUrl, branch, subject, err, rerun, commitPrefixFix) {
-  const fix = `Nothing reached the repository. ${pushQuestion({ branch }, subject)} Ask for a name the rule accepts, then ${rerun} with \`--branch <name>\`.`;
+  const fix = [
+    "Nothing reached the repository.",
+    pushQuestion({ branch }, subject),
+    `Ask for a name the rule accepts, then ${rerun} with \`--branch <name>\`.`
+  ].join("\n");
   const error = pushFailureReason(repoUrl, branch, err, fix, commitPrefixFix);
   return pushRuleSubject(String(err instanceof Error ? err.message : err)) === "branch-name" ? { error, proposedBranch: branch, proposedMessage: subject } : { error };
 }

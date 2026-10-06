@@ -200,7 +200,8 @@ describe.each(ROUTES)("$name, against a project that polices branch names", ({ p
     expect(result.ok).toBe(false);
     // the rule exactly as the server said it, not a paraphrase of it
     expect(result.error).toContain(`Branch name 'my-share' does not follow the pattern '${BRANCH_RULE}'`);
-    expect(result.error).toContain("Branch `my-share` · message `chore: the case under test` - confirm or change either.");
+    // the same question as the first screen, on a line of its own, the refused name in it
+    expect(result.error).toMatch(/^Branch `my-share` · message `chore: the case under test` - confirm or change either\.$/m);
     expect(result.error).toContain("--branch <name>");
     expect(result.proposedBranch).toBe("my-share");
     // no second push under a name of the product's choosing
