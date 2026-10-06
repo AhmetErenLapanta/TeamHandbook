@@ -501,6 +501,13 @@ describe("which items the concrete-checks rule judges", () => {
     expect(concrete(text)).toBe(true);
   });
 
+  it("given a numbered checks section and an unnumbered sub-heading inside a layer, when the numbered one says only to run the tests, then it is still read and fails", () => {
+    const text = DRAFT.replace("## Verification", "## 5. Verification")
+      .replace("- [ ] `./gradlew test` exits 0.", "- [ ] Run the tests.")
+      .replace("2. Keep the method the same on both sides. [fix 1]", "2. Keep the method the same on both sides. [fix 1]\n\n### Validation\n- `./gradlew check` exits 0.");
+    expect(concrete(text)).toBe(false);
+  });
+
   it("given a top-level title naming a validator, when checked, then the whole document is not read as checks", () => {
     const text = DRAFT.replace("# add-widget-route - a new widget route", "# add-widget-route - route, validator and tests");
     expect(concrete(text)).toBe(true);

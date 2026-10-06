@@ -606,13 +606,17 @@ function addExtendedFindings(
   // line of a draft titled after its validator - as checks, and three of the eleven drafts it
   // rejected had no unconcrete item in their checks section at all.
   //
-  // The template's checks section is unnumbered, and a numbered `## 4. Verification` is read as
-  // one only in a draft that has no unnumbered checks section - the form drafts took before the
-  // template, which numbered every section. A draft with `## Verification` that also writes
-  // `## 3. Tests` is using the number to say Tests is one of its layers, and its steps are steps.
+  // The template's checks section is an unnumbered `## Verification`, and a numbered
+  // `## 4. Verification` is the form drafts took before the template, which numbered every
+  // section. A draft that has the template's heading and also writes `## 3. Tests` is using the
+  // number to say Tests is one of its layers, so its steps are steps. Only that heading sets a
+  // numbered one aside: an unnumbered `### Validation` inside a layer does not, or a numbered
+  // checks section saying only "run the tests" would go unread.
   const checks = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
-  const unnumbered = checks.filter((s) => !NUM_HEAD_RE.test(s.title));
-  const verifySecs = unnumbered.length > 0 ? unnumbered : checks;
+  const templateChecks = checks.some(
+    (s) => s.level === 2 && !NUM_HEAD_RE.test(s.title) && EXEMPT_EXACT_RE.test(bareTitle(s.title)),
+  );
+  const verifySecs = templateChecks ? checks.filter((s) => !NUM_HEAD_RE.test(s.title)) : checks;
   const verifyItems = verifySecs
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);
