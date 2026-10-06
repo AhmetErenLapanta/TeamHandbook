@@ -1477,6 +1477,30 @@ describe("a mined draft delivered into the project it came from", () => {
     expect(log()).toContain("add the add-entity-field skill");
   });
 
+  it("given a mined draft queued before the repository was recorded, when it is approved from another repository, then its directory answers for it and it is refused", () => {
+    // given an older draft that carries only the directory it was drafted in, and a reviewer elsewhere
+    gitRepo();
+    const other = otherRepo();
+    try {
+      seedCandidate(mined());
+
+      // when it is approved into the project from the other repository
+      const result = approveWithWording(other);
+
+      // then the directory it was drafted in is the source, so it is refused as from another
+      // repository - not as one that is gone - and neither repository gets a commit
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("run review from the repository it came from");
+      expect(commits(project)).toBe("1");
+      expect(commits(other)).toBe("1");
+      expect(existsSync(join(project, ".claude"))).toBe(false);
+      expect(existsSync(join(other, ".claude"))).toBe(false);
+      expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it("given a mined draft from another repository, when the review screen names the project option, then it says where it came from by fingerprint and that review must run there", () => {
     // given a draft mined in one repository and a review run in another
     gitRepo();
