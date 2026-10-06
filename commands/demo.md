@@ -1,5 +1,5 @@
 ---
-description: Watch TeamHandbook learn something from a real session end to end, in about five minutes: it prepares a piece of real work, harvests a skill out of it, and hands you the approval step. Use when someone wants to see the product actually work before trusting it or rolling it out to a team. Triggers: "show me how this works", "give me a demo", "walk me through it", "let me see it in action", "what does this thing actually do", "I want to try it before I hand it to the team".
+description: Walk through mining a repository's repeating work into a draft skill on a scratch repository, end to end in about five minutes, up to the approval step. Use when someone wants to see the product actually work before trusting it or rolling it out to a team. Triggers: "show me how this works", "give me a demo", "walk me through it", "let me see it in action", "what does this thing actually do", "I want to try it before I hand it to the team".
 ---
 
 You are running TeamHandbook's guided demo. It shows the product's main path on a scratch
