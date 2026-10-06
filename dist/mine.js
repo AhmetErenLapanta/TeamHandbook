@@ -695,7 +695,9 @@ function addExtendedFindings(findings, secs, text, expects) {
     deliverySecs.length === 0 ? !expects.multiRepo : deliverySecs.some((s) => items(s.body) >= 1) || singleRepo,
     `delivery sections=${deliverySecs.length} single-repo note=${singleRepo} multi-repo=${Boolean(expects.multiRepo)}`
   );
-  const verifySecs = secs.filter((s) => VERIFY_HEAD_RE.test(s.title));
+  const checks = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
+  const unnumbered = checks.filter((s) => !NUM_HEAD_RE.test(s.title));
+  const verifySecs = unnumbered.length > 0 ? unnumbered : checks;
   const verifyItems = verifySecs.flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text))).map((line) => line.text);
   const fencedItems = verifySecs.flatMap((s) => s.body.filter((line) => line.kind === "fenced" && line.text.trim() !== "")).map((line) => line.text);
   const all = [...verifyItems, ...fencedItems];
@@ -865,7 +867,7 @@ var init_skill_format = __esm({
     MIN_VERIFY_ITEMS = 2;
     MIN_PITFALL_ITEMS = 1;
     SHARE_CELL_RE = /\b\d+\s*\/\s*\d+\b/;
-    OBSERVABLE_RE = /\b(returns?|shows?|appears?|contains?|equals?|matches?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
+    OBSERVABLE_RE = /\b(returns?|shows?|appears?|contains?|equals?|match(?:es)?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
     INLINE_CODE_RE = /`[^`\n]+`/;
     PATH_TOKEN_RE = /[^\s`|()]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|()]*/;
     PATH_TOKEN_ALL_RE = new RegExp(PATH_TOKEN_RE.source, "g");
@@ -2634,6 +2636,11 @@ function buildEvidence(shape, index, options = {}) {
   };
   const withhold = (count = 1) => dropped.withheld = (dropped.withheld ?? 0) + count;
   const skipHunk = () => dropped.hunksSkipped = (dropped.hunksSkipped ?? 0) + 1;
+  const maskAuthors = (lines, path) => lines.map((line) => {
+    const { text, masked } = maskAuthorFields(line, path);
+    if (masked) dropped.authorFields = (dropped.authorFields ?? 0) + masked;
+    return text;
+  });
   const roleOf = options.roleOf ?? ((repo, path) => fallbackRole(shape, repo, path));
   const { rows, droppedRows } = buildFileMap(shape, records, roleOf, limits.coreShare, numbers, pathScreen, drop);
   const testShare = records.filter((r) => r.slices.some((s) => slicePaths(s).some(isTestPath))).length;
@@ -2647,7 +2654,7 @@ function buildEvidence(shape, index, options = {}) {
     fileMapDropped: droppedRows,
     delivery: deployOrder(records, pathScreen, drop),
     subjects: collectSubjects(records, limits.maxSubjects, screen, numbers, drop),
-    hunks: collectHunks(rows, records, limits, roleOf, hunkScreen, numbers, drop, withhold, skipHunk, options.run),
+    hunks: collectHunks(rows, records, limits, roleOf, hunkScreen, numbers, drop, withhold, skipHunk, maskAuthors, options.run),
     fixes: collectFixes(records, shape, roleOf, limits.maxFixes, screen, pathScreen, numbers),
     siblings: siblingSeries(records, screen, numbers, drop),
     rubric: {
@@ -2685,6 +2692,7 @@ function buildEvidence(shape, index, options = {}) {
         drop,
         () => dropped.filesSkipped = (dropped.filesSkipped ?? 0) + 1,
         withhold,
+        maskAuthors,
         options.run
       );
       dropped.files = dropped.files ?? 0;
@@ -2701,6 +2709,7 @@ function buildEvidence(shape, index, options = {}) {
         () => dropped.configLines = (dropped.configLines ?? 0) + 1,
         () => dropped.configsSkipped = (dropped.configsSkipped ?? 0) + 1,
         withhold,
+        maskAuthors,
         options.run
       );
       dropped.configs = dropped.configs ?? 0;
@@ -2849,7 +2858,7 @@ function collectSubjects(records, max, screen, numbers, drop) {
   return out;
 }
 var BINARY_PATCH_RE = /^(?:Binary files .* differ|GIT binary patch)$/m;
-function collectHunks(rows, records, limits, roleOf, screen, numbers, drop, withhold, skip, run) {
+function collectHunks(rows, records, limits, roleOf, screen, numbers, drop, withhold, skip, maskAuthors, run) {
   const out = [];
   const withheld = /* @__PURE__ */ new Set();
   const binary = /* @__PURE__ */ new Set();
@@ -2885,7 +2894,7 @@ function collectHunks(rows, records, limits, roleOf, screen, numbers, drop, with
           drop(reason, "hunks");
           continue;
         }
-        const lines = all.slice(0, limits.maxHunkLines);
+        const lines = maskAuthors(all.slice(0, limits.maxHunkLines), found.path);
         out.push({
           role: row.role,
           unit: abstractTickets(record.key, numbers),
@@ -2975,6 +2984,45 @@ function isConfigPath(path) {
 function isWithheldFile(path) {
   return ENV_FILE_RE.test(path) && !ENV_EXAMPLE_RE.test(path);
 }
+var RECORD_FILE_RE = /\.(xml|ya?ml|json|properties|toml|sql)$/i;
+var AUTHOR_QUOTED_RE = /(\bauthor["']?[ \t]*[:=][ \t]*)(["'])([^"'\n]*)\2/gi;
+var AUTHOR_BARE_RE = /(\bauthor[ \t]*[:=][ \t]*)([^\s"'{[][^,}\]#\n]*)/gi;
+var AUTHOR_TAG_RE = /(@author[ \t]+)([^\n*]*[^\s*])/gi;
+var CHANGESET_RE = /(--[ \t]*changeset[ \t]+)([^:\s]+)(?=:)/gi;
+var ROLE_AUTHORS = /* @__PURE__ */ new Set([
+  "team",
+  "system",
+  "admin",
+  "bot",
+  "ci",
+  "automation",
+  "generated",
+  "liquibase",
+  "flyway",
+  "migration",
+  "dba",
+  "developer",
+  "developers",
+  "unknown",
+  "anonymous"
+]);
+var WITHHELD_AUTHOR = "(withheld)";
+function maskAuthorFields(line, path) {
+  let masked = 0;
+  const mask = (value) => {
+    if (!value.trim() || ROLE_AUTHORS.has(value.trim().toLowerCase())) return value;
+    masked++;
+    return WITHHELD_AUTHOR;
+  };
+  let text = line.replace(AUTHOR_TAG_RE, (_match, head, value) => head + mask(value));
+  if (RECORD_FILE_RE.test(path)) {
+    text = text.replace(AUTHOR_QUOTED_RE, (_match, head, quote, value) => head + quote + mask(value) + quote).replace(AUTHOR_BARE_RE, (_match, head, value) => {
+      const kept = value.trimEnd();
+      return head + mask(kept) + value.slice(kept.length);
+    }).replace(CHANGESET_RE, (_match, head, value) => head + mask(value));
+  }
+  return { text, masked };
+}
 var SIGNATURE_RE = /^\s*(?:class|interface|object|enum|struct|trait|record|fun|def|func|val|var|let|const|public|private|protected|internal|static|export|type|data|abstract|override|@)\b|[:=]/;
 var COMMENT_LINE_RE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--|;)/;
 var IMPORT_LINE_RE = /^\s*(?:import|package|from|#include|using|require)\b/;
@@ -3012,7 +3060,7 @@ function roleUsage(records, roleOf) {
   }
   return usage;
 }
-function collectFiles(shape, records, roleOf, limits, content, pathScreen, numbers, drop, skip, withhold, run) {
+function collectFiles(shape, records, roleOf, limits, content, pathScreen, numbers, drop, skip, withhold, maskAuthors, run) {
   const of = records.length;
   if (of === 0) return [];
   const usage = roleUsage(records, roleOf);
@@ -3054,14 +3102,14 @@ function collectFiles(shape, records, roleOf, limits, content, pathScreen, numbe
     out.push({
       role: row.role,
       path: abstractTickets(key, numbers),
-      lines: lines.map((line) => abstractTickets(line, numbers)),
+      lines: maskAuthors(lines, path).map((line) => abstractTickets(line, numbers)),
       omitted
     });
   }
   return out;
 }
 var CONFIG_KEY_RE = /^[+-]?\s*["']?([A-Za-z_][A-Za-z0-9_.\-]{1,60})["']?\s*[:=]/;
-function collectConfigs(records, limits, content, pathScreen, numbers, drop, lineHit, skip, withhold, run) {
+function collectConfigs(records, limits, content, pathScreen, numbers, drop, lineHit, skip, withhold, maskAuthors, run) {
   const touched = /* @__PURE__ */ new Map();
   for (const record of records) {
     const seen = /* @__PURE__ */ new Set();
@@ -3134,7 +3182,7 @@ function collectConfigs(records, limits, content, pathScreen, numbers, drop, lin
     }
     out.push({
       path: abstractTickets(key, numbers),
-      lines: chosen.map((i) => abstractTickets(all[i], numbers)),
+      lines: maskAuthors(chosen.map((i) => all[i]), entry.path).map((line) => abstractTickets(line, numbers)),
       omitted: all.length - chosen.length
     });
   }
@@ -3603,6 +3651,15 @@ function repositoryOf(dir) {
     at = up;
   }
 }
+function checkoutRoot(dir) {
+  try {
+    if (!statSync(dir).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const found = repositoryOf(dir);
+  return found ? realpathSync(found.checkout) : null;
+}
 function saveMinedRecord(repoPaths2, collection, shapes, home = handbookHome(), now = (/* @__PURE__ */ new Date()).toISOString()) {
   const unreadable = new Set(collection.unreadable.map((u) => u.path));
   const labels = repoLabels(repoPaths2);
@@ -3774,6 +3831,7 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
   mkdirSync5(dir, { recursive: true });
   writeFileSync4(join8(dir, "SKILL.md"), result.skill);
   const trace = identityInSkillDir(dir);
+  const root = checkoutRoot(cwd);
   const meta = {
     slug,
     status: "pending",
@@ -3791,6 +3849,7 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     kind: "procedure",
     suggestedTarget: "project",
     ...demo ? { demo: true } : {},
+    ...root ? { repoRoot: root } : {},
     ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}
   };
   writeCandidateMeta(dir, meta);

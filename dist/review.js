@@ -1,11 +1,12 @@
 // src/cli/review.ts
-import { readFileSync as readFileSync11 } from "node:fs";
-import { join as join14 } from "node:path";
+import { readFileSync as readFileSync12 } from "node:fs";
+import { join as join15 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, rmdirSync, rmSync as rmSync5 } from "node:fs";
+import { createHash as createHash2 } from "node:crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync8, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename3, dirname as dirname4, join as join10, relative } from "node:path";
+import { basename as basename4, dirname as dirname5, join as join11, relative as relative2 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
@@ -2097,24 +2098,92 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
 }
 var TEAM_SKILLS_DIR = "skills";
 
+// src/lib/session-workflow.ts
+import { appendFileSync, mkdirSync as mkdirSync7, readFileSync as readFileSync7, realpathSync, statSync as statSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { basename as basename3, dirname as dirname4, join as join10, relative, resolve, sep as sep2 } from "node:path";
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/session-workflow.ts
+function repositoryOf(dir) {
+  let at = resolve(dir);
+  for (; ; ) {
+    const dotgit = join10(at, ".git");
+    try {
+      const stat = statSync2(dotgit);
+      if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
+      if (stat.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync7(dotgit, "utf8"));
+        if (pointer) {
+          const gitdir = resolve(at, pointer[1].trim());
+          const marker = `${sep2}.git${sep2}worktrees${sep2}`;
+          const cut = gitdir.lastIndexOf(marker);
+          return { repo: realpathSync(cut >= 0 ? gitdir.slice(0, cut) : at), checkout: at, gitdir };
+        }
+      }
+    } catch {
+    }
+    const up = dirname4(at);
+    if (up === at) return null;
+    at = up;
+  }
+}
+function checkoutRoot(dir) {
+  try {
+    if (!statSync2(dir).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const found = repositoryOf(dir);
+  return found ? realpathSync(found.checkout) : null;
+}
+
 // src/lib/deliver.ts
 function soloSkillsDir(projectCwd) {
-  return join10(projectCwd, ".claude", "skills");
+  return join11(projectCwd, ".claude", "skills");
 }
 function personalSkillsDir() {
-  return join10(homedir4(), ".claude", "skills");
+  return join11(homedir4(), ".claude", "skills");
 }
 function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync5) {
   if (meta.demo) return meta.cwd ?? "";
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
+function minedSource(meta, fallbackCwd) {
+  if (meta.origin !== "mine" || meta.demo) return null;
+  const recorded = meta.repoRoot ?? meta.cwd ?? "";
+  const source = recorded ? checkoutRoot(recorded) : null;
+  if (!source) return { at: "gone", recorded };
+  const current = checkoutRoot(fallbackCwd);
+  return source === current ? { at: "here" } : { at: "elsewhere", source, current };
+}
+function repositoryFingerprint(root) {
+  return createHash2("sha256").update(root).digest("hex").slice(0, 8);
+}
+function minedSourceRefusal(source) {
+  if (source?.at === "gone") {
+    return `the repository this draft was mined in (fingerprint ${repositoryFingerprint(source.recorded)}) no longer exists, so there is no project it can be committed into: keep it for yourself, share it with the team, or reject it. Nothing was written and nothing was committed.`;
+  }
+  if (source?.at === "elsewhere") {
+    const here = source.current ? `in the one with fingerprint ${repositoryFingerprint(source.current)}` : "outside any repository";
+    return `this draft was mined in the repository with fingerprint ${repositoryFingerprint(source.source)}, and this review runs ${here}: run review from the repository it came from, or choose another target. Nothing was written and nothing was committed.`;
+  }
+  return null;
+}
 function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync5) {
   return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
 }
 function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync5) {
+  const mined = minedSource(meta, fallbackCwd);
+  if (mined?.at === "gone") return "none: the repository this draft was mined in no longer exists";
+  if (mined?.at === "elsewhere") {
+    return `the repository this draft was mined in (fingerprint ${repositoryFingerprint(mined.source)}), not this one - run review from there`;
+  }
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
-  return `${basename3(origin)}'s .claude/skills (where it was captured, not this project)`;
+  return `${basename4(origin)}'s .claude/skills (where it was captured, not this project)`;
 }
 function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cwd(), decidedAt = (/* @__PURE__ */ new Date()).toISOString(), team = loadTeamConfig(home), git = runGit, forge = runForge, target, personalDir = personalSkillsDir(), options = {}) {
   if (!isSafeSlug(slug)) return { ok: false, error: `invalid candidate name "${slug}"` };
@@ -2123,7 +2192,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
   }
   const conflict = conflictingOptions(options);
   if (conflict) return { ok: false, error: conflict };
-  const dir = join10(candidatesDir(home), slug);
+  const dir = join11(candidatesDir(home), slug);
   const meta = readCandidateMeta(dir);
   if (!meta) return { ok: false, error: `no candidate named "${slug}"` };
   if (meta.status !== "pending") {
@@ -2136,6 +2205,10 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
       meta,
       error: "a demo draft stays in its scratch repository: add it to that repository or reject it. Nothing was written."
     };
+  }
+  if (resolved === "project") {
+    const refusal = minedSourceRefusal(minedSource(meta, fallbackCwd));
+    if (refusal) return { ok: false, meta, error: refusal };
   }
   const wording = options.commitMessage ?? {};
   const commitsLocally = resolved === "project" && meta.origin === "mine";
@@ -2168,14 +2241,14 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
 }
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
-  const target = join10(skillsDir, slug);
+  const target = join11(skillsDir, slug);
   const occupied = existsSync5(target);
   const updatedExisting = occupied && mayUpdate(options, slug);
   if (occupied && !updatedExisting) {
     return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
   }
   try {
-    const skillMd = readFileSync7(join10(dir, "SKILL.md"), "utf8");
+    const skillMd = readFileSync8(join11(dir, "SKILL.md"), "utf8");
     if (updatedExisting) rmSync5(target, { recursive: true, force: true });
     copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
@@ -2184,7 +2257,7 @@ function installLocally(dir, meta, skillsDir, options) {
   return { slug, target, updatedExisting };
 }
 function localCollisionMessage(name, skillsDir, chosen) {
-  const taken = `a skill named "${name}" is already installed at ${displayPath(join10(skillsDir, name))}. Nothing was written.`;
+  const taken = `a skill named "${name}" is already installed at ${displayPath(join11(skillsDir, name))}. Nothing was written.`;
   const warning = "Replacing it happens immediately and cannot be undone - there is no merge request in front of a local install.";
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to replace the skill this candidate collided with. ${warning}` : `${taken} Approve again with --update to replace it, or with --as <name> to install this one under a different name. ${warning}`;
 }
@@ -2285,7 +2358,7 @@ function deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commit) {
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
   const installedProject = meta.cwd && existsSync5(meta.cwd) ? meta.cwd : fallbackCwd;
-  const originProject2 = installedProject !== fallbackCwd ? basename3(installedProject) : void 0;
+  const originProject2 = installedProject !== fallbackCwd ? basename4(installedProject) : void 0;
   const named = options.as ?? meta.slug;
   let subject;
   if (commit) {
@@ -2356,7 +2429,7 @@ function projectCommitProposal(slug) {
   return `add the ${slug} skill, drafted from this repository's history`;
 }
 function commitProjectSkill(git, repoDir, target, subject) {
-  const path = relative(repoDir, target);
+  const path = relative2(repoDir, target);
   try {
     git(["add", "--", path], repoDir);
     git(["commit", "--only", "-m", subject, "--", path], repoDir);
@@ -2371,7 +2444,7 @@ function commitProjectSkill(git, repoDir, target, subject) {
 }
 function uninstall(target, skillsDir) {
   rmSync5(target, { recursive: true, force: true });
-  for (const dir of [skillsDir, dirname4(skillsDir)]) {
+  for (const dir of [skillsDir, dirname5(skillsDir)]) {
     try {
       rmdirSync(dir);
     } catch {
@@ -2422,8 +2495,8 @@ function formatApproveResult(slug, result) {
 }
 
 // src/lib/sweep.ts
-import { readFileSync as readFileSync8 } from "node:fs";
-import { join as join11 } from "node:path";
+import { readFileSync as readFileSync9 } from "node:fs";
+import { join as join12 } from "node:path";
 
 // src/lib/transcript.ts
 var PER_USER_CAP = 1e3;
@@ -2498,7 +2571,7 @@ var DEFAULT_REASON = "did not meet the discovery bar on re-judgement";
 function expectOf(home, slug) {
   try {
     const grounded = JSON.parse(
-      readFileSync8(join11(candidatesDir(home), slug, "grounded-case.json"), "utf8")
+      readFileSync9(join12(candidatesDir(home), slug, "grounded-case.json"), "utf8")
     );
     return typeof grounded?.expect === "string" ? grounded.expect : "";
   } catch {
@@ -2755,13 +2828,13 @@ function formatLessonArchive(result) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync6, readFileSync as readFileSync9, readdirSync as readdirSync5 } from "node:fs";
-import { join as join12 } from "node:path";
+import { existsSync as existsSync6, readFileSync as readFileSync10, readdirSync as readdirSync5 } from "node:fs";
+import { join as join13 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync5(join12(home, "pending"));
+    entries = readdirSync5(join13(home, "pending"));
   } catch {
     return 0;
   }
@@ -2769,7 +2842,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync9(join12(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync10(join13(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -2778,26 +2851,22 @@ function pendingHarvestCount(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync10 } from "node:fs";
+import { readFileSync as readFileSync11 } from "node:fs";
 
 // src/lib/pipeline.ts
-import { basename as basename4, join as join13 } from "node:path";
+import { basename as basename5, join as join14 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join13(home, "pipeline.log");
+  return join14(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
-
-// src/lib/git-log.ts
-var MAX_OUTPUT_BYTES = 1 << 28;
-var MAX_BLOB_BYTES = 1 << 20;
 
 // src/lib/status.ts
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync10(pipelineLogFile(home), "utf8");
+    raw = readFileSync11(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -2820,10 +2889,10 @@ function usage() {
   process.exit(2);
 }
 function showCandidate(home, slug) {
-  const dir = join14(candidatesDir(home), slug);
+  const dir = join15(candidatesDir(home), slug);
   let skillMd;
   try {
-    skillMd = readFileSync11(join14(dir, "SKILL.md"), "utf8");
+    skillMd = readFileSync12(join15(dir, "SKILL.md"), "utf8");
   } catch {
     console.error(`error: no candidate named "${slug}"`);
     process.exit(1);
@@ -2860,7 +2929,7 @@ function showCandidate(home, slug) {
   console.log("");
   console.log("\u2500\u2500 grounded case \u2500\u2500");
   try {
-    const grounded = JSON.parse(readFileSync11(join14(dir, "grounded-case.json"), "utf8"));
+    const grounded = JSON.parse(readFileSync12(join15(dir, "grounded-case.json"), "utf8"));
     if (grounded.quote) {
       console.log(`you said:  "${grounded.quote}"`);
     }
