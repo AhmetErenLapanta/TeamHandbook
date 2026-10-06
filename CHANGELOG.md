@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.21.0] - 2026-10-06
+
+### Added
+
+- **`/handbook:status` reports the health of each skill it delivered:** whether the files
+  its file map names still exist, whether recent work still follows that map and which way
+  that is moving, how often the skill was called, and which other skill answers the same
+  requests when one does. It reads the repository's file list and history, calls no model
+  and opens no connection.
+- **The share screen warns when a skill you are sending answers the same requests as
+  another skill on this machine or in the team repository.** It is a warning, not a stop.
+
+### Changed
+
+- **The local skill-use count keeps a little more, and stops with session recording.**
+  Beside a skill's name, how many times it was called and when it was last called, it now
+  keeps how many calls fell on each day of the last month - never what the skill was asked
+  to do. Nothing is recorded while `{"sessions": {"detect": false}}` is set.
+
 ## [0.20.0] - 2026-10-06
 
 ### Changed
