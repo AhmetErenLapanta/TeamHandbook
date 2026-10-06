@@ -293,10 +293,12 @@ const SHARE_CELL_RE = /\b\d+\s*\/\s*\d+\b/;
  * The verbs of OBSERVING are in the list, not only the verbs of returning. The first version left
  * them out and rejected "Open the page and see the widget", which names exactly what a reader is
  * supposed to end up looking at - the rule is meant to catch "run the tests", which names no
- * outcome at all, and seeing a thing on a page is an outcome.
+ * outcome at all, and seeing a thing on a page is an outcome. "Match" counts only conjugated: a
+ * bare "match" opens an instruction as often as it states a result, and "Match the two paths"
+ * says what to do, not what was seen.
  */
 const OBSERVABLE_RE =
-  /\b(returns?|shows?|appears?|contains?|equals?|match(?:es)?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
+  /\b(returns?|shows?|appears?|contains?|equals?|match(?:es|ed)|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
 const INLINE_CODE_RE = /`[^`\n]+`/;
 
 /**
@@ -609,14 +611,16 @@ function addExtendedFindings(
   // The template's checks section is an unnumbered `## Verification`, and a numbered
   // `## 4. Verification` is the form drafts took before the template, which numbered every
   // section. A draft that has the template's heading and also writes `## 3. Tests` is using the
-  // number to say Tests is one of its layers, so its steps are steps. Only that heading sets a
-  // numbered one aside: an unnumbered `### Validation` inside a layer does not, or a numbered
-  // checks section saying only "run the tests" would go unread.
+  // number to say Tests is one of its layers, so its steps are steps. Only that exact heading
+  // sets a numbered one aside, and never a numbered one that is itself called Verification:
+  // `### Validation` inside a layer, or a `## Tests` or `## Checklist` of its own, setting aside
+  // a numbered checks section that says only "run the tests" would leave that check unread.
   const checks = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
-  const templateChecks = checks.some(
-    (s) => s.level === 2 && !NUM_HEAD_RE.test(s.title) && EXEMPT_EXACT_RE.test(bareTitle(s.title)),
-  );
-  const verifySecs = templateChecks ? checks.filter((s) => !NUM_HEAD_RE.test(s.title)) : checks;
+  const isVerification = (s: Section) => /^verification$/i.test(bareTitle(s.title));
+  const templateChecks = checks.some((s) => s.level === 2 && !NUM_HEAD_RE.test(s.title) && isVerification(s));
+  const verifySecs = templateChecks
+    ? checks.filter((s) => !NUM_HEAD_RE.test(s.title) || isVerification(s))
+    : checks;
   const verifyItems = verifySecs
     .flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text)))
     .map((line) => (line as { text: string }).text);

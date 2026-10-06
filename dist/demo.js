@@ -705,10 +705,9 @@ function addExtendedFindings(findings, secs, text, expects) {
     `delivery sections=${deliverySecs.length} single-repo note=${singleRepo} multi-repo=${Boolean(expects.multiRepo)}`
   );
   const checks = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
-  const templateChecks = checks.some(
-    (s) => s.level === 2 && !NUM_HEAD_RE.test(s.title) && EXEMPT_EXACT_RE.test(bareTitle(s.title))
-  );
-  const verifySecs = templateChecks ? checks.filter((s) => !NUM_HEAD_RE.test(s.title)) : checks;
+  const isVerification = (s) => /^verification$/i.test(bareTitle(s.title));
+  const templateChecks = checks.some((s) => s.level === 2 && !NUM_HEAD_RE.test(s.title) && isVerification(s));
+  const verifySecs = templateChecks ? checks.filter((s) => !NUM_HEAD_RE.test(s.title) || isVerification(s)) : checks;
   const verifyItems = verifySecs.flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text))).map((line) => line.text);
   const fencedItems = verifySecs.flatMap((s) => s.body.filter((line) => line.kind === "fenced" && line.text.trim() !== "")).map((line) => line.text);
   const all = [...verifyItems, ...fencedItems];
@@ -896,7 +895,7 @@ var init_skill_format = __esm({
     MIN_VERIFY_ITEMS = 2;
     MIN_PITFALL_ITEMS = 1;
     SHARE_CELL_RE = /\b\d+\s*\/\s*\d+\b/;
-    OBSERVABLE_RE = /\b(returns?|shows?|appears?|contains?|equals?|match(?:es)?|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
+    OBSERVABLE_RE = /\b(returns?|shows?|appears?|contains?|equals?|match(?:es|ed)|logs?|responds?|renders?|displays?|opens?|sees?|visible|status|200|201|400|404|500|non-empty|empty|\d+\s*(rows?|records?|items?|entries))\b/i;
     INLINE_CODE_RE = /`[^`\n]+`/;
     PATH_TOKEN_RE = /[^\s`|()]*(?:[/*]|\.[A-Za-z][A-Za-z0-9]{0,9})[^\s`|()]*/;
     PATH_TOKEN_ALL_RE = new RegExp(PATH_TOKEN_RE.source, "g");
@@ -3017,6 +3016,9 @@ var AUTHOR_QUOTED_RE = /(\bauthor["']?[ \t]*[:=][ \t]*)(["'])([^"'\n]*)\2/gi;
 var AUTHOR_BARE_RE = /(\bauthor[ \t]*[:=][ \t]*)([^\s"'{[][^,}\]#\n]*)/gi;
 var AUTHOR_TAG_RE = /(@author[ \t]+)([^\n*]*[^\s*])/gi;
 var CHANGESET_RE = /(--[ \t]*changeset[ \t]+)([^:\s]+)(?=:)/gi;
+var AUTHOR_ELEMENT_RE = /(<author>[ \t]*)([^<\n]*?)([ \t]*<\/author>)/gi;
+var TEXT_FILE_RE = /\.(patch|diff|md|txt)$/i;
+var AUTHOR_LINE_RE = /^([+\- ]?[ \t]*(?:[-*>][ \t]*)?author[ \t]*:[ \t]*)(\S.*?)([ \t]*)$/i;
 var ROLE_AUTHORS = /* @__PURE__ */ new Set([
   "team",
   "system",
@@ -3044,10 +3046,12 @@ function maskAuthorFields(line, path) {
   };
   let text = line.replace(AUTHOR_TAG_RE, (_match, head, value) => head + mask(value));
   if (RECORD_FILE_RE.test(path)) {
-    text = text.replace(AUTHOR_QUOTED_RE, (_match, head, quote, value) => head + quote + mask(value) + quote).replace(AUTHOR_BARE_RE, (_match, head, value) => {
+    text = text.replace(AUTHOR_ELEMENT_RE, (_match, open, value, close) => open + mask(value) + close).replace(AUTHOR_QUOTED_RE, (_match, head, quote, value) => head + quote + mask(value) + quote).replace(AUTHOR_BARE_RE, (_match, head, value) => {
       const kept = value.trimEnd();
       return head + mask(kept) + value.slice(kept.length);
     }).replace(CHANGESET_RE, (_match, head, value) => head + mask(value));
+  } else if (TEXT_FILE_RE.test(path)) {
+    text = text.replace(AUTHOR_LINE_RE, (_match, head, value, tail) => head + mask(value) + tail);
   }
   return { text, masked };
 }

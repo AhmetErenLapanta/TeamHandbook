@@ -1198,6 +1198,15 @@ const AUTHOR_BARE_RE = /(\bauthor[ \t]*[:=][ \t]*)([^\s"'{[][^,}\]#\n]*)/gi;
 const AUTHOR_TAG_RE = /(@author[ \t]+)([^\n*]*[^\s*])/gi;
 /** A formatted SQL changelog writes its author in front of the changeset id. */
 const CHANGESET_RE = /(--[ \t]*changeset[ \t]+)([^:\s]+)(?=:)/gi;
+/** The element form a data file writes the same field in. */
+const AUTHOR_ELEMENT_RE = /(<author>[ \t]*)([^<\n]*?)([ \t]*<\/author>)/gi;
+/**
+ * The text files that name a person on a header line - a mailed patch, a note, a readme -
+ * `Author: Jane Doe`. Only at the start of a line, after a diff marker or a list marker, so a
+ * sentence that merely mentions an author is left as it is.
+ */
+const TEXT_FILE_RE = /\.(patch|diff|md|txt)$/i;
+const AUTHOR_LINE_RE = /^([+\- ]?[ \t]*(?:[-*>][ \t]*)?author[ \t]*:[ \t]*)(\S.*?)([ \t]*)$/i;
 /** Values that name a role rather than a person, which are kept. A short list on purpose: a
  * value not on it is masked, because a handle that slips through is a person on the way out. */
 const ROLE_AUTHORS = new Set([
@@ -1238,12 +1247,15 @@ export function maskAuthorFields(line: string, path: string): { text: string; ma
   let text = line.replace(AUTHOR_TAG_RE, (_match, head: string, value: string) => head + mask(value));
   if (RECORD_FILE_RE.test(path)) {
     text = text
+      .replace(AUTHOR_ELEMENT_RE, (_match, open: string, value: string, close: string) => open + mask(value) + close)
       .replace(AUTHOR_QUOTED_RE, (_match, head: string, quote: string, value: string) => head + quote + mask(value) + quote)
       .replace(AUTHOR_BARE_RE, (_match, head: string, value: string) => {
         const kept = value.trimEnd();
         return head + mask(kept) + value.slice(kept.length);
       })
       .replace(CHANGESET_RE, (_match, head: string, value: string) => head + mask(value));
+  } else if (TEXT_FILE_RE.test(path)) {
+    text = text.replace(AUTHOR_LINE_RE, (_match, head: string, value: string, tail: string) => head + mask(value) + tail);
   }
   return { text, masked };
 }

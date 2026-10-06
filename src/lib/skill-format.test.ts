@@ -521,8 +521,35 @@ describe("which items the concrete-checks rule judges", () => {
     expect(concrete(text)).toBe(false);
   });
 
-  it("given a check saying two things match, when checked, then the comparison counts as a result", () => {
-    const text = DRAFT.replace("- [ ] `./gradlew test` exits 0.", "- [ ] The method on both sides and the route match.");
+  it("given a check saying one thing matched another, when checked, then the comparison counts as a result", () => {
+    const text = DRAFT.replace("- [ ] `./gradlew test` exits 0.", "- [ ] The method on the gateway matched the service.");
+    expect(concrete(text)).toBe(true);
+  });
+
+  it("given checks that only tell the reader to match things, when checked, then they are instructions rather than results", () => {
+    const text = DRAFT.replace(
+      "- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.",
+      "- [ ] Match the method on both sides.\n- [ ] Match the two paths.",
+    );
+    expect(concrete(text)).toBe(false);
+  });
+
+  it.each(["## Tests", "## Checklist", "## Verification"])(
+    "given %s with a concrete check and a numbered checks section that only says to run the tests, when checked, then the numbered one is still read",
+    (heading) => {
+      const text = DRAFT.replace(
+        "## Verification\n- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.",
+        `${heading}\n- [ ] \`./gradlew test\` exits 0.\n\n## 5. Verification\n- [ ] Run the tests.\n- [ ] Make sure nothing broke.`,
+      );
+      expect(concrete(text)).toBe(false);
+    },
+  );
+
+  it("given the template heading left empty and a concrete numbered checks section, when checked, then the numbered one is what is judged", () => {
+    const text = DRAFT.replace(
+      "## Verification\n- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.",
+      "## Verification\n\n## 5. Verification\n- [ ] `./gradlew test` exits 0.\n- [ ] The route returns 200 through the gateway.",
+    );
     expect(concrete(text)).toBe(true);
   });
 });

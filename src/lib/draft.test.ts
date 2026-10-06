@@ -383,7 +383,14 @@ describe("masking the author a changelog records", () => {
     ["a properties line", "author=jdoe", "app.properties", "author=(withheld)"],
     ["a formatted SQL changeset", "--changeset jdoe:42", "db/changes.sql", "--changeset (withheld):42"],
     ["a documentation tag in source", " * @author Jane Doe */", "src/Ledger.java", " * @author (withheld) */"],
+    ["an author element", "    <author>jdoe</author>", "db/changes/root.xml", "    <author>(withheld)</author>"],
+    ["an author line in a mailed patch", "Author: Jane Doe <jane@example.com>", "0001-fix.patch", "Author: (withheld)"],
+    ["an added author line in a note", "+Author: Jane Doe", "docs/RELEASE.md", "+Author: (withheld)"],
+    ["an author line in a text file", "Author: jdoe", "NOTES.txt", "Author: (withheld)"],
     ["a role", '    <changeSet id="1" author="system">', "db/changelog.xml", '    <changeSet id="1" author="system">'],
+    ["a role in an author element", "    <author>TEAM</author>", "db/changes/root.xml", "    <author>TEAM</author>"],
+    ["a role on an author line", "Author: ci", "0001-fix.patch", "Author: ci"],
+    ["a sentence that mentions an author", "The author: see the history.", "docs/NOTES.md", "The author: see the history."],
     ["a type in source code", "  val author: String,", "src/Book.kt", "  val author: String,"],
   ])("given %s, when masked, then the line reads as expected", (_label, line, path, expected) => {
     expect(maskAuthorFields(line, path).text).toBe(expected);
