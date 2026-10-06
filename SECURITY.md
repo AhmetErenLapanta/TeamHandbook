@@ -83,12 +83,16 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   only.
 - `skill-usage.json` - how many times each skill has fired, and when. Claude Code
   reports a skill invocation to the same hook TeamHandbook already listens on, so this
-  is a name and a count: no arguments, no file contents, no prompt. The hook sees
-  **every** skill you invoke, including ones from other plugins, and the file records
-  them all; what `/handbook:status` reports on is deliberately narrower - only the
-  skills TeamHandbook itself delivered or pulled from your team repo, because counting
-  the others would credit TeamHandbook with work it did not do. Either way it never
-  leaves your machine.
+  is a name, a running count, the time of the last call, and how many calls fell on each
+  of the last 30 days (older days are pruned on the next write): no arguments, no file
+  contents, no prompt. The call's arguments are what you asked the skill to do, and they
+  never reach the file; a skill value that is not shaped like a name is dropped rather
+  than kept. The hook sees **every** skill you invoke, including ones from other plugins,
+  and the file records them all; what `/handbook:status` reports on is deliberately
+  narrower - only the skills TeamHandbook itself delivered or pulled from your team repo,
+  because counting the others would credit TeamHandbook with work it did not do. It is
+  written only while session recording is on: `{"sessions": {"detect": false}}` stops it,
+  and so does a config file that cannot be parsed. Either way it never leaves your machine.
 - `config.json` - your settings. `muted.json` - fingerprints silenced by
   `reject --never`. Notice state (`welcomed`, `notified-counters.json`,
   `nudged-team`, `last-digest`, `seen-skills.json`) - what has
@@ -374,6 +378,29 @@ detection is off, and it never leaves the machine.
 how many unattended ones were left out, how many sessions reported their entry point and
 how many did not, what detection made of the sessions at their end whether or not a signal
 fired, and how many lines screening dropped.
+
+## Skill health
+
+`/handbook:status` reports, for each skill TeamHandbook delivered, whether the files its
+file map names still exist, whether recent work still follows that map, how often the
+skill was called, and whether another skill's description answers the same requests. The
+share screen shows the same overlap warning. Both are read-only: nothing is changed,
+redrafted or deleted because of a finding, no model is called and no connection is opened.
+
+**What it reads.** The `SKILL.md` of each delivered skill; the repository a skill was
+installed into, or the repositories its map rows name when `mined-workflows.json` knows
+them: the tracked file list (`git ls-files`) and the commit history (`git log`, the same
+read `/handbook:mine` makes); `skill-usage.json` and `workflows.jsonl`; and the name and
+description of every skill this machine loads - the project's `.claude/skills`, your
+`~/.claude/skills`, and the team repository's skills as your local clone of it holds them.
+
+**What it writes.** Nothing. The only new data is in `skill-usage.json` as described above,
+written by the hook rather than by this report: beside the name, running count and time of
+the last call it already kept, how many calls fell on each of the last 30 days, and never
+the call's arguments.
+
+**What leaves your machine.** Nothing. The team repository's skills are read from the
+clone already on disk, so the overlap warning makes no request.
 
 ## Removing your data
 

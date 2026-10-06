@@ -1,7 +1,7 @@
 import { resolve as toAbsolutePath } from "node:path";
 import { configIsBroken } from "../lib/config.js";
 import { join } from "node:path";
-import { loadTeamConfig, marketplacesRoot, runGit } from "../lib/init.js";
+import { loadTeamConfig, marketplacesRoot, runGit, teamSkillsDir } from "../lib/init.js";
 import {
   buildInventory,
   duplicateCopies,
@@ -190,7 +190,7 @@ function main(): void {
     // the manager picks knowing, and a repository that cannot be reached simply means no
     // labels rather than a screen that will not open.
     const config = loadTeamConfig();
-    const inv = buildInventory({}, config ? teamAssets(config) : null);
+    const inv = buildInventory({ teamSkills: teamSkillsDir() }, config ? teamAssets(config) : null);
     console.log(formatInventory(inv, forgeLine(config), duplicatesOf(inv, config)));
     if (!config) {
       console.log(
