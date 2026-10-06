@@ -36,6 +36,7 @@ import {
   type Shape,
 } from "./mine.js";
 import { detectSecret } from "./secrets.js";
+import type { CitationKind } from "./skill-format.js";
 import {
   gitFailure,
   isRepository,
@@ -2196,65 +2197,6 @@ export async function draftSkill(
  * machine's identity off every field on the way through, so no caller has to remember to.
  */
 export function buildDraftPrompt(evidence: EvidencePacket, failed: string[], host?: HostIdentity): string {
-  const fields: Record<string, string> = {
-    "how often this work happened": String(evidence.rubric.support),
-    "files it touches, and in how many of those jobs": evidence.fileMap
-      .map((row, i) => `[map ${i + 1}] ${row.role} | ${row.units}/${row.of} | e.g. ${row.examples.join(", ") || "(none)"}`)
-      .join("\n"),
-    "the order repositories were changed in": evidence.delivery.order
-      ? `${evidence.delivery.order.join(" -> ")} (in ${evidence.delivery.agreement} of ${evidence.delivery.units} multi-repository jobs)`
-      : "single repository",
-    "what the tickets were called": evidence.subjects.map((subject, i) => `[subject ${i + 1}] ${subject}`).join("\n"),
-    "what the changes look like": evidence.hunks
-      .map((hunk, i) => `[hunk ${i + 1}] ${hunk.role} (job ${hunk.unit})${hunk.truncated ? ", trimmed" : ""}\n${hunk.lines.join("\n")}`)
-      .join("\n\n"),
-    // Most costly first, with the signals that put each one there, so the mistakes table is built
-    // from what a correction COST rather than from how often something like it happened.
-    "corrections made inside the same ticket, costliest first": evidence.fixes
-      .map((fix, i) => {
-        const why = fix.signals.length ? ` [${fix.signals.join(" ")}]` : "";
-        return `[fix ${i + 1}]${why} ${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
-      })
-      .join("\n"),
-    "the same work repeated per product type": evidence.siblings
-      .map((series) => series.variants.join(" / "))
-      .join("\n"),
-    "measured numbers": [
-      `repeated ${evidence.rubric.support} times`,
-      `${evidence.rubric.coreFiles} core files`,
-      `${evidence.rubric.roles} roles`,
-      `spans ${evidence.rubric.repos} repositories per job`,
-      `${evidence.rubric.coreRepos} repositories hold the core files`,
-      `${evidence.rubric.testShare} of jobs changed a test`,
-      `${evidence.rubric.authors} people did it`,
-    ].join("\n"),
-  };
-  // Added only when the packet carries them, so a packet without the expanded sources renders the
-  // same prompt it always did rather than one with empty sections in it.
-  if (evidence.files?.length) {
-    fields["what these files hold today"] = evidence.files
-      .map(
-        (file, i) =>
-          `[file ${i + 1}] ${file.path} (${file.role})${file.omitted ? `, ${file.omitted} lines not shown` : ""}\n${file.lines.join("\n")}`,
-      )
-      .join("\n\n");
-  }
-  if (evidence.configs?.length) {
-    fields["the configuration this work changes"] = evidence.configs
-      .map(
-        (config, i) =>
-          `[config ${i + 1}] ${config.path}${config.omitted ? `, ${config.omitted} lines not shown` : ""}\n${config.lines.join("\n")}`,
-      )
-      .join("\n\n");
-  }
-  if (evidence.laterFixes?.length) {
-    fields["corrections made by LATER jobs touching the same files, costliest first"] = evidence.laterFixes
-      .map((fix, i) => {
-        const why = fix.signals.length ? ` [${fix.signals.join(" ")}]` : "";
-        return `[later-fix ${i + 1}]${why} ${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
-      })
-      .join("\n");
-  }
   // The forms this packet actually carries, named only when it carries them: a retry that offers
   // `[file 1]` to a packet with no files invites the dangling citation the gate just rejected.
   const extraForms = [
@@ -2276,7 +2218,98 @@ export function buildDraftPrompt(evidence: EvidencePacket, failed: string[], hos
       ].join("\n")
     : "";
   const instructions = INSTRUCTION_LINES.flatMap((line) => (line === CITATIONS ? citationRules(evidence) : [line])).join("\n");
-  return [instructions, retry, "", fenceUntrusted(fields, host)].join("\n");
+  return [instructions, retry, "", fenceUntrusted(evidenceFields(evidence), host)].join("\n");
+}
+
+/**
+ * The packet as a model reads it: one labelled field per kind of evidence, every piece carrying the
+ * tag a citation to it uses. Unfenced, so the caller fences it together with whatever else it sends.
+ */
+export function evidenceFields(evidence: EvidencePacket): Record<string, string> {
+  const tagged = (kind: CitationKind, count: number, separator: string): string =>
+    Array.from({ length: count }, (_, i) => `[${kind} ${i + 1}] ${citedPiece(evidence, kind, i + 1)}`).join(separator);
+  const fields: Record<string, string> = {
+    "how often this work happened": String(evidence.rubric.support),
+    "files it touches, and in how many of those jobs": tagged("map", evidence.fileMap.length, "\n"),
+    "the order repositories were changed in": evidence.delivery.order
+      ? `${evidence.delivery.order.join(" -> ")} (in ${evidence.delivery.agreement} of ${evidence.delivery.units} multi-repository jobs)`
+      : "single repository",
+    "what the tickets were called": tagged("subject", evidence.subjects.length, "\n"),
+    "what the changes look like": tagged("hunk", evidence.hunks.length, "\n\n"),
+    // Most costly first, with the signals that put each one there, so the mistakes table is built
+    // from what a correction COST rather than from how often something like it happened.
+    "corrections made inside the same ticket, costliest first": tagged("fix", evidence.fixes.length, "\n"),
+    "the same work repeated per product type": evidence.siblings
+      .map((series) => series.variants.join(" / "))
+      .join("\n"),
+    "measured numbers": [
+      `repeated ${evidence.rubric.support} times`,
+      `${evidence.rubric.coreFiles} core files`,
+      `${evidence.rubric.roles} roles`,
+      `spans ${evidence.rubric.repos} repositories per job`,
+      `${evidence.rubric.coreRepos} repositories hold the core files`,
+      `${evidence.rubric.testShare} of jobs changed a test`,
+      `${evidence.rubric.authors} people did it`,
+    ].join("\n"),
+  };
+  // Added only when the packet carries them, so a packet without the expanded sources renders the
+  // same prompt it always did rather than one with empty sections in it.
+  if (evidence.files?.length) fields["what these files hold today"] = tagged("file", evidence.files.length, "\n\n");
+  if (evidence.configs?.length) {
+    fields["the configuration this work changes"] = tagged("config", evidence.configs.length, "\n\n");
+  }
+  if (evidence.laterFixes?.length) {
+    fields["corrections made by LATER jobs touching the same files, costliest first"] = tagged(
+      "later-fix",
+      evidence.laterFixes.length,
+      "\n",
+    );
+  }
+  return fields;
+}
+
+/**
+ * One numbered piece of a packet as a model is shown it, without its `[kind n]` tag: what a
+ * citation to it points at. Null when the packet holds no such piece.
+ *
+ * The one rendering, used by the draft prompt and by whatever later asks what a citation pointed
+ * at. A grader shown a piece in other words than the drafting model saw would be grading a
+ * different piece.
+ */
+export function citedPiece(packet: EvidencePacket, kind: CitationKind, n: number): string | null {
+  const i = n - 1;
+  switch (kind) {
+    case "map": {
+      const row = packet.fileMap[i];
+      return row ? `${row.role} | ${row.units}/${row.of} | e.g. ${row.examples.join(", ") || "(none)"}` : null;
+    }
+    case "subject":
+      return packet.subjects[i] ?? null;
+    case "hunk": {
+      const hunk = packet.hunks[i];
+      return hunk ? `${hunk.role} (job ${hunk.unit})${hunk.truncated ? ", trimmed" : ""}\n${hunk.lines.join("\n")}` : null;
+    }
+    case "fix":
+      return correctionText(packet.fixes[i]);
+    case "later-fix":
+      return correctionText(packet.laterFixes?.[i]);
+    case "file": {
+      const file = packet.files?.[i];
+      return file
+        ? `${file.path} (${file.role})${file.omitted ? `, ${file.omitted} lines not shown` : ""}\n${file.lines.join("\n")}`
+        : null;
+    }
+    case "config": {
+      const config = packet.configs?.[i];
+      return config ? `${config.path}${config.omitted ? `, ${config.omitted} lines not shown` : ""}\n${config.lines.join("\n")}` : null;
+    }
+  }
+}
+
+function correctionText(fix: FixNote | undefined): string | null {
+  if (!fix) return null;
+  const why = fix.signals.length ? `[${fix.signals.join(" ")}] ` : "";
+  return `${why}${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
 }
 
 /**

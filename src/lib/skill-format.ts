@@ -706,23 +706,68 @@ function addMechanicalFindings(
     // above so that `[later-fix 2]` is not read as a correction from a pool it is not in.
     "later-fix": citable["later-fix"] ?? 0,
   };
-  const numberedSteps = secs
-    .filter(isProcedureSection)
-    .flatMap((s) => s.body.filter((line) => line.kind === "text" && NUM_ITEM_RE.test(line.text)))
-    .map((line) => (line as { text: string }).text);
-  const uncited = numberedSteps.filter((step) => [...step.matchAll(CITATION_RE)].length === 0);
+  const steps = numberedSteps(secs).map(({ step }) => step);
+  const uncited = steps.filter((step) => citationsIn(step).length === 0);
   const dangling: string[] = [];
-  for (const step of numberedSteps) {
-    for (const [, kind, index] of step.matchAll(CITATION_RE)) {
-      const n = Number(index);
-      if (n < 1 || n > (counts[kind!] ?? 0)) dangling.push(`${kind} ${index}`);
+  for (const step of steps) {
+    for (const { kind, index } of citationsIn(step)) {
+      if (index < 1 || index > (counts[kind] ?? 0)) dangling.push(`${kind} ${index}`);
     }
   }
   add(
     "step-evidence",
-    numberedSteps.length > 0 && uncited.length === 0 && dangling.length === 0,
-    `steps=${numberedSteps.length} uncited=${uncited.length} dangling=${JSON.stringify([...new Set(dangling)].slice(0, 3))} available=${JSON.stringify(counts)}`,
+    steps.length > 0 && uncited.length === 0 && dangling.length === 0,
+    `steps=${steps.length} uncited=${uncited.length} dangling=${JSON.stringify([...new Set(dangling)].slice(0, 3))} available=${JSON.stringify(counts)}`,
   );
+}
+
+export interface ProcedureStep {
+  /** The heading of the innermost section the step sits in. */
+  section: string;
+  /** The step's line as written, number and citations included. */
+  step: string;
+}
+
+/**
+ * The numbered steps of the procedure sections, in document order: exactly the lines `step-evidence`
+ * asks a citation of. A line under a nested heading sits in two sections' bodies and is still one
+ * step, filed under the nested one.
+ */
+function numberedSteps(secs: Section[]): ProcedureStep[] {
+  const found = new Map<Line, ProcedureStep>();
+  for (const section of secs.filter(isProcedureSection)) {
+    for (const line of section.body) {
+      if (line.kind !== "text" || !NUM_ITEM_RE.test(line.text)) continue;
+      found.set(line, { section: section.title, step: line.text });
+    }
+  }
+  return [...found.values()];
+}
+
+/**
+ * The steps of a draft as the gate counts them. Exported so that whatever grades a draft step by
+ * step grades the steps the gate made the model cite, rather than a second reading of the same file
+ * that could skip one or find one the gate never saw.
+ */
+export function procedureSteps(text: string): ProcedureStep[] {
+  return numberedSteps(sections(classifyLines(splitFrontmatter(text).body)));
+}
+
+export type CitationKind = "map" | "later-fix" | "fix" | "hunk" | "subject" | "file" | "config";
+
+export interface Citation {
+  kind: CitationKind;
+  index: number;
+}
+
+/** Every citation a line carries, in the order it carries them. */
+export function citationsIn(line: string): Citation[] {
+  return [...line.matchAll(CITATION_RE)].map(([, kind, index]) => ({ kind: kind as CitationKind, index: Number(index) }));
+}
+
+/** A line with its citations taken out, for a reader who does not hold the packet they point into. */
+export function withoutCitations(line: string): string {
+  return line.replace(CITATION_RE, "").replace(/[ \t]{2,}/g, " ").trim();
 }
 
 /**
