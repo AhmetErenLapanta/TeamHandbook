@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.20.0] - 2026-10-06
+
+### Changed
+
+- **The README now leads with the work a repository's history repeats.** It says what a
+  draft carries - a skeleton of the steps, a file map the history measured, and a list of
+  what the history cannot show - and that it is not a finished skill. The per-session
+  lesson harvest is described as what it now is: off unless you turn it on.
+- **`/handbook:demo` shows the history miner end to end.** It builds a scratch repository
+  with a history of its own, lists the work that history repeats and queues a draft of it
+  for review. The draft is a recorded one unless you ask for a live one, so the demo makes
+  no model call without your say.
+- **A draft mined from an open-source repository is included** under `docs/examples/`,
+  with where it came from and what it is not.
+- **The marketplace description says what the README says.**
+
+### Fixed
+
+- **A skill the demo produced could be kept for yourself, sent to the team, or, once its
+  scratch repository was deleted, written into whichever project you approved it from.**
+  A demo draft is now marked as one: it can only be added to its own scratch repository or
+  rejected, and with that repository gone it can only be rejected.
+
 ## [0.19.0] - 2026-10-06
 
 ### Added
