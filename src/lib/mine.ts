@@ -267,8 +267,22 @@ export interface RoleResolver {
   mirrors: Set<string>;
   /** Directory layouts where a name repeats across sibling directories, e.g. `middleware/*\/index.ts`. */
   templates: Map<string, string>;
+  /** Package-per-area layouts, where the kind of file repeats across sibling directories. */
+  areas: Map<string, string>;
   /** Roles found to be a build artifact of another role's files. */
   compiled: Set<string>;
+}
+
+/**
+ * The parts of a resolver that came from the history it was built on, in a form that survives
+ * being written to disk. Restoring one gives back the same path-to-role function without reading
+ * that history again, which is what lets work done outside git be named in the miner's own terms.
+ */
+export interface SavedRoleResolver {
+  mirrors: string[];
+  templates: [string, string][];
+  areas: [string, string][];
+  compiled: string[];
 }
 
 export interface RoleOptions {
@@ -367,7 +381,30 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
     }
   }
 
-  const named = (path: string): string => {
+  const filters = options.filters ?? true;
+  // Nothing is dropped with the filters off, so nothing is reported as dropped either: the two
+  // counts say what this run removed, not what a run with the filters on would have.
+  const compiled = filters ? compiledRoles(all, namer(templates, areas), options.binaryPaths) : new Set<string>();
+  return resolverFrom(mirrors, templates, areas, compiled, filters);
+}
+
+/** The state a resolver was built from, for `restoreRoleResolver` to read back. */
+export function saveRoleResolver(resolver: RoleResolver): SavedRoleResolver {
+  return {
+    mirrors: [...resolver.mirrors].sort(),
+    templates: [...resolver.templates].sort(),
+    areas: [...resolver.areas].sort(),
+    compiled: [...resolver.compiled].sort(),
+  };
+}
+
+/** The resolver `saveRoleResolver` wrote down, with the filters on as the miner runs them. */
+export function restoreRoleResolver(saved: SavedRoleResolver): RoleResolver {
+  return resolverFrom(new Set(saved.mirrors), new Map(saved.templates), new Map(saved.areas), new Set(saved.compiled), true);
+}
+
+function namer(templates: Map<string, string>, areas: Map<string, string>): (path: string) => string {
+  return (path: string): string => {
     const segments = path.split("/");
     if (segments.length >= 3) {
       const key = `${segments.slice(0, -2).join("/")}\u0000${segments[segments.length - 1]}`;
@@ -381,11 +418,16 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
     const { suffix, ext } = stemSuffix(base);
     return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
   };
+}
 
-  const filters = options.filters ?? true;
-  // Nothing is dropped with the filters off, so nothing is reported as dropped either: the two
-  // counts say what this run removed, not what a run with the filters on would have.
-  const compiled = filters ? compiledRoles(all, named, options.binaryPaths) : new Set<string>();
+function resolverFrom(
+  mirrors: Set<string>,
+  templates: Map<string, string>,
+  areas: Map<string, string>,
+  compiled: Set<string>,
+  filters: boolean,
+): RoleResolver {
+  const named = namer(templates, areas);
   const resolve = ((path: string): string => {
     const segments = path.split("/");
     if (filters) {
@@ -401,6 +443,7 @@ export function buildRoleResolver(paths: Iterable<string>, options: RoleOptions 
   }) as RoleResolver;
   resolve.mirrors = mirrors;
   resolve.templates = templates;
+  resolve.areas = areas;
   resolve.compiled = compiled;
   return resolve;
 }
@@ -476,7 +519,7 @@ function compiledRoles(paths: string[], named: (path: string) => string, binary:
 }
 
 /** Roles that carry no workflow: they are dropped from a shape rather than clustered. */
-const IGNORED_ROLES = new Set(["test", "lock", "mirror", "credits", "compiled"]);
+export const IGNORED_ROLES = new Set(["test", "lock", "mirror", "credits", "compiled"]);
 
 // ---------------------------------------------------------------------------
 // Repository naming

@@ -221,6 +221,16 @@ function writeFileAtomic(file, data) {
 
 // src/lib/session-state.ts
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+function parseWorkflowTrail(value) {
+  if (typeof value !== "object" || value === null) return void 0;
+  const raw = value;
+  if (!Array.isArray(raw.edits) || !Array.isArray(raw.fired)) return void 0;
+  return {
+    edits: raw.edits.filter((e) => typeof e === "string"),
+    green: raw.green === true,
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+  };
+}
 function emptySessionState(sessionId) {
   return { sessionId, openErrors: [], resolvedPairs: [] };
 }
@@ -238,6 +248,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const workflow = parseWorkflowTrail(parsed.workflow);
     const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
     return {
       sessionId,
@@ -248,7 +259,8 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
-      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {},
+      ...workflow ? { workflow } : {}
     };
   } catch {
     return emptySessionState(sessionId);

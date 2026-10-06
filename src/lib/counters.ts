@@ -17,6 +17,14 @@ export interface Counters {
   // captured pairs given up on after MAX_GATE_ATTEMPTS failed gate runs - surfaced
   // in status/doctor so the loss is never silent (originals kept in abandoned.jsonl)
   gateAbandoned: number;
+  // interactive sessions that reached their end with workflow detection on - the denominator
+  // the recognized sessions in workflows.jsonl are read against
+  workflowSessions: number;
+  // sessions nobody was driving (print mode, an SDK): left out of that denominator, but counted
+  workflowSkippedAutonomous: number;
+  // recognized sessions whose record was not written because something in it traced the person
+  // or a secret
+  workflowSkippedHygiene: number;
 }
 
 const FIELDS: Array<keyof Counters> = [
@@ -26,6 +34,9 @@ const FIELDS: Array<keyof Counters> = [
   "pairsResolved",
   "gateErrors",
   "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowSkippedHygiene",
 ];
 
 export function countersFile(home: string = handbookHome()): string {
@@ -40,6 +51,9 @@ export function readCounters(home: string = handbookHome()): Counters {
     pairsResolved: 0,
     gateErrors: 0,
     gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowSkippedHygiene: 0,
   };
   try {
     const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));

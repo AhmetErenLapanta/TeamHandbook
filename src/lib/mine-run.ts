@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import { collectUnits, shapesFromUnits } from "./mine.js";
 import type { MineOptions, Shape } from "./mine.js";
 import { variantFamilies } from "./draft.js";
+import { saveMinedRecord, sessionDetectEnabled } from "./session-workflow.js";
 import {
   DEFAULT_LIST_SIZE,
   draftWorkflow,
@@ -103,6 +104,13 @@ export async function runMineCommand(argv: string[], deps: MineRunDeps = {}): Pr
   const options: MineOptions = deps.options ?? {};
   const collection = collectUnits(paths, options);
   const mined = shapesFromUnits(collection, options);
+  if (sessionDetectEnabled(deps.home)) {
+    try {
+      saveMinedRecord(paths, collection, mined.shapes, deps.home);
+    } catch {
+      // the record only names later sessions; failing to keep it must not cost the listing
+    }
+  }
   const families = variantFamilies(mined.shapes);
   // The draft resolves against a list at least as long as the number asked for, so a choice
   // made from `--limit 10` still resolves when the draft call does not repeat the limit.

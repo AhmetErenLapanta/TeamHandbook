@@ -1,6 +1,6 @@
 // src/lib/status.ts
-import { readFileSync as readFileSync7 } from "node:fs";
-import { dirname as dirname2, join as join11 } from "node:path";
+import { readFileSync as readFileSync8 } from "node:fs";
+import { dirname as dirname3, join as join12 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/session-state.ts
@@ -172,7 +172,10 @@ var FIELDS = [
   "bashFailuresCaptured",
   "pairsResolved",
   "gateErrors",
-  "gateAbandoned"
+  "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
   return join2(home, "counters.json");
@@ -184,7 +187,10 @@ function readCounters(home = handbookHome()) {
     bashFailuresCaptured: 0,
     pairsResolved: 0,
     gateErrors: 0,
-    gateAbandoned: 0
+    gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowSkippedHygiene: 0
   };
   try {
     const parsed = JSON.parse(readFileSync(countersFile(home), "utf8"));
@@ -624,13 +630,51 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
+// src/lib/session-workflow.ts
+import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync7, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename as basename4, dirname as dirname2, join as join11, relative, resolve, sep as sep2 } from "node:path";
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/session-workflow.ts
+function workflowsFile(home = handbookHome()) {
+  return join11(home, "workflows.jsonl");
+}
+var COUNTED_MATCHES = /* @__PURE__ */ new Set(["shape"]);
+function recentWorkflowSessions(home = handbookHome(), now = Date.now(), days = 30) {
+  let raw;
+  try {
+    raw = readFileSync7(workflowsFile(home), "utf8");
+  } catch {
+    return { recognized: 0, matched: 0 };
+  }
+  const since = now - days * 864e5;
+  const recognized = /* @__PURE__ */ new Set();
+  const matched = /* @__PURE__ */ new Set();
+  for (const text of raw.split("\n")) {
+    if (!text.trim()) continue;
+    let line;
+    try {
+      line = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (typeof line.session !== "string" || Date.parse(line.ts ?? "") < since) continue;
+    if (line.match && COUNTED_MATCHES.has(line.match)) recognized.add(line.session);
+    if (line.match === "shape") matched.add(line.session);
+  }
+  return { recognized: recognized.size, matched: matched.size };
+}
+
 // src/lib/status.ts
 function pluginVersion() {
-  const here = dirname2(fileURLToPath(import.meta.url));
+  const here = dirname3(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(
-        readFileSync7(join11(here, up, ".claude-plugin", "plugin.json"), "utf8")
+        readFileSync8(join12(here, up, ".claude-plugin", "plugin.json"), "utf8")
       );
       if (typeof parsed?.version === "string") return parsed.version;
     } catch {
@@ -642,7 +686,7 @@ function ledgerStats(home = handbookHome()) {
   const stats = { total: 0, candidates: 0, weak: 0, distinctFingerprints: 0 };
   let raw;
   try {
-    raw = readFileSync7(signalsFile(home), "utf8");
+    raw = readFileSync8(signalsFile(home), "utf8");
   } catch {
     return stats;
   }
@@ -666,7 +710,7 @@ function ledgerStats(home = handbookHome()) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync7(pipelineLogFile(home), "utf8");
+    raw = readFileSync8(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -684,7 +728,7 @@ function pipelineAggregate(home = handbookHome()) {
   const agg = { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 };
   let raw;
   try {
-    raw = readFileSync7(pipelineLogFile(home), "utf8");
+    raw = readFileSync8(pipelineLogFile(home), "utf8");
   } catch {
     return agg;
   }
@@ -736,6 +780,7 @@ function gatherStatus(home = handbookHome()) {
     },
     lastRun: lastPipelineRun(home),
     pipeline: pipelineAggregate(home),
+    workflows: recentWorkflowSessions(home),
     scoringNow: pendingHarvestCount(home),
     abandoned: counters.gateAbandoned,
     usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length },
@@ -788,6 +833,7 @@ function formatStatus(report) {
     ...formatLastRejection(lastRun),
     ...formatLastError(lastRun),
     `Harvest runs:    ${report.pipeline.runs} run(s) in log - ${report.pipeline.written} written, ${report.pipeline.rejected} rejected, ${report.pipeline.errored} errored, ${report.pipeline.sievedOut} sieved out`,
+    `Workflows:       ${report.workflows.recognized} workflow session${report.workflows.recognized === 1 ? "" : "s"} recognized in the last 30 days (${report.workflows.matched} matched a mined workflow)`,
     ...report.usage.known > 0 ? [
       report.usage.totalUses > 0 ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` + (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} \xD7${report.usage.topSkill.count})` : "") : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`
     ] : [],

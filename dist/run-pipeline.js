@@ -1070,7 +1070,10 @@ var FIELDS = [
   "bashFailuresCaptured",
   "pairsResolved",
   "gateErrors",
-  "gateAbandoned"
+  "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
   return join9(home, "counters.json");
@@ -1082,7 +1085,10 @@ function readCounters(home = handbookHome()) {
     bashFailuresCaptured: 0,
     pairsResolved: 0,
     gateErrors: 0,
-    gateAbandoned: 0
+    gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowSkippedHygiene: 0
   };
   try {
     const parsed = JSON.parse(readFileSync5(countersFile(home), "utf8"));

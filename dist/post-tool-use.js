@@ -325,6 +325,16 @@ function writeFileAtomic(file, data) {
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 var MAX_EDITS_PER_ERROR = 20;
 var MAX_OPEN_ERRORS = 50;
+function parseWorkflowTrail(value) {
+  if (typeof value !== "object" || value === null) return void 0;
+  const raw = value;
+  if (!Array.isArray(raw.edits) || !Array.isArray(raw.fired)) return void 0;
+  return {
+    edits: raw.edits.filter((e) => typeof e === "string"),
+    green: raw.green === true,
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+  };
+}
 function emptySessionState(sessionId) {
   return { sessionId, openErrors: [], resolvedPairs: [] };
 }
@@ -342,6 +352,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
     if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.openErrors)) {
       return emptySessionState(sessionId);
     }
+    const workflow = parseWorkflowTrail(parsed.workflow);
     const activity = typeof parsed.activity === "object" && parsed.activity !== null && Array.isArray(parsed.activity.families) && Array.isArray(parsed.activity.exts) ? { families: parsed.activity.families, exts: parsed.activity.exts } : void 0;
     return {
       sessionId,
@@ -352,7 +363,8 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
-      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {}
+      ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {},
+      ...workflow ? { workflow } : {}
     };
   } catch {
     return emptySessionState(sessionId);
@@ -411,7 +423,10 @@ var FIELDS = [
   "bashFailuresCaptured",
   "pairsResolved",
   "gateErrors",
-  "gateAbandoned"
+  "gateAbandoned",
+  "workflowSessions",
+  "workflowSkippedAutonomous",
+  "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
   return join2(home, "counters.json");
@@ -423,7 +438,10 @@ function readCounters(home = handbookHome()) {
     bashFailuresCaptured: 0,
     pairsResolved: 0,
     gateErrors: 0,
-    gateAbandoned: 0
+    gateAbandoned: 0,
+    workflowSessions: 0,
+    workflowSkippedAutonomous: 0,
+    workflowSkippedHygiene: 0
   };
   try {
     const parsed = JSON.parse(readFileSync2(countersFile(home), "utf8"));
@@ -572,18 +590,175 @@ function captureBashSuccess(input, home = handbookHome()) {
 }
 
 // src/lib/usage.ts
-import { readFileSync as readFileSync3 } from "node:fs";
-import { basename, join as join3 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { basename as basename2, join as join4 } from "node:path";
+
+// src/lib/config.ts
+import { existsSync, readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join3(home, "config.json");
+}
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync3(configFile(home), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync3(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
+  }
+}
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 // src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
 var HOME_PATH = new RegExp(
   "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
   "g"
 );
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
 
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
@@ -616,11 +791,11 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
 
 // src/lib/usage.ts
 function usageFile(home = handbookHome()) {
-  return join3(home, "skill-usage.json");
+  return join4(home, "skill-usage.json");
 }
 function readSkillUsage(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync3(usageFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync4(usageFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     const usage = {};
     for (const [slug, value] of Object.entries(parsed)) {
@@ -642,6 +817,851 @@ function recordSkillUse(slug, home = handbookHome(), at = (/* @__PURE__ */ new D
   writeFileAtomic(usageFile(home), JSON.stringify(usage, null, 2) + "\n");
 }
 
+// src/lib/session-workflow.ts
+import { createHash as createHash2, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync6, realpathSync, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename as basename4, dirname as dirname2, join as join7, relative, resolve as resolve2, sep } from "node:path";
+
+// src/lib/signals.ts
+import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { join as join5 } from "node:path";
+function signalsFile(home = handbookHome()) {
+  return join5(home, "signals.jsonl");
+}
+function sessionSignalCount(sessionId, home = handbookHome()) {
+  let raw;
+  try {
+    raw = readFileSync5(signalsFile(home), "utf8");
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      if (JSON.parse(line)?.sessionId === sessionId) count += 1;
+    } catch {
+    }
+  }
+  return count;
+}
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/mine.ts
+var LOCK = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum|gradle\.lockfile|deno\.lock)$/;
+var TEST = /(^|\/)(src\/test\/|test\/|tests\/|__tests__\/|spec\/)|\.(test|spec)\.[a-z]+$|_test\.(go|py)$|Test\.(kt|java)$/;
+var NOT_A_TICKET = /* @__PURE__ */ new Set([
+  "UTF",
+  "ISO",
+  "CVE",
+  "SHA",
+  "RFC",
+  "HTTP",
+  "HTTPS",
+  "MD",
+  "AES",
+  "RSA",
+  "TLS",
+  "SSL",
+  "IPV",
+  "UTC",
+  "GMT",
+  "JDK",
+  "ES",
+  "EC",
+  "PEP",
+  "ADR",
+  "RGB",
+  "SQL"
+]);
+var KEY_CANDIDATE = /\b([A-Z]{2,})-(\d+)\b/g;
+function stemSuffix(base) {
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot + 1) : "";
+  const parts = stem.split(/[._-]/);
+  const last = parts[parts.length - 1] || stem;
+  const camel = last.match(/[A-Z][a-z0-9]+|[A-Z]+(?![a-z])|[a-z0-9]+/g);
+  return { suffix: camel ? camel[camel.length - 1] : last, ext };
+}
+function buildRoleResolver(paths, options = {}) {
+  const minSiblings = options.minSiblings ?? 5;
+  const mirrorShare = options.mirrorShare ?? 0.6;
+  const mirrorMinFiles = options.mirrorMinFiles ?? 10;
+  const all = [...paths];
+  const siblings = /* @__PURE__ */ new Map();
+  const areaDirs = /* @__PURE__ */ new Map();
+  const topLevel = /* @__PURE__ */ new Map();
+  for (const path of all) {
+    const segments = path.split("/");
+    if (segments.length >= 3) {
+      const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
+      let dirs = siblings.get(key);
+      if (!dirs) siblings.set(key, dirs = /* @__PURE__ */ new Set());
+      dirs.add(segments[segments.length - 2]);
+      const area = areaKey(segments);
+      let areas2 = areaDirs.get(area);
+      if (!areas2) areaDirs.set(area, areas2 = /* @__PURE__ */ new Set());
+      areas2.add(segments[segments.length - 2]);
+    }
+    if (segments.length >= 2) {
+      const top = segments[0];
+      let rest = topLevel.get(top);
+      if (!rest) topLevel.set(top, rest = /* @__PURE__ */ new Set());
+      rest.add(segments.slice(1).join("/"));
+    }
+  }
+  const templates = /* @__PURE__ */ new Map();
+  for (const [key, dirs] of siblings) {
+    if (dirs.size < minSiblings) continue;
+    const [parentPath, base] = key.split("\0");
+    const grandparent = parentPath.split("/").pop() || parentPath;
+    templates.set(key, `${grandparent}/*/${base}`);
+  }
+  const areas = /* @__PURE__ */ new Map();
+  if (options.areaTemplates ?? true) {
+    for (const [key, dirs] of areaDirs) {
+      if (dirs.size < minSiblings) continue;
+      const [parentPath, kind] = key.split("\0");
+      const grandparent = parentPath.split("/").pop() || parentPath;
+      areas.set(key, `${grandparent}/${kind}`);
+    }
+  }
+  const mirrors = /* @__PURE__ */ new Set();
+  for (const [name, files] of topLevel) {
+    if (files.size < mirrorMinFiles) continue;
+    for (const [other, otherFiles] of topLevel) {
+      if (other === name || files.size > otherFiles.size) continue;
+      let shared = 0;
+      for (const f of files) if (otherFiles.has(f)) shared++;
+      if (shared / files.size >= mirrorShare) {
+        mirrors.add(name);
+        break;
+      }
+    }
+  }
+  const filters = options.filters ?? true;
+  const compiled = filters ? compiledRoles(all, namer(templates, areas), options.binaryPaths) : /* @__PURE__ */ new Set();
+  return resolverFrom(mirrors, templates, areas, compiled, filters);
+}
+function restoreRoleResolver(saved) {
+  return resolverFrom(new Set(saved.mirrors), new Map(saved.templates), new Map(saved.areas), new Set(saved.compiled), true);
+}
+function namer(templates, areas) {
+  return (path) => {
+    const segments = path.split("/");
+    if (segments.length >= 3) {
+      const key = `${segments.slice(0, -2).join("/")}\0${segments[segments.length - 1]}`;
+      const template = templates.get(key) ?? areas.get(areaKey(segments));
+      if (template) return template;
+    }
+    const base = segments[segments.length - 1];
+    const parent = segments.length > 1 ? segments[segments.length - 2] : ".";
+    const localized = localeFree(base);
+    if (localized) return `${parent}/${localized}`;
+    const { suffix, ext } = stemSuffix(base);
+    return ext ? `${parent}/*${suffix}.${ext}` : `${parent}/${base}`;
+  };
+}
+function resolverFrom(mirrors, templates, areas, compiled, filters) {
+  const named = namer(templates, areas);
+  const resolve3 = (path) => {
+    const segments = path.split("/");
+    if (filters) {
+      if (TEST.test(path)) return "test";
+      if (LOCK.test(path)) return "lock";
+      if (CREDITS.test(path)) return "credits";
+      if (segments.length >= 2 && mirrors.has(segments[0])) return "mirror";
+      const role = named(path);
+      if (compiled.has(role)) return "compiled";
+      return role;
+    }
+    return named(path);
+  };
+  resolve3.mirrors = mirrors;
+  resolve3.templates = templates;
+  resolve3.areas = areas;
+  resolve3.compiled = compiled;
+  return resolve3;
+}
+var LOCALES = /* @__PURE__ */ new Set([
+  "en",
+  "tr",
+  "de",
+  "fr",
+  "es",
+  "it",
+  "pt",
+  "nl",
+  "ru",
+  "ar",
+  "zh",
+  "ja",
+  "ko",
+  "pl",
+  "sv",
+  "da",
+  "fi",
+  "nb",
+  "cs",
+  "hu",
+  "ro",
+  "el",
+  "he",
+  "uk",
+  "bg",
+  "hr",
+  "sk",
+  "sl",
+  "sr",
+  "et",
+  "lv",
+  "lt",
+  "fa",
+  "hi",
+  "th",
+  "vi"
+]);
+var LOCALIZED = /^(.*?[._-])?([a-z]{2})([_-][A-Z]{2})?\.([A-Za-z0-9]+)$/;
+function localeFree(base) {
+  const match = LOCALIZED.exec(base);
+  if (!match || !LOCALES.has(match[2])) return null;
+  return `${match[1] ?? ""}{locale}.${match[4]}`;
+}
+function areaKey(segments) {
+  const { suffix, ext } = stemSuffix(segments[segments.length - 1]);
+  return `${segments.slice(0, -2).join("/")}\0${ext ? `*${suffix}.${ext}` : segments[segments.length - 1]}`;
+}
+var CREDITS = /(^|\/)(AUTHORS|CONTRIBUTORS|MAINTAINERS|CODEOWNERS|THANKS|\.mailmap)(\.[A-Za-z]+)?$/;
+function compiledRoles(paths, named, binary) {
+  const compiled = /* @__PURE__ */ new Set();
+  if (!binary?.size) return compiled;
+  const textual = /* @__PURE__ */ new Set();
+  const byStem = /* @__PURE__ */ new Map();
+  for (const path of paths) {
+    const role = named(path);
+    const stem = role.replace(/\.[A-Za-z0-9]+$/, "");
+    let roles = byStem.get(stem);
+    if (!roles) byStem.set(stem, roles = /* @__PURE__ */ new Set());
+    roles.add(role);
+    if (!binary.has(path)) textual.add(role);
+  }
+  for (const roles of byStem.values()) {
+    if (roles.size < 2 || ![...roles].some((role) => textual.has(role))) continue;
+    for (const role of roles) if (!textual.has(role)) compiled.add(role);
+  }
+  return compiled;
+}
+var IGNORED_ROLES = /* @__PURE__ */ new Set(["test", "lock", "mirror", "credits", "compiled"]);
+
+// src/lib/shell-command.ts
+import { basename as basename3, isAbsolute, join as join6, resolve } from "node:path";
+import { statSync as statSync2 } from "node:fs";
+var OPERATORS = ["&&", "||", ";;", ";", "|&", "|", "&", "(", ")"];
+var REDIRECTS = ["&>>", "&>", ">>", ">|", ">&", "<<<", "<<-", "<<", "<&", "<>", ">", "<"];
+function simpleCommands(line) {
+  const out = [];
+  let current = { words: [], redirects: [], then: null };
+  let word = "";
+  let inWord = false;
+  let pendingRedirect = null;
+  const heredocs = [];
+  let i = 0;
+  const endWord = () => {
+    if (!inWord) return;
+    if (pendingRedirect) {
+      if (pendingRedirect === "<<" || pendingRedirect === "<<-") {
+        heredocs.push({ delimiter: word, strip: pendingRedirect === "<<-" });
+      } else {
+        current.redirects.push({ op: pendingRedirect, target: word });
+      }
+      pendingRedirect = null;
+    } else {
+      current.words.push(word);
+    }
+    word = "";
+    inWord = false;
+  };
+  const endCommand = (then) => {
+    endWord();
+    if (current.words.length || current.redirects.length) {
+      current.then = then;
+      out.push(current);
+    } else if (then && out.length) {
+      out[out.length - 1].then = then;
+    }
+    current = { words: [], redirects: [], then: null };
+  };
+  const skipHeredocBodies = () => {
+    while (heredocs.length && i < line.length) {
+      const { delimiter, strip } = heredocs.shift();
+      while (i < line.length) {
+        const end = line.indexOf("\n", i);
+        const text = line.slice(i, end === -1 ? line.length : end);
+        i = end === -1 ? line.length : end + 1;
+        if ((strip ? text.replace(/^\t+/, "") : text) === delimiter) break;
+      }
+    }
+  };
+  while (i < line.length) {
+    const c = line[i];
+    if (c === "\\") {
+      if (line[i + 1] === "\n") {
+        i += 2;
+        continue;
+      }
+      word += line[i + 1] ?? "";
+      inWord = true;
+      i += 2;
+      continue;
+    }
+    if (c === "'") {
+      const end = line.indexOf("'", i + 1);
+      const stop = end === -1 ? line.length : end;
+      word += line.slice(i + 1, stop);
+      inWord = true;
+      i = stop + 1;
+      continue;
+    }
+    if (c === '"') {
+      i++;
+      while (i < line.length && line[i] !== '"') {
+        if (line[i] === "\\" && i + 1 < line.length) {
+          word += line[i + 1];
+          i += 2;
+        } else if (line[i] === "$" && line[i + 1] === "(") {
+          const end = closingParen(line, i + 1);
+          word += line.slice(i, end + 1);
+          i = end + 1;
+        } else {
+          word += line[i];
+          i++;
+        }
+      }
+      inWord = true;
+      i++;
+      continue;
+    }
+    if (c === "$" && line[i + 1] === "(") {
+      const end = closingParen(line, i + 1);
+      word += line.slice(i, end + 1);
+      inWord = true;
+      i = end + 1;
+      continue;
+    }
+    if (c === "`") {
+      const end = line.indexOf("`", i + 1);
+      const stop = end === -1 ? line.length : end;
+      word += line.slice(i, stop + 1);
+      inWord = true;
+      i = stop + 1;
+      continue;
+    }
+    if (c === "#" && !inWord) {
+      const end = line.indexOf("\n", i);
+      i = end === -1 ? line.length : end;
+      continue;
+    }
+    if (c === "\n") {
+      endCommand(";");
+      i++;
+      skipHeredocBodies();
+      continue;
+    }
+    if (c === " " || c === "	") {
+      endWord();
+      i++;
+      continue;
+    }
+    if (/[0-9]/.test(c) && !inWord) {
+      const m = /^[0-9]+(?=[<>])/.exec(line.slice(i));
+      if (m) {
+        const op = REDIRECTS.find((r) => line.startsWith(r, i + m[0].length));
+        endWord();
+        pendingRedirect = `${m[0]}${op}`;
+        i += m[0].length + op.length;
+        continue;
+      }
+    }
+    const redirect = REDIRECTS.find((r) => line.startsWith(r, i));
+    if (redirect) {
+      endWord();
+      pendingRedirect = redirect;
+      i += redirect.length;
+      continue;
+    }
+    const operator = OPERATORS.find((o) => line.startsWith(o, i));
+    if (operator) {
+      endCommand(operator === "(" || operator === ")" || operator === ";;" ? ";" : operator === "|&" ? "|" : operator);
+      i += operator.length;
+      continue;
+    }
+    word += c;
+    inWord = true;
+    i++;
+  }
+  endCommand(null);
+  return out;
+}
+function closingParen(line, open) {
+  let depth = 0;
+  for (let i = open; i < line.length; i++) {
+    if (line[i] === "(") depth++;
+    else if (line[i] === ")" && --depth === 0) return i;
+  }
+  return line.length - 1;
+}
+var WRITE_REDIRECTS = /* @__PURE__ */ new Set([">", ">>", ">|", "&>", "&>>", "1>", "1>>", "1>|"]);
+var WRAPPERS2 = /* @__PURE__ */ new Set(["sudo", "command", "nohup", "time", "nice", "exec", "env", "builtin"]);
+function programOf(cmd) {
+  const words = [...cmd.words];
+  while (words.length) {
+    const first = words[0];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) words.shift();
+    else if (WRAPPERS2.has(first)) words.shift();
+    else if (first === "timeout") {
+      words.shift();
+      while (words.length && words[0].startsWith("-")) words.shift();
+      words.shift();
+    } else break;
+  }
+  return words;
+}
+function statusReaches(cmds, index) {
+  for (let i = index; i < cmds.length - 1; i++) if (cmds[i].then !== "&&") return false;
+  return true;
+}
+function directoryAt(cmds, index, cwd, home) {
+  let dir = cwd;
+  for (let i = 0; i < index; i++) {
+    const words = programOf(cmds[i]);
+    if (words[0] !== "cd" && words[0] !== "pushd") continue;
+    const target = words[1];
+    dir = target && dir ? resolvePath(target, dir, home) : null;
+  }
+  return dir;
+}
+function resolvePath(target, dir, home) {
+  let path = target;
+  if (path === "~" || path.startsWith("~/")) path = home + path.slice(1);
+  else if (path.startsWith("$HOME/")) path = home + path.slice(5);
+  else if (path.startsWith("${HOME}/")) path = home + path.slice(7);
+  if (!path || /[$`*?[\]{}]/.test(path)) return null;
+  if (path.startsWith("/dev/")) return null;
+  return isAbsolute(path) ? resolve(path) : resolve(dir, path);
+}
+function isDirectory(path) {
+  try {
+    return statSync2(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function operands(args) {
+  const out = [];
+  let literal = false;
+  for (const arg of args) {
+    if (!literal && arg === "--") literal = true;
+    else if (literal || !arg.startsWith("-") || arg === "-") out.push(arg);
+  }
+  return out;
+}
+function sedTargets(args) {
+  let inPlace = false;
+  let hasScript = false;
+  const files = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") {
+      files.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg.startsWith("--in-place")) inPlace = true;
+    else if (arg.startsWith("--expression=") || arg.startsWith("--file=")) hasScript = true;
+    else if (arg === "--expression" || arg === "--file") {
+      hasScript = true;
+      i++;
+    } else if (arg.startsWith("-") && arg.length > 1 && !arg.startsWith("--")) {
+      for (let j = 1; j < arg.length; j++) {
+        const flag = arg[j];
+        if (flag === "i") {
+          inPlace = true;
+          if (j === arg.length - 1 && args[i + 1] === "") i++;
+          break;
+        }
+        if (flag === "e" || flag === "f") {
+          hasScript = true;
+          if (j === arg.length - 1) i++;
+          break;
+        }
+      }
+    } else files.push(arg);
+  }
+  if (!inPlace) return [];
+  return hasScript ? files : files.slice(1);
+}
+function copyTargets(args, dir, home) {
+  const words = operands(args);
+  if (words.length < 2) return [];
+  const destination = resolvePath(words[words.length - 1], dir, home);
+  if (!destination) return [];
+  const sources = words.slice(0, -1);
+  if (sources.length > 1 || isDirectory(destination)) return sources.map((s) => join6(destination, basename3(s)));
+  return [destination];
+}
+function gitInvocation(args, dir, home) {
+  let base = dir;
+  let rest = args;
+  while (rest.length && rest[0].startsWith("-")) {
+    if (rest[0] === "-C" && rest[1]) {
+      base = resolvePath(rest[1], base, home) ?? base;
+      rest = rest.slice(2);
+    } else rest = rest.slice(rest[0] === "-c" ? 2 : 1);
+  }
+  return { sub: rest[0] ?? "", rest: rest.slice(1), base };
+}
+function commandWrites(cmds, index, cwd, home) {
+  const dir = directoryAt(cmds, index, cwd, home);
+  if (!dir) return [];
+  const cmd = cmds[index];
+  const targets = [];
+  const add = (word, base = dir) => {
+    const path = resolvePath(word, base, home);
+    if (path) targets.push(path);
+  };
+  for (const { op, target } of cmd.redirects) if (WRITE_REDIRECTS.has(op)) add(target);
+  const [program, ...args] = programOf(cmd);
+  switch (program ? basename3(program) : "") {
+    case "tee":
+      for (const file of operands(args)) add(file);
+      break;
+    case "sed":
+    case "gsed":
+      for (const file of sedTargets(args)) add(file);
+      break;
+    case "cp":
+    case "mv":
+    case "install":
+      targets.push(...copyTargets(args, dir, home));
+      break;
+    case "git": {
+      const { sub, rest, base } = gitInvocation(args, dir, home);
+      if (sub === "mv") targets.push(...copyTargets(rest, base, home));
+      else if (sub === "rm") for (const file of operands(rest)) add(file, base);
+      break;
+    }
+  }
+  return targets;
+}
+
+// src/lib/session-workflow.ts
+var SHAPE_SHARE = 0.6;
+var MIN_ROLES = 2;
+var MAX_TRAIL_EDITS = 1e3;
+var EDIT_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
+function workflowsFile(home = handbookHome()) {
+  return join7(home, "workflows.jsonl");
+}
+function minedRecordFile(home = handbookHome()) {
+  return join7(home, "mined-workflows.json");
+}
+function sessionDetectEnabled(home = handbookHome()) {
+  const sessions = readConfigFile(home).sessions;
+  return !configIsBroken(home) && sessions?.detect !== false;
+}
+function isAutonomous(entrypoint) {
+  return !!entrypoint && entrypoint.startsWith("sdk");
+}
+function repositoryOf(dir) {
+  let at = resolve2(dir);
+  for (; ; ) {
+    const dotgit = join7(at, ".git");
+    try {
+      const stat = statSync3(dotgit);
+      if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
+      if (stat.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync6(dotgit, "utf8"));
+        if (pointer) {
+          const gitdir = resolve2(at, pointer[1].trim());
+          const marker = `${sep}.git${sep}worktrees${sep}`;
+          const cut = gitdir.lastIndexOf(marker);
+          return { repo: realpathSync(cut >= 0 ? gitdir.slice(0, cut) : at), checkout: at, gitdir };
+        }
+      }
+    } catch {
+    }
+    const up = dirname2(at);
+    if (up === at) return null;
+    at = up;
+  }
+}
+var diskLocator = {
+  locate(path) {
+    const found = repositoryOf(dirname2(path));
+    if (!found) return null;
+    const rel = relative(found.checkout, path).split(sep).join("/");
+    if (!rel || rel.startsWith("../") || rel === ".git" || rel.startsWith(".git/")) return null;
+    return { repo: found.repo, checkout: found.checkout, path: rel };
+  },
+  ignored(checkout, paths) {
+    if (paths.length === 0) return /* @__PURE__ */ new Set();
+    const result = spawnSync("git", ["-C", checkout, "check-ignore", "--stdin"], {
+      input: paths.join("\n"),
+      encoding: "utf8",
+      timeout: 2e3
+    });
+    if (result.status !== 0 || typeof result.stdout !== "string") return /* @__PURE__ */ new Set();
+    return new Set(result.stdout.split("\n").filter(Boolean));
+  },
+  branch(checkout) {
+    const found = repositoryOf(checkout);
+    if (!found) return null;
+    try {
+      const head = readFileSync6(join7(found.gitdir, "HEAD"), "utf8");
+      return /^ref:\s*refs\/heads\/(.+)$/m.exec(head)?.[1]?.trim() ?? null;
+    } catch {
+      return null;
+    }
+  }
+};
+function loadMinedRecord(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync6(minedRecordFile(home), "utf8"));
+    if (parsed?.version !== 1 || !Array.isArray(parsed.repos) || !Array.isArray(parsed.shapes)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function detectWorkflow(files, mined) {
+  if (files.length === 0) return null;
+  const resolver = mined ? restoreRoleResolver(mined.resolver) : buildRoleResolver(files.map((f) => f.path));
+  const pairs = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    const role = resolver(file.path);
+    if (IGNORED_ROLES.has(role)) continue;
+    pairs.set(`${file.repo}\0${role}`, { repo: file.repo, role });
+  }
+  if (pairs.size < MIN_ROLES) return null;
+  const list = [...pairs.values()];
+  const shape = mined ? bestShape(list, mined) : null;
+  return { match: shape ? "shape" : "candidate", shape, pairs: list };
+}
+function bestShape(pairs, mined) {
+  const names = new Map(mined.repos.map((r) => [r.root, r]));
+  const held = /* @__PURE__ */ new Set();
+  for (const { repo, role } of pairs) {
+    const named = names.get(repo);
+    if (!named) continue;
+    held.add(`${named.label}:${role}`);
+    held.add(`${named.family}:${role}`);
+  }
+  let best = null;
+  for (const shape of mined.shapes) {
+    if (shape.core.length === 0) continue;
+    const share = shape.core.filter((role) => held.has(role)).length / shape.core.length;
+    if (share < SHAPE_SHARE) continue;
+    if (!best || share > best.share || share === best.share && shape.recurrence > best.recurrence) {
+      best = { id: shape.id, share, recurrence: shape.recurrence };
+    }
+  }
+  return best?.id ?? null;
+}
+var PACKAGE_RUNNERS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "bun"]);
+var SCRIPT_CHECK = /^(test|tests|t|e2e|spec|build|compile|typecheck|type-check|tsc|check)(:|$)/;
+var TOOL_CHECKS = /* @__PURE__ */ new Set(["vitest", "jest", "mocha", "ava", "pytest", "py.test", "tox", "rspec", "phpunit", "tsc"]);
+var SUBCOMMAND_CHECKS = {
+  go: /* @__PURE__ */ new Set(["test", "build", "vet"]),
+  cargo: /* @__PURE__ */ new Set(["test", "build", "check", "nextest"]),
+  dotnet: /* @__PURE__ */ new Set(["test", "build"]),
+  swift: /* @__PURE__ */ new Set(["test", "build"]),
+  bazel: /* @__PURE__ */ new Set(["test", "build"]),
+  bazelisk: /* @__PURE__ */ new Set(["test", "build"]),
+  playwright: /* @__PURE__ */ new Set(["test"]),
+  cypress: /* @__PURE__ */ new Set(["run"])
+};
+var MAVEN_PHASES = /* @__PURE__ */ new Set(["test", "verify", "compile", "package", "install"]);
+var GRADLE_TASK = /(^|:)(test\w*|check|build|assemble\w*|compile\w*)$/;
+var MAKE_TARGETS = /* @__PURE__ */ new Set(["test", "check", "build", "all"]);
+var positional = (args) => args.filter((a) => !a.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(a));
+function isCheck(cmd) {
+  const [program, ...args] = programOf(cmd);
+  if (!program) return false;
+  const name = basename4(program);
+  const words = positional(args);
+  if (PACKAGE_RUNNERS.has(name)) {
+    const [sub, next] = words;
+    if (sub === "exec" || sub === "dlx" || sub === "x") return !!next && TOOL_CHECKS.has(basename4(next));
+    const script = sub === "run" || sub === "run-script" ? next : sub;
+    return !!script && SCRIPT_CHECK.test(script);
+  }
+  if (name === "npx" || name === "bunx") {
+    const [tool, sub] = words;
+    if (!tool) return false;
+    const toolName = basename4(tool);
+    return TOOL_CHECKS.has(toolName) || !!sub && !!SUBCOMMAND_CHECKS[toolName]?.has(sub);
+  }
+  if (TOOL_CHECKS.has(name)) return true;
+  if (/^python[0-9.]*$/.test(name)) {
+    const module = args[args.indexOf("-m") + 1];
+    return args.includes("-m") && (module === "pytest" || module === "unittest");
+  }
+  if (name === "node") return args.includes("--test");
+  if (SUBCOMMAND_CHECKS[name]) return !!words[0] && SUBCOMMAND_CHECKS[name].has(words[0]);
+  if (name === "mvn" || name === "mvnw") return words.some((w) => MAVEN_PHASES.has(w));
+  if (name === "gradle" || name === "gradlew") return words.some((w) => GRADLE_TASK.test(w));
+  if (name === "make") return words.length === 0 || words.some((w) => MAKE_TARGETS.has(w));
+  if (name === "xcodebuild") return words.some((w) => w === "test" || w === "build");
+  return false;
+}
+function isCommit(cmd) {
+  const [program, ...args] = programOf(cmd);
+  return !!program && basename4(program) === "git" && gitInvocation(args, ".", ".").sub === "commit";
+}
+function emptyTrail() {
+  return { edits: [], green: false, fired: [] };
+}
+function recordWorkflowEvent(input, home = handbookHome(), deps = {}) {
+  if (!input.session_id || !sessionDetectEnabled(home)) return null;
+  if (isAutonomous(deps.entrypoint ?? process.env.CLAUDE_CODE_ENTRYPOINT)) return null;
+  const locator = deps.locator ?? diskLocator;
+  const userHome = deps.userHome ?? homedir3();
+  const cwd = input.cwd ?? "";
+  const steps = [];
+  if (EDIT_TOOLS2.has(input.tool_name ?? "")) {
+    const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
+    if (filePath) steps.push({ kind: "write", path: resolve2(cwd || "/", filePath) });
+  } else if (input.tool_name === "Bash") {
+    const command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+    if (!command) return null;
+    const ok = isBashSuccess(input);
+    const cmds = simpleCommands(command);
+    cmds.forEach((cmd, index) => {
+      for (const path of commandWrites(cmds, index, cwd, userHome)) steps.push({ kind: "write", path });
+      const known = statusReaches(cmds, index);
+      if (isCheck(cmd)) steps.push({ kind: "check", green: known && ok });
+      if (isCommit(cmd)) steps.push({ kind: "commit", ok: known && ok });
+    });
+  }
+  if (steps.length === 0) return null;
+  const state = loadSessionState(input.session_id, home);
+  const trail = state.workflow ?? emptyTrail();
+  let line = null;
+  let changed = false;
+  for (const step of steps) {
+    if (step.kind === "write") {
+      if (!locator.locate(step.path)) continue;
+      trail.green = false;
+      if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
+      changed = true;
+    } else if (step.kind === "check") {
+      trail.green = step.green;
+      changed = true;
+    } else if (step.ok && trail.green && !trail.fired.includes("S1")) {
+      const outcome = evaluate(state, trail, "S1", home, deps);
+      if (outcome !== null) {
+        trail.fired.push("S1");
+        if (outcome !== "hygiene") line = outcome;
+      }
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  state.workflow = trail;
+  saveSessionState(state, home);
+  return line;
+}
+function evaluate(state, trail, signal, home, deps) {
+  const locator = deps.locator ?? diskLocator;
+  const files = trailFiles(trail.edits, locator);
+  const mined = loadMinedRecord(home);
+  const detection = detectWorkflow(files, mined);
+  if (!detection) return null;
+  const work = workKey(files, locator, mined?.prefixes ?? []);
+  const host = deps.host ?? hostIdentity();
+  const material = [...files.map((f) => f.path), ...detection.pairs.map((p) => p.role), ...work ? [work] : []];
+  if (material.some((text) => traced(text, host))) {
+    bumpCounter("workflowSkippedHygiene", home);
+    return "hygiene";
+  }
+  const salt = installSalt(home);
+  const line = {
+    ts: deps.now?.() ?? (/* @__PURE__ */ new Date()).toISOString(),
+    session: saltedHash(salt, "session", state.sessionId),
+    signal,
+    match: detection.match,
+    shape: detection.shape,
+    roles: [...new Set(detection.pairs.map((p) => saltedHash(salt, "role", `${p.repo}\0${p.role}`)))].sort(),
+    repos: [...new Set(detection.pairs.map((p) => saltedHash(salt, "repo", p.repo)))].sort(),
+    rolesEdited: detection.pairs.length,
+    signals: sessionSignalCount(state.sessionId, home) + state.resolvedPairs.length + state.openErrors.length,
+    ticket: work ? saltedHash(salt, "ticket", work) : null
+  };
+  const serialized = JSON.stringify(line);
+  if (traced(serialized, host)) {
+    bumpCounter("workflowSkippedHygiene", home);
+    return "hygiene";
+  }
+  mkdirSync5(home, { recursive: true });
+  appendFileSync2(workflowsFile(home), `${serialized}
+`);
+  return line;
+}
+function traced(text, host) {
+  return detectIdentity(text, host) !== null || detectSecret(text) !== null;
+}
+function trailFiles(edits, locator) {
+  const byCheckout = /* @__PURE__ */ new Map();
+  for (const edit of edits) {
+    const file = locator.locate(edit);
+    if (!file) continue;
+    const list = byCheckout.get(file.checkout) ?? [];
+    list.push(file);
+    byCheckout.set(file.checkout, list);
+  }
+  const files = [];
+  for (const [checkout, list] of byCheckout) {
+    const ignored = locator.ignored(checkout, list.map((f) => f.path));
+    files.push(...list.filter((f) => !ignored.has(f.path)));
+  }
+  return files;
+}
+var DEFAULT_BRANCHES = /* @__PURE__ */ new Set(["main", "master", "develop", "dev", "trunk", "HEAD"]);
+function workKey(files, locator, prefixes) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const file of files) counts.set(file.checkout, (counts.get(file.checkout) ?? 0) + 1);
+  const checkout = [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0];
+  const branch = checkout ? locator.branch(checkout) : null;
+  if (!branch || DEFAULT_BRANCHES.has(branch)) return null;
+  for (const match of branch.matchAll(KEY_CANDIDATE)) {
+    const prefix = match[1];
+    if (NOT_A_TICKET.has(prefix) || prefixes.length > 0 && !prefixes.includes(prefix)) continue;
+    return match[0];
+  }
+  return branch;
+}
+function installSalt(home) {
+  const file = join7(home, "workflow-salt");
+  try {
+    return Buffer.from(readFileSync6(file, "utf8").trim(), "hex");
+  } catch {
+    mkdirSync5(home, { recursive: true });
+    try {
+      writeFileSync3(file, randomBytes(16).toString("hex"), { flag: "wx", mode: 384 });
+    } catch {
+    }
+    return Buffer.from(readFileSync6(file, "utf8").trim(), "hex");
+  }
+}
+function saltedHash(salt, kind, value) {
+  return createHash2("sha256").update(salt).update(kind).update("\0").update(value).digest("hex").slice(0, 16);
+}
+
 // src/hooks/post-tool-use.ts
 async function main() {
   const raw = await readStdin();
@@ -654,6 +1674,7 @@ async function main() {
     recordSkillUse(slug);
     return;
   }
+  recordWorkflowEvent(input);
   recordActivity(input);
   if (captureBashFailure(input)) {
     bumpCounter("bashFailuresCaptured");
