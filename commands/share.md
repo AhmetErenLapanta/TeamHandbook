@@ -74,6 +74,10 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      other people already use. That mark is absent when the team repository could not be
      read, so its absence never proves the team does not have it - the share itself makes
      the real check and turns the selection back if it does.
+   - An entry carrying an **overlaps** line is a warning, not a refusal: its description
+     answers the same requests as the skill it names, so a request may reach either one.
+     It can still be picked. Say the overlap where the skill is offered, and leave whether
+     to reword one of the two to the user.
    - Say once, before the first dialog, that they can answer in free text instead
      ("gitlab-*", "all servers, no skills") if they already know what they want, and
      resolve that answer with `pick` exactly as above. Twenty skills is six dialogs, and a

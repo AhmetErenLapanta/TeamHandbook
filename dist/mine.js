@@ -470,10 +470,16 @@ __export(skill_format_exports, {
   MIN_TRIGGER_SENTENCES: () => MIN_TRIGGER_SENTENCES,
   MIN_VERIFY_ITEMS: () => MIN_VERIFY_ITEMS,
   checkSkillFormat: () => checkSkillFormat,
+  citationsIn: () => citationsIn,
   failedRules: () => failedRules,
+  fileMapCells: () => fileMapCells,
   formatPasses: () => formatPasses,
+  matcherFor: () => matcherFor,
+  pathTokens: () => pathTokens,
+  procedureSteps: () => procedureSteps,
   splitFrontmatter: () => splitFrontmatter,
-  triggerSentences: () => triggerSentences
+  triggerSentences: () => triggerSentences,
+  withoutCitations: () => withoutCitations
 });
 function ci(source) {
   return new RegExp(source, "iu");
@@ -590,6 +596,9 @@ function dataRows(body) {
 }
 function firstCell(row) {
   return row.trim().replace(/^\|/, "").split("|")[0].trim();
+}
+function fileMapCells(text) {
+  return sections(classifyLines(splitFrontmatter(text).body)).filter((s) => MAP_HEAD_RE.test(s.title)).flatMap((s) => dataRows(s.body)).map(firstCell);
 }
 function patternMatcher(pattern) {
   return matcherFor(pathTokens(pattern)[0] ?? null);
@@ -765,20 +774,38 @@ function addMechanicalFindings(findings, secs, expects) {
     // above so that `[later-fix 2]` is not read as a correction from a pool it is not in.
     "later-fix": citable["later-fix"] ?? 0
   };
-  const numberedSteps = secs.filter(isProcedureSection).flatMap((s) => s.body.filter((line) => line.kind === "text" && NUM_ITEM_RE.test(line.text))).map((line) => line.text);
-  const uncited = numberedSteps.filter((step) => [...step.matchAll(CITATION_RE)].length === 0);
+  const steps = numberedSteps(secs).map(({ step }) => step);
+  const uncited = steps.filter((step) => citationsIn(step).length === 0);
   const dangling = [];
-  for (const step of numberedSteps) {
-    for (const [, kind, index] of step.matchAll(CITATION_RE)) {
-      const n = Number(index);
-      if (n < 1 || n > (counts[kind] ?? 0)) dangling.push(`${kind} ${index}`);
+  for (const step of steps) {
+    for (const { kind, index } of citationsIn(step)) {
+      if (index < 1 || index > (counts[kind] ?? 0)) dangling.push(`${kind} ${index}`);
     }
   }
   add(
     "step-evidence",
-    numberedSteps.length > 0 && uncited.length === 0 && dangling.length === 0,
-    `steps=${numberedSteps.length} uncited=${uncited.length} dangling=${JSON.stringify([...new Set(dangling)].slice(0, 3))} available=${JSON.stringify(counts)}`
+    steps.length > 0 && uncited.length === 0 && dangling.length === 0,
+    `steps=${steps.length} uncited=${uncited.length} dangling=${JSON.stringify([...new Set(dangling)].slice(0, 3))} available=${JSON.stringify(counts)}`
   );
+}
+function numberedSteps(secs) {
+  const found = /* @__PURE__ */ new Map();
+  for (const section of secs.filter(isProcedureSection)) {
+    for (const line of section.body) {
+      if (line.kind !== "text" || !NUM_ITEM_RE.test(line.text)) continue;
+      found.set(line, { section: section.title, step: line.text });
+    }
+  }
+  return [...found.values()];
+}
+function procedureSteps(text) {
+  return numberedSteps(sections(classifyLines(splitFrontmatter(text).body)));
+}
+function citationsIn(line) {
+  return [...line.matchAll(CITATION_RE)].map(([, kind, index]) => ({ kind, index: Number(index) }));
+}
+function withoutCitations(line) {
+  return line.replace(CITATION_RE, "").replace(/[ \t]{2,}/g, " ").trim();
 }
 function namesAFile(line) {
   for (const [, code] of line.matchAll(/`([^`\n]+)`/g)) {
@@ -3524,48 +3551,6 @@ async function draftSkill(evidence, run = defaultDraftRunner, options = {}) {
   return { ok: false, skill: null, reasons, attempts: 2, prompts };
 }
 function buildDraftPrompt(evidence, failed, host) {
-  const fields = {
-    "how often this work happened": String(evidence.rubric.support),
-    "files it touches, and in how many of those jobs": evidence.fileMap.map((row, i) => `[map ${i + 1}] ${row.role} | ${row.units}/${row.of} | e.g. ${row.examples.join(", ") || "(none)"}`).join("\n"),
-    "the order repositories were changed in": evidence.delivery.order ? `${evidence.delivery.order.join(" -> ")} (in ${evidence.delivery.agreement} of ${evidence.delivery.units} multi-repository jobs)` : "single repository",
-    "what the tickets were called": evidence.subjects.map((subject, i) => `[subject ${i + 1}] ${subject}`).join("\n"),
-    "what the changes look like": evidence.hunks.map((hunk, i) => `[hunk ${i + 1}] ${hunk.role} (job ${hunk.unit})${hunk.truncated ? ", trimmed" : ""}
-${hunk.lines.join("\n")}`).join("\n\n"),
-    // Most costly first, with the signals that put each one there, so the mistakes table is built
-    // from what a correction COST rather than from how often something like it happened.
-    "corrections made inside the same ticket, costliest first": evidence.fixes.map((fix, i) => {
-      const why = fix.signals.length ? ` [${fix.signals.join(" ")}]` : "";
-      return `[fix ${i + 1}]${why} ${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
-    }).join("\n"),
-    "the same work repeated per product type": evidence.siblings.map((series) => series.variants.join(" / ")).join("\n"),
-    "measured numbers": [
-      `repeated ${evidence.rubric.support} times`,
-      `${evidence.rubric.coreFiles} core files`,
-      `${evidence.rubric.roles} roles`,
-      `spans ${evidence.rubric.repos} repositories per job`,
-      `${evidence.rubric.coreRepos} repositories hold the core files`,
-      `${evidence.rubric.testShare} of jobs changed a test`,
-      `${evidence.rubric.authors} people did it`
-    ].join("\n")
-  };
-  if (evidence.files?.length) {
-    fields["what these files hold today"] = evidence.files.map(
-      (file, i) => `[file ${i + 1}] ${file.path} (${file.role})${file.omitted ? `, ${file.omitted} lines not shown` : ""}
-${file.lines.join("\n")}`
-    ).join("\n\n");
-  }
-  if (evidence.configs?.length) {
-    fields["the configuration this work changes"] = evidence.configs.map(
-      (config, i) => `[config ${i + 1}] ${config.path}${config.omitted ? `, ${config.omitted} lines not shown` : ""}
-${config.lines.join("\n")}`
-    ).join("\n\n");
-  }
-  if (evidence.laterFixes?.length) {
-    fields["corrections made by LATER jobs touching the same files, costliest first"] = evidence.laterFixes.map((fix, i) => {
-      const why = fix.signals.length ? ` [${fix.signals.join(" ")}]` : "";
-      return `[later-fix ${i + 1}]${why} ${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
-    }).join("\n");
-  }
   const extraForms = [
     evidence.files?.length ? "[file 1]" : "",
     evidence.configs?.length ? "[config 1]" : "",
@@ -3583,7 +3568,77 @@ ${config.lines.join("\n")}`
     ...failed.map((rule) => `- ${rule}: ${remedy(rule)}`)
   ].join("\n") : "";
   const instructions = INSTRUCTION_LINES.flatMap((line) => line === CITATIONS ? citationRules(evidence) : [line]).join("\n");
-  return [instructions, retry, "", fenceUntrusted(fields, host)].join("\n");
+  return [instructions, retry, "", fenceUntrusted(evidenceFields(evidence), host)].join("\n");
+}
+function evidenceFields(evidence) {
+  const tagged = (kind, count, separator) => Array.from({ length: count }, (_, i) => `[${kind} ${i + 1}] ${citedPiece(evidence, kind, i + 1)}`).join(separator);
+  const fields = {
+    "how often this work happened": String(evidence.rubric.support),
+    "files it touches, and in how many of those jobs": tagged("map", evidence.fileMap.length, "\n"),
+    "the order repositories were changed in": evidence.delivery.order ? `${evidence.delivery.order.join(" -> ")} (in ${evidence.delivery.agreement} of ${evidence.delivery.units} multi-repository jobs)` : "single repository",
+    "what the tickets were called": tagged("subject", evidence.subjects.length, "\n"),
+    "what the changes look like": tagged("hunk", evidence.hunks.length, "\n\n"),
+    // Most costly first, with the signals that put each one there, so the mistakes table is built
+    // from what a correction COST rather than from how often something like it happened.
+    "corrections made inside the same ticket, costliest first": tagged("fix", evidence.fixes.length, "\n"),
+    "the same work repeated per product type": evidence.siblings.map((series) => series.variants.join(" / ")).join("\n"),
+    "measured numbers": [
+      `repeated ${evidence.rubric.support} times`,
+      `${evidence.rubric.coreFiles} core files`,
+      `${evidence.rubric.roles} roles`,
+      `spans ${evidence.rubric.repos} repositories per job`,
+      `${evidence.rubric.coreRepos} repositories hold the core files`,
+      `${evidence.rubric.testShare} of jobs changed a test`,
+      `${evidence.rubric.authors} people did it`
+    ].join("\n")
+  };
+  if (evidence.files?.length) fields["what these files hold today"] = tagged("file", evidence.files.length, "\n\n");
+  if (evidence.configs?.length) {
+    fields["the configuration this work changes"] = tagged("config", evidence.configs.length, "\n\n");
+  }
+  if (evidence.laterFixes?.length) {
+    fields["corrections made by LATER jobs touching the same files, costliest first"] = tagged(
+      "later-fix",
+      evidence.laterFixes.length,
+      "\n"
+    );
+  }
+  return fields;
+}
+function citedPiece(packet, kind, n) {
+  const i = n - 1;
+  switch (kind) {
+    case "map": {
+      const row = packet.fileMap[i];
+      return row ? `${row.role} | ${row.units}/${row.of} | e.g. ${row.examples.join(", ") || "(none)"}` : null;
+    }
+    case "subject":
+      return packet.subjects[i] ?? null;
+    case "hunk": {
+      const hunk = packet.hunks[i];
+      return hunk ? `${hunk.role} (job ${hunk.unit})${hunk.truncated ? ", trimmed" : ""}
+${hunk.lines.join("\n")}` : null;
+    }
+    case "fix":
+      return correctionText(packet.fixes[i]);
+    case "later-fix":
+      return correctionText(packet.laterFixes?.[i]);
+    case "file": {
+      const file = packet.files?.[i];
+      return file ? `${file.path} (${file.role})${file.omitted ? `, ${file.omitted} lines not shown` : ""}
+${file.lines.join("\n")}` : null;
+    }
+    case "config": {
+      const config = packet.configs?.[i];
+      return config ? `${config.path}${config.omitted ? `, ${config.omitted} lines not shown` : ""}
+${config.lines.join("\n")}` : null;
+    }
+  }
+}
+function correctionText(fix) {
+  if (!fix) return null;
+  const why = fix.signals.length ? `[${fix.signals.join(" ")}] ` : "";
+  return `${why}${fix.subject} (touched ${fix.files.join(", ") || "(withheld)"})`;
 }
 function extractSkill(reply) {
   const text = reply.replace(/\r\n?/g, "\n").trim();

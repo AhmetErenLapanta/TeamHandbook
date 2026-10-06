@@ -1,7 +1,16 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FORMAT_PATTERNS, checkSkillFormat, failedRules, formatPasses, splitFrontmatter } from "./skill-format.js";
+import {
+  FORMAT_PATTERNS,
+  checkSkillFormat,
+  citationsIn,
+  failedRules,
+  formatPasses,
+  procedureSteps,
+  splitFrontmatter,
+  withoutCitations,
+} from "./skill-format.js";
 
 /**
  * The verdicts of the measurement harness's checker, dumped by its own fixtures rather than copied
@@ -586,6 +595,47 @@ describe("a fixed section that carries a number anyway", () => {
   it("given a numbered file map heading with its count, when checked, then it is still the map", () => {
     const text = DRAFT.replace("## File map (9 past changes)", "## 6. File map (9 past changes)");
     expect(rules(text)).toEqual([]);
+  });
+});
+
+describe("handing a draft's steps to whatever grades them one by one", () => {
+  it("given a draft, when its steps are read, then they are the five the gate asks a citation of, in order", () => {
+    const steps = procedureSteps(DRAFT);
+
+    expect(steps.map((s) => s.step)).toEqual([
+      "1. Add the handler in `controller/WidgetController.kt`. [map 1]",
+      "2. Add the request shape in `dto/WidgetRequest.kt`. [map 2]",
+      "1. Register the path in `endpoints/widget_endpoints.json`. [map 3]",
+      "2. Keep the method the same on both sides. [fix 1]",
+      "1. Compare the two paths before opening the request. [map 3]",
+    ]);
+    expect(steps.map((s) => s.section)).toEqual(["1. Service", "1. Service", "2. Gateway", "2. Gateway", "3. Both sides"]);
+  });
+
+  it("given numbered checks and a nested heading, when the steps are read, then checks stay out and a nested step counts once", () => {
+    const text = DRAFT.replace("- [ ] `./gradlew test` exits 0.", "1. `./gradlew test` exits 0.").replace(
+      "2. Keep the method the same on both sides. [fix 1]",
+      "2. Keep the method the same on both sides. [fix 1]\n\n### 2a. Rate class\n1. Copy the rate block. [map 3]",
+    );
+
+    const steps = procedureSteps(text);
+
+    expect(steps).toHaveLength(6);
+    expect(steps.filter((s) => s.step.includes("Copy the rate block"))).toEqual([
+      { section: "2a. Rate class", step: "1. Copy the rate block. [map 3]" },
+    ]);
+    expect(steps.some((s) => s.step.includes("gradlew"))).toBe(false);
+  });
+
+  it("given a line with citations, when read and stripped, then each one is found and none is left", () => {
+    const line = "2. Carry it through [hunk 2] and [later-fix 3], then [map 4/9].";
+
+    expect(citationsIn(line)).toEqual([
+      { kind: "hunk", index: 2 },
+      { kind: "later-fix", index: 3 },
+      { kind: "map", index: 4 },
+    ]);
+    expect(withoutCitations(line)).toBe("2. Carry it through and , then .");
   });
 });
 

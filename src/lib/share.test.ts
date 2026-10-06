@@ -1532,3 +1532,64 @@ describe("share and review meet in one team repository", () => {
     expect(reviewList).toContain("jira-task");
   });
 });
+
+describe("skills that answer the same request", () => {
+  const ROUTE =
+    'Exposes a new route through the gateway and the service behind it. Use when a ticket opens an endpoint. Triggers: "open an endpoint", "add a route".';
+
+  function writeDescribed(root: string, name: string, description: string): void {
+    const dir = join(root, ".claude", "skills", name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n\nBody.\n`);
+  }
+
+  it("given two installed skills with the same description, when the screen is printed, then each names the other as a warning", () => {
+    writeDescribed(userHome, "add-route", ROUTE);
+    writeDescribed(project, "open-endpoint", ROUTE);
+    writeDescribed(userHome, "release-notes", "Writes the release notes. Use when a version is tagged.");
+
+    const text = formatInventory(buildInventory(paths()));
+    const skills = text.slice(text.indexOf("Skills ("), text.indexOf("Everything you pick"));
+
+    expect(skills).toMatchInlineSnapshot(`
+      "Skills (3) - the ones you pick go out as part of ONE merge request to the team repository
+
+        1. add-route  [personal]
+           Exposes a new route through the gateway and the service behind it. Use when a ticket opens an endpoint. Triggers: "open an endpoint", "add a route".
+           overlaps open-endpoint: a request that reaches one may reach the other
+        2. release-notes  [personal]
+           Writes the release notes. Use when a version is tagged.
+        3. open-endpoint  [project]
+           Exposes a new route through the gateway and the service behind it. Use when a ticket opens an endpoint. Triggers: "open an endpoint", "add a route".
+           overlaps add-route: a request that reaches one may reach the other
+
+      "
+    `);
+  });
+
+  it("given a skill whose description matches one the team already has, when the inventory is read, then the team's skill is named", () => {
+    const teamSkills = mkdtempSync(join(tmpdir(), "handbook-team-skills-"));
+    try {
+      mkdirSync(join(teamSkills, "add-route"), { recursive: true });
+      writeFileSync(join(teamSkills, "add-route", "SKILL.md"), `---\nname: add-route\ndescription: ${ROUTE}\n---\n\nBody.\n`);
+      writeDescribed(userHome, "open-endpoint", ROUTE);
+
+      const inv = buildInventory({ ...paths(), teamSkills });
+
+      expect(inv.skills.map((s) => [s.name, s.overlaps])).toEqual([["open-endpoint", ["add-route"]]]);
+    } finally {
+      rmSync(teamSkills, { recursive: true, force: true });
+    }
+  });
+
+  it("given both overlapping skills picked, when shared, then both travel and neither is refused", () => {
+    remote = teamRepo();
+    writeDescribed(userHome, "add-route", ROUTE);
+    writeDescribed(userHome, "open-endpoint", ROUTE);
+
+    const result = shareSelection(select({ skills: ["add-route", "open-endpoint"] }), team(), paths(), undefined, forge);
+
+    expect(result.refused).toEqual([]);
+    expect(result.team).toMatchObject({ ok: true, skillNames: ["add-route", "open-endpoint"] });
+  });
+});
