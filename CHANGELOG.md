@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.18.0] - 2026-10-06
+
+### Added
+
+- **Every push asks for its branch beside its commit message.** Sharing, approving a skill
+  to the team and refreshing the team repository's scaffold show one question before
+  anything is pushed: the proposed branch and the proposed commit message together, to
+  confirm or change either. The branch you give is used exactly as given, for that push
+  only. The proposal follows your work: the ticket in the branch you are on
+  (`TEAM-12-...`) or one named earlier in the session, then your own prefixes, then the
+  example your team recorded. Without a prompt, pass `--branch <name>` beside `--message`.
+- **A team can record how its branches are named.** The scaffold refresh can store one
+  example branch name in the team file with `--branch-example`, so everyone who joins
+  afterwards gets proposals in that shape.
+- **On GitLab without `glab`, the push itself asks GitLab to open the merge request.** It
+  counts as opened only when GitLab answers with one, and since a push cannot carry the
+  request's description, the description is printed for you to paste.
+- **A second request for the same plugin version is caught before it is pushed.** If a
+  branch that is not merged yet already raises the plugin to the version this push would,
+  the push stops and offers two ways on: go past that version with
+  `--version-after-open`, or merge or close that branch first.
+- **The scaffold refresh says on its first line who it is for,** and that it can be skipped.
+- **`/handbook:status` and `/handbook:doctor` say when a newer version is available.**
+
+### Changed
+
+- **The default branch proposal is the plain name of what is being sent,** no longer under
+  a `handbook/` prefix, when nothing in your work, your settings or your team's example
+  suggests another.
+- **No push writes anything into your settings.** The branch and commit prefixes a team
+  repository records used to be saved into your config by sharing; now they only shape
+  the proposal you are shown.
+- **A machine that cannot open a merge request is told so on the first screen,** before
+  anything is pushed, along with why "you decide" cannot be the answer to the commit
+  message there. The check behind it now answers quickly instead of waiting as long as
+  opening a request may take.
+- **A run that gives a commit message but no branch stops and asks for the branch,** rather
+  than pushing under a name nobody saw.
+
+### Fixed
+
+- **A scaffold refresh whose branch name the team's forge refused stopped there,** with
+  editing your settings as the only way on. It now shows the forge's own words and asks
+  for the branch again, as sharing and team approvals do, and none of the three retries on
+  its own under a name you did not choose.
+
 ## [0.17.0] - 2026-10-06
 
 - **TeamHandbook now notices when a session looks like a piece of repeated work, and keeps a
