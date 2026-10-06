@@ -1,11 +1,11 @@
 // src/lib/join.ts
-import { readFileSync as readFileSync4, rmSync as rmSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { readFileSync as readFileSync5, rmSync as rmSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 
 // src/lib/init.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -75,10 +75,142 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 // src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
 var HOME_PATH = new RegExp(
   "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
   "g"
 );
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
 
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
@@ -231,6 +363,18 @@ var GLOBAL_TWIN = new Map(
     new RegExp(p.re.source, p.re.flags + "g")
   ])
 );
+function detectSecret(text) {
+  for (const { name, re, reject } of SECRET_PATTERNS) {
+    if (!reject) {
+      if (re.test(text)) return name;
+      continue;
+    }
+    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
+      if (!reject(match[0])) return name;
+    }
+  }
+  return null;
+}
 
 // src/lib/queue.ts
 function isSafeSlug(slug) {
@@ -248,10 +392,36 @@ var CUT_SCOPE_SENTENCE = new RegExp(
   `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
 );
 
+// src/lib/branch.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+var BRANCH_EXAMPLE_MAX = 100;
+function branchExampleProblem(value) {
+  if (value.length > BRANCH_EXAMPLE_MAX) return `longer than ${BRANCH_EXAMPLE_MAX} characters`;
+  if (/\p{C}/u.test(value)) return "carrying a control character";
+  const identity = detectIdentity(value);
+  if (identity) return `carrying a trace of a machine (${identity})`;
+  const secret = detectSecret(value);
+  if (secret) return `carrying what looks like a ${secret}`;
+  return null;
+}
+function readTeamBranchExample(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  const value = raw.trim();
+  const problem = branchExampleProblem(value);
+  return problem ? { problem } : { example: value };
+}
+
 // src/lib/git-errors.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 function probeCredentials() {
-  const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] });
+  const run = (cmd, args) => execFileSync2(cmd, args, { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] });
   try {
     run("gh", ["--version"]);
   } catch {
@@ -296,9 +466,9 @@ function cloneFailureReason(url, err, creds = probeCredentials()) {
 }
 
 // src/lib/display-path.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir2()) {
+function displayPath(path, userHome = homedir3()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -324,7 +494,7 @@ function loadTeamConfig(home = handbookHome()) {
 var BrokenConfigError = class extends Error {
   constructor(home) {
     super(
-      `${displayPath(join3(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
+      `${displayPath(join4(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
     );
     this.name = "BrokenConfigError";
   }
@@ -333,7 +503,7 @@ function saveTeamConfig(team, home = handbookHome()) {
   if (configIsBroken(home)) throw new BrokenConfigError(home);
   const config = readConfigFile(home);
   config.team = team;
-  writeFileAtomic(join3(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
+  writeFileAtomic(join4(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -356,7 +526,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync4(join4(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -381,9 +551,28 @@ function summarizeGitStderr(stderr, tailLines = 3) {
   const tail = lines.slice(-tailLines).filter((line) => !explanations.includes(line));
   return [...explanations, ...tail].join("\n");
 }
+function pushReplying(args, cwd) {
+  const run = spawnSync("git", args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    env: nonInteractiveEnv(),
+    timeout: GIT_TIMEOUT_MS
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), {
+      status: run.status,
+      stdout: run.stdout,
+      stderr: run.stderr
+    });
+  }
+  return `${run.stdout}${run.stderr}`;
+}
 function runGit(args, cwd) {
   try {
-    return execFileSync2("git", args, {
+    if (args[0] === "push") return pushReplying(args, cwd);
+    return execFileSync3("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
@@ -403,7 +592,7 @@ function runGit(args, cwd) {
 function readMarketplaceName(repoDir) {
   try {
     const parsed = JSON.parse(
-      readFileSync4(join4(repoDir, ".claude-plugin", "marketplace.json"), "utf8")
+      readFileSync5(join5(repoDir, ".claude-plugin", "marketplace.json"), "utf8")
     );
     return typeof parsed?.name === "string" && parsed.name ? parsed.name : null;
   } catch {
@@ -438,11 +627,11 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
   if (existing && existing.repoUrl !== url) {
     return {
       ok: false,
-      error: `already joined ${existing.repoUrl}; run /handbook:leave (or edit ${displayPath(join4(home, "config.json"))}) to switch teams`
+      error: `already joined ${existing.repoUrl}; run /handbook:leave (or edit ${displayPath(join5(home, "config.json"))}) to switch teams`
     };
   }
   const workdir = handbookWorkdir("handbook-join-", home);
-  const repoDir = join4(workdir, "repo");
+  const repoDir = join5(workdir, "repo");
   try {
     try {
       git(["clone", "--depth", "1", "--single-branch", "--", url, repoDir], workdir);
@@ -464,13 +653,15 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       };
     }
     const recorded = readTeamCommitPrefix(repoDir);
+    const { example } = readTeamBranchExample(repoDir);
     saveTeamConfig(
       {
         ...existing ?? {},
         repoUrl: url,
         marketplaceName: name,
         joinedAt: now,
-        ...recorded.prefix !== void 0 ? { commitPrefix: recorded.prefix } : {}
+        ...recorded.prefix !== void 0 ? { commitPrefix: recorded.prefix } : {},
+        ...example ? { branchExample: example } : {}
       },
       home
     );
@@ -480,7 +671,8 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       url,
       home,
       ...recorded.prefix ? { commitPrefix: recorded.prefix } : {},
-      ...recorded.prefix === void 0 ? { prefixNote: prefixNote(recorded.problem) } : {}
+      ...recorded.prefix === void 0 ? { prefixNote: prefixNote(recorded.problem) } : {},
+      ...example ? { branchExample: example } : {}
     };
   } finally {
     rmSync3(workdir, { recursive: true, force: true });
@@ -498,7 +690,8 @@ function formatJoinSuccess(result) {
     "",
     "  engine:  approved skills will now target this repository",
     ...result.commitPrefix ? [`  commits: titled "${result.commitPrefix} ...", the prefix this repository records`] : [],
-    `  config:  team repo saved to ${displayPath(join4(result.home ?? "", "config.json"))}`,
+    ...result.branchExample ? [`  branches: proposed in the shape of "${result.branchExample}", the example this repository records`] : [],
+    `  config:  team repo saved to ${displayPath(join5(result.home ?? "", "config.json"))}`,
     "",
     ...result.prefixNote ? [result.prefixNote, ""] : [],
     "To finish, connect Claude Code to the team marketplace (built-in commands):",

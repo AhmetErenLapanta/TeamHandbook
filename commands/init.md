@@ -63,22 +63,32 @@ file is missing, `/handbook:doctor` reported the scaffold behind, or the command
 refuses with "a team repository is already configured" - do not tell them to leave and
 re-init. That loses the repository. Refresh it in place instead:
 
-1. Run `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade`. It reads the repository in a
-   throwaway clone and changes nothing, there or on this machine: it prints which scaffold
-   files are missing or differ, and the diff.
-2. **Relay the plan and the diff, and ask which files to refresh.** A `DIFFERS` file may
+1. Run `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade` (add `--branch-hint <name>` if
+   the user named a branch earlier in this conversation, so the proposal reuses its
+   ticket). It reads the repository in a throwaway clone and changes nothing, there or on
+   this machine: it prints which scaffold files are missing or differ, and the diff.
+2. **Relay the plan's first line before anything else.** It says who the refresh reaches
+   and whether sharing waits on it; usually it does not, and the user may stop right there.
+   Then relay the plan and the diff, and ask which files to refresh. A `DIFFERS` file may
    be an old scaffold or an edit the team made on purpose - `hooks/notice.mjs` and
    `README.md` are the likely ones - and nothing records which. Never pick on their behalf.
-3. Send only what they chose, with the message they chose:
-   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade --file <path> --file <path> --message "<their wording>"`
-   (or `--delegate-message <fingerprint>` in place of `--message`, if they said you decide;
-   the plan printed the fingerprint beside the message). The plan in step 1 printed the
-   message this would otherwise commit, so they have already seen it; ask them at the same
-   time as you ask which files to send. A run with neither flag is
-   refused and nothing is pushed. It opens one merge request. The team's own skills, commands, agents and `.mcp.json` are
-   not offered and cannot be written, and inside the two manifests the team's own entries -
-   the plugin version, any extra plugins, the marketplace owner - are carried across rather
-   than replaced.
+3. Send only what they chose, on the branch and with the message they chose. The plan
+   printed one question for both,
+   ``Branch `<name>` · message `<text>` - confirm or change either.``:
+   ask it as ONE question, at the same time as you ask which files to send, and run
+   `node "${CLAUDE_PLUGIN_ROOT}/dist/init.js" --upgrade --file <path> --file <path> --branch "<name>" --message "<their wording>"`
+   (or `--delegate-message <fingerprint>` in place of `--message`, if they said you decide
+   and the plan offered it; it offers none on a machine that cannot open the request, and
+   says so). The branch is used exactly as given and is never saved as a setting. A run
+   missing either answer is refused and nothing is pushed. It opens one merge request. The
+   team's own skills, commands, agents and `.mcp.json` are not offered and cannot be
+   written, and inside the two manifests the team's own entries - the plugin version, any
+   extra plugins, the marketplace owner - are carried across rather than replaced.
+   **If the plan asks what a branch name looks like in this repository**, ask the user once
+   for one real example (`TEAM-123-short-description`, say) or let them skip it. An answer
+   goes on the same run as `--branch-example "<example>"`, which records it in
+   `.teamhandbook.json` for everyone; every later proposal on every teammate's machine
+   takes its shape. It is an example, not a rule: do not write a pattern for them.
 4. **Read the plan's version line back to the user rather than promising a refresh.** The
    merge request normally raises the plugin version, which is what makes teammates' copies
    pick it up - but a repository whose version is not a three-part `MAJOR.MINOR.PATCH`
@@ -87,8 +97,12 @@ re-init. That loses the repository. Refresh it in place instead:
 5. A `NOT OFFERED` line is not a file to argue with. It means either the repository carries
    a symbolic link on that path, or the file embeds the team's commit-message prefix and
    only the machine that ran `/handbook:init` recorded it. Naming it anyway is refused.
-6. If the push is refused, the error names the rule - the same branch-name and
-   commit-message cases the setup steps above describe, except that here they are fixed in
-   the config rather than by a flag.
+6. If the push is refused for the branch NAME, nothing reached the repository and nothing
+   was retried: the error quotes the forge's own sentence and asks the same one question
+   with the refused name in it. Relay the sentence, ask again with that name as the starting
+   point for their edit, and run once more with the new `--branch`. If the plan or the
+   refusal names an unmerged branch that already raises the plugin version, offer its two
+   ways: `--version-after-open` to go past it, or stop until that branch is merged or
+   closed. A commit-message refusal names its own routes, as in the setup steps above.
 
 Note: teammates who only want to USE the team's skills (not capture their own) do not need TeamHandbook at all - they run the two built-in `/plugin` commands the CLI prints, and the team plugin ships a tiny hook that shows them new-skill notices.

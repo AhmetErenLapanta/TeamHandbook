@@ -35,6 +35,9 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    marks not shareable and the reason for each. Show everything before asking anything: the
    point of this command is that the user sees how much they have and decides where to
    spend their attention. Nothing is shared by this step.
+   If the list ends with "This machine cannot open the merge request", relay that line too,
+   now: it says how the request will reach the forge and that "you decide" is not an answer
+   to the commit message on this machine. The user hears it before picking, not after a push.
 2. Say that consequence in one line, then ask. Everything on this screen is seen by other
    people once it is picked, a skill no less than a server.
 3. Ask with the multiple-choice question tool (AskUserQuestion), `multiSelect` enabled,
@@ -65,10 +68,14 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
 4. Run it with the names they picked, and only those:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" share --skill <name> --mcp <name> --command <name>`
    Never add a name the user did not choose. With no flags the command shares nothing,
-   which is the correct answer to an empty selection.
-   **This first run commits nothing.** It comes back with `commit message required`, the
-   exact message it proposes for the commit, and any refusal or collision the selection
-   hit. That is the screen steps 6 and 7 work from.
+   which is the correct answer to an empty selection. If the user named a branch earlier in
+   this conversation, for this command or another one, add `--branch-hint <that name>`: the
+   proposal then reuses its ticket. Each run is a fresh process and remembers nothing, so
+   the conversation is the only place that answer lives.
+   **This first run commits and pushes nothing.** It comes back with one question on its
+   first line - ``Branch `<name>` · message `<text>` - confirm or change either.`` - then
+   `commit message required`, and any refusal or collision the selection hit. That is the
+   screen steps 6 and 7 work from.
 5. **A skill the list does not show** is shared by path instead:
    `node "${CLAUDE_PLUGIN_ROOT}/dist/share.js" share --skill-path <directory>`
    If the command was invoked with a directory path ($ARGUMENTS), that path is the
@@ -101,14 +108,20 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      `--update` NAMES what it updates (`--update gitlab` updates gitlab and nothing else),
      so run it with only the names the user actually said yes to. Two collisions and one
      yes means one name on that flag, not both. Renaming is the other answer.
-7. **Then ask about the commit message, and ask about it last.** The proposal changes with
-   the `--update` answers from step 6: a name sent as an update reads as "update" in it
-   rather than "add". So if step 6 added any `--update`, run the whole selection once more
-   WITH those flags and still no message flag, and use that run's proposal - the first
-   run's is stale and would put a sentence in front of the user that is not the one about
-   to be committed. Show them the proposal exactly as the CLI printed it, and let them
-   approve it, edit it, or write their own. Then run the share again with everything from
-   step 4, any `--update` flags from step 6, and their answer:
+7. **Then ask the one question - branch and message - and ask it last.** The message
+   proposal changes with the `--update` answers from step 6: a name sent as an update reads
+   as "update" in it rather than "add". So if step 6 added any `--update`, run the whole
+   selection once more WITH those flags and still no message or branch flag, and use that
+   run's question - the first run's is stale and would put a sentence in front of the user
+   that is not the one about to be committed. Show the question line exactly as the CLI
+   printed it, ``Branch `<name>` · message `<text>` - confirm or change either.``, as ONE
+   question: the user confirms both, or changes either one. When the branch reads
+   `<TICKET>-...` the line also shows how branches look in this repository and asks which
+   ticket this is; the user's answer is the branch. Then run the share again with
+   everything from step 4, any `--update` flags from step 6, and their answers:
+   - the branch: `--branch "<name>"`, the proposed one if they confirmed it, otherwise
+     theirs, word for word. It is used exactly as given and for this request only: it is
+     never written into any setting and never changed by a suffix.
    - they approved or wrote a message: `--message "<their wording>"`. If it has no team
      prefix and the team needs one, the CLI adds it and the result says what was committed.
    - they said you decide: `--delegate-message <fingerprint>`, with the fingerprint the
@@ -118,8 +131,13 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      "these are the user's words". Naming the fingerprint is what ties the answer to the
      sentence they read: if the proposal has moved since, the run is refused and prints the
      new one, which you show them before asking again.
-   A run with neither flag is refused and nothing is committed. That is deliberate, and it
-   is not something to work around by picking a message yourself.
+   A run missing either answer is refused and nothing is committed; one given only asks the
+   other. That is deliberate, and it is not something to work around by picking a message
+   or a branch yourself.
+   **If the refusal names an unmerged branch that already raises the plugin version**,
+   offer the two ways it names and nothing else: send this one past it, by running again
+   with `--version-after-open`, or stop here so that branch is merged or closed first. Two
+   requests raising the same number both merge, and the second reaches nobody.
    **If the refusal offers no `--delegate-message` at all, delegating is not available
    here** and the reason is in the same sentence: a machine with no `gh`/`glab` signed in
    has no merge request to open, and "you decide" is an answer about the request. Ask the
@@ -129,11 +147,15 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
 8. Relay the output verbatim. It names what went out per kind rather than as one total,
    because a skill somebody reads, a server that connects and a command somebody types are
    not interchangeable, and it names the commit the request carries. The team repository
-   got a COPY, so the skill the user already uses is untouched and keeps working.
-9. **If it fails because the forge refuses the branch NAME**, the error quotes the pattern.
-   Handle it exactly as `/handbook:init` does: propose one prefix that satisfies the
-   pattern, confirm it with the user, and have them set `branchPrefix` under `team` in
-   `~/.teamhandbook/config.json`. A prefix discovered by a successful retry is remembered.
+   got a COPY, so the skill the user already uses is untouched and keeps working. When
+   GitLab opened the request from the push, the output ends with the request's description
+   to paste into it: a push cannot carry one, and the reviewer needs it.
+9. **If it fails because the forge refuses the branch NAME**, nothing reached the
+   repository and nothing was retried. The error quotes the forge's own sentence and then
+   the same one question, with the refused name in it. Relay the sentence exactly, then ask
+   that question again with the refused name as the starting point for their edit; run the
+   share once more with their new `--branch` and everything else unchanged. Do not invent
+   a name for them and do not suggest a config setting: the name is theirs for this push.
 10. **If it fails because the forge refuses the commit MESSAGE**, the error names both ways
    out and they are not equivalent. Recording the prefix in the team repository (whoever
    ran `/handbook:init` runs `/handbook:init --upgrade` once) fixes it for everyone who

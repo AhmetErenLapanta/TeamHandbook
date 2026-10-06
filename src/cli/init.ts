@@ -1,5 +1,6 @@
 import { configIsBroken } from "../lib/config.js";
-import { formatInitSuccess, initTeamRepo, loadTeamConfig } from "../lib/init.js";
+import { formatInitSuccess, initTeamRepo, loadTeamConfig, runGit } from "../lib/init.js";
+import { branchHints } from "../lib/branch.js";
 import type { CommitMessageChoice } from "../lib/init.js";
 import { applyUpgrade, formatUpgradePlan, formatUpgradeResult, planUpgrade } from "../lib/upgrade.js";
 
@@ -7,7 +8,8 @@ function usage(): never {
   console.error(
     "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] " +
       "[--with-ci] [--message <commit message>] [--delegate-message <fingerprint>]\n" +
-      "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>]",
+      "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] " +
+      "[--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>]",
   );
   process.exit(2);
 }
@@ -48,11 +50,23 @@ function commitMessageFrom(args: string[]): CommitMessageChoice {
 function upgrade(args: string[]): void {
   const files: string[] = [];
   const commitMessage = commitMessageFrom(args);
+  // The branch the refresh goes out on, asked beside the message and used exactly as
+  // given; the hint and the example only shape what is proposed. None of them is written
+  // into this machine's config: the example goes to the team repository, in the request.
+  const branch = valueOf(args, "--branch");
+  const hint = valueOf(args, "--branch-hint");
+  const branchExample = valueOf(args, "--branch-example");
+  const choice = {
+    ...(branch !== undefined ? { branch } : {}),
+    ...(branchExample !== undefined ? { branchExample } : {}),
+    ...(args.includes("--version-after-open") ? { versionAfterOpen: true } : {}),
+    hints: branchHints(process.cwd(), runGit, hint),
+  };
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--upgrade") continue;
-    // Both take a value, which is read above: stepping over it here is what keeps the
-    // fingerprint from being read as a --file path.
-    if (args[i] === "--message" || args[i] === "--delegate-message") {
+    if (args[i] === "--upgrade" || args[i] === "--version-after-open") continue;
+    // Each takes a value, which is read above: stepping over it here is what keeps the
+    // fingerprint or a branch name from being read as a --file path.
+    if (["--message", "--delegate-message", "--branch", "--branch-hint", "--branch-example"].includes(args[i]!)) {
       i++;
       continue;
     }
@@ -76,8 +90,8 @@ function upgrade(args: string[]): void {
     );
     process.exit(1);
   }
-  if (!files.length) {
-    const plan = planUpgrade(team);
+  if (!files.length && branchExample === undefined) {
+    const plan = planUpgrade(team, undefined, undefined, choice);
     if (!plan.ok) {
       console.error(`error: ${plan.error}`);
       process.exit(1);
@@ -85,7 +99,7 @@ function upgrade(args: string[]): void {
     console.log(formatUpgradePlan(plan));
     return;
   }
-  const result = applyUpgrade(team, files, undefined, undefined, commitMessage);
+  const result = applyUpgrade(team, files, undefined, undefined, commitMessage, choice);
   if (!result.ok) {
     console.error(`error: ${result.error}`);
     process.exit(1);

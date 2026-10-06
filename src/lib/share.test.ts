@@ -32,6 +32,10 @@ function delegating(run: (choice: CommitMessageChoice) => ShareResult): ShareRes
   return run({ delegated: probe.team!.proposalHash! });
 }
 
+/**
+ * The two runs a share takes when the user confirms the branch it proposes: the first shows
+ * the name and pushes nothing, the second names it back.
+ */
 type ShareArgs = Parameters<typeof shareSelectionDeciding>;
 function shareSelection(
   selection: ShareArgs[0],
@@ -41,7 +45,11 @@ function shareSelection(
   forge?: ShareArgs[4],
   options: NonNullable<ShareArgs[5]> = {},
 ) {
-  return shareSelectionDeciding(selection, team, paths, git, forge, { commitMessage: APPROVED, ...options });
+  const decided = { commitMessage: APPROVED, ...options };
+  if (decided.branch !== undefined) return shareSelectionDeciding(selection, team, paths, git, forge, decided);
+  const probe = shareSelectionDeciding(selection, team, paths, git, forge, decided);
+  const proposed = probe.team && !probe.team.ok ? probe.team.proposedBranch : undefined;
+  return proposed ? shareSelectionDeciding(selection, team, paths, git, forge, { ...decided, branch: proposed }) : probe;
 }
 
 let home: string;
@@ -390,7 +398,7 @@ describe("shareSelection", () => {
     remote = teamRepo();
     writeSkill(userHome, "deploy-runbook");
 
-    const result = shareSelectionDeciding(
+    const result = shareSelection(
       select({ skills: ["deploy-runbook"] }),
       team(),
       paths(),
@@ -536,7 +544,7 @@ describe("shareSelection", () => {
     });
 
     const result = delegating((commitMessage) =>
-      shareSelectionDeciding(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge, {
+      shareSelection(select({ servers: ["gitlab", "linear"] }), team(), paths(), undefined, forge, {
         commitMessage,
       }),
     );
@@ -545,7 +553,7 @@ describe("shareSelection", () => {
     // git merges the identical line without a conflict, and the second server lands
     // with no version of its own, so no teammate's copy refreshes for it.
     const branches = gitIn(remote, ["branch", "--list"]).trim().split("\n").map((b) => b.replace("*", "").trim());
-    expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([result.team!.branch]);
+    expect(branches.filter((b) => b !== "main")).toEqual([result.team!.branch]);
     expect(result.team!.version).toBe("1.0.1");
     expect(JSON.parse(gitIn(remote, ["show", `${result.team!.branch}:.claude-plugin/plugin.json`])).version).toBe("1.0.1");
     // one commit, carrying both servers and the version signal together
@@ -672,7 +680,7 @@ describe("shareSelection", () => {
 
     expect(result.team!.ok).toBe(false);
     expect(result.refused[0]!.reason).toContain("not valid JSON");
-    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+    expect(gitIn(remote, ["branch", "--list"]).replace(/[*\s]/g, "")).toBe("main");
   });
 
   it("given a later failure stops the whole request, when it is reported, then a credential is not reported as that failure", () => {
@@ -766,7 +774,7 @@ describe("shareSelection carries commands", () => {
     const inv = buildInventory(paths());
 
     const result = delegating((commitMessage) =>
-      shareSelectionDeciding(
+      shareSelection(
         select({
           skills: inv.skills.map((s) => s.name),
           servers: inv.servers.map((s) => s.name),
@@ -790,7 +798,7 @@ describe("shareSelection carries commands", () => {
     // The same defect within one run: a second request opened off the same clone would
     // claim the same version and the change in it would reach nobody
     const branches = gitIn(remote, ["branch", "--list"]).trim().split("\n").map((b) => b.replace("*", "").trim());
-    expect(branches.filter((b) => b.startsWith("handbook/"))).toEqual([branch]);
+    expect(branches.filter((b) => b !== "main")).toEqual([branch]);
     const commits = gitIn(remote, ["log", "--format=%s", `main..${branch}`]).trim().split("\n");
     expect(commits).toEqual(["feat(skill,mcp,commands): add deploy-runbook, gitlab, explain, fix-tests"]);
     expect(JSON.parse(gitIn(remote, ["show", `${branch}:.claude-plugin/plugin.json`])).version).toBe("1.0.1");
@@ -876,6 +884,7 @@ describe("shareSelection carries commands", () => {
     const sent = shareSelectionDeciding(selection(), team(), paths(), undefined, forge, {
       update: ["explain"],
       commitMessage: { delegated: second.team!.proposalHash! },
+      branch: second.team!.proposedBranch!,
     });
 
     // what was committed is the sentence the SECOND run showed, which is the one the user
@@ -932,7 +941,7 @@ describe("shareSelection carries commands", () => {
 
     expect(result.team!.ok).toBe(false);
     expect(result.team!.error).toContain("already has a command");
-    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+    expect(gitIn(remote, ["branch", "--list"]).replace(/[*\s]/g, "")).toBe("main");
   });
 
   it("given no team repository is configured, when commands are selected, then they say why not rather than vanishing", () => {

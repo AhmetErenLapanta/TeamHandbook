@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
-  approveAndDeliver,
+  approveAndDeliver as approveAndDeliverDeciding,
   formatApproveResult,
   projectTargetLabel,
   resolveDeliveryDir,
@@ -24,6 +25,21 @@ import { candidatesDir } from "./skill-index.js";
  * of them a second run, since "you decide" has to name the proposal it was shown.
  */
 const APPROVED = { message: "chore: the case under test" } as const;
+
+/**
+ * The two runs a team delivery takes when the reviewer confirms the branch it proposes: the
+ * first shows the name and pushes nothing, the second names it back. Every other delivery
+ * pushes nothing, asks nothing, and runs once.
+ */
+function approveAndDeliver(...args: Parameters<typeof approveAndDeliverDeciding>) {
+  const options = args[9] ?? {};
+  if (options.branch !== undefined) return approveAndDeliverDeciding(...args);
+  const probe = approveAndDeliverDeciding(...args);
+  if (probe.ok || !probe.proposedBranch) return probe;
+  const replay = [...args] as Parameters<typeof approveAndDeliverDeciding>;
+  replay[9] = { ...options, branch: probe.proposedBranch };
+  return approveAndDeliverDeciding(...replay);
+}
 
 /** A credential in the shape the secret sieve knows, built rather than written out whole. */
 const LIVE_KEY = "sk-ant-api03-" + "b".repeat(95);
@@ -259,13 +275,13 @@ describe("approveAndDeliver (team mode)", () => {
     expect(result).toMatchObject({
       ok: true,
       mode: "team",
-      branch: "handbook/fix-npm-test",
+      branch: "fix-npm-test",
       prUrl: "https://gitlab.acme.com/team/skills/-/merge_requests/7",
       deliveredTo: "https://gitlab.acme.com/team/skills/-/merge_requests/7",
     });
     const files = execFileSync(
       "git",
-      ["-C", remote, "ls-tree", "-r", "--name-only", "handbook/fix-npm-test"],
+      ["-C", remote, "ls-tree", "-r", "--name-only", "fix-npm-test"],
       { encoding: "utf8" },
     );
     expect(files).toContain("skills/fix-npm-test/SKILL.md");
@@ -276,14 +292,17 @@ describe("approveAndDeliver (team mode)", () => {
     });
   });
 
-  it("given a forge that refuses the default branch name, when sharing, then the prefix it accepts is remembered", () => {
-    saveTeamConfig({ repoUrl: remote, marketplaceName: "t", commitPrefix: "HQA-000" }, home);
+  it("given a forge that refuses the branch name, when sharing, then nothing is learned and the config is byte-identical", () => {
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    const configFile = join(home, "config.json");
+    const before = createHash("md5").update(readFileSync(configFile)).digest("hex");
     seedCandidate(meta());
     let pushes = 0;
     const policedGit: GitRunner = (args, cwd) => {
-      if (args[0] === "push" && ++pushes === 1) {
+      if (args[0] === "push") {
+        pushes += 1;
         throw new Error(
-          "git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the " +
+          "git push failed: remote: GitLab: Branch name 'fix-npm-test' does not follow the " +
             "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
         );
       }
@@ -303,8 +322,46 @@ describe("approveAndDeliver (team mode)", () => {
       { commitMessage: APPROVED },
     );
 
-    expect(result).toMatchObject({ ok: true, mode: "team", branch: "HQA-000-fix-npm-test" });
-    expect(loadTeamConfig(home)?.branchPrefix).toBe("HQA-000-");
+    expect(result).toMatchObject({ ok: false, mode: "team", proposedBranch: "fix-npm-test" });
+    expect(result.error).toContain("Branch name 'fix-npm-test' does not follow the pattern");
+    expect(pushes).toBe(1);
+    expect(createHash("md5").update(readFileSync(configFile)).digest("hex")).toBe(before);
+    expect(readCandidateMeta(join(candidatesDir(home), "fix-npm-test"))?.status).toBe("pending");
+  });
+
+  it("given a repository that records a commit prefix this machine lacks, when a candidate goes to the team, then the config is byte-identical", () => {
+    // The one quiet writer left after the branch prefix stopped being learned: the prefix
+    // the clone records used to be saved back into this machine's settings.
+    const work = mkdtempSync(join(tmpdir(), "handbook-record-"));
+    try {
+      execFileSync("git", ["clone", remote, work], { stdio: "ignore" });
+      writeFileSync(join(work, ".teamhandbook.json"), JSON.stringify({ commitPrefix: "OPS-42" }) + "\n");
+      execFileSync("git", ["-C", work, "add", "-A"]);
+      execFileSync("git", ["-C", work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "record"]);
+      execFileSync("git", ["-C", work, "push", "origin", "HEAD:main"], { stdio: "ignore" });
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t", joinedAt: "2026-02-02T00:00:00Z" }, home);
+    const configFile = join(home, "config.json");
+    const before = createHash("md5").update(readFileSync(configFile)).digest("hex");
+    seedCandidate(meta());
+
+    const result = approveAndDeliver(
+      home,
+      "fix-npm-test",
+      "/fallback",
+      "2026-08-08T01:00:00Z",
+      undefined,
+      undefined,
+      () => "",
+      undefined,
+      undefined,
+      { commitMessage: APPROVED },
+    );
+
+    expect(result).toMatchObject({ ok: true, mode: "team", branch: "OPS-42-fix-npm-test" });
+    expect(createHash("md5").update(readFileSync(configFile)).digest("hex")).toBe(before);
   });
 
   it("records the branch as deliveredTo when no PR URL could be obtained", () => {
@@ -327,8 +384,8 @@ describe("approveAndDeliver (team mode)", () => {
     expect(result).toMatchObject({
       ok: true,
       mode: "team",
-      branch: "handbook/fix-npm-test",
-      deliveredTo: `${remote} (branch handbook/fix-npm-test)`,
+      branch: "fix-npm-test",
+      deliveredTo: `${remote} (branch fix-npm-test)`,
     });
     expect(result.prUrl).toBeUndefined();
   });
@@ -379,7 +436,7 @@ describe("approveAndDeliver (team mode)", () => {
     );
 
     expect(result).toMatchObject({ ok: true, commitMessage: "feat: the npm test fix we all keep hitting" });
-    const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "handbook/fix-npm-test"], {
+    const subject = execFileSync("git", ["-C", remote, "log", "-1", "--format=%s", "fix-npm-test"], {
       encoding: "utf8",
     });
     expect(subject.trim()).toBe("feat: the npm test fix we all keep hitting");

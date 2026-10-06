@@ -1,6 +1,7 @@
 // src/lib/status.ts
+import { execFileSync } from "node:child_process";
 import { readFileSync as readFileSync8 } from "node:fs";
-import { dirname as dirname3, join as join12 } from "node:path";
+import { basename as basename5, dirname as dirname3, join as join12, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/session-state.ts
@@ -515,6 +516,15 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+function nonInteractiveEnv(base = process.env) {
+  return {
+    ...base,
+    GIT_TERMINAL_PROMPT: "0",
+    GLAB_NO_PROMPT: "1",
+    GH_PROMPT_DISABLED: "1",
+    NO_COLOR: "1"
+  };
+}
 function marketplacesRoot() {
   return join7(homedir3(), ".claude", "plugins", "marketplaces");
 }
@@ -679,17 +689,64 @@ function recentWorkflowSessions(home = handbookHome(), now = Date.now(), days = 
 
 // src/lib/status.ts
 function pluginVersion() {
+  const root = pluginRoot();
+  if (!root) return "unknown";
+  try {
+    const parsed = JSON.parse(readFileSync8(join12(root, ".claude-plugin", "plugin.json"), "utf8"));
+    if (typeof parsed?.version === "string") return parsed.version;
+  } catch {
+  }
+  return "unknown";
+}
+function pluginRoot() {
   const here = dirname3(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
-      const parsed = JSON.parse(
-        readFileSync8(join12(here, up, ".claude-plugin", "plugin.json"), "utf8")
-      );
-      if (typeof parsed?.version === "string") return parsed.version;
+      const parsed = JSON.parse(readFileSync8(join12(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join12(here, up);
     } catch {
     }
   }
-  return "unknown";
+  return null;
+}
+var RELEASE_CHECK_TIMEOUT_MS = 5e3;
+var lookupRelease = (args, cwd) => execFileSync("git", args, {
+  cwd,
+  stdio: ["ignore", "pipe", "ignore"],
+  encoding: "utf8",
+  env: nonInteractiveEnv(),
+  timeout: RELEASE_CHECK_TIMEOUT_MS
+});
+function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
+  if (!root || !versionNumbers(installed)) return null;
+  const versionDir = resolve2(root);
+  if (basename5(dirname3(dirname3(dirname3(versionDir)))) !== "cache") return null;
+  const marketplace = basename5(dirname3(dirname3(versionDir)));
+  let out;
+  try {
+    out = String(git(["ls-remote", "--tags", "origin"], join12(marketRoot, marketplace)) ?? "");
+  } catch {
+    return null;
+  }
+  let latest = null;
+  for (const line of out.split("\n")) {
+    const tag = line.split("	")[1]?.match(/^refs\/tags\/v?(\d+\.\d+\.\d+)$/)?.[1];
+    if (tag && (latest === null || laterThan(tag, latest))) latest = tag;
+  }
+  return latest && laterThan(latest, installed) ? latest : null;
+}
+function versionNumbers(version) {
+  const parts = version.split(".").map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
+}
+function laterThan(a, b) {
+  const x = versionNumbers(a);
+  const y = versionNumbers(b);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+function newerReleaseLine(installed, newer) {
+  return `${installed} is installed and a newer version is available (${newer}) - update it from /plugin`;
 }
 function ledgerStats(home = handbookHome()) {
   const stats = { total: 0, candidates: 0, weak: 0, distinctFingerprints: 0 };
@@ -755,7 +812,7 @@ function pipelineAggregate(home = handbookHome()) {
   }
   return agg;
 }
-function gatherStatus(home = handbookHome()) {
+function gatherStatus(home = handbookHome(), release = newerRelease) {
   const candidates = listCandidates(home);
   const count = (status) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
@@ -764,9 +821,12 @@ function gatherStatus(home = handbookHome()) {
   const approved = candidates.filter((c) => c.status === "approved");
   const known = handbookSkills(home);
   const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
+  const version = pluginVersion();
+  const newerVersion = release(version);
   return {
     home,
-    version: pluginVersion(),
+    version,
+    ...newerVersion ? { newerVersion } : {},
     ledger: ledgerStats(home),
     queue: {
       pending: count("pending"),
@@ -829,6 +889,7 @@ function formatStatus(report) {
   const { ledger, queue, unreadable, lastRun, config } = report;
   const lines = [
     `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
+    ...report.newerVersion ? [`Version:         ${newerReleaseLine(report.version, report.newerVersion)}`] : [],
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,

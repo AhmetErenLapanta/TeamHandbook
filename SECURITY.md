@@ -143,7 +143,7 @@ Nothing deletes the directory for you.
 
 ## What leaves your machine
 
-Two things, and only these:
+These, and only these:
 
 1. **Automatically, before you review:** at the end of a substantive session,
    TeamHandbook calls `claude -p` (your own Claude CLI) **once**, with a redacted slice
@@ -212,13 +212,30 @@ Two things, and only these:
      whose `gh`/`glab` is missing or not signed in, the wording has to be yours. What this
      does not promise: if the CLI is signed in and opening the request still fails, the
      branch is pushed with the delegated message and the request is yours to open.
+   - So is the branch it goes out on. Every push asks for the branch beside the message,
+     in one question, and pushes exactly the name you confirm or give: never one derived
+     from a forge's refusal, never a name with a suffix added. A name you give passes the
+     same screen as the content - a trace of the machine or a credential in it is refused
+     before git sees it - and is used for that one push: nothing about a push is written
+     into `~/.teamhandbook/config.json`. On GitLab, with no `glab` to open the request,
+     the push asks GitLab to open it (push options); the request's title is the commit
+     message you approved, and its description, which a push cannot carry, is printed for
+     you to paste.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
    the scaffold itself generates, and only the ones you name one by one with `--file`:
    without a `--file` it prints the diff and makes no change at all. It never writes
    `skills/`, `commands/`, `agents/` or `.mcp.json`, and inside the two `.claude-plugin`
-   manifests it carries the team's own entries across rather than replacing them.
+   manifests it carries the team's own entries across rather than replacing them. An
+   example branch name you give it with `--branch-example` is screened like a branch and
+   written into the team's `.teamhandbook.json` in that same request, for teammates who
+   join afterwards to read.
+4. **A release check, carrying nothing of yours:** `/handbook:status` and
+   `/handbook:doctor` ask the repository this plugin was installed from for its release
+   tags - one `git ls-remote --tags`, run in the marketplace clone Claude Code keeps - to
+   say whether a newer version exists. It sends no content, makes no model call, and is
+   skipped silently when it cannot be made.
 
 ## What `/handbook:mine` reads and sends
 

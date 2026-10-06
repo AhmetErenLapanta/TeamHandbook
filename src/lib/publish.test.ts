@@ -12,7 +12,6 @@ import {
   manualPrUrl,
   publishCandidate as publishCandidateDeciding,
   publishTeamSelection as publishTeamSelectionDeciding,
-  retryBranchAfterNameRejection,
 } from "./publish.js";
 import type { PublishOptions } from "./publish.js";
 import { auditServer } from "./mcp.js";
@@ -31,6 +30,20 @@ import type { GroundedCase } from "./distill.js";
  */
 const APPROVED = { message: "chore: the case under test" } as const;
 
+/**
+ * The two runs a push takes when the user confirms the branch it proposes: the first shows
+ * the name and pushes nothing, the second names it back. A case that names its own branch
+ * pays one run, like a case that gives its own message.
+ */
+function confirmingBranch<T extends { ok: boolean; proposedBranch?: string }>(
+  options: PublishOptions,
+  run: (options: PublishOptions) => T,
+): T {
+  if (options.branch !== undefined) return run(options);
+  const probe = run(options);
+  return !probe.ok && probe.proposedBranch ? run({ ...options, branch: probe.proposedBranch }) : probe;
+}
+
 type CandidateArgs = Parameters<typeof publishCandidateDeciding>;
 function publishCandidate(
   dir: CandidateArgs[0],
@@ -40,7 +53,9 @@ function publishCandidate(
   forge?: CandidateArgs[4],
   options: PublishOptions = {},
 ) {
-  return publishCandidateDeciding(dir, meta, team, git, forge, { commitMessage: APPROVED, ...options });
+  return confirmingBranch({ commitMessage: APPROVED, ...options }, (o) =>
+    publishCandidateDeciding(dir, meta, team, git, forge, o),
+  );
 }
 
 /**
@@ -62,7 +77,9 @@ function publishTeamSelection(
   forge?: SelectionArgs[3],
   options: PublishOptions = {},
 ) {
-  return publishTeamSelectionDeciding(selection, team, git, forge, { commitMessage: APPROVED, ...options });
+  return confirmingBranch({ commitMessage: APPROVED, ...options }, (o) =>
+    publishTeamSelectionDeciding(selection, team, git, forge, o),
+  );
 }
 
 let candidateDir: string;
@@ -196,7 +213,7 @@ describe("manualPrUrl", () => {
 });
 
 describe("publishCandidate", () => {
-  it("pushes a handbook/<slug> branch with the artifact and returns the forge PR URL", () => {
+  it("pushes the confirmed branch with the artifact and returns the forge PR URL", () => {
     remote = teamRepo();
     const forgeCalls: string[][] = [];
     const result = publishCandidate(
@@ -211,14 +228,15 @@ describe("publishCandidate", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      branch: "handbook/fix-npm-test",
+      branch: "fix-npm-test",
       prUrl: "https://gitlab.acme.com/team/skills/-/merge_requests/7",
     });
-    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", "handbook/fix-npm-test"]);
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", "fix-npm-test"]);
     expect(files).toContain("skills/fix-npm-test/SKILL.md");
     expect(files).toContain("skills/fix-npm-test/grounded-case.json");
-    expect(forgeCalls[0]![0]).toBe("glab");
-    expect(forgeCalls[0]).toContain("handbook/fix-npm-test");
+    const opened = forgeCalls.find((call) => call.includes("create"))!;
+    expect(opened[0]).toBe("glab");
+    expect(opened).toContain("fix-npm-test");
   });
 
   // Was: "suffixes the slug when the team repo already has that skill directory". The
@@ -244,7 +262,7 @@ describe("publishCandidate", () => {
     expect(result.error).toContain('already has a skill named "fix-npm-test"');
     expect(result.error).toContain("--update");
     expect(result.error).toContain("--as");
-    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+    expect(gitIn(remote, ["branch", "--list"]).replace(/[*\s]/g, "")).toBe("main");
     expect(gitIn(remote, ["show", "main:skills/fix-npm-test/SKILL.md"])).toBe("occupied\n");
   });
 
@@ -320,7 +338,7 @@ describe("publishCandidate", () => {
     // and NO skills/ directory for it: the two used to be one check, and the branch
     // silently renamed the skill
     remote = teamRepo();
-    gitIn(remote, ["branch", "handbook/fix-npm-test", "main"]);
+    gitIn(remote, ["branch", "fix-npm-test", "main"]);
 
     // when the candidate is published
     const result = publishCandidate(
@@ -331,22 +349,45 @@ describe("publishCandidate", () => {
       () => "https://example.com/mr/1",
     );
 
-    // then the skill keeps the name it asked for, and only the BRANCH steps aside - which
-    // is the guard that stops the push being rejected non-fast-forward and the slug being
-    // locked for good
-    expect(result).toMatchObject({ ok: true, skillDir: "skills/fix-npm-test", branch: "handbook/fix-npm-test-2" });
-    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", "handbook/fix-npm-test-2"]);
+    // then the skill keeps the name it asked for, and only the PROPOSED branch steps aside -
+    // which is the guard that stops the push being rejected non-fast-forward and the slug
+    // being locked for good
+    expect(result).toMatchObject({ ok: true, skillDir: "skills/fix-npm-test", branch: "fix-npm-test-2" });
+    const files = gitIn(remote, ["ls-tree", "-r", "--name-only", "fix-npm-test-2"]);
     expect(files).toContain("skills/fix-npm-test/SKILL.md");
     expect(files).not.toContain("skills/fix-npm-test-2/SKILL.md");
-    expect(gitIn(remote, ["show", "handbook/fix-npm-test-2:skills/fix-npm-test/SKILL.md"])).toContain(
+    expect(gitIn(remote, ["show", "fix-npm-test-2:skills/fix-npm-test/SKILL.md"])).toContain(
       "name: fix-npm-test",
     );
+  });
+
+  it("refuses a branch the user named when the repository already has it, rather than suffixing it", () => {
+    // given the branch an earlier approve left behind, and a publisher who names it
+    remote = teamRepo();
+    gitIn(remote, ["branch", "TEAM-12", "main"]);
+
+    // when the candidate is published under that exact name
+    const result = publishCandidate(
+      candidateDir,
+      meta(),
+      { repoUrl: remote, marketplaceName: "t" },
+      undefined,
+      () => "https://example.com/mr/1",
+      { branch: "TEAM-12" },
+    );
+
+    // then nothing is pushed, no other name is picked, and the question comes back with it
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('already has a branch named "TEAM-12"');
+    expect(result.error).toContain("Branch `TEAM-12` - confirm or change it.");
+    expect(result.proposedBranch).toBe("TEAM-12");
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("TEAM-12-2");
   });
 
   it("still finds a free branch for an update whose first attempt left a branch behind", () => {
     // given the team has the skill AND the branch from the approve that put it there
     remote = teamRepo(["fix-npm-test"]);
-    gitIn(remote, ["branch", "handbook/fix-npm-test", "main"]);
+    gitIn(remote, ["branch", "fix-npm-test", "main"]);
 
     // when the publisher sends an update
     const result = publishCandidate(
@@ -364,7 +405,7 @@ describe("publishCandidate", () => {
       ok: true,
       skillDir: "skills/fix-npm-test",
       updatedExisting: true,
-      branch: "handbook/fix-npm-test-2",
+      branch: "fix-npm-test-2",
     });
   });
 
@@ -374,20 +415,19 @@ describe("publishCandidate", () => {
       candidateDir,
       meta(),
       { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "t" },
-      (args, cwd) => {
-        // clone from the local bare repo regardless of the configured SSH URL
-        const rewritten = args.map((a) => (a === "git@gitlab.acme.com:team/skills.git" ? remote : a));
-        execFileSync("git", rewritten, { cwd, stdio: "ignore" });
-      },
+      // clone from the local bare repo regardless of the configured SSH URL; real git
+      // otherwise, so the push options a local repository refuses are refused as they would
+      // be by any server that is not GitLab
+      (args, cwd) => runGit(args.map((a) => (a === "git@gitlab.acme.com:team/skills.git" ? remote : a)), cwd),
       () => {
         throw new Error("glab: command not found");
       },
     );
     expect(result).toMatchObject({
       ok: true,
-      branch: "handbook/fix-npm-test",
+      branch: "fix-npm-test",
       manualUrl:
-        "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=handbook%2Ffix-npm-test",
+        "https://gitlab.acme.com/team/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-npm-test",
     });
     expect(result.prUrl).toBeUndefined();
     // the reason the auto-PR was skipped is surfaced, not swallowed
@@ -470,11 +510,11 @@ describe("publishCandidate", () => {
     try {
       execFileSync("git", ["clone", remote, join(divergent, "repo")], { stdio: "ignore" });
       const repo = join(divergent, "repo");
-      gitIn(repo, ["checkout", "-b", "handbook/fix-npm-test"]);
+      gitIn(repo, ["checkout", "-b", "fix-npm-test"]);
       writeFileSync(join(repo, "other.txt"), "divergent\n");
       gitIn(repo, ["add", "-A"]);
       gitIn(repo, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "divergent"]);
-      gitIn(repo, ["push", "origin", "handbook/fix-npm-test"]);
+      gitIn(repo, ["push", "origin", "fix-npm-test"]);
     } finally {
       rmSync(divergent, { recursive: true, force: true });
     }
@@ -486,7 +526,7 @@ describe("publishCandidate", () => {
       () => "",
     );
     expect(result.ok).toBe(true);
-    expect(result.branch).toBe("handbook/fix-npm-test-2");
+    expect(result.branch).toBe("fix-npm-test-2");
   });
 
   it("fails with the rule that refused the push, not just the fact that it failed", () => {
@@ -508,83 +548,40 @@ describe("publishCandidate", () => {
   });
 });
 
-describe("retryBranchAfterNameRejection", () => {
-  const pattern = "((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$";
-  const rejection = new Error(
-    `git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the pattern '${pattern}'`,
-  );
-  const team = { repoUrl: "git@gitlab.com:acme/qa.git", marketplaceName: "qa", commitPrefix: "HQA-000" };
-
-  it("given the team's own commit prefix, when the branch name is refused, then it is reused for the branch", () => {
-    const retry = retryBranchAfterNameRejection(rejection, team, "fix-npm-test");
-
-    expect(retry).toEqual({ branch: "HQA-000-fix-npm-test", prefix: "HQA-000-" });
-  });
-
-  it("given a slug already suffixed past a collision, when derived, then the name still satisfies the rule", () => {
-    const retry = retryBranchAfterNameRejection(rejection, team, "fix-npm-test-2");
-
-    expect(retry).toEqual({ branch: "HQA-000-fix-npm-test-2", prefix: "HQA-000-" });
-  });
-
-  it("given no commit prefix to derive from, when the branch name is refused, then nothing is invented", () => {
-    const retry = retryBranchAfterNameRejection(rejection, { ...team, commitPrefix: undefined }, "fix-npm-test");
-
-    expect(retry).toBeNull();
-  });
-
-  it("given a derived name the pattern still rejects, when checked, then it is not pushed", () => {
-    const refusesEverything = new Error(
-      "git push failed: remote: GitLab: Branch name 'handbook/x' does not follow the pattern '^release/.+$'",
-    );
-
-    expect(retryBranchAfterNameRejection(refusesEverything, team, "fix-npm-test")).toBeNull();
-  });
-
-  it("given the commit AUTHOR was refused, when classified, then no second branch is pushed for it", () => {
-    // the author-email rule quotes an address, and a branch derived from it would be
-    // refused for exactly the same reason the first push was
-    const authorRule = new Error(
-      "git push failed: remote: GitLab: Committer's email 'dev@personal.example' does not follow the pattern '@acme\\.com$'",
-    );
-
-    expect(retryBranchAfterNameRejection(authorRule, team, "fix-npm-test")).toBeNull();
-  });
-
-  it("given the commit MESSAGE was refused, when classified, then the branch name is left alone", () => {
-    const commitRule = new Error(
-      "git push failed: remote: GitLab: Commit message does not follow the pattern '^HQA-\\d+'",
-    );
-
-    expect(retryBranchAfterNameRejection(commitRule, team, "fix-npm-test")).toBeNull();
-  });
-
-  it("given an unparseable pattern, when evaluated, then the rule is reported instead of guessed at", () => {
-    const broken = new Error(
-      "git push failed: remote: GitLab: Branch name 'handbook/x' does not follow the pattern '([unclosed'",
-    );
-
-    expect(retryBranchAfterNameRejection(broken, team, "fix-npm-test")).toBeNull();
-  });
-});
-
 describe("publishCandidate - a forge that polices branch names", () => {
-  it("given the default branch name is refused, when publishing, then it retries under the team's prefix and reports it", () => {
+  it("given the branch name is refused, when publishing, then nothing is retried and the forge's sentence comes back with the question", () => {
     remote = teamRepo();
     let pushes = 0;
     const policedGit: GitRunner = (args, cwd) => {
       if (args[0] === "push") {
         pushes += 1;
-        if (pushes === 1) {
-          throw new Error(
-            "git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the " +
-              "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'\n" +
-              "To gitlab.com:acme/qa-handbook.git\n" +
-              " ! [remote rejected] handbook/fix-npm-test -> handbook/fix-npm-test (pre-receive hook declined)\n" +
-              "error: failed to push some refs to 'gitlab.com:acme/qa-handbook.git'",
-          );
-        }
+        throw new Error(
+          "git push failed: remote: GitLab: Branch name 'fix-npm-test' does not follow the " +
+            "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'\n" +
+            "To gitlab.com:acme/qa-handbook.git\n" +
+            " ! [remote rejected] fix-npm-test -> fix-npm-test (pre-receive hook declined)\n" +
+            "error: failed to push some refs to 'gitlab.com:acme/qa-handbook.git'",
+        );
       }
+      return runGit(args, cwd);
+    };
+
+    const result = publishCandidate(candidateDir, meta(), { repoUrl: remote, marketplaceName: "t" }, policedGit, () => "");
+
+    expect(result.ok).toBe(false);
+    expect(pushes).toBe(1);
+    expect(result.error).toContain("Branch name 'fix-npm-test' does not follow the pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'");
+    expect(result.error).toContain("Branch `fix-npm-test` · message `chore: the case under test` - confirm or change either.");
+    expect(result.error).toContain("--branch <name>");
+    expect(result).toMatchObject({ proposedBranch: "fix-npm-test", proposedMessage: "chore: the case under test" });
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("fix-npm-test");
+  });
+
+  it("given a commit prefix that is a ticket key, when publishing, then the proposal carries the key and one push goes through", () => {
+    remote = teamRepo();
+    let pushes = 0;
+    const countingGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") pushes += 1;
       return runGit(args, cwd);
     };
 
@@ -592,39 +589,12 @@ describe("publishCandidate - a forge that polices branch names", () => {
       candidateDir,
       meta(),
       { repoUrl: remote, marketplaceName: "t", commitPrefix: "HQA-000" },
-      policedGit,
+      countingGit,
       () => "",
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.branch).toBe("HQA-000-fix-npm-test");
-    expect(result.learnedBranchPrefix).toBe("HQA-000-");
-    expect(pushes).toBe(2);
-  });
-
-  it("given nothing to derive a prefix from, when the branch name is refused, then the rule and the fix are reported", () => {
-    remote = teamRepo();
-    const policedGit: GitRunner = (args, cwd) => {
-      if (args[0] === "push") {
-        throw new Error(
-          "git push failed: remote: GitLab: Branch name 'handbook/fix-npm-test' does not follow the " +
-            "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
-        );
-      }
-      return runGit(args, cwd);
-    };
-
-    const result = publishCandidate(
-      candidateDir,
-      meta(),
-      { repoUrl: remote, marketplaceName: "t" },
-      policedGit,
-      () => "",
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("rejected the branch NAME");
-    expect(result.error).toContain("branchPrefix");
+    expect(result).toMatchObject({ ok: true, branch: "HQA-000-fix-npm-test" });
+    expect(pushes).toBe(1);
   });
 });
 
@@ -644,16 +614,16 @@ describe("publishTeamSelection with a single server", () => {
 
     const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/3");
 
-    expect(result).toMatchObject({ ok: true, branch: "handbook/mcp-gitlab", version: "0.1.1" });
-    const declared = JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.mcp.json"]));
+    expect(result).toMatchObject({ ok: true, branch: "mcp-gitlab", version: "0.1.1" });
+    const declared = JSON.parse(gitIn(remote, ["show", "mcp-gitlab:.mcp.json"]));
     expect(declared.mcpServers.linear).toEqual({ type: "sse", url: "https://mcp.linear.app/sse" });
     expect(declared.mcpServers.gitlab).toEqual(gitlab.config);
     // the server and the version signal travel as one commit, in either order: a merged
     // server whose version did not move reaches nobody
-    const touched = gitIn(remote, ["show", "--name-only", "--format=", "handbook/mcp-gitlab"]);
+    const touched = gitIn(remote, ["show", "--name-only", "--format=", "mcp-gitlab"]);
     expect(touched).toContain(".mcp.json");
     expect(touched).toContain(".claude-plugin/plugin.json");
-    expect(JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.claude-plugin/plugin.json"])).version).toBe("0.1.1");
+    expect(JSON.parse(gitIn(remote, ["show", "mcp-gitlab:.claude-plugin/plugin.json"])).version).toBe("0.1.1");
   });
 
   it("given a team repo with no .mcp.json at all, when a server is shared, then the file is created in the shape Claude Code loads", () => {
@@ -662,7 +632,7 @@ describe("publishTeamSelection with a single server", () => {
     const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/4");
 
     expect(result.ok).toBe(true);
-    expect(JSON.parse(gitIn(remote, ["show", "handbook/mcp-gitlab:.mcp.json"]))).toEqual({
+    expect(JSON.parse(gitIn(remote, ["show", "mcp-gitlab:.mcp.json"]))).toEqual({
       mcpServers: { gitlab: gitlab.config },
     });
   });
@@ -778,7 +748,7 @@ describe("a name the destination already has", () => {
     expect(skill.error).toContain("--update");
 
     // and nothing was pushed over anything
-    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+    expect(gitIn(remote, ["branch", "--list"]).replace(/[*\s]/g, "")).toBe("main");
   });
 
   it("is replaced for a server and a command too, once the publisher answers with --update", () => {
@@ -1101,8 +1071,9 @@ describe("a machine that joined before the repository recorded its prefix", () =
 
     expect(result.ok).toBe(true);
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).startsWith("OPS-42 ")).toBe(true);
-    // Persisted by the caller, so the second share needs no lookup at all.
-    expect(result.learnedCommitPrefix).toBe("OPS-42");
+    // Read again on every push rather than written into the config: nothing is handed back
+    // for a caller to persist.
+    expect(result).not.toHaveProperty("learnedCommitPrefix");
   });
 
   it("given an approval from a machine with no prefix, when the repository records one, then the skill's commit carries it too", () => {
@@ -1112,7 +1083,6 @@ describe("a machine that joined before the repository recorded its prefix", () =
 
     expect(result.ok).toBe(true);
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).startsWith("OPS-42 ")).toBe(true);
-    expect(result.learnedCommitPrefix).toBe("OPS-42");
   });
 
   it("given a machine that already has its own prefix, when the repository records a different one, then the machine's own is kept", () => {
@@ -1128,10 +1098,9 @@ describe("a machine that joined before the repository recorded its prefix", () =
     // A prefix in the config may be a correction made by hand after a rejection; the
     // repository never overwrites one.
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).startsWith("OPS-99 ")).toBe(true);
-    expect(result.learnedCommitPrefix).toBeUndefined();
   });
 
-  it("given the repository records that the team needs no prefix, when shared, then that answer is learned rather than looked up again", () => {
+  it("given the repository records that the team needs no prefix, when shared, then the title carries none", () => {
     const remote = recordingRepo("");
 
     const result = delegating((commitMessage) =>
@@ -1141,7 +1110,6 @@ describe("a machine that joined before the repository recorded its prefix", () =
     );
 
     expect(result.ok).toBe(true);
-    expect(result.learnedCommitPrefix).toBe("");
     // No prefix, and no stray leading space either: the title is exactly what it would be
     // on a machine that had always known the team asks for nothing.
     expect(gitIn(remote, ["log", "-1", "--format=%s", result.branch!]).trim()).toBe("feat(mcp): add gitlab");
@@ -1218,35 +1186,24 @@ describe("a machine that joined before the repository recorded its prefix", () =
     const second = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
 
     expect(second.ok).toBe(true);
-    expect(second.learnedCommitPrefix).toBe("OPS-42");
     expect(gitIn(remote, ["log", "-1", "--format=%s", second.branch!]).startsWith("OPS-42 ")).toBe(true);
   });
 
-  it("given a repository that records its prefix, when the forge then refuses the branch NAME, then the recovery the prefix enables is reachable", () => {
+  it("given a repository that records its prefix, when a share is proposed, then the branch takes its ticket key and goes through first time", () => {
     const remote = recordingRepo("HQA-000");
     let pushes = 0;
-    const policedGit: GitRunner = (args, cwd) => {
-      if (args[0] === "push") {
-        pushes++;
-        if (args.includes("handbook/mcp-gitlab")) {
-          throw new Error(
-            "git push failed: remote: GitLab: Branch name 'handbook/mcp-gitlab' does not follow the " +
-              "pattern '((^HQA-\\d+(-[a-z0-9]+)*)|dev|master)$'",
-          );
-        }
-      }
+    const countingGit: GitRunner = (args, cwd) => {
+      if (args[0] === "push") pushes++;
       return runGit(args, cwd);
     };
 
-    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), policedGit, () => "");
+    const result = publishTeamSelection({ servers: [gitlab] }, joiner(remote), countingGit, () => "");
 
-    // Without the repository lookup there is no commitPrefix to derive a branch from, so
-    // this push failed outright before.
+    // The repository's prefix reaches the proposal through the clone, with nothing written
+    // into this machine's config on the way.
     expect(result.ok).toBe(true);
     expect(result.branch).toBe("HQA-000-mcp-gitlab");
-    expect(result.learnedBranchPrefix).toBe("HQA-000-");
-    expect(result.learnedCommitPrefix).toBe("HQA-000");
-    expect(pushes).toBe(2);
+    expect(pushes).toBe(1);
   });
 });
 
@@ -1289,10 +1246,11 @@ describe("a delegated wording needs a merge request to be about", () => {
 
     const result = publishCandidateDeciding(candidateDir, meta(), team, undefined, signedInForge, {
       commitMessage: { delegated: probe.proposalHash! },
+      branch: probe.proposedBranch!,
     });
 
-    expect(result).toMatchObject({ ok: true, branch: "handbook/fix-npm-test" });
-    expect(gitIn(remote, ["log", "-1", "--format=%s", "handbook/fix-npm-test"]).trim()).toBe(probe.proposedMessage);
+    expect(result).toMatchObject({ ok: true, branch: "fix-npm-test" });
+    expect(gitIn(remote, ["log", "-1", "--format=%s", "fix-npm-test"]).trim()).toBe(probe.proposedMessage);
   });
 
   it("given no way to open one, when a selection is shared with the wording delegated, then nothing reaches the remote", () => {
@@ -1345,6 +1303,7 @@ describe("a delegated wording needs a merge request to be about", () => {
 
     const result = publishTeamSelectionDeciding({ servers: [poisoned] }, team, undefined, () => "", {
       commitMessage: { message: "feat: add the server the team asked for" },
+      branch: "TEAM-12-gitlab-server",
     });
 
     expect(result).toMatchObject({ ok: true, commitMessage: "feat: add the server the team asked for" });
@@ -1369,6 +1328,9 @@ describe("a delegated wording needs a merge request to be about", () => {
     expect(probe.ok).toBe(false);
     expect(probe.error).toContain("gitlab-token");
     expect(probe.error).toContain("--message");
-    expect(gitIn(remote, ["branch", "--list"])).not.toContain("handbook/");
+    // the branch it would derive from that name is screened the same way, and not offered
+    expect(probe.proposedBranch).toBeUndefined();
+    expect(probe.error).not.toContain("glpat");
+    expect(gitIn(remote, ["branch", "--list"]).replace(/^\*\s*/, "").trim()).toBe("main");
   });
 });

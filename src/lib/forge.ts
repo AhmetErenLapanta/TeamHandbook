@@ -13,17 +13,26 @@ export function hostFromUrl(url: string): string | null {
   return normalized.slice(0, normalized.indexOf("/"));
 }
 
-export type ForgeRunner = (tool: "gh" | "glab", args: string[], cwd: string) => string;
+export type ForgeRunner = (tool: "gh" | "glab", args: string[], cwd: string, timeoutMs?: number) => string;
 
 export const FORGE_TIMEOUT_MS = 60_000;
 
-export function runForge(tool: "gh" | "glab", args: string[], cwd: string): string {
+/**
+ * How long the sign-in check may take. It sits in front of read-only screens - the share
+ * list, the first run of every push, the doctor - and with a CLI installed but its host
+ * unreachable it used to inherit the minute a merge request is given to open, freezing a
+ * screen that pushes nothing. The same reasoning as the release check in status: a check
+ * that stalls the screen it decorates is worse than no check.
+ */
+export const FORGE_CHECK_TIMEOUT_MS = 5_000;
+
+export function runForge(tool: "gh" | "glab", args: string[], cwd: string, timeoutMs = FORGE_TIMEOUT_MS): string {
   return execFileSync(tool, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     env: nonInteractiveEnv(),
-    timeout: FORGE_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
 }
 
@@ -52,12 +61,15 @@ export function forgeTool(repoUrl: string): "gh" | "glab" {
 /**
  * Why a merge request could not be opened from this machine, or null when one could.
  *
- * Asked BEFORE the push, and only for a run whose wording was delegated. Everywhere else a
- * forge that is missing is a soft failure: the branch is pushed and the user is handed a
- * link to open the request by hand. It cannot be soft for a delegated run, because the
- * delegation was given for the moment the request is opened - if no request can be opened,
- * a commit carrying a sentence nobody read is all that would be left behind, on a branch,
- * waiting for someone to notice.
+ * Asked before anything is pushed: by every push decision, by the share list and by the
+ * doctor, so each of them tells the user the same thing about the same forge. For most of
+ * them a missing forge is a soft failure, said up front: the branch is pushed and a link is
+ * printed, or on GitLab the push itself asks for the request. It is a hard one only for a
+ * delegated wording, because the delegation was given for the moment the request is
+ * opened - if no request can be opened, a commit carrying a sentence nobody read is all
+ * that would be left behind, on a branch, waiting for someone to notice. A check that does
+ * not answer in time counts as a forge that cannot open one, which keeps both readings on
+ * their safe side.
  */
 export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: ForgeRunner): string | null {
   const tool = forgeTool(repoUrl);
@@ -74,11 +86,13 @@ export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: Forg
   let last = "";
   for (const args of attempts) {
     try {
-      forge(tool, args, repoDir);
+      forge(tool, args, repoDir, FORGE_CHECK_TIMEOUT_MS);
       return null;
     } catch (err) {
       const e = err as { code?: string; stderr?: string; message?: string };
       if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      // Not retried without the host: a second attempt would only double the wait.
+      if (e?.code === "ETIMEDOUT") return "the forge check timed out";
       const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
       last = (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
       if (!/unknown (flag|shorthand)/i.test(stderr)) break;
@@ -133,4 +147,23 @@ export function openPr(
  */
 export function noRequestPossible(reason: string): string {
   return `no merge request can be opened from this machine (${reason})`;
+}
+
+/**
+ * What happens to the request when the forge CLI cannot open it, said before the push.
+ *
+ * Learning it from a result that has already pushed is too late to do anything about it -
+ * install the CLI, sign in, or decide to open the request by hand - and "you decide" is
+ * refused for the same reason, so the two are said together. On GitLab the push itself
+ * asks for the request, which is why the sentence differs by forge.
+ */
+export function forgeNotice(repoUrl: string, problem: string): string {
+  const byPush = forgeTool(repoUrl) === "glab" && hostFromUrl(repoUrl) !== null;
+  return (
+    (byPush
+      ? `This machine cannot open the merge request with glab (${problem}): the branch will be pushed asking ` +
+        "GitLab to open the request itself, and a link printed if it does not."
+      : `This machine cannot open the merge request (${problem}): the branch will be pushed and a link printed.`) +
+    ' For the same reason "you decide" is not an answer to the commit message here: the wording is asked of you.'
+  );
 }

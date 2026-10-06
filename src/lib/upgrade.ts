@@ -1,24 +1,38 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { uniqueSlug } from "./distill.js";
-import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
+import { forgeNotice, hostFromUrl, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import {
   assertSafeGitUrl,
   commitSubject,
-  decideCommitSubject,
   proposalFingerprint,
   gitIdentityArgs,
-  pushFailureReason,
   readTeamCommitPrefix,
   teamCommitPrefixFix,
   runGit,
   skeletonFiles,
-  teamBranchPrefix,
   teamCommitPrefix,
+  TEAM_PREFIX_FILE,
 } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion } from "./publish.js";
+import {
+  branchAnswer,
+  branchNameProblem,
+  branchTrace,
+  decidePush,
+  openRequest,
+  previewPush,
+  pushBranch,
+  pushFailure,
+  pushQuestion,
+  readTeamBranchExample,
+  requestPushOptions,
+  unattachedDescriptionLines,
+  versionClaimProblem,
+  versionPast,
+} from "./branch.js";
+import type { BranchProposal, PushChoice, Pushed, VersionClaim } from "./branch.js";
 import { handbookWorkdir } from "./session-state.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
@@ -240,8 +254,12 @@ export interface CandidateSet {
  * itself. A repository scaffolded before that formatting was fixed does report its CI
  * file as stale, which is what the file being out of date means.
  */
-export function upgradeCandidates(repoDir: string, team: TeamConfig): CandidateSet {
+export function upgradeCandidates(repoDir: string, team: TeamConfig, branchExample?: string): CandidateSet {
   const withCi = existsSync(join(repoDir, CI_MARKER));
+  // The example the repository already records is carried across unless a new one was
+  // given. A machine that never heard of it would otherwise regenerate the team file
+  // without it and offer, as a refresh, to delete what an administrator wrote there.
+  const example = branchExample ?? readTeamBranchExample(repoDir).example;
   // The repository is asked before this machine is written off as not knowing. A teammate
   // who joined before the handbook recorded its prefix has nothing in their config, but the
   // repository they are refreshing may have been given the record since - and regenerating
@@ -250,7 +268,7 @@ export function upgradeCandidates(repoDir: string, team: TeamConfig): CandidateS
   // not knowing the answer.
   const recorded = commitPrefixIsKnown(team) ? undefined : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
-  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi);
+  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi, example);
   const known = commitPrefixIsKnown(team) || recorded !== undefined;
   const unknownPrefix = known ? new Set<string>() : prefixDependentPaths(team, withCi);
   const files: Record<string, string> = {};
@@ -339,6 +357,22 @@ export interface UpgradePlan {
   proposedMessage?: string;
   /** Its fingerprint, which a delegated refresh has to name back. */
   proposalHash?: string;
+  /** The branch the refresh would go out on, shown beside the message. */
+  branch?: BranchProposal;
+  /** Why the branch given (or the one this would propose) cannot be used. */
+  branchProblem?: string;
+  /** Why no merge request can be opened from this machine, when none can. */
+  forgeProblem?: string;
+  /** Unmerged branches already claiming the version this refresh would raise to. */
+  versionClaim?: string;
+  /** Set when the repository records no example branch name, so the plan can ask once. */
+  asksBranchExample?: boolean;
+}
+
+/** What a refresh needs decided beyond its files and its message. */
+export interface UpgradeChoice extends PushChoice {
+  /** One branch name the way this repository names branches, to record in the team file. */
+  branchExample?: string;
 }
 
 export interface UpgradeResult {
@@ -359,7 +393,14 @@ export interface UpgradeResult {
   proposedMessage?: string;
   /** Its fingerprint, which a delegated refresh has to name back. */
   proposalHash?: string;
+  /** The branch shown on that refusal, to be confirmed or changed. */
+  proposedBranch?: string;
+  /** The request body, when GitLab opened the request from the push and could not attach it. */
+  unattachedDescription?: string;
 }
+
+/** The name every refresh branch is proposed from. */
+const REFRESH_SLUG = "refresh-scaffold";
 
 function classify(repoDir: string, candidates: Record<string, string>): SkeletonFileState[] {
   return Object.entries(candidates).map(([path, content]) => {
@@ -544,7 +585,12 @@ function checkIgnore(git: GitRunner, repoDir: string, paths: string[]): string[]
  * printed "Nothing has been changed". The scratch directory is created here and holds
  * nothing but these files, so there is no link for a write to follow.
  */
-export function planUpgrade(team: TeamConfig, git: GitRunner = runGit): UpgradePlan {
+export function planUpgrade(
+  team: TeamConfig,
+  git: GitRunner = runGit,
+  forge: ForgeRunner = runForge,
+  choice: UpgradeChoice = {},
+): UpgradePlan {
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -556,10 +602,21 @@ export function planUpgrade(team: TeamConfig, git: GitRunner = runGit): UpgradeP
   try {
     const cloneError = cloneForUpgrade(git, team, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
-    const candidates = upgradeCandidates(repoDir, team);
+    const exampleError = branchExampleError(choice.branchExample, git, repoDir);
+    if (exampleError) return { ok: false, error: exampleError };
+    const candidates = upgradeCandidates(repoDir, team, choice.branchExample);
     const files = classify(repoDir, candidates.files);
     const paths = refreshable(files);
     const unreadable = unreadableManifests(repoDir, candidates);
+    // The same preview the refresh run decides from, so the branch, the forge route and
+    // the version in the way are shown here exactly as that run will meet them.
+    const preview = previewPush(git, forge, repoDir, team, REFRESH_SLUG, choice.hints);
+    const versionClaim = versionClaimProblem(preview, "run the refresh again");
+    // The same sieve the refresh run applies, so a given name carrying a trace is not
+    // printed back on the plan either; a name that can go out is shown as given.
+    const answer = branchAnswer(choice, preview, git, repoDir, "run the refresh again");
+    const branch = choice.branch !== undefined && !answer.said ? { branch: choice.branch } : answer.shown;
+    const branchProblem = choice.branch !== undefined || !answer.shown ? answer.said : null;
     const plan: UpgradePlan = {
       ok: true,
       url: team.repoUrl,
@@ -568,6 +625,11 @@ export function planUpgrade(team: TeamConfig, git: GitRunner = runGit): UpgradeP
       version: versionPlan(repoDir),
       proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
       proposalHash: proposalFingerprint(commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE)),
+      ...(branch ? { branch } : {}),
+      ...(branchProblem ? { branchProblem } : {}),
+      ...(preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {}),
+      ...(versionClaim ? { versionClaim } : {}),
+      ...(!choice.branchExample && !readTeamBranchExample(repoDir).example ? { asksBranchExample: true } : {}),
       ...(candidates.linked.length ? { linked: candidates.linked } : {}),
       ...(candidates.withheld.length ? { withheld: candidates.withheld } : {}),
       ...(unreadable.length ? { unreadable } : {}),
@@ -601,18 +663,15 @@ export function planUpgrade(team: TeamConfig, git: GitRunner = runGit): UpgradeP
   }
 }
 
-function remoteBranches(git: GitRunner, repoDir: string): Set<string> {
-  try {
-    return new Set(
-      String(git(["ls-remote", "--heads", "origin"], repoDir) ?? "")
-        .split("\n")
-        .map((line) => line.split("\t")[1] ?? "")
-        .filter(Boolean)
-        .map((ref) => ref.replace("refs/heads/", "")),
-    );
-  } catch {
-    return new Set<string>();
-  }
+/** Why the example given for the team file cannot be recorded, or null. It is a branch
+ * name everyone on the team reads and copies, so it passes the same sieve as one. */
+function branchExampleError(example: string | undefined, git: GitRunner, repoDir: string): string | null {
+  if (example === undefined) return null;
+  const problem = branchNameProblem(example, git, repoDir);
+  if (!problem) return null;
+  // A traced example is described, never quoted, for the reason branchTrace gives.
+  const named = branchTrace(example) ? "that example" : `"${example}"`;
+  return `${named} cannot be recorded as the example branch name: ${problem}. Nothing was changed.`;
 }
 
 /**
@@ -634,8 +693,9 @@ export function applyUpgrade(
   git: GitRunner = runGit,
   forge: ForgeRunner = runForge,
   commitMessage: CommitMessageChoice = {},
+  choice: UpgradeChoice = {},
 ): UpgradeResult {
-  if (!paths.length) {
+  if (!paths.length && choice.branchExample === undefined) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
   }
   try {
@@ -658,8 +718,18 @@ export function applyUpgrade(
   try {
     const cloneError = cloneForUpgrade(git, team, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
-    const candidates = upgradeCandidates(repoDir, team);
+    const exampleError = branchExampleError(choice.branchExample, git, repoDir);
+    if (exampleError) return { ok: false, error: exampleError };
+    const candidates = upgradeCandidates(repoDir, team, choice.branchExample);
     const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
+    // Giving the example is the approval of the one file it is written into, so that file
+    // joins the request without being named twice - unless it already says exactly that.
+    if (choice.branchExample !== undefined && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
+      paths = [...paths, TEAM_PREFIX_FILE];
+    }
+    if (!paths.length) {
+      return { ok: false, error: `${TEAM_PREFIX_FILE} already records that example, so nothing was changed.` };
+    }
     // Refusing an unknown path by name is what keeps the red lines from depending on the
     // caller: the only writable paths in existence are the ones today's skeleton emits,
     // minus everything the team owns, everything a symbolic link sits on and everything
@@ -683,37 +753,26 @@ export function applyUpgrade(
     // Read before anything is written, so the commit raises the version exactly when the
     // plan said it would and stays silent when the plan said it could not.
     const version = versionPlan(repoDir);
-    const prefix = teamBranchPrefix(team);
-    // An earlier refresh whose request is still open (or was abandoned) already holds the
-    // obvious name, and reusing it makes the push fail non-fast-forward for a reason that
-    // has nothing to do with this run.
-    const taken = remoteBranches(git, repoDir);
-    const branch = `${prefix}${uniqueSlug("refresh-scaffold", (slug) => taken.has(`${prefix}${slug}`))}`;
     const title = REFRESH_COMMIT_TITLE;
     // After the paths are checked, so a run stopped for naming a file this cannot refresh
     // says that rather than asking for wording the user would then have to give twice, and
     // before the checkout, so a run with no decision leaves nothing behind.
     const messagePrefix = teamCommitPrefix(team);
-    const proposal = commitSubject(messagePrefix, title);
-    const stopped = (error: string): UpgradeResult => ({
-      ok: false,
-      error,
-      proposedMessage: proposal,
-      proposalHash: proposalFingerprint(proposal),
-    });
-    // See publishCandidate: "you decide" is an answer about the merge request, so a
-    // machine that cannot open one has nothing to honour it at, and a run that has not
-    // been asked yet must not offer a delegation this machine would refuse.
-    const unavailable =
-      commitMessage.message === undefined ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
-    const decided = decideCommitSubject(
-      commitMessage,
-      proposal,
+    const decided = decidePush({
+      git,
+      forge,
+      repoDir,
+      team,
+      slug: REFRESH_SLUG,
+      choice,
+      message: commitMessage,
+      proposedMessage: commitSubject(messagePrefix, title),
       messagePrefix,
-      "run the refresh again",
-      unavailable ? noRequestPossible(unavailable) : undefined,
-    );
-    if ("error" in decided) return stopped(decided.error);
+      rerun: "run the refresh again",
+    });
+    if (!decided.ok) return decided;
+    const { branch } = decided;
+    let pushed: Pushed;
     let raised: string | null = null;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -724,27 +783,20 @@ export function applyUpgrade(
       // the team already has rather than the one the skeleton ships, so the signal they
       // have been building on is preserved and advanced, never reset - and when it cannot
       // be raised, nothing is invented and the result says so instead.
-      if (version.next) raised = bumpPluginVersion(repoDir);
+      if (version.next) raised = bumpPluginVersion(repoDir, decided.claims);
       const { missing } = stage(git, repoDir, paths);
       // Before the commit, so a refresh that cannot carry everything it was asked for
       // carries none of it rather than reporting a file it quietly dropped.
       if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
       git([...identity, "commit", "-m", decided.subject], repoDir);
-      git(["push", "-u", "origin", branch], repoDir);
+      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
     } catch (err) {
       return {
         ok: false,
-        error: pushFailureReason(
-          team.repoUrl,
-          branch,
-          err,
-          'Set "branchPrefix" under "team" in your TeamHandbook config.json to a prefix that fits ' +
-            '(for example "TEAM-1-"), then run this again.',
-          teamCommitPrefixFix(team, "run this again"),
-        ),
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "run the refresh again", teamCommitPrefixFix(team, "run this again")),
       };
     }
-    const pr = openPr(
+    const request = openRequest(
       team.repoUrl,
       branch,
       title,
@@ -761,6 +813,8 @@ export function applyUpgrade(
       ].join("\n"),
       repoDir,
       forge,
+      decided.forgeProblem,
+      pushed,
     );
     return {
       ok: true,
@@ -770,8 +824,7 @@ export function applyUpgrade(
       commitMessage: decided.subject,
       ...(raised ? { version: raised } : {}),
       ...(raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {}),
-      ...(pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined }),
-      ...(pr.url ? {} : pr.error ? { prError: pr.error } : {}),
+      ...request,
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });
@@ -782,10 +835,39 @@ function withheldLines(files: WithheldFile[]): string[] {
   return files.flatMap((file) => [`  ${"NOT OFFERED".padEnd(16)} ${file.path}`, `                   ${file.reason}`]);
 }
 
+/**
+ * Who a refresh of these files actually reaches, as the plan's first line.
+ *
+ * The plan used to describe the change perfectly and never say whether the person reading
+ * it needed it, so a refresh nobody on the call needed cost a whole round of pushing and
+ * merging before anyone asked why. Sharing never waits on the scaffold - with one
+ * exception, a repository with no plugin manifest, where no share can raise the version
+ * teammates update on, and that is the one case the line says so.
+ */
+export function refreshAudience(plan: UpgradePlan): string {
+  const files = plan.files ?? [];
+  if (files.some((file) => file.path === PLUGIN_MANIFEST && file.state === "absent")) {
+    return (
+      `Teammates receive nothing you share until this is merged: the repository has no ${PLUGIN_MANIFEST}, ` +
+      "so no share can raise the version their copies update on."
+    );
+  }
+  const paths = refreshable(files);
+  const who = [
+    ...(paths.includes(TEAM_PREFIX_FILE) ? ["teammates who join after you"] : []),
+    ...(paths.some((path) => path.startsWith("hooks/")) ? ["the notice teammates see when new skills arrive"] : []),
+    ...(paths.includes("README.md") ? ["people reading the repository's README"] : []),
+    ...(paths.some((path) => path.startsWith(".claude-plugin/")) ? ["how the plugin is described in teammates' plugin list"] : []),
+    ...(paths.some((path) => path === CI_MARKER || path.endsWith(".yml")) ? ["the repository's version-bump job"] : []),
+  ];
+  const listed = who.length <= 1 ? who.join("") : `${who.slice(0, -1).join(", ")} and ${who.at(-1)}`;
+  return `This only matters to ${listed || "the scaffold itself"}; you can skip it and keep sharing.`;
+}
+
 export function formatUpgradePlan(plan: UpgradePlan): string {
   const files = plan.files ?? [];
   const paths = refreshable(files);
-  const lines = [`Team handbook scaffold at ${plan.url}`, ""];
+  const lines = [...(paths.length ? [refreshAudience(plan), ""] : []), `Team handbook scaffold at ${plan.url}`, ""];
   for (const file of files) {
     const label =
       file.state === "current" ? "up to date" : file.state === "absent" ? "NOT IN THE REPO" : "DIFFERS";
@@ -800,7 +882,7 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     );
   }
   if (!paths.length) {
-    lines.push("", "Nothing to refresh - every scaffold file already matches this version.");
+    lines.push("", "Nothing to refresh - every scaffold file already matches this version.", ...branchExampleQuestion(plan));
     return lines.join("\n");
   }
   lines.push(
@@ -839,18 +921,42 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "",
     `  ${paths.map((path) => `--file ${path}`).join(" ")}`,
   );
-  // The message is part of what is being asked for, not a detail of how it is sent: the
-  // refresh refuses to commit until this sentence has been seen, so the screen that asks
-  // which files to send is the screen that shows it.
+  // The branch and the message are part of what is being asked for, not details of how it
+  // is sent: the refresh refuses to push until both have been seen, so the screen that asks
+  // which files to send is the screen that shows them, as the same one question every
+  // push asks.
   if (plan.proposedMessage) {
     lines.push(
       "",
-      `That request commits as "${plan.proposedMessage}". Pass the message you want with`,
-      `--message "<your wording>", or --delegate-message ${plan.proposalHash} to use the one above as it`,
-      "stands - the fingerprint is what ties that answer to this exact sentence.",
+      pushQuestion(plan.branch ?? null, plan.proposedMessage),
+      `That request goes out on that branch and commits as "${plan.proposedMessage}". Pass the branch with`,
+      `--branch "<name>" - the one above, if it is confirmed - and the message with --message "<your wording>"` +
+        (plan.forgeProblem
+          ? "."
+          : `, or --delegate-message ${plan.proposalHash} to use the one above as it stands - the fingerprint is what ties that answer to this exact sentence.`),
+      ...(plan.branchProblem ? [plan.branchProblem] : []),
+      ...(plan.forgeProblem ? [forgeNotice(plan.url ?? "", plan.forgeProblem)] : []),
     );
   }
+  if (plan.versionClaim) lines.push("", `WARNING: ${plan.versionClaim}`);
+  lines.push(...branchExampleQuestion(plan));
   return lines.join("\n");
+}
+
+/**
+ * The one question a refresh asks an administrator, and only while the repository has no
+ * answer: what a branch name looks like here. An example rather than a rule, so nobody
+ * writes a regular expression and nothing has to parse one; every later proposal takes its
+ * shape, and every teammate who joins reads it.
+ */
+function branchExampleQuestion(plan: UpgradePlan): string[] {
+  if (!plan.asksBranchExample) return [];
+  return [
+    "",
+    "What does a branch name look like in this repository? e.g. TEAM-123-short-description",
+    `Answer with --branch-example "<one branch name>" to record it in ${TEAM_PREFIX_FILE} for everyone, or leave it out:`,
+    "branches are still proposed and confirmed one push at a time.",
+  ];
 }
 
 export function formatUpgradeResult(result: UpgradeResult): string {
@@ -869,6 +975,7 @@ export function formatUpgradeResult(result: UpgradeResult): string {
     ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
     "",
     "Nothing reaches anyone until that is merged.",
+    ...unattachedDescriptionLines(result.unattachedDescription),
   ].join("\n");
 }
 

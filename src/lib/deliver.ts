@@ -6,12 +6,12 @@ import {
   loadTeamConfig,
   proposalFingerprint,
   runGit,
-  saveTeamConfig,
 } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import { conflictingOptions, mayUpdate, publishCandidate, runForge } from "./publish.js";
+import { unattachedDescriptionLines } from "./branch.js";
 import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
 import { candidatesDir } from "./skill-index.js";
@@ -98,12 +98,8 @@ export interface DeliverResult {
   originProject?: string;
   // why a team PR could not be auto-opened (the branch is pushed; link is manual)
   prError?: string;
-  // the branch prefix the forge forced this push to adopt, once, so it can be said out
-  // loud instead of the branch quietly having a different name than the one reported
-  learnedBranchPrefix?: string;
-  // the commit prefix this push read out of the team repository, for a machine that joined
-  // before the repository recorded one; the caller persists it
-  learnedCommitPrefix?: string;
+  // the PR body, when GitLab opened the request from the push and could not attach it
+  unattachedDescription?: string;
   // The name the skill was actually filed under. It is not always the one the reviewer
   // typed, and for a year it was nowhere in this type: publishCandidate picked
   // skills/foo-2, deliver dropped the field on the way through, and the CLI printed the
@@ -122,6 +118,9 @@ export interface DeliverResult {
   proposedMessage?: string;
   // its fingerprint, which a delegated approval has to name back
   proposalHash?: string;
+  // the branch a team delivery would push, shown on the same refusal to be confirmed or
+  // changed; on a refused push it is the name the forge turned back
+  proposedBranch?: string;
 }
 
 /** How a reviewer answers a refusal: send it as an update to what is there, or under a
@@ -188,6 +187,19 @@ export function approveAndDeliver(
         "--to team for a message to have somewhere to go, or drop the flag. Nothing was written.",
     };
   }
+  // The branch is the same kind of answer as the wording, about a push that only a team
+  // delivery makes: given anywhere else it would be dropped, and the reviewer would
+  // believe their request had gone out under it.
+  if (resolved !== "team" && (options.branch !== undefined || options.versionAfterOpen)) {
+    return {
+      ok: false,
+      meta,
+      error:
+        `this approval installs "${slug}" into ${resolved === "personal" ? "your own skills" : "the project"}, ` +
+        "which pushes nothing, so there is no branch to name and no version to raise. Approve with --to team " +
+        "for those to have somewhere to go, or drop the flag. Nothing was written.",
+    };
+  }
   if (resolved === "team") {
     if (!team) {
       return {
@@ -196,17 +208,10 @@ export function approveAndDeliver(
         error: "no team configured - run /handbook:init or /handbook:join first, or approve with --to personal",
       };
     }
-    const delivered = deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
-    // The forge taught us its branch rule the only way it can: by refusing one, and the
-    // repository told us the commit rule by recording it. Remember both here, where the
-    // home directory is known, so the next skill goes out first time - and in one save,
-    // because two saves from the same stale `team` lose whichever was written first.
-    const learned = {
-      ...(delivered.learnedBranchPrefix ? { branchPrefix: delivered.learnedBranchPrefix } : {}),
-      ...(delivered.learnedCommitPrefix !== undefined ? { commitPrefix: delivered.learnedCommitPrefix } : {}),
-    };
-    if (Object.keys(learned).length) saveTeamConfig({ ...team, ...learned }, home);
-    return delivered;
+    // Nothing about this push is written back into the config: a branch name the reviewer
+    // gave is for this request only, and a setting is changed by the person who owns it,
+    // through /handbook:init, never as a side effect of sharing.
+    return deliverToTeam(dir, meta, team, decidedAt, git, forge, options);
   }
   if (resolved === "personal") return deliverPersonal(dir, meta, decidedAt, personalDir, options);
   return deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commitsLocally ? git : undefined);
@@ -372,6 +377,7 @@ function deliverToTeam(
       ...(published.collision ? { collision: published.collision } : {}),
       ...(published.proposedMessage ? { proposedMessage: published.proposedMessage } : {}),
       ...(published.proposalHash ? { proposalHash: published.proposalHash } : {}),
+      ...(published.proposedBranch ? { proposedBranch: published.proposedBranch } : {}),
     };
   }
   const deliveredTo = published.prUrl ?? `${team.repoUrl} (branch ${published.branch})`;
@@ -390,8 +396,7 @@ function deliverToTeam(
     ...(published.version ? { version: published.version } : {}),
     manualUrl: published.manualUrl,
     ...(published.prError ? { prError: published.prError } : {}),
-    ...(published.learnedBranchPrefix ? { learnedBranchPrefix: published.learnedBranchPrefix } : {}),
-    ...(published.learnedCommitPrefix !== undefined ? { learnedCommitPrefix: published.learnedCommitPrefix } : {}),
+    ...(published.unattachedDescription ? { unattachedDescription: published.unattachedDescription } : {}),
   };
 }
 
@@ -621,14 +626,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     // What the commit says, in the reviewer's own words when they gave any: the request
     // is theirs, and the sentence on it is the one thing about it they were asked for.
     if (result.commitMessage) lines.push(`The commit says: ${result.commitMessage}`);
-    // The branch is not named what it would normally be named. Say so once, rather than
-    // letting the reader find a different name than the one they expected in the forge.
-    if (result.learnedBranchPrefix) {
-      lines.push(
-        `Your project refuses the default branch name, so this went out as ${result.branch}. ` +
-          "That prefix is remembered - later skills use it straight away.",
-      );
-    }
+    lines.push(...unattachedDescriptionLines(result.unattachedDescription));
     return lines.join("\n");
   }
   if (result.mode === "personal") {

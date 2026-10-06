@@ -11,8 +11,9 @@ import { auditCommand, commandRefusalSummary, readLocalCommands } from "./comman
 import type { CommandAudit, CommandEntry } from "./commands.js";
 import { runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
-import { runForge } from "./forge.js";
+import { forgeNotice, forgeSignInProblem, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
+import { unattachedDescriptionLines } from "./branch.js";
 
 // Taking the setup already on this machine to the team.
 //
@@ -286,7 +287,12 @@ function onTeamNote(item: OnTeam): string {
   return item.onTeam ? "  already on the team: picking it sends an update to their copy" : "";
 }
 
-export function formatInventory(inv: Inventory): string {
+/**
+ * `forge` is what the first screen says about how the request will reach the forge, when
+ * this machine cannot open it with a CLI. It is said here, before anything is picked,
+ * because the alternative was learning it from a result that had already pushed.
+ */
+export function formatInventory(inv: Inventory, forge?: string): string {
   if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
     return (
       "No skills, MCP servers or commands are set up on this machine or in this project, so " +
@@ -344,8 +350,18 @@ export function formatInventory(inv: Inventory): string {
     "credential is refused rather than redacted, and anything in a server's headers or env",
     "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
     "secret cannot.",
+    ...(forge ? ["", forge] : []),
   );
   return lines.join("\n");
+}
+
+/** The first screen's sentence about the merge request, or undefined when this machine
+ * can open one. Asked of the same check every push makes, so the screen and the push
+ * cannot disagree about it. */
+export function forgeLine(team: TeamConfig | null, forge: ForgeRunner = runForge, cwd: string = process.cwd()): string | undefined {
+  if (!team) return undefined;
+  const problem = forgeSignInProblem(team.repoUrl, cwd, forge);
+  return problem ? forgeNotice(team.repoUrl, problem) : undefined;
 }
 
 export interface ShareResult {
@@ -553,6 +569,7 @@ export function formatShareResult(result: ShareResult, marketplaceName?: string)
         "    this never writes to ~/.claude/commands, so both names keep working.",
       );
     }
+    lines.push(...unattachedDescriptionLines(shared.unattachedDescription));
   }
   // Asked for once, about the whole request, because the request is what it is about.
   if (shared && !shared.ok && shared.proposedMessage && shared.error) {

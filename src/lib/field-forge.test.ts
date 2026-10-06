@@ -120,13 +120,13 @@ function share(
   forge: ForgeRunner = noForge,
   body?: string,
 ) {
-  return publishTeamSelection(
-    { skills: [{ name, dir: localSkill(name, body) }] },
-    loadTeamConfig(home)!,
-    gitAs(identity),
-    forge,
-    { commitMessage },
-  );
+  const selection = { skills: [{ name, dir: localSkill(name, body) }] };
+  const team = loadTeamConfig(home)!;
+  // The two runs a share takes when the user confirms the branch it proposes.
+  const probe = publishTeamSelection(selection, team, gitAs(identity), forge, { commitMessage });
+  return !probe.ok && probe.proposedBranch
+    ? publishTeamSelection(selection, team, gitAs(identity), forge, { commitMessage, branch: probe.proposedBranch })
+    : probe;
 }
 
 describe("the project refuses the way the server does", () => {
@@ -199,8 +199,8 @@ describe("init against a project that enforces one rule", () => {
     expect(repo.filesOn(repo.defaultBranch)).not.toContain(".claude-plugin/marketplace.json");
 
     repo.mergeIntoDefault("handbook/scaffold");
-    expect(share()).toMatchObject({ ok: true, branch: "handbook/skills-my-skill" });
-    expect(repo.filesOn("handbook/skills-my-skill")).toContain("skills/my-skill/SKILL.md");
+    expect(share()).toMatchObject({ ok: true, branch: "skills-my-skill" });
+    expect(repo.filesOn("skills-my-skill")).toContain("skills/my-skill/SKILL.md");
 
     const teammate = mkdtempSync(join(tmpdir(), "handbook-mate-"));
     try {
@@ -358,9 +358,9 @@ describe("share by someone who joined a project that was already answered", () =
 
     const outcome = share();
 
-    expect(outcome).toMatchObject({ ok: true, branch: "handbook/skills-my-skill" });
+    expect(outcome).toMatchObject({ ok: true, branch: "TEAM-1-skills-my-skill" });
     // the prefix did not just satisfy the rule, it is on the commit the project now holds
-    expect(repo.subjectOn("handbook/skills-my-skill")).toMatch(/^TEAM-1 /);
+    expect(repo.subjectOn("TEAM-1-skills-my-skill")).toMatch(/^TEAM-1 /);
   });
 
   it("given a joined machine whose config carries both prefixes, when it shares first, then the project takes it", () => {
@@ -390,21 +390,20 @@ describe("share by someone who joined a project that was already answered", () =
     expect(outcome.error).toContain(MESSAGE_RULE);
     expect(outcome.error).toContain("/handbook:init --upgrade");
     expect(outcome.error).not.toContain("--commit-prefix");
-    expect(repo.branches()).not.toContain("handbook/skills-my-skill");
+    expect(repo.branches()).not.toContain("skills-my-skill");
   });
 
-  it("given a joined machine and a branch rule, when the branch name is refused, then the branch the retry derives is one the project accepts", () => {
-    // The recovery exists because a project that polices branch names polices commit
-    // messages too, so the answer to one is already the answer to the other - and since
-    // joining now supplies that answer, this is the whole route a teammate actually walks.
+  it("given a joined machine and a branch rule, when it shares, then the proposal already carries the key the rule asks for", () => {
+    // The key the repository records reaches the branch proposal as well as the commit, so
+    // the name the user is asked to confirm is one the project accepts - and there is no
+    // retry under a derived name for a refusal that never happens.
     const repo = joined({ branchName: BRANCH_RULE, commitMessage: MESSAGE_RULE });
     expect(joinTeamRepo(repo.url, home)).toMatchObject({ ok: true, commitPrefix: COMMIT_PREFIX });
 
     const outcome = share();
 
-    expect(outcome).toMatchObject({ ok: true, branch: "TEAM-1-skills-my-skill", learnedBranchPrefix: BRANCH_PREFIX });
-    // the refused name is not left behind on the project
-    expect(repo.branches()).not.toContain("handbook/skills-my-skill");
+    expect(outcome).toMatchObject({ ok: true, branch: "TEAM-1-skills-my-skill" });
+    expect(repo.branches()).toContain("TEAM-1-skills-my-skill");
   });
 });
 
@@ -438,8 +437,8 @@ describe("a skill carrying a trace of the machine it was written on", () => {
 
     const result = share(MEMBER, "leaky-skill", APPROVED, noForge, "Run the suite from the repository root first.");
 
-    expect(result).toMatchObject({ ok: true, branch: "handbook/skills-leaky-skill" });
-    expect(repo.filesOn("handbook/skills-leaky-skill")).toContain("skills/leaky-skill/SKILL.md");
+    expect(result).toMatchObject({ ok: true, branch: "skills-leaky-skill" });
+    expect(repo.filesOn("skills-leaky-skill")).toContain("skills/leaky-skill/SKILL.md");
   });
 });
 
