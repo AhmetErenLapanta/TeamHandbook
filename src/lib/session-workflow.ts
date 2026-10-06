@@ -144,6 +144,23 @@ export function repositoryOf(dir: string): { repo: string; checkout: string; git
   }
 }
 
+/**
+ * The checkout a directory sits in, by its real path, or null when the directory is gone or in no
+ * repository. Gone is answered first: walking up from a deleted directory would otherwise find
+ * whatever repository encloses it, a home directory kept under git included. The real path because
+ * a temporary directory is reached through a symlink on some systems, and one checkout spelled two
+ * ways must not read as two.
+ */
+export function checkoutRoot(dir: string): string | null {
+  try {
+    if (!statSync(dir).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const found = repositoryOf(dir);
+  return found ? realpathSync(found.checkout) : null;
+}
+
 export const diskLocator: RepoLocator = {
   locate(path) {
     const found = repositoryOf(dirname(path));

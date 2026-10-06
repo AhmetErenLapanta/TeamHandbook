@@ -34,6 +34,9 @@ export interface CandidateMeta {
   // queued by the guided demo for its scratch repository, which is the only project it may
   // ever be delivered into: once that directory is gone, there is none
   demo?: boolean;
+  // the checkout a mined draft was drafted in, by its real path: its file map is made of that
+  // repository's paths, so it is the only repository adding it to a project may commit into
+  repoRoot?: string;
   kind?: "procedure" | "correction" | "error-fix" | "discovery";
   // default answer to "keep it, or share it?" - derived from scope + team config
   suggestedTarget?: "personal" | "project" | "team";

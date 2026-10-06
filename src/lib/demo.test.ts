@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildDemoRepo, createDemo, demoListing, draftDemoWorkflow, isDemoRepo } from "./demo.js";
@@ -120,6 +120,8 @@ describe("drafting in the demo", () => {
       suggestedTarget: "project",
       cwd: repo,
       demo: true,
+      // the scratch repository is recorded as the one this draft came from, by its real path
+      repoRoot: realpathSync(repo),
     });
     expect(readFileSync(join(outcome.dir!, "SKILL.md"), "utf8")).toBe(recorded);
     expect(existsSync(marker)).toBe(false);

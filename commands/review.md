@@ -69,6 +69,12 @@ user clear them in one pass.
       **Add to <scratch repository>** while the line says it can still be added, and
       **Reject**. Keeping it for yourself and sharing it with the team are refused by the CLI,
       so they are not options for it.
+   e. A draft mined from repository history (its `kind:` line says so) is added to a project
+      only from the repository it was mined in. When its `project:` or `suggested:` line says
+      it was mined in another repository, or that the repository no longer exists, the CLI
+      refuses **Add to <project>** from here, so do not offer it: offer **Keep for yourself**,
+      **Share with the team** and **Reject**, and say in one sentence that adding it to its
+      project means running the review from the repository it came from.
 5. **Edit first**: if the user asks for changes ("step 3 is wrong", "add a warning about X"),
    edit the candidate's `SKILL.md` in place (it lives in the directory shown by `show`;
    keep the frontmatter `name:` unchanged), show the diff, and then ask for their verdict

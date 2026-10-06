@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
@@ -14,6 +15,7 @@ import { conflictingOptions, mayUpdate, publishCandidate, runForge } from "./pub
 import { unattachedDescriptionLines } from "./branch.js";
 import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
+import { checkoutRoot } from "./session-workflow.js";
 import { candidatesDir } from "./skill-index.js";
 import {
   auditSkillDir,
@@ -56,6 +58,62 @@ function deliveryOrigin(
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
 
+/**
+ * Where a mined draft stands against the repository the review runs in, or null for a candidate
+ * this does not apply to.
+ *
+ * A mined draft's file map is made of one repository's real paths, and adding it to a project
+ * makes a commit, so it goes only into the checkout it was drafted in, and only when the review
+ * runs there. Before this, a review run anywhere else committed into the origin unannounced, and
+ * once the origin was gone, into whichever repository the reviewer happened to be standing in.
+ * Checkouts are compared rather than directories, so a review run from a subdirectory of the
+ * same repository still counts as here. The guided demo's draft keeps the rules it already has:
+ * its scratch repository is its only home, and that is where it is committed from anywhere.
+ */
+type MinedSource =
+  | { at: "here" }
+  | { at: "elsewhere"; source: string; current: string | null }
+  | { at: "gone"; recorded: string };
+
+function minedSource(meta: CandidateMeta, fallbackCwd: string): MinedSource | null {
+  if (meta.origin !== "mine" || meta.demo) return null;
+  // A draft queued before the root was recorded is answered from the directory it was drafted in.
+  const recorded = meta.repoRoot ?? meta.cwd ?? "";
+  const source = recorded ? checkoutRoot(recorded) : null;
+  if (!source) return { at: "gone", recorded };
+  const current = checkoutRoot(fallbackCwd);
+  return source === current ? { at: "here" } : { at: "elsewhere", source, current };
+}
+
+/**
+ * A repository named by a short hash of its real path. Enough to tell two apart on this machine,
+ * and nothing a refusal pasted into an issue or a README would give away about where it lives.
+ */
+function repositoryFingerprint(root: string): string {
+  return createHash("sha256").update(root).digest("hex").slice(0, 8);
+}
+
+function minedSourceRefusal(source: MinedSource | null): string | null {
+  if (source?.at === "gone") {
+    return (
+      `the repository this draft was mined in (fingerprint ${repositoryFingerprint(source.recorded)}) no longer ` +
+      "exists, so there is no project it can be committed into: keep it for yourself, share it with the team, " +
+      "or reject it. Nothing was written and nothing was committed."
+    );
+  }
+  if (source?.at === "elsewhere") {
+    const here = source.current
+      ? `in the one with fingerprint ${repositoryFingerprint(source.current)}`
+      : "outside any repository";
+    return (
+      `this draft was mined in the repository with fingerprint ${repositoryFingerprint(source.source)}, and this ` +
+      `review runs ${here}: run review from the repository it came from, or choose another target. ` +
+      "Nothing was written and nothing was committed."
+    );
+  }
+  return null;
+}
+
 export function resolveDeliveryDir(
   meta: CandidateMeta,
   fallbackCwd: string,
@@ -74,6 +132,11 @@ export function projectTargetLabel(
   fallbackCwd: string,
   dirExists: (path: string) => boolean = existsSync,
 ): string {
+  const mined = minedSource(meta, fallbackCwd);
+  if (mined?.at === "gone") return "none: the repository this draft was mined in no longer exists";
+  if (mined?.at === "elsewhere") {
+    return `the repository this draft was mined in (fingerprint ${repositoryFingerprint(mined.source)}), not this one - run review from there`;
+  }
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
   // The bare name, not the absolute path: it is what the reviewer recognizes, and the
@@ -166,6 +229,12 @@ export function approveAndDeliver(
         "a demo draft stays in its scratch repository: add it to that repository or reject it. " +
         "Nothing was written.",
     };
+  }
+  // Before the wording is asked for: a reviewer asked to approve a sentence and then told the
+  // commit cannot happen here would have been asked for nothing.
+  if (resolved === "project") {
+    const refusal = minedSourceRefusal(minedSource(meta, fallbackCwd));
+    if (refusal) return { ok: false, meta, error: refusal };
   }
   // A commit message means nothing anywhere but the team, where a commit is made. Said
   // out loud rather than dropped: a reviewer who asked their wording to go somewhere and

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFixture, seedStandardHistory } from "./mine-fixture.js";
@@ -203,6 +203,8 @@ describe("drafting one of them", () => {
     expect(meta?.origin).toBe("mine");
     expect(meta?.status).toBe("pending");
     expect(meta?.suggestedTarget).toBe("project");
+    // the repository the command ran in, not the one named with --repo, by its real path
+    expect(meta?.repoRoot).toBe(realpathSync(repos[0]!));
     expect(existsSync(join(repos[0]!, ".claude", "skills"))).toBe(false);
     expect(existsSync(join(repos[1]!, ".claude", "skills"))).toBe(false);
     expect(out.lines.join("\n")).toContain("sends the screened evidence");

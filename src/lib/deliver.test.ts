@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -1329,6 +1329,168 @@ describe("a mined draft delivered into the project it came from", () => {
     // the directories the install made go too, or "nothing was written" is not true
     expect(existsSync(join(project, ".claude"))).toBe(false);
     expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+  });
+
+  /** A second repository with one commit of its own, for a review run somewhere the draft did not come from. */
+  function otherRepo(): string {
+    const other = mkdtempSync(join(tmpdir(), "handbook-other-"));
+    execFileSync("git", ["init", "-b", "main", other], { stdio: "ignore" });
+    execFileSync("git", ["-C", other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "seed"], { stdio: "ignore" });
+    return other;
+  }
+
+  function commits(repo: string): string {
+    return execFileSync("git", ["-C", repo, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim();
+  }
+
+  function approveWithWording(from: string) {
+    return approveAndDeliver(
+      home, "add-entity-field", from, "2026-10-06T00:00:00Z", null, runGit, undefined, "project",
+      undefined, { commitMessage: { message: "add the add-entity-field skill" } },
+    );
+  }
+
+  it("given a mined draft and a review run in another repository, when it is added to the project, then it is refused and neither repository gets a commit", () => {
+    // given a draft mined in one repository and a reviewer standing in another
+    gitRepo();
+    const other = otherRepo();
+    try {
+      seedCandidate(mined({ repoRoot: realpathSync(project) }));
+
+      // when it is approved into the project, with a wording already given so nothing else stops it
+      const result = approveWithWording(other);
+
+      // then it is refused, nothing was written or committed on either side, and the draft still waits
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("run review from the repository it came from, or choose another target");
+      expect(result.error).toContain("Nothing was written and nothing was committed");
+      expect(commits(project)).toBe("1");
+      expect(commits(other)).toBe("1");
+      expect(existsSync(join(project, ".claude"))).toBe(false);
+      expect(existsSync(join(other, ".claude"))).toBe(false);
+      expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+      // and the refusal names each repository by a short fingerprint, never by its path or its name
+      expect(result.error).toMatch(/fingerprint [0-9a-f]{8}\b.*fingerprint [0-9a-f]{8}\b/);
+      for (const where of [project, other, realpathSync(project), realpathSync(other)]) {
+        expect(result.error).not.toContain(where);
+        expect(result.error).not.toContain(basename(where));
+      }
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("given a mined draft whose repository was deleted, when it is added to the project the reviewer stands in, then it is refused and nothing reaches that project", () => {
+    // given a draft mined in a repository that no longer exists, and another repository to approve from
+    const gone = mkdtempSync(join(tmpdir(), "handbook-gone-"));
+    rmSync(gone, { recursive: true, force: true });
+    const other = otherRepo();
+    try {
+      seedCandidate(mined({ cwd: gone, repoRoot: gone }));
+
+      // when it is approved into the project
+      const result = approveWithWording(other);
+
+      // then the repository it stands in gains neither the skill nor a commit
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("no longer exists, so there is no project it can be committed into");
+      expect(result.error).not.toContain(basename(gone));
+      expect(commits(other)).toBe("1");
+      expect(existsSync(join(other, ".claude"))).toBe(false);
+      expect(readCandidateMeta(join(candidatesDir(home), "add-entity-field"))?.status).toBe("pending");
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("given a mined draft and a review run outside any repository, when it is added to the project, then it is refused", () => {
+    // given a draft from a real repository and a reviewer in a plain directory
+    gitRepo();
+    const plain = mkdtempSync(join(tmpdir(), "handbook-plain-"));
+    try {
+      seedCandidate(mined({ repoRoot: realpathSync(project) }));
+
+      // when it is approved into the project
+      const result = approveWithWording(plain);
+
+      // then it is refused, and the repository it came from was not committed into from afar
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("outside any repository");
+      expect(commits(project)).toBe("1");
+      expect(existsSync(join(plain, ".claude"))).toBe(false);
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
+  it("given a mined draft and no wording yet, when it is approved from another repository, then the refusal comes before any commit message is asked for", () => {
+    // given a draft from one repository and a reviewer in another, with nothing decided
+    gitRepo();
+    const other = otherRepo();
+    try {
+      seedCandidate(mined({ repoRoot: realpathSync(project) }));
+
+      // when it is approved with no wording
+      const result = approveAndDeliver(home, "add-entity-field", other, "2026-10-06T00:00:00Z", null, runGit, undefined, "project");
+
+      // then the reviewer is not asked to approve a sentence for a commit that cannot be made
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("run review from the repository it came from");
+      expect(result.proposedMessage).toBeUndefined();
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("given a review run from a subdirectory of the repository, and through another spelling of its path, when it is added, then it is committed as before", () => {
+    // given the repository the draft came from, a subdirectory in it, and a link to it
+    gitRepo();
+    mkdirSync(join(project, "src"));
+    const link = mkdtempSync(join(tmpdir(), "handbook-link-"));
+    rmSync(link, { recursive: true, force: true });
+    symlinkSync(project, link);
+    try {
+      seedCandidate(mined({ repoRoot: realpathSync(project) }));
+
+      // when it is approved from the subdirectory, reached through the link
+      const result = approveWithWording(join(link, "src"));
+
+      // then the checkout is the same one, so the skill lands and is committed where it always did
+      expect(result.ok).toBe(true);
+      expect(log()).toContain("add the add-entity-field skill");
+      expect(existsSync(join(project, ".claude", "skills", "add-entity-field", "SKILL.md"))).toBe(true);
+    } finally {
+      rmSync(link, { force: true });
+    }
+  });
+
+  it("given a mined draft queued before the repository was recorded, when it is approved from that repository, then its directory answers for it", () => {
+    // given an older draft that carries only the directory it was drafted in
+    gitRepo();
+    seedCandidate(mined());
+
+    // when it is approved from that same repository
+    const result = approveWithWording(project);
+
+    // then nothing changed for it
+    expect(result.ok).toBe(true);
+    expect(log()).toContain("add the add-entity-field skill");
+  });
+
+  it("given a mined draft from another repository, when the review screen names the project option, then it says where it came from by fingerprint and that review must run there", () => {
+    // given a draft mined in one repository and a review run in another
+    gitRepo();
+    const other = otherRepo();
+    try {
+      // when the option text is built
+      const label = projectTargetLabel(mined({ repoRoot: realpathSync(project) }), other);
+
+      // then it does not promise a project the delivery would refuse, and names no path
+      expect(label).toMatch(/^the repository this draft was mined in \(fingerprint [0-9a-f]{8}\), not this one - run review from there$/);
+      expect(label).not.toContain(basename(project));
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it("given an ordinary harvested candidate, when it is approved into the project, then it still installs without being asked for a message", () => {

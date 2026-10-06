@@ -8,6 +8,7 @@ import { uniqueSlug } from "./distill.js";
 import { hostIdentity } from "./identity.js";
 import { readConfigFile } from "./config.js";
 import { handbookHome } from "./session-state.js";
+import { checkoutRoot } from "./session-workflow.js";
 import { candidatesDir, parseSkillFrontmatter } from "./skill-index.js";
 import { identityInSkillDir, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
@@ -281,6 +282,7 @@ export async function draftWorkflow(
   // Read back what landed on disk rather than trusting what was sent: the review screen
   // shows this mark so the decision to send the draft anywhere is taken knowing it.
   const trace = identityInSkillDir(dir);
+  const root = checkoutRoot(cwd);
   const meta: CandidateMeta = {
     slug,
     status: "pending",
@@ -298,6 +300,7 @@ export async function draftWorkflow(
     kind: "procedure",
     suggestedTarget: "project",
     ...(demo ? { demo: true } : {}),
+    ...(root ? { repoRoot: root } : {}),
     ...(trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}),
   };
   writeCandidateMeta(dir, meta);

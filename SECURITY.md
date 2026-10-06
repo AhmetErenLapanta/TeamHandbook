@@ -311,7 +311,12 @@ the project writes it to that repository's `.claude/skills/` and commits it ther
 is the one delivery that makes a commit without opening a merge request - so the commit
 message is asked for first and never invented. It is screened for secrets and for traces
 of this machine before that commit is made, and a failure to commit removes what was
-written and leaves the candidate waiting.
+written and leaves the candidate waiting. "That repository" is the checkout the draft was
+mined in, and the approval is taken only there: run from any other repository, from outside
+one, or after that checkout is gone, adding it to a project is refused before anything is
+written or asked, and the refusal names the repository by a short hash of its path rather
+than by the path or its name. Keeping it for yourself and sharing it with the team are
+unaffected.
 
 ## Recognizing a workflow in a session
 
