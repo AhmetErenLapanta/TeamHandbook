@@ -472,7 +472,10 @@ __export(skill_format_exports, {
   checkSkillFormat: () => checkSkillFormat,
   citationsIn: () => citationsIn,
   failedRules: () => failedRules,
+  fileMapCells: () => fileMapCells,
   formatPasses: () => formatPasses,
+  matcherFor: () => matcherFor,
+  pathTokens: () => pathTokens,
   procedureSteps: () => procedureSteps,
   splitFrontmatter: () => splitFrontmatter,
   triggerSentences: () => triggerSentences,
@@ -593,6 +596,9 @@ function dataRows(body) {
 }
 function firstCell(row) {
   return row.trim().replace(/^\|/, "").split("|")[0].trim();
+}
+function fileMapCells(text) {
+  return sections(classifyLines(splitFrontmatter(text).body)).filter((s) => MAP_HEAD_RE.test(s.title)).flatMap((s) => dataRows(s.body)).map(firstCell);
 }
 function patternMatcher(pattern) {
   return matcherFor(pathTokens(pattern)[0] ?? null);

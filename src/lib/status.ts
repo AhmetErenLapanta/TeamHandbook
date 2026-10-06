@@ -16,7 +16,9 @@ import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
 import { displayPath } from "./display-path.js";
 import { marketplacesRoot, nonInteractiveEnv } from "./init.js";
-import { recentWorkflowSessions } from "./session-workflow.js";
+import { recentWorkflowSessions, sessionDetectEnabled } from "./session-workflow.js";
+import { formatSkillHealth, gatherSkillHealth } from "./skill-health.js";
+import type { SkillHealth } from "./skill-health.js";
 
 /**
  * The installed plugin's version, for support/bug reports. The bundle runs from
@@ -231,7 +233,11 @@ export interface StatusReport {
     topSkill: { slug: string; count: number } | null;
     // every skill TeamHandbook put on this machine, approvals and team pulls alike
     known: number;
+    // calls are only counted while session recording is on
+    recording: boolean;
   };
+  // what became of each of those skills since: stale map, calls, fit to new work, overlaps
+  skillHealth: SkillHealth[];
   config: {
     harvestModel: string;
     harvestEnabled: boolean;
@@ -242,7 +248,11 @@ export interface StatusReport {
   };
 }
 
-export function gatherStatus(home: string = handbookHome(), release: (installed: string) => string | null = newerRelease): StatusReport {
+export function gatherStatus(
+  home: string = handbookHome(),
+  release: (installed: string) => string | null = newerRelease,
+  health: (home: string) => SkillHealth[] = gatherSkillHealth,
+): StatusReport {
   const candidates = listCandidates(home);
   const count = (status: string) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
@@ -284,7 +294,8 @@ export function gatherStatus(home: string = handbookHome(), release: (installed:
     workflows: recentWorkflowSessions(home),
     scoringNow: pendingHarvestCount(home),
     abandoned: counters.gateAbandoned,
-    usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length },
+    usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length, recording: sessionDetectEnabled(home) },
+    skillHealth: health(home),
     config: {
       harvestModel: harvest.model,
       harvestEnabled: harvest.enabled,
@@ -348,12 +359,17 @@ export function formatStatus(report: StatusReport): string {
     `Workflows:       ${report.workflows.recognized} workflow session${report.workflows.recognized === 1 ? "" : "s"} recognized in the last 30 days (${report.workflows.matched} matched a mined workflow)`,
     ...(report.usage.known > 0
       ? [
-          report.usage.totalUses > 0
-            ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` +
-              (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} ×${report.usage.topSkill.count})` : "")
-            : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`,
+          // While recording is off the totals are frozen at whatever was counted before, so they are
+          // not shown: the health lines below say "usage not recorded", and this line agrees with them.
+          !report.usage.recording
+            ? `Skills in use:   usage not recorded while session recording is off`
+            : report.usage.totalUses > 0
+              ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` +
+                (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} ×${report.usage.topSkill.count})` : "")
+              : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`,
         ]
       : []),
+    ...formatSkillHealth(report.skillHealth),
     ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) - run /handbook:doctor`] : []),
     ...(report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : []),
     "",

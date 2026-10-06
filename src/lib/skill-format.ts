@@ -410,6 +410,18 @@ function firstCell(row: string): string {
 }
 
 /**
+ * The pattern column of a skill's file map, one cell per data row, found the way the rules below
+ * find it. Exported so a skill that is already installed has its map read by the same parser that
+ * admitted it, rather than by a second one that disagrees on a heading or a table.
+ */
+export function fileMapCells(text: string): string[] {
+  return sections(classifyLines(splitFrontmatter(text).body))
+    .filter((s) => MAP_HEAD_RE.test(s.title))
+    .flatMap((s) => dataRows(s.body))
+    .map(firstCell);
+}
+
+/**
  * A file pattern turned into a matcher. `*` and the two placeholder spellings a draft uses for a
  * varying part (`{locale}`, `<name>`) all stand for "something within one path segment".
  */
@@ -439,7 +451,7 @@ function baseMatcher(pattern: string): RegExp | null {
  * reported as a step naming an unmapped file while the map listed it all along. A token carrying
  * a separator is a path and sorts ahead of one that only carries a star or a dot.
  */
-function pathTokens(cell: string): string[] {
+export function pathTokens(cell: string): string[] {
   const matches = [...cell.replace(/`/g, "").matchAll(PATH_TOKEN_ALL_RE)].map((m) => m[0]);
   return matches.sort((a, b) => Number(b.includes("/")) - Number(a.includes("/")) || b.length - a.length);
 }
@@ -452,7 +464,7 @@ function pathTokens(cell: string): string[] {
  * unbuildable pattern makes the row match nothing, which costs the draft a finding, rather than
  * throwing out of a checker whose job is to return a verdict on every draft.
  */
-function matcherFor(token: string | null): RegExp | null {
+export function matcherFor(token: string | null): RegExp | null {
   if (!token) return null;
   const source = token
     .replace(/[.+?^${}()|[\]\\]/g, "\\$&")

@@ -603,8 +603,8 @@ function captureBashSuccess(input, home = handbookHome()) {
 }
 
 // src/lib/usage.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { basename as basename2, join as join4 } from "node:path";
+import { readFileSync as readFileSync6 } from "node:fs";
+import { basename as basename4, join as join7 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync3 } from "node:fs";
@@ -806,51 +806,23 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   2
 );
 
-// src/lib/usage.ts
-function usageFile(home = handbookHome()) {
-  return join4(home, "skill-usage.json");
-}
-function readSkillUsage(home = handbookHome()) {
-  try {
-    const parsed = JSON.parse(readFileSync4(usageFile(home), "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    const usage = {};
-    for (const [slug, value] of Object.entries(parsed)) {
-      const entry = value;
-      if (typeof entry?.count === "number" && typeof entry?.lastAt === "string") {
-        usage[slug] = { count: entry.count, lastAt: entry.lastAt };
-      }
-    }
-    return usage;
-  } catch {
-    return {};
-  }
-}
-function recordSkillUse(slug, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString()) {
-  if (!slug) return;
-  const usage = readSkillUsage(home);
-  const prior = usage[slug];
-  usage[slug] = { count: (prior?.count ?? 0) + 1, lastAt: at };
-  writeFileAtomic(usageFile(home), JSON.stringify(usage, null, 2) + "\n");
-}
-
 // src/lib/session-workflow.ts
 import { createHash as createHash2, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync6, realpathSync, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync5, realpathSync, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename4, dirname as dirname2, join as join7, relative, resolve as resolve2, sep } from "node:path";
+import { basename as basename3, dirname as dirname2, join as join6, relative, resolve as resolve2, sep } from "node:path";
 
 // src/lib/signals.ts
-import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
 function signalsFile(home = handbookHome()) {
-  return join5(home, "signals.jsonl");
+  return join4(home, "signals.jsonl");
 }
 function sessionSignalCount(sessionId, home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync5(signalsFile(home), "utf8");
+    raw = readFileSync4(signalsFile(home), "utf8");
   } catch {
     return 0;
   }
@@ -1079,7 +1051,7 @@ function compiledRoles(paths, named, binary) {
 var IGNORED_ROLES = /* @__PURE__ */ new Set(["test", "lock", "mirror", "credits", "compiled"]);
 
 // src/lib/shell-command.ts
-import { basename as basename3, isAbsolute, join as join6, resolve } from "node:path";
+import { basename as basename2, isAbsolute, join as join5, resolve } from "node:path";
 import { statSync as statSync2 } from "node:fs";
 var OPERATORS = ["&&", "||", ";;", ";", "|&", "|", "&", "(", ")"];
 var REDIRECTS = ["&>>", "&>", ">>", ">|", ">&", "<<<", "<<-", "<<", "<&", "<>", ">", "<"];
@@ -1330,7 +1302,7 @@ function copyTargets(args, dir, home) {
   const destination = resolvePath(words[words.length - 1], dir, home);
   if (!destination) return [];
   const sources = words.slice(0, -1);
-  if (sources.length > 1 || isDirectory(destination)) return sources.map((s) => join6(destination, basename3(s)));
+  if (sources.length > 1 || isDirectory(destination)) return sources.map((s) => join5(destination, basename2(s)));
   return [destination];
 }
 function gitInvocation(args, dir, home) {
@@ -1355,7 +1327,7 @@ function commandWrites(cmds, index, cwd, home) {
   };
   for (const { op, target } of cmd.redirects) if (WRITE_REDIRECTS.has(op)) add(target);
   const [program, ...args] = programOf(cmd);
-  switch (program ? basename3(program) : "") {
+  switch (program ? basename2(program) : "") {
     case "tee":
       for (const file of operands(args)) add(file);
       break;
@@ -1384,10 +1356,10 @@ var MIN_ROLES = 2;
 var MAX_TRAIL_EDITS = 1e3;
 var EDIT_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
 function workflowsFile(home = handbookHome()) {
-  return join7(home, "workflows.jsonl");
+  return join6(home, "workflows.jsonl");
 }
 function minedRecordFile(home = handbookHome()) {
-  return join7(home, "mined-workflows.json");
+  return join6(home, "mined-workflows.json");
 }
 function sessionDetectEnabled(home = handbookHome()) {
   const sessions = readConfigFile(home).sessions;
@@ -1399,12 +1371,12 @@ function isAutonomous(entrypoint) {
 function repositoryOf(dir) {
   let at = resolve2(dir);
   for (; ; ) {
-    const dotgit = join7(at, ".git");
+    const dotgit = join6(at, ".git");
     try {
       const stat = statSync3(dotgit);
       if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
       if (stat.isFile()) {
-        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync6(dotgit, "utf8"));
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync5(dotgit, "utf8"));
         if (pointer) {
           const gitdir = resolve2(at, pointer[1].trim());
           const marker = `${sep}.git${sep}worktrees${sep}`;
@@ -1441,7 +1413,7 @@ var diskLocator = {
     const found = repositoryOf(checkout);
     if (!found) return null;
     try {
-      const head = readFileSync6(join7(found.gitdir, "HEAD"), "utf8");
+      const head = readFileSync5(join6(found.gitdir, "HEAD"), "utf8");
       return /^ref:\s*refs\/heads\/(.+)$/m.exec(head)?.[1]?.trim() ?? null;
     } catch {
       return null;
@@ -1450,7 +1422,7 @@ var diskLocator = {
 };
 function loadMinedRecord(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync6(minedRecordFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync5(minedRecordFile(home), "utf8"));
     if (parsed?.version !== 1 || !Array.isArray(parsed.repos) || !Array.isArray(parsed.shapes)) return null;
     return parsed;
   } catch {
@@ -1513,18 +1485,18 @@ var positional = (args) => args.filter((a) => !a.startsWith("-") && !/^[A-Za-z_]
 function isCheck(cmd) {
   const [program, ...args] = programOf(cmd);
   if (!program) return false;
-  const name = basename4(program);
+  const name = basename3(program);
   const words = positional(args);
   if (PACKAGE_RUNNERS.has(name)) {
     const [sub, next] = words;
-    if (sub === "exec" || sub === "dlx" || sub === "x") return !!next && TOOL_CHECKS.has(basename4(next));
+    if (sub === "exec" || sub === "dlx" || sub === "x") return !!next && TOOL_CHECKS.has(basename3(next));
     const script = sub === "run" || sub === "run-script" ? next : sub;
     return !!script && SCRIPT_CHECK.test(script);
   }
   if (name === "npx" || name === "bunx") {
     const [tool, sub] = words;
     if (!tool) return false;
-    const toolName = basename4(tool);
+    const toolName = basename3(tool);
     return TOOL_CHECKS.has(toolName) || !!sub && !!SUBCOMMAND_CHECKS[toolName]?.has(sub);
   }
   if (TOOL_CHECKS.has(name)) return true;
@@ -1542,7 +1514,7 @@ function isCheck(cmd) {
 }
 function isCommit(cmd) {
   const [program, ...args] = programOf(cmd);
-  return !!program && basename4(program) === "git" && gitInvocation(args, ".", ".").sub === "commit";
+  return !!program && basename3(program) === "git" && gitInvocation(args, ".", ".").sub === "commit";
 }
 function emptyTrail() {
   return { edits: [], green: false, masked: false, fired: [] };
@@ -1672,20 +1644,73 @@ function workKey(files, locator, prefixes) {
   return branch;
 }
 function installSalt(home) {
-  const file = join7(home, "workflow-salt");
+  const file = join6(home, "workflow-salt");
   try {
-    return Buffer.from(readFileSync6(file, "utf8").trim(), "hex");
+    return Buffer.from(readFileSync5(file, "utf8").trim(), "hex");
   } catch {
     mkdirSync5(home, { recursive: true });
     try {
       writeFileSync3(file, randomBytes(16).toString("hex"), { flag: "wx", mode: 384 });
     } catch {
     }
-    return Buffer.from(readFileSync6(file, "utf8").trim(), "hex");
+    return Buffer.from(readFileSync5(file, "utf8").trim(), "hex");
   }
 }
 function saltedHash(salt, kind, value) {
   return createHash2("sha256").update(salt).update(kind).update("\0").update(value).digest("hex").slice(0, 16);
+}
+
+// src/lib/usage.ts
+var USAGE_DAYS = 30;
+var DAY = /^\d{4}-\d{2}-\d{2}$/;
+var SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
+function usageFile(home = handbookHome()) {
+  return join7(home, "skill-usage.json");
+}
+function readSkillUsage(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync6(usageFile(home), "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const usage = {};
+    for (const [slug, value] of Object.entries(parsed)) {
+      const entry = value;
+      if (typeof entry?.count === "number" && typeof entry?.lastAt === "string") {
+        const days = dayCounts(entry.days);
+        usage[slug] = { count: entry.count, lastAt: entry.lastAt, ...days ? { days } : {} };
+      }
+    }
+    return usage;
+  } catch {
+    return {};
+  }
+}
+function dayCounts(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const days = {};
+  for (const [day, count] of Object.entries(value)) {
+    if (DAY.test(day) && typeof count === "number") days[day] = count;
+  }
+  return days;
+}
+function dayOf(at) {
+  return at.slice(0, 10);
+}
+function windowStart(at, days) {
+  const ms = Date.parse(at);
+  return Number.isFinite(ms) ? new Date(ms - (days - 1) * 864e5).toISOString().slice(0, 10) : dayOf(at);
+}
+function recordSkillUse(slug, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString()) {
+  if (!SKILL_NAME.test(slug) || !sessionDetectEnabled(home)) return;
+  const usage = readSkillUsage(home);
+  const prior = usage[slug];
+  const since = windowStart(at, USAGE_DAYS);
+  const days = Object.fromEntries(Object.entries(prior?.days ?? {}).filter(([day]) => day >= since));
+  days[dayOf(at)] = (days[dayOf(at)] ?? 0) + 1;
+  usage[slug] = { count: (prior?.count ?? 0) + 1, lastAt: at, days };
+  writeFileAtomic(usageFile(home), JSON.stringify(usage, null, 2) + "\n");
+}
+function recordSkillCall(input, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString()) {
+  recordSkillUse(typeof input.tool_input?.skill === "string" ? input.tool_input.skill : "", home, at);
 }
 
 // src/hooks/post-tool-use.ts
@@ -1696,8 +1721,7 @@ async function main() {
   if (!input) return;
   bumpCounter("postToolUse");
   if (input.tool_name === "Skill") {
-    const slug = typeof input.tool_input?.skill === "string" ? input.tool_input.skill : "";
-    recordSkillUse(slug);
+    recordSkillCall(input);
     return;
   }
   recordWorkflowEvent(input);

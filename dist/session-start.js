@@ -21,7 +21,7 @@ function parseHookInput(raw) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync3, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync8, readdirSync as readdirSync5 } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -40,7 +40,7 @@ function writeFileAtomic(file, data) {
 }
 
 // src/lib/notify.ts
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -672,26 +672,153 @@ function reviewQueue(home = handbookHome()) {
 }
 
 // src/lib/usage.ts
-import { readFileSync as readFileSync6 } from "node:fs";
-import { basename as basename2, join as join7 } from "node:path";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { basename as basename2, join as join8 } from "node:path";
+
+// src/lib/signals.ts
+import { existsSync as existsSync3, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync6 } from "node:fs";
+import { join as join7 } from "node:path";
+function sanitizeSignalsForPersistence(signals) {
+  let redacted = 0;
+  const clean = signals.map((s) => {
+    if (s.secretRedacted || !signalSecret(s)) return s;
+    redacted += 1;
+    return {
+      ts: s.ts,
+      sessionId: s.sessionId,
+      kind: "weak",
+      fingerprint: s.fingerprint,
+      family: "",
+      command: "",
+      error: "",
+      cwd: "",
+      count: s.count,
+      edits: [],
+      secretRedacted: true
+    };
+  });
+  return { clean, redacted };
+}
+function signalsFile(home = handbookHome()) {
+  return join7(home, "signals.jsonl");
+}
+function ledgerFingerprintCounts(home = handbookHome()) {
+  const counts = /* @__PURE__ */ new Map();
+  let raw;
+  try {
+    raw = readFileSync6(signalsFile(home), "utf8");
+  } catch {
+    return counts;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (typeof parsed?.fingerprint === "string") {
+        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
+      }
+    } catch {
+    }
+  }
+  return counts;
+}
+function appendSignals(signals, home = handbookHome()) {
+  if (signals.length === 0) return;
+  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
+  if (redacted > 0) incrementRedactionBlocked(home, redacted);
+  mkdirSync5(home, { recursive: true });
+  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
+  appendFileSync(signalsFile(home), lines);
+}
+function signalFromPair(pair, sessionId, ts, fileExists = existsSync3) {
+  const persistedEdits = pair.edits.filter(fileExists);
+  return {
+    ts,
+    sessionId,
+    kind: persistedEdits.length > 0 ? "candidate" : "weak",
+    fingerprint: pair.fingerprint,
+    family: pair.family,
+    command: pair.command,
+    error: pair.error,
+    cwd: pair.cwd,
+    count: pair.count,
+    edits: persistedEdits,
+    resolvedCommand: pair.resolvedCommand,
+    resolvedAt: pair.resolvedAt
+  };
+}
+function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync3) {
+  const state = loadSessionState(sessionId, home);
+  if (state.resolvedPairs.length === 0) return [];
+  const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
+  appendSignals(signals, home);
+  state.resolvedPairs = [];
+  saveSessionState(state, home);
+  return signals;
+}
+function ledgerPairsForSession(sessionId, home = handbookHome()) {
+  let raw;
+  try {
+    raw = readFileSync6(signalsFile(home), "utf8");
+  } catch {
+    return [];
+  }
+  const pairs = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed.sessionId !== sessionId || !parsed.resolvedCommand || parsed.secretRedacted) continue;
+    pairs.push({
+      fingerprint: parsed.fingerprint,
+      family: parsed.family,
+      command: parsed.command,
+      error: parsed.error,
+      resolvedCommand: parsed.resolvedCommand,
+      edits: parsed.edits ?? [],
+      ...parsed.cwd ? { cwd: parsed.cwd } : {}
+    });
+  }
+  return pairs;
+}
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/usage.ts
+var DAY = /^\d{4}-\d{2}-\d{2}$/;
 function usageFile(home = handbookHome()) {
-  return join7(home, "skill-usage.json");
+  return join8(home, "skill-usage.json");
 }
 function readSkillUsage(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync6(usageFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(usageFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     const usage = {};
     for (const [slug, value] of Object.entries(parsed)) {
       const entry = value;
       if (typeof entry?.count === "number" && typeof entry?.lastAt === "string") {
-        usage[slug] = { count: entry.count, lastAt: entry.lastAt };
+        const days = dayCounts(entry.days);
+        usage[slug] = { count: entry.count, lastAt: entry.lastAt, ...days ? { days } : {} };
       }
     }
     return usage;
   } catch {
     return {};
   }
+}
+function dayCounts(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const days = {};
+  for (const [day, count] of Object.entries(value)) {
+    if (DAY.test(day) && typeof count === "number") days[day] = count;
+  }
+  return days;
 }
 function handbookSkills(home = handbookHome()) {
   const delivered = listCandidates(home, "approved").filter((c) => c.deliveredMode === "personal" || c.deliveredMode === "solo").map((c) => c.deliveredTo ? basename2(c.deliveredTo) : c.slug);
@@ -715,22 +842,22 @@ function loadNotifyConfig(home = handbookHome()) {
   };
 }
 function welcomeMarkerFile(home) {
-  return join8(home, "welcomed");
+  return join9(home, "welcomed");
 }
 function isFirstRun(home = handbookHome()) {
   const marker = welcomeMarkerFile(home);
-  if (existsSync3(marker)) return false;
+  if (existsSync4(marker)) return false;
   writeFileAtomic(marker, (/* @__PURE__ */ new Date()).toISOString() + "\n");
   return true;
 }
 function heartbeatSnapshotFile(home) {
-  return join8(home, "notified-counters.json");
+  return join9(home, "notified-counters.json");
 }
 function heartbeatDelta(home = handbookHome()) {
   const current = readCounters(home);
   let prior = { bashFailuresCaptured: 0, pairsResolved: 0, gateErrors: 0 };
   try {
-    const parsed = JSON.parse(readFileSync7(heartbeatSnapshotFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync8(heartbeatSnapshotFile(home), "utf8"));
     prior = {
       bashFailuresCaptured: Number(parsed?.bashFailuresCaptured) || 0,
       pairsResolved: Number(parsed?.pairsResolved) || 0,
@@ -758,18 +885,18 @@ function heartbeatDelta(home = handbookHome()) {
 }
 var TEAM_NUDGE_APPROVALS = 3;
 function teamNudgeMarkerFile(home) {
-  return join8(home, "nudged-team");
+  return join9(home, "nudged-team");
 }
 function digestMarkerFile(home) {
-  return join8(home, "last-digest");
+  return join9(home, "last-digest");
 }
 function foldedLessonsMarkerFile(home) {
-  return join8(home, "noticed-folded-lessons");
+  return join9(home, "noticed-folded-lessons");
 }
 function foldedLessonsToAnnounce(home, folded) {
   let announced = 0;
   try {
-    announced = Number.parseInt(readFileSync7(foldedLessonsMarkerFile(home), "utf8"), 10) || 0;
+    announced = Number.parseInt(readFileSync8(foldedLessonsMarkerFile(home), "utf8"), 10) || 0;
   } catch {
   }
   if (folded === announced) return 0;
@@ -782,7 +909,7 @@ function weeklyDigest(home = handbookHome(), now = Date.now()) {
   const marker = digestMarkerFile(home);
   let since = 0;
   try {
-    since = Date.parse(readFileSync7(marker, "utf8").trim());
+    since = Date.parse(readFileSync8(marker, "utf8").trim());
   } catch {
     writeFileAtomic(marker, new Date(now).toISOString() + "\n");
     return null;
@@ -812,7 +939,7 @@ function weeklyDigest(home = handbookHome(), now = Date.now()) {
 }
 function pendingTeamNudge(home = handbookHome()) {
   if (loadTeamConfig(home)) return null;
-  if (existsSync3(teamNudgeMarkerFile(home))) return null;
+  if (existsSync4(teamNudgeMarkerFile(home))) return null;
   const approved = listCandidates(home, "approved").length;
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), (/* @__PURE__ */ new Date()).toISOString() + "\n");
@@ -821,7 +948,7 @@ function pendingTeamNudge(home = handbookHome()) {
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync5(join8(home, "pending"));
+    entries = readdirSync5(join9(home, "pending"));
   } catch {
     return 0;
   }
@@ -829,7 +956,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync7(join8(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync8(join9(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -837,11 +964,11 @@ function pendingHarvestCount(home = handbookHome()) {
   return total;
 }
 function seenSkillsFile(home = handbookHome()) {
-  return join8(home, "seen-skills.json");
+  return join9(home, "seen-skills.json");
 }
 function readSeenSkills(home) {
   try {
-    const parsed = JSON.parse(readFileSync7(seenSkillsFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync8(seenSkillsFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     return parsed;
   } catch {
@@ -947,7 +1074,7 @@ function buildSessionStartSummary(inputs) {
 function lastHarvestFoundNothing(home) {
   let raw;
   try {
-    raw = readFileSync7(join8(home, "pipeline.log"), "utf8");
+    raw = readFileSync8(join9(home, "pipeline.log"), "utf8");
   } catch {
     return false;
   }
@@ -986,7 +1113,7 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   } : null;
   const pendingRepeats = Math.max(0, ...rest.map((c) => c.taughtBefore ? c.taughtBefore + 1 : 0));
   const pendingPreviews = rest.slice(0, 2).map((c) => `${c.slug} - ${c.description.slice(0, 60)}`);
-  const watchedDirs = [join8(cwd, ".claude", "skills")];
+  const watchedDirs = [join9(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
   const newSkills = watchedDirs.flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home)).sort();
@@ -1006,117 +1133,6 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
     keptSkills: listCandidates(home, "approved").length,
     foldedLessons: foldedLessonsToAnnounce(home, queue.olderLessons.length)
   });
-}
-
-// src/lib/signals.ts
-import { existsSync as existsSync4, appendFileSync, mkdirSync as mkdirSync5, readFileSync as readFileSync8 } from "node:fs";
-import { join as join9 } from "node:path";
-function sanitizeSignalsForPersistence(signals) {
-  let redacted = 0;
-  const clean = signals.map((s) => {
-    if (s.secretRedacted || !signalSecret(s)) return s;
-    redacted += 1;
-    return {
-      ts: s.ts,
-      sessionId: s.sessionId,
-      kind: "weak",
-      fingerprint: s.fingerprint,
-      family: "",
-      command: "",
-      error: "",
-      cwd: "",
-      count: s.count,
-      edits: [],
-      secretRedacted: true
-    };
-  });
-  return { clean, redacted };
-}
-function signalsFile(home = handbookHome()) {
-  return join9(home, "signals.jsonl");
-}
-function ledgerFingerprintCounts(home = handbookHome()) {
-  const counts = /* @__PURE__ */ new Map();
-  let raw;
-  try {
-    raw = readFileSync8(signalsFile(home), "utf8");
-  } catch {
-    return counts;
-  }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (typeof parsed?.fingerprint === "string") {
-        counts.set(parsed.fingerprint, (counts.get(parsed.fingerprint) ?? 0) + 1);
-      }
-    } catch {
-    }
-  }
-  return counts;
-}
-function appendSignals(signals, home = handbookHome()) {
-  if (signals.length === 0) return;
-  const { clean, redacted } = sanitizeSignalsForPersistence(signals);
-  if (redacted > 0) incrementRedactionBlocked(home, redacted);
-  mkdirSync5(home, { recursive: true });
-  const lines = clean.map((s) => JSON.stringify(s)).join("\n") + "\n";
-  appendFileSync(signalsFile(home), lines);
-}
-function signalFromPair(pair, sessionId, ts, fileExists = existsSync4) {
-  const persistedEdits = pair.edits.filter(fileExists);
-  return {
-    ts,
-    sessionId,
-    kind: persistedEdits.length > 0 ? "candidate" : "weak",
-    fingerprint: pair.fingerprint,
-    family: pair.family,
-    command: pair.command,
-    error: pair.error,
-    cwd: pair.cwd,
-    count: pair.count,
-    edits: persistedEdits,
-    resolvedCommand: pair.resolvedCommand,
-    resolvedAt: pair.resolvedAt
-  };
-}
-function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__ */ new Date()).toISOString(), fileExists = existsSync4) {
-  const state = loadSessionState(sessionId, home);
-  if (state.resolvedPairs.length === 0) return [];
-  const signals = state.resolvedPairs.map((p) => signalFromPair(p, sessionId, ts, fileExists));
-  appendSignals(signals, home);
-  state.resolvedPairs = [];
-  saveSessionState(state, home);
-  return signals;
-}
-function ledgerPairsForSession(sessionId, home = handbookHome()) {
-  let raw;
-  try {
-    raw = readFileSync8(signalsFile(home), "utf8");
-  } catch {
-    return [];
-  }
-  const pairs = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (parsed.sessionId !== sessionId || !parsed.resolvedCommand || parsed.secretRedacted) continue;
-    pairs.push({
-      fingerprint: parsed.fingerprint,
-      family: parsed.family,
-      command: parsed.command,
-      error: parsed.error,
-      resolvedCommand: parsed.resolvedCommand,
-      edits: parsed.edits ?? [],
-      ...parsed.cwd ? { cwd: parsed.cwd } : {}
-    });
-  }
-  return pairs;
 }
 
 // src/lib/pipeline.ts
