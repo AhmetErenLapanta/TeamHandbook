@@ -1460,9 +1460,15 @@ var init_score = __esm({
   }
 });
 
-// src/cli/mine.ts
-import { writeFileSync as writeFileSync4 } from "node:fs";
-import { parseArgs as parseArgs2 } from "node:util";
+// src/cli/demo.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+// src/lib/demo.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { dirname as dirname3, join as join8 } from "node:path";
 
 // src/lib/mine.ts
 init_secrets();
@@ -1968,17 +1974,17 @@ var MINE_DEFAULTS = {
 var UMBRELLA_DAYS = 180;
 var UMBRELLA_COMMITS = 5;
 var PREFERRED_REFS = ["origin/master", "origin/main", "master", "main", "HEAD"];
-function mineShapes(repoPaths2, options = {}) {
-  return shapesFromUnits(collectUnits(repoPaths2, options), options);
+function mineShapes(repoPaths, options = {}) {
+  return shapesFromUnits(collectUnits(repoPaths, options), options);
 }
-function collectUnits(repoPaths2, options = {}) {
+function collectUnits(repoPaths, options = {}) {
   const started = Date.now();
-  const labels = repoLabels(repoPaths2);
+  const labels = repoLabels(repoPaths);
   const salt = randomBytes(16);
   const commitsByRepo = /* @__PURE__ */ new Map();
   const unreadable = [];
   let commitCount = 0;
-  for (const repoPath of repoPaths2) {
+  for (const repoPath of repoPaths) {
     const read = readRepository(repoPath, options);
     if ("reason" in read) {
       unreadable.push({ path: repoPath, reason: read.reason });
@@ -2446,8 +2452,9 @@ function redactSubjects(shapes) {
 var EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 var SAMPLE_SUBJECTS = 5;
 
-// src/lib/mine-run.ts
-import { parseArgs } from "node:util";
+// src/lib/mine-command.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // src/lib/draft.ts
 init_identity();
@@ -2458,10 +2465,10 @@ function slicePaths(slice) {
   for (const commit of slice.commits) for (const path of commit.paths) if (!out.includes(path)) out.push(path);
   return out;
 }
-function readUnitIndex(repoPaths2, options = {}) {
-  const labels = repoLabels(repoPaths2);
+function readUnitIndex(repoPaths, options = {}) {
+  const labels = repoLabels(repoPaths);
   const byRepo = /* @__PURE__ */ new Map();
-  for (const repoPath of repoPaths2) {
+  for (const repoPath of repoPaths) {
     if (!isRepository(repoPath, { run: options.run })) continue;
     const ref = options.ref ?? resolveRef(repoPath, PREFERRED_REFS, { run: options.run });
     if (!ref) continue;
@@ -3527,10 +3534,6 @@ var defaultDraftRunner = async (prompt) => {
 var DRAFT_MODEL = "sonnet";
 var DRAFT_TIMEOUT_MS = 3e5;
 
-// src/lib/mine-command.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
-
 // src/lib/distill.ts
 init_session_state();
 init_config();
@@ -3556,13 +3559,15 @@ init_config();
 init_session_state();
 init_skill_index();
 init_queue();
-var ESTIMATED_DRAFT_COST = 0.1;
-function loadMineConfig(home = handbookHome()) {
-  const mine = readConfigFile(home).mine;
-  const repos = Array.isArray(mine?.repos) ? mine.repos.filter((r) => typeof r === "string") : [];
-  return { repos };
-}
 var DEFAULT_LIST_SIZE = 5;
+function listWorkflows(repoPaths, options = {}) {
+  const result = mineShapes(repoPaths, options);
+  return {
+    workflows: workflowsFromShapes(result.shapes, options.limit ?? DEFAULT_LIST_SIZE),
+    repos: result.stats.repos,
+    commits: result.stats.commits
+  };
+}
 function workflowsFromShapes(shapes, limit = DEFAULT_LIST_SIZE) {
   const families = variantFamilies(shapes);
   const workflows = [];
@@ -3597,45 +3602,6 @@ function describe(shape, rank) {
 }
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
-}
-function draftRefusal(workflows, chosen, asked) {
-  if (!chosen) {
-    return `There is no workflow ${/^\d+$/.test(asked) ? `numbered ${asked}` : `"${asked}"`} in the list. Run /handbook:mine with the same repositories to see the numbers again.`;
-  }
-  if (chosen.sameAs !== void 0) {
-    return `Number ${chosen.rank} is the same work as number ${chosen.sameAs}, found again at a different size, so drafting it would write the same skill twice. Draft ${chosen.sameAs} instead.`;
-  }
-  return workflows.length === 0 ? "There is nothing to draft." : null;
-}
-function pickWorkflow(workflows, asked) {
-  const byRank = workflows.find((w) => String(w.rank) === asked);
-  return byRank ?? workflows.find((w) => w.id === asked);
-}
-function formatWorkflowList(workflows, repos, listSize = DEFAULT_LIST_SIZE, repoArgs2 = "") {
-  if (workflows.length === 0) {
-    return [
-      "No repeating work found in this history.",
-      "",
-      "That is an answer, not a failure: it takes several jobs that touched the same files",
-      "before the same work can be recognised twice. A younger repository, or one whose",
-      "commits each touch something different, will say this."
-    ].join("\n");
-  }
-  const lines = workflowEntries(workflows, repos);
-  const drafted = workflows.filter((f) => f.sameAs === void 0).length;
-  lines.push(
-    `Nothing has been sent anywhere: this read your git history and nothing else.`,
-    "",
-    `Writing a draft sends the screened evidence for that one workflow to the model, which`,
-    `costs about $${ESTIMATED_DRAFT_COST.toFixed(2)} and takes a minute. The draft goes to /handbook:review,`,
-    `where you decide whether it is kept, and nothing reaches a repository before that.`,
-    "",
-    `  /handbook:mine draft 1${repoArgs2}`
-  );
-  if (workflows.length >= listSize && drafted > 0) {
-    lines.push(`  /handbook:mine${repoArgs2} --limit ${listSize * 2}   to see further down the list`);
-  }
-  return lines.join("\n");
 }
 function workflowEntries(workflows, repos) {
   const lines = [
@@ -3698,247 +3664,223 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
   writeCandidateMeta(dir, meta);
   return { ok: true, rank: workflow.rank, slug, dir };
 }
-function unitIndexFor(repoPaths2, options = {}) {
-  return readUnitIndex(repoPaths2, options);
+function unitIndexFor(repoPaths, options = {}) {
+  return readUnitIndex(repoPaths, options);
 }
 
-// src/lib/mine-run.ts
-var USAGE = `usage: /handbook:mine [--repo <path>]... [--limit <n>]
-       /handbook:mine draft <n|id> [--repo <path>]...
-
-Reads the git history of this repository, and of any others you name, and lists the work
-that repeats in it. Listing reads history only: nothing is sent anywhere.
-
-  --repo <path>   another repository to read as well as this one
-  --limit <n>     how many to list (default ${DEFAULT_LIST_SIZE})
-  draft <n|id>    write a draft skill for the work listed at that number
-
-A number only means something against the list it was read from, so pass the SAME --repo
-arguments to draft that you passed to the listing. The id shown for a workflow is stable
-whatever the arguments are.`;
-function repoArgs(named) {
-  return named.map((r) => ` --repo ${r}`).join("");
+// src/lib/demo.ts
+init_session_state();
+var PEOPLE = [
+  { name: "Alice Doe", email: "alice@example.invalid" },
+  { name: "Bruno Roe", email: "bruno@example.invalid" },
+  { name: "Carla Poe", email: "carla@example.invalid" }
+];
+var RESOURCES = ["order", "customer", "product", "supplier", "shipment", "refund", "coupon", "warehouse", "invoice", "payment"];
+var SETTINGS = [
+  "requestTimeout",
+  "maxPageSize",
+  "rateLimit",
+  "currency",
+  "taxRate",
+  "retryCount",
+  "cacheSeconds",
+  "logLevel"
+];
+var FIXES = [
+  ["src/lib/logger.ts", "log the request id with every line"],
+  ["src/lib/errors.ts", "map a missing record to a not-found response"],
+  ["src/lib/db.ts", "close the pool on shutdown"],
+  ["src/server.ts", "read the port from the environment"],
+  ["src/lib/paging.ts", "stop a negative offset reaching the query"],
+  ["src/lib/money.ts", "round half to even when converting"],
+  ["src/lib/clock.ts", "use one clock for created and updated times"],
+  ["src/middleware/auth.ts", "reject an expired token before the handler runs"],
+  ["src/middleware/cors.ts", "allow the admin origin"],
+  ["src/lib/ids.ts", "generate sortable ids"],
+  ["src/lib/validate.ts", "report every invalid field, not only the first"],
+  ["src/lib/http.ts", "send a retry-after header with a rate-limited reply"]
+];
+function pascal(word) {
+  return word[0].toUpperCase() + word.slice(1);
 }
-function repoPaths(cwd, named, configured) {
-  return [.../* @__PURE__ */ new Set([cwd, ...configured, ...named])];
+function gitEnv(date) {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_DATE: date,
+    GIT_COMMITTER_DATE: date
+  };
 }
-async function runMineCommand(argv, deps = {}) {
-  const log = deps.log ?? ((line) => console.log(line));
-  const fail = deps.error ?? ((line) => console.error(line));
-  const cwd = deps.cwd ?? process.cwd();
-  const [verb, ...rest] = argv;
-  if (verb !== "list" && verb !== "draft") {
-    fail(USAGE);
-    return 2;
-  }
-  let values;
-  let positionals;
-  try {
-    ({ values, positionals } = parseArgs({
-      args: rest,
-      allowPositionals: verb === "draft",
-      options: {
-        repo: { type: "string", multiple: true },
-        limit: { type: "string" },
-        help: { type: "boolean" }
+function buildDemoRepo(dir) {
+  mkdirSync5(dir, { recursive: true });
+  let day = 0;
+  const nextDate = () => new Date(Date.UTC(2025, 2, 3, 10) + day++ * 864e5).toISOString();
+  const git = (args, date = nextDate()) => execFileSync3("git", ["-C", dir, ...args], { encoding: "utf8", env: gitEnv(date), stdio: ["ignore", "pipe", "pipe"] });
+  const write = (files, appends = {}) => {
+    for (const [file, content] of Object.entries({ ...files, ...appends })) {
+      mkdirSync5(dirname3(join8(dir, file)), { recursive: true });
+      (file in files ? writeFileSync4 : appendFileSync)(join8(dir, file), content);
+    }
+  };
+  const commit = (subject, person) => {
+    git(["add", "-A"]);
+    git(["-c", `user.name=${person.name}`, "-c", `user.email=${person.email}`, "commit", "-q", "-m", subject]);
+  };
+  const by = (i) => PEOPLE[i % PEOPLE.length];
+  git(["init", "-q", "-b", "main"]);
+  write({
+    "README.md": "# shop-api\n\nThe HTTP API behind the shop.\n",
+    "package.json": '{ "name": "shop-api", "private": true }\n',
+    "src/app.ts": 'import { createServer } from "./server.js";\n\nexport const app = createServer();\n',
+    "src/server.ts": "export function createServer() {\n  return { routes: [] as unknown[] };\n}\n",
+    "docs/api.md": "# Endpoints\n"
+  });
+  commit("initial", by(0));
+  for (const [file] of FIXES) write({ [file]: `export {};
+` });
+  commit("lay out the shared helpers", by(1));
+  const fixes = [...FIXES];
+  let ticket = 100;
+  RESOURCES.forEach((resource, i) => {
+    const type = pascal(resource);
+    const key = `SHOP-${++ticket}`;
+    write(
+      {
+        [`src/routes/${resource}Routes.ts`]: `export const ${resource}Routes = ["GET /${resource}s", "POST /${resource}s"];
+`,
+        [`src/schemas/${resource}Schema.ts`]: `export interface ${type} {
+  id: string;
+}
+`,
+        ...i % 3 === 0 ? { [`test/routes/${resource}Routes.test.ts`]: `import "../../src/routes/${resource}Routes.js";
+` } : {}
+      },
+      {
+        "src/app.ts": `import { ${resource}Routes } from "./routes/${resource}Routes.js";
+app.routes.push(...${resource}Routes);
+`,
+        "docs/api.md": `
+## ${type}s
+
+- GET /${resource}s
+- POST /${resource}s
+`
       }
-    }));
-  } catch (err) {
-    fail(`${err.message}
+    );
+    commit(`${key} add the ${resource} endpoints`, by(i));
+    if (i < SETTINGS.length) {
+      const setting = SETTINGS[i];
+      const settingKey = `SHOP-${++ticket}`;
+      write(
+        {},
+        {
+          "src/config/schema.ts": `export const ${setting} = "number";
+`,
+          "src/config/defaults.ts": `export const ${setting} = 0;
+`,
+          ".env.example": `${setting.replace(/[A-Z]/g, (c) => `_${c}`).toUpperCase()}=
+`,
+          "docs/configuration.md": `
+## ${setting}
+`
+        }
+      );
+      commit(`${settingKey} make ${setting} configurable`, by(i + 1));
+    }
+    for (const [file, what] of fixes.splice(0, 2)) {
+      write({}, { [file]: `// ${what}
+` });
+      commit(`SHOP-${++ticket} ${what}`, by(i + 2));
+    }
+  });
+  return dir;
+}
+var DEMO_MARKER = ".handbook-demo";
+function createDemo(root = tmpdir3()) {
+  const base = mkdtempSync2(join8(root, "handbook-demo-"));
+  writeFileSync4(join8(base, DEMO_MARKER), "");
+  return buildDemoRepo(join8(base, "shop-api"));
+}
+function isDemoRepo(repo) {
+  return existsSync3(join8(dirname3(repo), DEMO_MARKER));
+}
+function demoListing(repo, script) {
+  const { workflows, repos } = listWorkflows([repo]);
+  return [
+    "Built a scratch repository for the demo: an invented shop API, its history written to order.",
+    `  ${repo}`,
+    "",
+    ...workflowEntries(workflows, repos),
+    "Nothing has been sent anywhere: this read the scratch repository's history and nothing else.",
+    "",
+    "A draft of the first workflow can come either way below, and both land in /handbook:review:",
+    "",
+    `  node "${script}" recorded "${repo}"`,
+    "      a draft written earlier from this same history, put through the checks a fresh one",
+    "      has to pass. No model call.",
+    "",
+    `  node "${script}" live "${repo}"`,
+    "      a fresh draft from your own claude CLI. One model call, about a minute."
+  ].join("\n");
+}
+async function draftDemoWorkflow(repo, run, home = handbookHome(), now) {
+  const mined = shapesFromUnits(collectUnits([repo]));
+  const [workflow] = workflowsFromShapes(mined.shapes);
+  const shape = mined.shapes.find((s) => s.id === workflow?.id);
+  if (!workflow || !shape) return { ok: false, rank: 1, reasons: ["no repeating work in this repository"] };
+  return draftWorkflow(workflow, unitIndexFor([repo]), shape, run, home, now, repo);
+}
 
-${USAGE}`);
-    return 2;
-  }
-  if (values.help) {
-    log(USAGE);
+// src/cli/demo.ts
+var RECORDED = fileURLToPath(new URL("../demo/recorded-draft.md", import.meta.url));
+var USAGE = `usage: node dist/demo.js start
+       node dist/demo.js recorded <repository>
+       node dist/demo.js live <repository>
+
+start builds a scratch repository and lists the work its history repeats; nothing is sent.
+recorded drafts the first workflow from a draft that ships with the plugin; nothing is sent.
+live drafts it with your own claude CLI, which is one model call.`;
+async function main() {
+  const [verb, repo, ...extra] = process.argv.slice(2);
+  if (verb === "start" && repo === void 0) {
+    console.log(demoListing(createDemo(), process.argv[1]));
     return 0;
   }
-  if (verb === "draft" && positionals.length !== 1) {
-    fail(`draft takes the number or the id of one workflow from the list.
-
-${USAGE}`);
+  if (verb !== "recorded" && verb !== "live" || repo === void 0 || extra.length > 0) {
+    console.error(USAGE);
     return 2;
   }
-  const limit = values.limit === void 0 ? DEFAULT_LIST_SIZE : Number(values.limit);
-  if (!Number.isInteger(limit) || limit < 1) {
-    fail(`--limit needs a whole number of workflows to show, and was given "${values.limit}".`);
+  if (!isDemoRepo(repo)) {
+    console.error(
+      `${repo} is not a repository this demo built, so nothing was drafted from it. Run start for a scratch one, or /handbook:mine to draft from a real repository.`
+    );
     return 2;
   }
-  const paths = repoPaths(cwd, values.repo ?? [], loadMineConfig(deps.home).repos);
-  const options = deps.options ?? {};
-  const collection = collectUnits(paths, options);
-  const mined = shapesFromUnits(collection, options);
-  const families = variantFamilies(mined.shapes);
-  const asked = verb === "draft" ? positionals[0] : void 0;
-  const reach = asked !== void 0 && /^\d+$/.test(asked) ? Math.max(limit, Number(asked)) : limit;
-  const workflows = workflowsFromShapes(mined.shapes, asked === void 0 ? limit : reach);
-  if (asked === void 0) {
-    log(formatWorkflowList(workflows, mined.stats.repos, limit, repoArgs(values.repo ?? [])));
-    return 0;
-  }
-  const workflow = pickWorkflow(workflows, asked);
-  const refusal = draftRefusal(workflows, workflow, asked);
-  if (refusal || !workflow) {
-    fail(refusal ?? "There is nothing to draft.");
-    return 2;
-  }
-  const chosen = workflow.rank;
-  const shape = shapeFor(families, workflow.id);
-  if (!shape) {
-    fail(`The work listed at ${chosen} could not be read back from the history. Nothing was sent.`);
-    return 1;
-  }
-  log(`Drafting ${chosen}: this sends the screened evidence for this workflow to the model.`);
-  const outcome = await draftWorkflow(
-    workflow,
-    unitIndexFor(paths, options),
-    shape,
-    deps.run,
-    deps.home,
-    deps.now,
-    cwd
-  );
+  if (verb === "live") console.log("Drafting the first workflow: this sends its screened evidence to your claude CLI.");
+  const outcome = await draftDemoWorkflow(repo, verb === "recorded" ? async () => readFileSync3(RECORDED, "utf8") : void 0);
   if (!outcome.ok) {
-    fail(
-      `No draft was kept for ${chosen}: ${(outcome.reasons ?? ["the reply could not be used"]).join(", ")}. Nothing was queued, and nothing was written anywhere.`
+    console.error(
+      `No draft was kept: ${(outcome.reasons ?? ["the reply could not be used"]).join(", ")}. Nothing was queued, and nothing was written anywhere.`
     );
     return 1;
   }
-  log(
+  console.log(
     `Queued "${outcome.slug}" for review. It is a draft, not a finished skill: it has the file map
 the history measured and a skeleton of the steps, and the part the history cannot see is
 listed on it for you to fill in.
 
   /handbook:review show ${outcome.slug}
 
-Nothing is installed or committed until you approve it there.`
+Approving it into the project commits it to the scratch repository, never to yours.`
   );
   return 0;
 }
-function shapeFor(families, id) {
-  for (const family of families) {
-    if (family.head.id === id) return family.head;
-    const variant = family.variants.find((s) => s.id === id);
-    if (variant) return variant;
-  }
-  return void 0;
-}
-
-// src/cli/mine.ts
-var USER_COMMANDS = /* @__PURE__ */ new Set(["list", "draft"]);
-var USAGE2 = `usage: node dist/mine.js <repo>... [options]
-
-Mines the repositories' history for recurring workflow shapes and prints them as JSON.
-Reads local history only: it never fetches.
-
-  --ref <ref>             ref to walk in every repository (default: origin/master, origin/main, master, main, HEAD)
-  --since <date>          only commits after this date, as git --since understands it
-  --min-recurrence <n>    units a shape needs; changes nothing else (default 8)
-  --min-proposers <n>     alike units it takes to propose a shape (default 5)
-  --rare-role-cut <n>     roles touched by fewer units are dropped before clustering (default 5)
-  --min-roles <n>         roles a shape needs (default 3)
-  --core-share <x>        share of units a role needs to be a core file (default 0.6)
-  --similarity <x>        average Jaccard a unit needs to join a cluster (default 0.5)
-  --hub-share <x>         a role in more than this share of units is not used to find candidates (default 0.2)
-  --containment <x>       share of a shape's core a unit must touch to count as doing it (default 0.8)
-  --unit-share <x>        share of a unit's own roles the core must be for it to count (default 0.25, 0 off)
-  --dedupe-overlap <x>    two shapes sharing this share of their units are one (default 0.5)
-  --variant-overlap <x>   the same, for the pair whose cores nest (default 0.4, 0 off)
-  --min-distinct-roles <n> core roles a shape needs that are not files most units touch (default 0, off)
-  --limit <n>             shapes to print (default 200)
-  --no-renames            turn rename detection off, for blobless clones
-  --no-filters            keep the noise, to measure what the filters remove
-  --out <file>            write the JSON here instead of to stdout`;
-function number(value, name) {
-  if (value === void 0) return void 0;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    console.error(`error: --${name} needs a number, got "${value}"`);
-    process.exit(2);
-  }
-  return parsed;
-}
-function main() {
-  if (USER_COMMANDS.has(process.argv[2] ?? "")) {
-    runMineCommand(process.argv.slice(2)).then(
-      (code) => process.exit(code),
-      (err) => {
-        console.error(`error: ${err.message}`);
-        process.exit(1);
-      }
-    );
-    return;
-  }
-  let parsed;
-  try {
-    parsed = parseArgs2({
-      allowPositionals: true,
-      options: {
-        ref: { type: "string" },
-        since: { type: "string" },
-        "min-recurrence": { type: "string" },
-        "min-proposers": { type: "string" },
-        "rare-role-cut": { type: "string" },
-        "min-roles": { type: "string" },
-        "core-share": { type: "string" },
-        similarity: { type: "string" },
-        "hub-share": { type: "string" },
-        containment: { type: "string" },
-        "unit-share": { type: "string" },
-        "dedupe-overlap": { type: "string" },
-        "variant-overlap": { type: "string" },
-        "min-distinct-roles": { type: "string" },
-        limit: { type: "string" },
-        "no-renames": { type: "boolean" },
-        "no-filters": { type: "boolean" },
-        out: { type: "string" },
-        help: { type: "boolean" }
-      }
-    });
-  } catch (error) {
-    console.error(`error: ${error.message}
-
-${USAGE2}`);
-    process.exit(2);
-  }
-  const { values, positionals } = parsed;
-  if (values.help || positionals.length === 0) {
-    console.error(USAGE2);
-    process.exit(values.help ? 0 : 2);
-  }
-  const options = {
-    ref: values.ref,
-    since: values.since,
-    minRecurrence: number(values["min-recurrence"], "min-recurrence"),
-    minProposers: number(values["min-proposers"], "min-proposers"),
-    rareRoleUnits: number(values["rare-role-cut"], "rare-role-cut"),
-    minRoles: number(values["min-roles"], "min-roles"),
-    coreShare: number(values["core-share"], "core-share"),
-    similarity: number(values.similarity, "similarity"),
-    hubShare: number(values["hub-share"], "hub-share"),
-    containment: number(values.containment, "containment"),
-    unitShare: number(values["unit-share"], "unit-share"),
-    dedupeOverlap: number(values["dedupe-overlap"], "dedupe-overlap"),
-    variantOverlap: number(values["variant-overlap"], "variant-overlap"),
-    minDistinctRoles: number(values["min-distinct-roles"], "min-distinct-roles"),
-    limit: number(values.limit, "limit"),
-    noRenames: values["no-renames"],
-    filters: values["no-filters"] ? false : void 0
-  };
-  for (const key of Object.keys(options)) if (options[key] === void 0) delete options[key];
-  const result = mineShapes(positionals, options);
-  const json = `${JSON.stringify(result, null, 2)}
-`;
-  if (values.out) writeFileSync4(values.out, json);
-  else process.stdout.write(json);
-  const { stats } = result;
-  for (const { path, reason } of stats.unreadableRepos) console.error(`skipped ${path}: ${reason}`);
-  if (stats.repos === 0) {
-    console.error("error: none of the given paths could be read");
+main().then(
+  (code) => process.exit(code),
+  (err) => {
+    console.error(`error: ${String(err)}`);
     process.exit(1);
   }
-  console.error(
-    `mined ${stats.repos} repositories: ${stats.commits} commits, ${stats.workUnits} work units, ${result.shapes.length} shapes in ${(stats.elapsedMs / 1e3).toFixed(1)}s`
-  );
-}
-main();
+);

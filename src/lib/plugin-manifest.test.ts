@@ -78,12 +78,6 @@ const KNOWN_EVENT_PREFIXES = ["Worktree"];
 // command kind names a path, so only that kind is resolved below.
 const HOOK_TYPES = ["command", "prompt"];
 
-// demo.md runs no engine binary on purpose: it builds a scratch project and hands the
-// work to a clean session, because a session that narrates itself harvests badly. Naming
-// the exemption is what lets every OTHER command file carry a per-file assertion, which
-// is what catches one silently losing its only reference.
-const COMMANDS_WITHOUT_ENGINE = new Set(["demo.md"]);
-
 // run-pipeline is spawned from inside a hook bundle and is never typed by a user, so it
 // has no command markdown. mine is the history miner's measurement entry: its slash command
 // comes with the review path it feeds, and until then a command would put in front of users
@@ -96,6 +90,9 @@ const CLI_WITHOUT_COMMAND = new Set(["run-pipeline", "mine"]);
 // harvest with no symptom but silence. The references are derived from the source that
 // resolves them rather than listed here.
 const SIBLING_BUNDLE = /new URL\(\s*"\.\/([A-Za-z0-9._-]+\.js)"\s*,\s*import\.meta\.url\s*\)/g;
+// The same silence for a data file read from the plugin root, one directory above the bundle:
+// the demo replays its recorded draft from there, and a tree without it fails only when run.
+const PLUGIN_FILE = /new URL\(\s*"\.\.\/([A-Za-z0-9_-][A-Za-z0-9._/-]*)"\s*,\s*import\.meta\.url\s*\)/g;
 
 // A path written in prose ends up with the sentence's punctuation stuck to it, and a
 // documentation-only edit must never red CI over a full stop.
@@ -185,13 +182,10 @@ describe("commands/*.md", () => {
       const text = readFileSync(join(dir, name), "utf8");
       const referenced = pluginRootPaths(text);
 
-      // then the file still reaches the engine, unless it is one of the named
-      // exemptions, and every path it does name exists. Asserted per file rather than
-      // over the whole set: a set-level count stays satisfied by the other 20
-      // references while one command quietly loses its only one and stops working.
-      if (!COMMANDS_WITHOUT_ENGINE.has(name)) {
-        expect(PLUGIN_ROOT_REF.test(text), `commands/${name} no longer runs anything`).toBe(true);
-      }
+      // then the file still reaches the engine, and every path it names exists. Asserted
+      // per file rather than over the whole set: a set-level count stays satisfied by the
+      // other 20 references while one command quietly loses its only one and stops working.
+      expect(PLUGIN_ROOT_REF.test(text), `commands/${name} no longer runs anything`).toBe(true);
       for (const path of referenced) {
         expect(existsSync(join(repoRoot, path)), `missing file referenced by commands/${name}: ${path}`).toBe(true);
       }
@@ -228,6 +222,25 @@ describe("commands/*.md", () => {
           `(if it is not meant to be reachable, add it to CLI_WITHOUT_COMMAND)`,
       ).toContain(name);
     }
+  });
+});
+
+describe("README.md", () => {
+  it("lists every command the plugin ships in its command table, and no other", () => {
+    // given the command files and the table a visitor reads
+    const shipped = readdirSync(join(repoRoot, "commands"))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => name.replace(/\.md$/, ""));
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+    const table = readme.slice(readme.indexOf("\n## Commands\n"));
+
+    // when the rows are read; a command with a flag of its own, `init --upgrade`, is a row
+    // of the same command
+    const listed = new Set([...table.matchAll(/^\| `\/handbook:([a-z-]+)/gm)].map((match) => match[1]!));
+
+    // then the two agree: a row for a command that is gone sends a visitor to nothing, and a
+    // command without a row is one they never hear of
+    expect([...listed].sort()).toEqual(shipped.sort());
   });
 });
 
@@ -283,15 +296,20 @@ describe("bundles resolved from code rather than from a manifest", () => {
 
     // when the sibling references are read out of the source that resolves them
     const referenced: { label: string; bundle: string }[] = [];
+    const rootFiles: { label: string; path: string }[] = [];
     for (const { label, text } of files) {
       const matches = [...text.matchAll(SIBLING_BUNDLE)];
+      const fromRoot = [...text.matchAll(PLUGIN_FILE)];
       referenced.push(...matches.map((match) => ({ label, bundle: match[1]! })));
-      // Every import.meta.url in these entrypoints must be one this pattern understands.
-      // A form it does not recognize (a parent directory, a computed name) maps to a
-      // different bundle, and skipping it silently is the vacuous pass this file exists
-      // to rule out.
+      rootFiles.push(...fromRoot.map((match) => ({ label, path: match[1]! })));
+      // Every import.meta.url in these entrypoints must be one of these two patterns. A form
+      // neither recognizes (a computed name, a path further up) maps to something else, and
+      // skipping it silently is the vacuous pass this file exists to rule out.
       const total = [...text.matchAll(/import\.meta\.url/g)].length;
-      expect(matches.length, `unrecognized import.meta.url reference in ${label}`).toBe(total);
+      expect(matches.length + fromRoot.length, `unrecognized import.meta.url reference in ${label}`).toBe(total);
+    }
+    for (const { label, path } of rootFiles) {
+      expect(existsSync(join(repoRoot, path)), `${label} reads ${path} from the plugin root, which is not shipped`).toBe(true);
     }
 
     // then each one exists in the published tree. Nothing names these in a manifest, so

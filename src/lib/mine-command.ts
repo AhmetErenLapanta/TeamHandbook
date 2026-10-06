@@ -182,6 +182,28 @@ export function formatWorkflowList(
       "commits each touch something different, will say this.",
     ].join("\n");
   }
+  const lines = workflowEntries(workflows, repos);
+  const drafted = workflows.filter((f) => f.sameAs === undefined).length;
+  lines.push(
+    `Nothing has been sent anywhere: this read your git history and nothing else.`,
+    "",
+    `Writing a draft sends the screened evidence for that one workflow to the model, which`,
+    `costs about $${ESTIMATED_DRAFT_COST.toFixed(2)} and takes a minute. The draft goes to /handbook:review,`,
+    `where you decide whether it is kept, and nothing reaches a repository before that.`,
+    "",
+    `  /handbook:mine draft 1${repoArgs}`,
+  );
+  if (workflows.length >= listSize && drafted > 0) {
+    lines.push(`  /handbook:mine${repoArgs} --limit ${listSize * 2}   to see further down the list`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The list itself, without the lines that say how to draft from it: those name a command, and the
+ * guided demo, which drafts from a scratch repository, has a different one to name.
+ */
+export function workflowEntries(workflows: Workflow[], repos: number): string[] {
   const lines = [
     `Repeating work found in ${plural(repos, "repository", "repositories")}, most established first:`,
     "",
@@ -207,20 +229,7 @@ export function formatWorkflowList(
     }
     lines.push("");
   }
-  const drafted = workflows.filter((f) => f.sameAs === undefined).length;
-  lines.push(
-    `Nothing has been sent anywhere: this read your git history and nothing else.`,
-    "",
-    `Writing a draft sends the screened evidence for that one workflow to the model, which`,
-    `costs about $${ESTIMATED_DRAFT_COST.toFixed(2)} and takes a minute. The draft goes to /handbook:review,`,
-    `where you decide whether it is kept, and nothing reaches a repository before that.`,
-    "",
-    `  /handbook:mine draft 1${repoArgs}`,
-  );
-  if (workflows.length >= listSize && drafted > 0) {
-    lines.push(`  /handbook:mine${repoArgs} --limit ${listSize * 2}   to see further down the list`);
-  }
-  return lines.join("\n");
+  return lines;
 }
 
 export interface DraftOutcome {

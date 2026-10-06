@@ -97,6 +97,12 @@ Approved skills are written **outside** `~/.teamhandbook/`, where Claude Code lo
 them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
 (project), or the team repo via a pull request.
 
+`/handbook:demo` writes one more place: a scratch repository it builds under the system's
+temporary directory (`handbook-demo-*/shop-api`), holding an invented history by invented
+authors. Its draft goes to the same review queue as any other, and approving it into the
+project commits it to that scratch repository, nowhere else. Nothing deletes the directory
+for you.
+
 - **A secret in a format the detector recognizes is redacted before anything is
   written - the session files included.** A captured command, error, or edit that
   matches a secret pattern is dropped entirely and reduced to a content-free
@@ -221,6 +227,11 @@ reaches Anthropic. The evidence is screened piece by piece on the way in, and th
 reply is screened again before anything is kept; a piece that trips a screen is dropped
 and counted, and the packet is built without it rather than abandoned.
 
+`/handbook:demo` drafts the same way from its scratch repository, so its `live` draft sends
+that invented history's screened evidence and nothing of yours. Its `recorded` draft sends
+nothing: a draft that ships with the plugin is put through the same format check and screen
+in place of a model's reply.
+
 The line is drawn between PROSE and IDENTIFIERS, because the same word means different
 things on either side of it:
 
@@ -273,8 +284,10 @@ rm -rf ~/.teamhandbook
 ```
 
 That deletes every byte TeamHandbook itself stores - ledger, queue, per-session state,
-counters, `pipeline.log`, any `abandoned.jsonl`, and notice state. There is no other
-storage location and no remote copy.
+counters, `pipeline.log`, any `abandoned.jsonl`, and notice state. The only other place
+it keeps anything of its own is a scratch repository `/handbook:demo` built, under the
+system's temporary directory as `handbook-demo-*`; delete that the same way. There is no
+remote copy.
 
 Skills you already approved are ordinary files and are **not** removed by that
 command: delete `~/.claude/skills/<slug>/` (personal) or the repo's
