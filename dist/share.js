@@ -69,7 +69,7 @@ function configIsBroken(home = handbookHome()) {
 // src/lib/init.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/lib/score.ts
@@ -220,7 +220,7 @@ var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
 var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
 import { basename as basename2, join as join4 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -1088,7 +1088,7 @@ function refusalSummary(audit) {
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync6, readdirSync as readdirSync5, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync6, readdirSync as readdirSync5, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/lib/commands.ts
@@ -1512,7 +1512,7 @@ function teamAssets(team, git = runGit) {
     const mcpFile = join8(repoDir, TEAM_MCP_FILE);
     return {
       skills: namesIn(join8(repoDir, "skills")),
-      servers: declaredServerNames(existsSync3(mcpFile) ? readFileSync7(mcpFile, "utf8") : null),
+      servers: declaredServerNames(existsSync4(mcpFile) ? readFileSync7(mcpFile, "utf8") : null),
       commands: namesIn(join8(repoDir, TEAM_COMMANDS_DIR), ".md")
     };
   } catch {
@@ -1615,7 +1615,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     if (subjects.length) {
       try {
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
-          existsSync3(target) ? readFileSync7(target, "utf8") : null,
+          existsSync4(target) ? readFileSync7(target, "utf8") : null,
           subjects.map((s) => s.entry),
           (name) => mayUpdate(options, name)
         ));
@@ -1632,7 +1632,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingCommands = [];
     const replacedCommands = [];
     for (const command of commands) {
-      if (existsSync3(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+      if (existsSync4(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1650,7 +1650,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingSkills = [];
     const replacedSkills = [];
     for (const skill of skills) {
-      if (existsSync3(join8(repoDir, TEAM_SKILLS_DIR, skill.name))) {
+      if (existsSync4(join8(repoDir, TEAM_SKILLS_DIR, skill.name))) {
         if (!mayUpdate(options, skill.name)) {
           collisions.push(skillCollisionMessage(skill.name, false));
           refused.push({

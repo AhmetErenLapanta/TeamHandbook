@@ -259,6 +259,8 @@ export async function draftWorkflow(
   home: string = handbookHome(),
   now: () => string = () => new Date().toISOString(),
   cwd: string = process.cwd(),
+  /** Set by the guided demo, whose drafts may only ever land in its own scratch repository. */
+  demo = false,
 ): Promise<DraftOutcome> {
   const evidence = buildEvidence(shape, index, { host: hostIdentity() });
   // `run` left out means draftSkill's own runner, which is the one that shells out to the
@@ -295,6 +297,7 @@ export async function draftWorkflow(
     origin: "mine",
     kind: "procedure",
     suggestedTarget: "project",
+    ...(demo ? { demo: true } : {}),
     ...(trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}),
   };
   writeCandidateMeta(dir, meta);

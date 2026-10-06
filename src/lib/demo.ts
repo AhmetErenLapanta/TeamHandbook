@@ -157,20 +157,22 @@ export function buildDemoRepo(dir: string): string {
 }
 
 /**
- * Left beside every scratch repository the demo builds. The demo drafts only where it finds one:
- * pointed at a real project by mistake, it would otherwise queue that project's own work.
+ * Left inside every scratch repository the demo builds, under `.git` so no status or commit ever
+ * carries it. The demo drafts only where it finds one: pointed at a real project by mistake, it
+ * would otherwise queue that project's own work. Inside rather than beside, because a directory
+ * holds more than one repository, and a marker next to them all would vouch for each of them.
  */
-const DEMO_MARKER = ".handbook-demo";
+const DEMO_MARKER = join(".git", "handbook-demo");
 
 /** A fresh scratch repository under `root`, never one that already exists, so nothing is overwritten. */
 export function createDemo(root: string = tmpdir()): string {
-  const base = mkdtempSync(join(root, "handbook-demo-"));
-  writeFileSync(join(base, DEMO_MARKER), "");
-  return buildDemoRepo(join(base, "shop-api"));
+  const repo = buildDemoRepo(join(mkdtempSync(join(root, "handbook-demo-")), "shop-api"));
+  writeFileSync(join(repo, DEMO_MARKER), "");
+  return repo;
 }
 
 export function isDemoRepo(repo: string): boolean {
-  return existsSync(join(dirname(repo), DEMO_MARKER));
+  return existsSync(join(repo, DEMO_MARKER));
 }
 
 /** What the demo prints once the repository is built: the product's own list, then the two ways on. */
@@ -212,5 +214,5 @@ export async function draftDemoWorkflow(
   const [workflow] = workflowsFromShapes(mined.shapes);
   const shape = mined.shapes.find((s) => s.id === workflow?.id);
   if (!workflow || !shape) return { ok: false, rank: 1, reasons: ["no repeating work in this repository"] };
-  return draftWorkflow(workflow, unitIndexFor([repo]), shape, run, home, now, repo);
+  return draftWorkflow(workflow, unitIndexFor([repo]), shape, run, home, now, repo, true);
 }

@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildDemoRepo, createDemo, demoListing, draftDemoWorkflow, isDemoRepo } from "./demo.js";
 import { listWorkflows } from "./mine-command.js";
 import { readCandidateMeta } from "./queue.js";
@@ -50,14 +50,24 @@ describe("the demo's scratch repository", () => {
     expect(tip(again)).toBe(tip(repo));
   });
 
-  it("given a directory the demo did not build, when it is checked, then it is not taken for a demo repository", () => {
-    // given an ordinary directory next to the demo's own
-    const other = join(root, "elsewhere", "shop-api");
-    mkdirSync(other, { recursive: true });
+  it("given a repository beside the demo's own, in the same directory, when each is checked, then only the demo's is a demo repository", () => {
+    // given a neighbouring repository sharing the scratch repository's parent directory
+    const neighbour = join(dirname(repo), "neighbour");
+    mkdirSync(neighbour, { recursive: true });
+    execFileSync("git", ["init", "-q", neighbour]);
 
-    // when each is checked, then only the demo's own passes
-    expect(isDemoRepo(other)).toBe(false);
+    // when each is checked, then the mark belongs to the repository that carries it and to no
+    // repository merely standing next to it
+    expect(isDemoRepo(neighbour)).toBe(false);
     expect(isDemoRepo(repo)).toBe(true);
+  });
+
+  it("given a fresh demo repository, when its status is read, then the mark that identifies it is not in the work tree", () => {
+    // when git is asked what is untracked or changed
+    const status = execFileSync("git", ["-C", repo, "status", "--porcelain"], { encoding: "utf8" });
+
+    // then nothing is, so approving a draft into it commits the skill and nothing else
+    expect(status).toBe("");
   });
 
   it("given the listing, when it is read, then it offers both ways to a draft and names the scratch repository in each", () => {
@@ -109,6 +119,7 @@ describe("drafting in the demo", () => {
       status: "pending",
       suggestedTarget: "project",
       cwd: repo,
+      demo: true,
     });
     expect(readFileSync(join(outcome.dir!, "SKILL.md"), "utf8")).toBe(recorded);
     expect(existsSync(marker)).toBe(false);

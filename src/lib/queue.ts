@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { writeFileAtomic } from "./fs-atomic.js";
@@ -31,6 +31,9 @@ export interface CandidateMeta {
   deliveredMode?: "solo" | "personal" | "team";
   // how this candidate came to exist and what it is - drives the review wording
   origin?: "harvest" | "manual" | "recurrence" | "mine";
+  // queued by the guided demo for its scratch repository, which is the only project it may
+  // ever be delivered into: once that directory is gone, there is none
+  demo?: boolean;
   kind?: "procedure" | "correction" | "error-fix" | "discovery";
   // default answer to "keep it, or share it?" - derived from scope + team config
   suggestedTarget?: "personal" | "project" | "team";
@@ -303,6 +306,18 @@ export function secretInSkillDir(
  * leaves this machine; a secret is refused only by the routes that audit the whole skill, so
  * its line asks for the credential to come out rather than saying a refusal will catch it.
  */
+/**
+ * What a demo draft is, said before anything else about it: the two answers it can take, and
+ * only the one when its scratch repository is already gone. The review dialog is built from
+ * this, so it offers what the CLI will accept and nothing it refuses.
+ */
+export function demoLines(meta: CandidateMeta, dirExists: (path: string) => boolean = existsSync): string[] {
+  if (!meta.demo) return [];
+  return meta.cwd && dirExists(meta.cwd)
+    ? ["demo:      a /handbook:demo draft - add it to its scratch repository or reject it; nothing else is accepted"]
+    : ["demo:      a /handbook:demo draft whose scratch repository no longer exists - reject it"];
+}
+
 export function hygieneLines(dir: string, slug: string): string[] {
   const lines: string[] = [];
   const trace = identityInSkillDir(dir, slug);
@@ -770,6 +785,7 @@ export function formatCandidateList(
     // git never saw is listed on it rather than filled in. Said on the list as well as on
     // the detail screen, because the decision to open one is taken here.
     if (meta.origin === "mine") lines.push(`     ${MINE_REVIEW_HEADING}`);
+    for (const line of demoLines(meta)) lines.push(`     ${line}`);
   });
   return lines.join("\n");
 }

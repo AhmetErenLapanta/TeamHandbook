@@ -3,14 +3,14 @@ import { readFileSync as readFileSync10 } from "node:fs";
 import { join as join13 } from "node:path";
 
 // src/lib/deliver.ts
-import { existsSync as existsSync4, readFileSync as readFileSync6, rmdirSync, rmSync as rmSync5 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync6, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { basename as basename3, dirname as dirname4, join as join9, relative } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/lib/session-state.ts
@@ -347,7 +347,7 @@ ${indent(clean)}`;
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
 import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -706,6 +706,10 @@ function secretInSkillDir(sourceDir, files = listSkillFiles(sourceDir).files) {
   }
   return null;
 }
+function demoLines(meta, dirExists = existsSync2) {
+  if (!meta.demo) return [];
+  return meta.cwd && dirExists(meta.cwd) ? ["demo:      a /handbook:demo draft - add it to its scratch repository or reject it; nothing else is accepted"] : ["demo:      a /handbook:demo draft whose scratch repository no longer exists - reject it"];
+}
 function hygieneLines(dir, slug) {
   const lines = [];
   const trace = identityInSkillDir(dir, slug);
@@ -973,6 +977,7 @@ function formatCandidateList(metas, now = Date.now(), label = "Pending") {
     );
     lines.push(`     ${meta.description}`);
     if (meta.origin === "mine") lines.push(`     ${MINE_REVIEW_HEADING}`);
+    for (const line of demoLines(meta)) lines.push(`     ${line}`);
   });
   return lines.join("\n");
 }
@@ -1541,7 +1546,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync5, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync5, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 function buildPrTitle(slug, update = false) {
   return `feat(skill): ${update ? "update" : "add"} ${slug}`;
@@ -1754,7 +1759,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const commitPrefix = pushTeam.prefix;
     const remoteBranches = listRemoteBranches(git, repoDir);
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
-    const occupied = existsSync3(join8(repoDir, skillDir));
+    const occupied = existsSync4(join8(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
         ok: false,
@@ -1838,13 +1843,14 @@ function soloSkillsDir(projectCwd) {
 function personalSkillsDir() {
   return join9(homedir4(), ".claude", "skills");
 }
-function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync4) {
+function deliveryOrigin(meta, fallbackCwd, dirExists = existsSync5) {
+  if (meta.demo) return meta.cwd ?? "";
   return meta.cwd && dirExists(meta.cwd) ? meta.cwd : fallbackCwd;
 }
-function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync4) {
+function resolveDeliveryDir(meta, fallbackCwd, dirExists = existsSync5) {
   return soloSkillsDir(deliveryOrigin(meta, fallbackCwd, dirExists));
 }
-function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync4) {
+function projectTargetLabel(meta, fallbackCwd, dirExists = existsSync5) {
   const origin = deliveryOrigin(meta, fallbackCwd, dirExists);
   if (origin === fallbackCwd) return "this project's .claude/skills";
   return `${basename3(origin)}'s .claude/skills (where it was captured, not this project)`;
@@ -1863,6 +1869,13 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
     return { ok: false, meta, error: `candidate "${slug}" is already ${meta.status}` };
   }
   const resolved = target ?? meta.suggestedTarget ?? (team ? "team" : "project");
+  if (meta.demo && resolved !== "project") {
+    return {
+      ok: false,
+      meta,
+      error: "a demo draft stays in its scratch repository: add it to that repository or reject it. Nothing was written."
+    };
+  }
   const wording = options.commitMessage ?? {};
   const commitsLocally = resolved === "project" && meta.origin === "mine";
   if (resolved !== "team" && !commitsLocally && (wording.message !== void 0 || wording.delegated !== void 0)) {
@@ -1894,7 +1907,7 @@ function approveAndDeliver(home = handbookHome(), slug, fallbackCwd = process.cw
 function installLocally(dir, meta, skillsDir, options) {
   const slug = options.as ?? meta.slug;
   const target = join9(skillsDir, slug);
-  const occupied = existsSync4(target);
+  const occupied = existsSync5(target);
   const updatedExisting = occupied && mayUpdate(options, slug);
   if (occupied && !updatedExisting) {
     return { error: localCollisionMessage(slug, skillsDir, options.as !== void 0), collision: { kind: "skill", name: slug } };
@@ -1998,11 +2011,18 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commit) {
-  const originGone = !!meta.cwd && !existsSync4(meta.cwd);
+  if (meta.demo && !(meta.cwd && existsSync5(meta.cwd))) {
+    return {
+      ok: false,
+      meta,
+      error: "this demo draft belongs to a scratch repository that no longer exists; reject it. Nothing was written and nothing was committed."
+    };
+  }
+  const originGone = !!meta.cwd && !existsSync5(meta.cwd);
   const noOrigin = !meta.cwd;
   const skillsDir = resolveDeliveryDir(meta, fallbackCwd);
   const warning = originGone || noOrigin ? `origin project ${meta.cwd ? `"${displayPath(meta.cwd)}" no longer exists` : "was not recorded"}; installed into the current project instead (${displayPath(skillsDir)})` : void 0;
-  const installedProject = meta.cwd && existsSync4(meta.cwd) ? meta.cwd : fallbackCwd;
+  const installedProject = meta.cwd && existsSync5(meta.cwd) ? meta.cwd : fallbackCwd;
   const originProject2 = installedProject !== fallbackCwd ? basename3(installedProject) : void 0;
   const named = options.as ?? meta.slug;
   let subject;
@@ -2406,7 +2426,7 @@ function formatSweepReport(report, dryRun) {
 }
 
 // src/lib/notify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync8, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync6, readFileSync as readFileSync8, readdirSync as readdirSync5 } from "node:fs";
 import { join as join11 } from "node:path";
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
@@ -2486,6 +2506,7 @@ function showCandidate(home, slug) {
   console.log(`candidate: ${slug}${kind}  [scope: ${meta?.scope ?? "?"}]  [status: ${meta?.status ?? "?"}]`);
   console.log(`location:  ${displayPath(dir)}`);
   if (meta?.origin === "mine") console.log(`kind:      ${MINE_REVIEW_HEADING}`);
+  if (meta) for (const line of demoLines(meta)) console.log(line);
   for (const line of hygieneLines(dir, slug)) console.log(line);
   if (gate) {
     const scores = Object.entries(gate.scores).map(([k, v]) => `${k} ${v}`).join(", ");

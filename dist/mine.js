@@ -1052,7 +1052,7 @@ var init_skill_files = __esm({
 });
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync2, readdirSync as readdirSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2, readdirSync as readdirSync2 } from "node:fs";
 import { basename as basename3, join as join5 } from "node:path";
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
@@ -3614,7 +3614,7 @@ function saveMinedRecord(repoPaths2, collection, shapes, home = handbookHome(), 
 }
 
 // src/lib/mine-command.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/lib/distill.ts
@@ -3747,7 +3747,7 @@ function workflowEntries(workflows, repos) {
   }
   return lines;
 }
-async function draftWorkflow(workflow, index, shape, run, home = handbookHome(), now = () => (/* @__PURE__ */ new Date()).toISOString(), cwd = process.cwd()) {
+async function draftWorkflow(workflow, index, shape, run, home = handbookHome(), now = () => (/* @__PURE__ */ new Date()).toISOString(), cwd = process.cwd(), demo = false) {
   const evidence = buildEvidence(shape, index, { host: hostIdentity() });
   const result = run ? await draftSkill(evidence, run) : await draftSkill(evidence);
   if (!result.ok || !result.skill) {
@@ -3758,7 +3758,7 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     return { ok: false, rank: workflow.rank, reasons: ["no-frontmatter"] };
   }
   const base = candidatesDir(home);
-  const slug = uniqueSlug(summary.name, (s) => existsSync2(join8(base, s)));
+  const slug = uniqueSlug(summary.name, (s) => existsSync3(join8(base, s)));
   const dir = join8(base, slug);
   mkdirSync5(dir, { recursive: true });
   writeFileSync4(join8(dir, "SKILL.md"), result.skill);
@@ -3779,6 +3779,7 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     origin: "mine",
     kind: "procedure",
     suggestedTarget: "project",
+    ...demo ? { demo: true } : {},
     ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}
   };
   writeCandidateMeta(dir, meta);

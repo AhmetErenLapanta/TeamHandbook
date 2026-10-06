@@ -50,6 +50,11 @@ user clear them in one pass.
       option on each. Never-suggest-again is not announced here, because it is asked
       after a Reject, where it is the obvious next question rather than a fifth thing
       to hold in mind.
+   d. A candidate whose `show` output carries a `demo:` line is a draft `/handbook:demo`
+      queued for its scratch repository, and its question offers only what that line names:
+      **Add to <scratch repository>** while the line says it can still be added, and
+      **Reject**. Keeping it for yourself and sharing it with the team are refused by the CLI,
+      so they are not options for it.
 5. **Edit first**: if the user asks for changes ("step 3 is wrong", "add a warning about X"),
    edit the candidate's `SKILL.md` in place (it lives in the directory shown by `show`;
    keep the frontmatter `name:` unchanged), show the diff, and then ask for their verdict

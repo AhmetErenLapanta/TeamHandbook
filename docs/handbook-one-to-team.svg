@@ -2,11 +2,11 @@
      role="img" aria-labelledby="t d"
      font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
   <title id="t">The work your repository repeats, an MCP server, or a command, approved once, reaches the whole team</title>
-  <desc id="d">The work your repository keeps repeating, drafted as a skill, or an MCP server or a
-    command that is already on your machine, drawn as three boxes above a single figure who
-    approves one of them. A line carries that approval down into
-    one repository. From there, lines fan out to four teammates, and each of them has it at their
-    next session, with nothing to install by hand.</desc>
+  <desc id="d">The work your repository keeps repeating, drafted as a skill, or an MCP server or a command
+    already on your machine, drawn as three boxes above a single figure who approves one of
+    them. A line carries that approval down into one repository. From there, lines fan out to
+    the rest of the team, and each of them has it at their next session, with nothing to install
+    by hand.</desc>
 
   <!-- No <style> element and no prefers-color-scheme query, for the same reason the sibling
        diagrams record: GitHub's page theme comes from the site's own settings, while an SVG

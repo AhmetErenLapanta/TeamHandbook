@@ -71,5 +71,6 @@ outlive that repository: approved later from a real project, it would land there
 ## Afterwards
 
 The scratch repository stays until it is deleted. When the user asks, remove the directory
-the repository sits in (the `handbook-demo-*` one). To do the same on real work, run
+the repository sits in (the `handbook-demo-*` one), once the draft has been added or rejected:
+a draft still waiting after that can only be rejected. To do the same on real work, run
 `/handbook:mine` in a real repository.

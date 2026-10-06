@@ -103,9 +103,11 @@ them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
 
 `/handbook:demo` writes one more place: a scratch repository it builds under the system's
 temporary directory (`handbook-demo-*/shop-api`), holding an invented history by invented
-authors. Its draft goes to the same review queue as any other, and approving it into the
-project commits it to that scratch repository, nowhere else. Nothing deletes the directory
-for you.
+authors. Its draft goes to the same review queue as any other, marked as a demo draft, and
+that mark limits it to two answers: committed into that scratch repository, or rejected.
+Keeping it for yourself or sending it to the team is refused, and once the directory is
+gone, so is adding it to any project - it never falls back to the one you are standing in.
+Nothing deletes the directory for you.
 
 - **A secret in a format the detector recognizes is redacted before anything is
   written - the session files included.** A captured command, error, or edit that

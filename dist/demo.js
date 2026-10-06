@@ -1052,7 +1052,7 @@ var init_skill_files = __esm({
 });
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync2, readdirSync as readdirSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2, readdirSync as readdirSync2 } from "node:fs";
 import { basename as basename3, join as join5 } from "node:path";
 function isSafeSlug(slug) {
   return /^[a-z0-9][a-z0-9-]*$/.test(slug);
@@ -1466,7 +1466,7 @@ import { fileURLToPath } from "node:url";
 
 // src/lib/demo.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { dirname as dirname3, join as join8 } from "node:path";
 
@@ -2460,7 +2460,7 @@ var EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 var SAMPLE_SUBJECTS = 5;
 
 // src/lib/mine-command.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/lib/draft.ts
@@ -3634,7 +3634,7 @@ function workflowEntries(workflows, repos) {
   }
   return lines;
 }
-async function draftWorkflow(workflow, index, shape, run, home = handbookHome(), now = () => (/* @__PURE__ */ new Date()).toISOString(), cwd = process.cwd()) {
+async function draftWorkflow(workflow, index, shape, run, home = handbookHome(), now = () => (/* @__PURE__ */ new Date()).toISOString(), cwd = process.cwd(), demo = false) {
   const evidence = buildEvidence(shape, index, { host: hostIdentity() });
   const result = run ? await draftSkill(evidence, run) : await draftSkill(evidence);
   if (!result.ok || !result.skill) {
@@ -3645,7 +3645,7 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     return { ok: false, rank: workflow.rank, reasons: ["no-frontmatter"] };
   }
   const base = candidatesDir(home);
-  const slug = uniqueSlug(summary.name, (s) => existsSync2(join7(base, s)));
+  const slug = uniqueSlug(summary.name, (s) => existsSync3(join7(base, s)));
   const dir = join7(base, slug);
   mkdirSync4(dir, { recursive: true });
   writeFileSync3(join7(dir, "SKILL.md"), result.skill);
@@ -3666,6 +3666,7 @@ async function draftWorkflow(workflow, index, shape, run, home = handbookHome(),
     origin: "mine",
     kind: "procedure",
     suggestedTarget: "project",
+    ...demo ? { demo: true } : {},
     ...trace ? { hygiene: { identity: trace.class, where: trace.where } } : {}
   };
   writeCandidateMeta(dir, meta);
@@ -3804,14 +3805,14 @@ app.routes.push(...${resource}Routes);
   });
   return dir;
 }
-var DEMO_MARKER = ".handbook-demo";
+var DEMO_MARKER = join8(".git", "handbook-demo");
 function createDemo(root = tmpdir3()) {
-  const base = mkdtempSync2(join8(root, "handbook-demo-"));
-  writeFileSync4(join8(base, DEMO_MARKER), "");
-  return buildDemoRepo(join8(base, "shop-api"));
+  const repo = buildDemoRepo(join8(mkdtempSync2(join8(root, "handbook-demo-")), "shop-api"));
+  writeFileSync4(join8(repo, DEMO_MARKER), "");
+  return repo;
 }
 function isDemoRepo(repo) {
-  return existsSync3(join8(dirname3(repo), DEMO_MARKER));
+  return existsSync4(join8(repo, DEMO_MARKER));
 }
 function demoListing(repo, script) {
   const { workflows, repos } = listWorkflows([repo]);
@@ -3837,7 +3838,7 @@ async function draftDemoWorkflow(repo, run, home = handbookHome(), now) {
   const [workflow] = workflowsFromShapes(mined.shapes);
   const shape = mined.shapes.find((s) => s.id === workflow?.id);
   if (!workflow || !shape) return { ok: false, rank: 1, reasons: ["no repeating work in this repository"] };
-  return draftWorkflow(workflow, unitIndexFor([repo]), shape, run, home, now, repo);
+  return draftWorkflow(workflow, unitIndexFor([repo]), shape, run, home, now, repo, true);
 }
 
 // src/cli/demo.ts

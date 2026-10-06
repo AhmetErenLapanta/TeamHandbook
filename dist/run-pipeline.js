@@ -18,7 +18,7 @@ import { dirname as dirname4, join as join8 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname3, isAbsolute, join as join7 } from "node:path";
 
 // src/lib/session-state.ts
@@ -345,7 +345,7 @@ ${indent(clean)}`;
 }
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
 import { basename as basename2, join as join5 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -1025,7 +1025,7 @@ function uniqueSlug(baseSlug, taken) {
 }
 function writeCandidate(artifact, home = handbookHome()) {
   const base = candidatesDir(home);
-  const slug = uniqueSlug(artifact.slug, (s) => existsSync2(join7(base, s)));
+  const slug = uniqueSlug(artifact.slug, (s) => existsSync3(join7(base, s)));
   const dir = join7(base, slug);
   mkdirSync4(dir, { recursive: true });
   const skillMd = slug === artifact.slug ? artifact.skillMd : renameSkillMd(artifact.skillMd, slug);
@@ -1293,7 +1293,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
 }
 
 // src/lib/harvest.ts
-import { existsSync as existsSync3 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 
 // src/lib/transcript.ts
 import { readFileSync as readFileSync7 } from "node:fs";
@@ -1913,7 +1913,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
     const scope = item.scope === "project" ? normalizedRemote ?? "team" : "team";
     const slug = uniqueSlug(
       baseSlug,
-      (s) => existsSync3(join11(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
+      (s) => existsSync4(join11(candidatesDir(home), s)) || existingSkills.some((sk) => sk.name === s)
     );
     const artifact = {
       slug,

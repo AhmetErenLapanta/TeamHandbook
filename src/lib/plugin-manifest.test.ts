@@ -242,6 +242,22 @@ describe("README.md", () => {
     // command without a row is one they never hear of
     expect([...listed].sort()).toEqual(shipped.sort());
   });
+
+  it("describes every diagram it embeds in the same words the diagram describes itself", () => {
+    // given each diagram the README embeds, with the alt text it is given there
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+    const embedded = [...readme.matchAll(/<img src="(docs\/[^"]+\.svg)" alt="([^"]*)"/g)];
+    const words = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
+    expect(embedded.length).toBeGreaterThan(0);
+
+    // when each is compared with the <desc> inside the file, then they are one text: a screen
+    // reader on the page and one opening the image alone must not be told two different products
+    for (const [, path, alt] of embedded) {
+      const desc = /<desc id="d">([\s\S]*?)<\/desc>/.exec(readFileSync(join(repoRoot, path!), "utf8"))?.[1];
+      expect(desc, `${path} has no <desc>`).toBeDefined();
+      expect(words(desc!), path).toBe(words(alt!));
+    }
+  });
 });
 
 describe(".claude-plugin manifests", () => {

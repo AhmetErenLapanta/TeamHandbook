@@ -10,6 +10,7 @@ import {
   listCandidates,
   readArchiveManifest,
   formatUnreadableCandidates,
+  demoLines,
   hygieneLines,
   MINE_REVIEW_HEADING,
   readCandidateMeta,
@@ -57,6 +58,7 @@ function showCandidate(home: string, slug: string): void {
   // is a skeleton and a measured map, not a finished skill, and the steps git could not see
   // are listed on it rather than filled in.
   if (meta?.origin === "mine") console.log(`kind:      ${MINE_REVIEW_HEADING}`);
+  if (meta) for (const line of demoLines(meta)) console.log(line);
   // Printed before the score: it changes what the verdict MEANS rather than how good the
   // lesson is.
   for (const line of hygieneLines(dir, slug)) console.log(line);
