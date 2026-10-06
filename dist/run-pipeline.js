@@ -1073,6 +1073,8 @@ var FIELDS = [
   "gateAbandoned",
   "workflowSessions",
   "workflowSkippedAutonomous",
+  "workflowDetectedShape",
+  "workflowDetectedCandidate",
   "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
@@ -1088,6 +1090,8 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0,
     workflowSessions: 0,
     workflowSkippedAutonomous: 0,
+    workflowDetectedShape: 0,
+    workflowDetectedCandidate: 0,
     workflowSkippedHygiene: 0
   };
   try {

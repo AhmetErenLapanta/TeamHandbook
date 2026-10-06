@@ -65,6 +65,7 @@ function parseWorkflowTrail(value) {
   return {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
+    masked: raw.masked === true,
     fired: raw.fired.filter((s) => s === "S1" || s === "S2")
   };
 }
@@ -505,6 +506,8 @@ var FIELDS = [
   "gateAbandoned",
   "workflowSessions",
   "workflowSkippedAutonomous",
+  "workflowDetectedShape",
+  "workflowDetectedCandidate",
   "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
@@ -520,6 +523,8 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0,
     workflowSessions: 0,
     workflowSkippedAutonomous: 0,
+    workflowDetectedShape: 0,
+    workflowDetectedCandidate: 0,
     workflowSkippedHygiene: 0
   };
   try {
@@ -770,6 +775,8 @@ var MAX_BLOB_BYTES = 1 << 20;
 
 // src/lib/mine.ts
 var LOCK = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum|gradle\.lockfile|deno\.lock)$/;
+var DOC = /(\.md|\.mdx|\.rst|\.txt|LICENSE|CHANGELOG[^/]*)$/i;
+var isDocPath = (path) => DOC.test(path);
 var TEST = /(^|\/)(src\/test\/|test\/|tests\/|__tests__\/|spec\/)|\.(test|spec)\.[a-z]+$|_test\.(go|py)$|Test\.(kt|java)$/;
 var NOT_A_TICKET = /* @__PURE__ */ new Set([
   "UTF",
@@ -1055,8 +1062,10 @@ function loadMinedRecord(home = handbookHome()) {
 function detectWorkflow(files, mined) {
   if (files.length === 0) return null;
   const resolver = mined ? restoreRoleResolver(mined.resolver) : buildRoleResolver(files.map((f) => f.path));
+  const worked = new Set(files.filter((f) => !isDocPath(f.path)).map((f) => f.repo));
   const pairs = /* @__PURE__ */ new Map();
   for (const file of files) {
+    if (!worked.has(file.repo)) continue;
     const role = resolver(file.path);
     if (IGNORED_ROLES.has(role)) continue;
     pairs.set(`${file.repo}\0${role}`, { repo: file.repo, role });
@@ -1094,16 +1103,22 @@ function finishWorkflowSession(input, state, home = handbookHome(), deps = {}) {
   }
   bumpCounter("workflowSessions", home);
   const trail = state.workflow;
-  if (!trail?.green || trail.fired.includes("S2")) return null;
-  const outcome = evaluate(state, trail, "S2", home, deps);
+  if (!trail?.edits.length) return null;
+  const found = detectTrail(trail, home, deps);
+  if (!found) return null;
+  bumpCounter(found.detection.match === "shape" ? "workflowDetectedShape" : "workflowDetectedCandidate", home);
+  if (!trail.green || trail.fired.includes("S2")) return null;
+  const outcome = writeLine(state, trail, "S2", found, home, deps);
   return outcome === "hygiene" ? null : outcome;
 }
-function evaluate(state, trail, signal, home, deps) {
-  const locator = deps.locator ?? diskLocator;
-  const files = trailFiles(trail.edits, locator);
+function detectTrail(trail, home, deps) {
+  const files = trailFiles(trail.edits, deps.locator ?? diskLocator);
   const mined = loadMinedRecord(home);
   const detection = detectWorkflow(files, mined);
-  if (!detection) return null;
+  return detection ? { files, mined, detection } : null;
+}
+function writeLine(state, trail, signal, { files, mined, detection }, home, deps) {
+  const locator = deps.locator ?? diskLocator;
   const work = workKey(files, locator, mined?.prefixes ?? []);
   const host = deps.host ?? hostIdentity();
   const material = [...files.map((f) => f.path), ...detection.pairs.map((p) => p.role), ...work ? [work] : []];
@@ -1122,7 +1137,8 @@ function evaluate(state, trail, signal, home, deps) {
     repos: [...new Set(detection.pairs.map((p) => saltedHash(salt, "repo", p.repo)))].sort(),
     rolesEdited: detection.pairs.length,
     signals: sessionSignalCount(state.sessionId, home) + state.resolvedPairs.length + state.openErrors.length,
-    ticket: work ? saltedHash(salt, "ticket", work) : null
+    ticket: work ? saltedHash(salt, "ticket", work) : null,
+    maskedCheck: trail.masked
   };
   const serialized = JSON.stringify(line);
   if (traced(serialized, host)) {

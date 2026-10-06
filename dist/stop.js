@@ -51,6 +51,7 @@ function parseWorkflowTrail(value) {
   return {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
+    masked: raw.masked === true,
     fired: raw.fired.filter((s) => s === "S1" || s === "S2")
   };
 }
@@ -279,6 +280,8 @@ var FIELDS = [
   "gateAbandoned",
   "workflowSessions",
   "workflowSkippedAutonomous",
+  "workflowDetectedShape",
+  "workflowDetectedCandidate",
   "workflowSkippedHygiene"
 ];
 function countersFile(home = handbookHome()) {
@@ -294,6 +297,8 @@ function readCounters(home = handbookHome()) {
     gateAbandoned: 0,
     workflowSessions: 0,
     workflowSkippedAutonomous: 0,
+    workflowDetectedShape: 0,
+    workflowDetectedCandidate: 0,
     workflowSkippedHygiene: 0
   };
   try {

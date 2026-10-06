@@ -53,6 +53,7 @@ const BUILD =
   /(^|\/)(build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.properties|pom\.xml|package\.json|jsr\.json|pyproject\.toml|Cargo\.toml|go\.mod|[^/]*\.toml|gradle\/wrapper\/.*|libs\.versions\.toml)$/;
 const CI = /(^|\/)(\.gitlab-ci\.yml|\.github\/|Jenkinsfile|\.circleci\/|helm\/|k8s\/|deploy\/|Dockerfile[^/]*$)/;
 const DOC = /(\.md|\.mdx|\.rst|\.txt|LICENSE|CHANGELOG[^/]*)$/i;
+export const isDocPath = (path: string): boolean => DOC.test(path);
 const TEST =
   /(^|\/)(src\/test\/|test\/|tests\/|__tests__\/|spec\/)|\.(test|spec)\.[a-z]+$|_test\.(go|py)$|Test\.(kt|java)$/;
 

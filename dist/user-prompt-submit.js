@@ -228,6 +228,7 @@ function parseWorkflowTrail(value) {
   return {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
+    masked: raw.masked === true,
     fired: raw.fired.filter((s) => s === "S1" || s === "S2")
   };
 }

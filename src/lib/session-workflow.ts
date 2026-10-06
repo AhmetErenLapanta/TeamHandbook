@@ -17,6 +17,7 @@ import type { SessionState, WorkflowSignal, WorkflowTrail } from "./session-stat
 import {
   buildRoleResolver,
   IGNORED_ROLES,
+  isDocPath,
   KEY_CANDIDATE,
   NOT_A_TICKET,
   repoLabels,
@@ -39,6 +40,7 @@ export interface WorkflowLine {
   rolesEdited: number;
   signals: number;
   ticket: string | null;
+  maskedCheck: boolean;
 }
 
 export const WORKFLOW_LINE_FIELDS = [
@@ -52,6 +54,7 @@ export const WORKFLOW_LINE_FIELDS = [
   "rolesEdited",
   "signals",
   "ticket",
+  "maskedCheck",
 ] as const;
 
 /** How much of a mined workflow's core a session has to touch to count as doing it. */
@@ -248,8 +251,12 @@ export interface Detection {
 export function detectWorkflow(files: RepoFile[], mined: MinedRecord | null): Detection | null {
   if (files.length === 0) return null;
   const resolver = mined ? restoreRoleResolver(mined.resolver) : buildRoleResolver(files.map((f) => f.path));
+  // A repository the session only wrote prose in - a note, a brief, a report - had no work done
+  // in it, for the same reason the miner sets a docs-only commit aside.
+  const worked = new Set(files.filter((f) => !isDocPath(f.path)).map((f) => f.repo));
   const pairs = new Map<string, { repo: string; role: string }>();
   for (const file of files) {
+    if (!worked.has(file.repo)) continue;
     const role = resolver(file.path);
     if (IGNORED_ROLES.has(role)) continue;
     pairs.set(`${file.repo}\u0000${role}`, { repo: file.repo, role });
@@ -355,7 +362,7 @@ export interface WorkflowDeps {
 }
 
 function emptyTrail(): WorkflowTrail {
-  return { edits: [], green: false, fired: [] };
+  return { edits: [], green: false, masked: false, fired: [] };
 }
 
 /**
@@ -374,7 +381,7 @@ export function recordWorkflowEvent(
   const locator = deps.locator ?? diskLocator;
   const userHome = deps.userHome ?? homedir();
   const cwd = input.cwd ?? "";
-  const steps: ({ kind: "write"; path: string } | { kind: "check"; green: boolean } | { kind: "commit"; ok: boolean })[] = [];
+  const steps: ({ kind: "write"; path: string } | { kind: "check"; green: boolean; masked: boolean } | { kind: "commit"; ok: boolean })[] = [];
 
   if (EDIT_TOOLS.has(input.tool_name ?? "")) {
     const filePath = typeof input.tool_input?.file_path === "string" ? input.tool_input.file_path : "";
@@ -382,13 +389,15 @@ export function recordWorkflowEvent(
   } else if (input.tool_name === "Bash") {
     const command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
     if (!command) return null;
+    // The line's exit status stands for every check in it. Most checks in real sessions are piped
+    // into tail or grep, which hides their own status; reading those as unknown left the signals
+    // all but silent, so they count by the line's status and are marked as read that way.
     const ok = isBashSuccess(input);
     const cmds = simpleCommands(command);
     cmds.forEach((cmd, index) => {
       for (const path of commandWrites(cmds, index, cwd, userHome)) steps.push({ kind: "write", path });
-      const known = statusReaches(cmds, index);
-      if (isCheck(cmd)) steps.push({ kind: "check", green: known && ok });
-      if (isCommit(cmd)) steps.push({ kind: "commit", ok: known && ok });
+      if (isCheck(cmd)) steps.push({ kind: "check", green: ok, masked: !statusReaches(cmds, index) });
+      if (isCommit(cmd)) steps.push({ kind: "commit", ok });
     });
   }
   if (steps.length === 0) return null;
@@ -401,14 +410,17 @@ export function recordWorkflowEvent(
     if (step.kind === "write") {
       if (!locator.locate(step.path)) continue;
       trail.green = false;
+      trail.masked = false;
       if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
       changed = true;
     } else if (step.kind === "check") {
       trail.green = step.green;
+      trail.masked = step.masked;
       changed = true;
     } else if (step.ok && trail.green && !trail.fired.includes("S1")) {
-      const outcome = evaluate(state, trail, "S1", home, deps);
-      if (outcome !== null) {
+      const found = detectTrail(trail, home, deps);
+      const outcome = found && writeLine(state, trail, "S1", found, home, deps);
+      if (outcome) {
         trail.fired.push("S1");
         if (outcome !== "hygiene") line = outcome;
       }
@@ -423,9 +435,9 @@ export function recordWorkflowEvent(
 
 /**
  * The end of a session: count it in the denominator (or as skipped, when nobody was driving it),
- * then record it under S2 if its last check after its last write was green. Takes the state the
- * caller already loaded, because the session's evidence is flushed and its file deleted right
- * after this.
+ * count what detection makes of it whether or not a signal fired, then record it under S2 if its
+ * last check after its last write was green. Takes the state the caller already loaded, because
+ * the session's evidence is flushed and its file deleted right after this.
  */
 export function finishWorkflowSession(
   input: HookInput,
@@ -440,29 +452,44 @@ export function finishWorkflowSession(
   }
   bumpCounter("workflowSessions", home);
   const trail = state.workflow;
-  if (!trail?.green || trail.fired.includes("S2")) return null;
-  const outcome = evaluate(state, trail, "S2", home, deps);
+  if (!trail?.edits.length) return null;
+  const found = detectTrail(trail, home, deps);
+  if (!found) return null;
+  // Lines are written only when a signal fires; these counts are what lets a missing line be
+  // read as "no workflow" rather than "no signal".
+  bumpCounter(found.detection.match === "shape" ? "workflowDetectedShape" : "workflowDetectedCandidate", home);
+  if (!trail.green || trail.fired.includes("S2")) return null;
+  const outcome = writeLine(state, trail, "S2", found, home, deps);
   return outcome === "hygiene" ? null : outcome;
 }
 
+interface Found {
+  files: RepoFile[];
+  mined: MinedRecord | null;
+  detection: Detection;
+}
+
+/** What detection makes of the trail so far, or null when it is not a workflow. */
+function detectTrail(trail: WorkflowTrail, home: string, deps: WorkflowDeps): Found | null {
+  const files = trailFiles(trail.edits, deps.locator ?? diskLocator);
+  const mined = loadMinedRecord(home);
+  const detection = detectWorkflow(files, mined);
+  return detection ? { files, mined, detection } : null;
+}
+
 /**
- * Detect, build the line, screen it, write it. Null when the session is not a workflow; "hygiene"
- * when it was one but something in it carried a trace of the person or a secret, in which case
- * nothing is written and the skip is counted.
+ * Build the line, screen it, write it. "hygiene" when something in it carried a trace of the
+ * person or a secret, in which case nothing is written and the skip is counted.
  */
-function evaluate(
+function writeLine(
   state: SessionState,
   trail: WorkflowTrail,
   signal: WorkflowSignal,
+  { files, mined, detection }: Found,
   home: string,
   deps: WorkflowDeps,
-): WorkflowLine | "hygiene" | null {
+): WorkflowLine | "hygiene" {
   const locator = deps.locator ?? diskLocator;
-  const files = trailFiles(trail.edits, locator);
-  const mined = loadMinedRecord(home);
-  const detection = detectWorkflow(files, mined);
-  if (!detection) return null;
-
   const work = workKey(files, locator, mined?.prefixes ?? []);
   // Screened before hashing as well as after: every field on disk is a hash, so screening only
   // the finished line could never find anything, and a trace in what the hashes are made of is
@@ -486,6 +513,7 @@ function evaluate(
     rolesEdited: detection.pairs.length,
     signals: sessionSignalCount(state.sessionId, home) + state.resolvedPairs.length + state.openErrors.length,
     ticket: work ? saltedHash(salt, "ticket", work) : null,
+    maskedCheck: trail.masked,
   };
   const serialized = JSON.stringify(line);
   if (traced(serialized, host)) {

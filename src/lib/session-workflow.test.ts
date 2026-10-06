@@ -123,6 +123,12 @@ describe("detectWorkflow", () => {
     expect(detectWorkflow(files, record)).toMatchObject({ match: "candidate", shape: null });
   });
 
+  it("given code in one repository and only a report in another, when detected, then the report adds no role", () => {
+    const files = [file("/r/acme-api", "src/service/RefundService.kt"), file("/r/acme-notes", "reports/RefundReport.md")];
+
+    expect(detectWorkflow(files, record)).toBeNull();
+  });
+
   it("given one role and its test, when detected, then it is not a workflow", () => {
     const files = [file("/r/acme-api", "src/service/RefundService.kt"), file("/r/acme-api", "src/test/RefundServiceTest.kt")];
 
@@ -160,10 +166,20 @@ describe("S1: a green check, then a commit", () => {
     expect(lines()).toHaveLength(1);
   });
 
-  it("given a check piped into tail, when the session commits, then nothing fires because the status was tail's", () => {
+  it("given a check piped into tail, when the session commits, then S1 fires on the line's status and says the check's own status was hidden", () => {
     withMinedRecord();
     for (const path of HIDDEN_WORKFLOW_FILES()) recordWorkflowEvent(edit(path), home, deps());
     recordWorkflowEvent(bash("npm test 2>&1 | tail -5"), home, deps());
+
+    const line = recordWorkflowEvent(bash("git commit -m x"), home, deps());
+
+    expect(line).toMatchObject({ signal: "S1", maskedCheck: true });
+  });
+
+  it("given a commit with no check since the last write, when it lands, then nothing fires", () => {
+    withMinedRecord();
+    recordWorkflowEvent(bash("npm test"), home, deps());
+    for (const path of HIDDEN_WORKFLOW_FILES()) recordWorkflowEvent(edit(path), home, deps());
 
     expect(recordWorkflowEvent(bash("git commit -m x"), home, deps())).toBeNull();
     expect(lines()).toEqual([]);
@@ -190,13 +206,14 @@ describe("S2: the session ends after a green check", () => {
     expect(readCounters(home).workflowSessions).toBe(1);
   });
 
-  it("given a write after the last check, when the session ends, then nothing fires but the session is still counted", () => {
+  it("given a write after the last check, when the session ends, then nothing fires but the session and its detection are still counted", () => {
     withMinedRecord();
     recordWorkflowEvent(bash("npm test"), home, deps());
     for (const path of HIDDEN_WORKFLOW_FILES()) recordWorkflowEvent(edit(path), home, deps());
 
     expect(finishWorkflowSession({ session_id: "s1" }, loadSessionState("s1", home), home, deps())).toBeNull();
-    expect(readCounters(home).workflowSessions).toBe(1);
+    expect(readCounters(home)).toMatchObject({ workflowSessions: 1, workflowDetectedShape: 1, workflowDetectedCandidate: 0 });
+    expect(lines()).toEqual([]);
   });
 });
 
@@ -210,7 +227,7 @@ describe("what one line holds", () => {
     const line = JSON.parse(raw) as WorkflowLine;
 
     expect(Object.keys(line)).toEqual([...WORKFLOW_LINE_FIELDS]);
-    expect(line).toMatchObject({ signal: "S1", match: "candidate", shape: null, rolesEdited: 5, signals: 0, ticket: null });
+    expect(line).toMatchObject({ signal: "S1", match: "candidate", shape: null, rolesEdited: 5, signals: 0, ticket: null, maskedCheck: false });
     for (const hash of [line.session, ...line.roles, ...line.repos]) expect(hash).toMatch(/^[0-9a-f]{16}$/);
     for (const forbidden of [fixture.root, "acme", "Refund", "dto", "Service", "npm test", "git commit", "TEAM-99", "s1"]) {
       expect(raw).not.toContain(forbidden);
@@ -320,7 +337,7 @@ describe("what is not recorded", () => {
 
     expect(loadSessionState("s1", home).workflow).toBeUndefined();
     expect(existsSync(workflowsFile(home))).toBe(false);
-    expect(readCounters(home)).toMatchObject({ workflowSessions: 0, workflowSkippedAutonomous: 0 });
+    expect(readCounters(home)).toMatchObject({ workflowSessions: 0, workflowSkippedAutonomous: 0, workflowDetectedShape: 0, workflowDetectedCandidate: 0 });
   });
 
   it("given a session nobody drives, when it writes and ends, then it is skipped and counted as such", () => {

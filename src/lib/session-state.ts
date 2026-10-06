@@ -39,8 +39,13 @@ export type WorkflowSignal = "S1" | "S2";
 export interface WorkflowTrail {
   /** Files written inside a repository, by the edit tools and through the shell, first seen first. */
   edits: string[];
-  /** Whether the latest check since the last of those writes passed, as far as its exit status can say. */
+  /** Whether the latest check since the last of those writes passed, by the exit status of its line. */
   green: boolean;
+  /**
+   * Whether that check's own status was hidden by what followed it (`npm test | tail`), so the
+   * line's status is the tail's. Kept so a green read that way can be told apart later.
+   */
+  masked: boolean;
   /** Signals already recorded for this session: each is written at most once. */
   fired: WorkflowSignal[];
 }
@@ -52,6 +57,7 @@ function parseWorkflowTrail(value: unknown): WorkflowTrail | undefined {
   return {
     edits: raw.edits.filter((e): e is string => typeof e === "string"),
     green: raw.green === true,
+    masked: raw.masked === true,
     fired: raw.fired.filter((s): s is WorkflowSignal => s === "S1" || s === "S2"),
   };
 }
