@@ -705,8 +705,10 @@ function addExtendedFindings(findings, secs, text, expects) {
     `delivery sections=${deliverySecs.length} single-repo note=${singleRepo} multi-repo=${Boolean(expects.multiRepo)}`
   );
   const checks = secs.filter((s) => s.level >= 2 && VERIFY_HEAD_RE.test(s.title) && !isProcedureSection(s));
-  const unnumbered = checks.filter((s) => !NUM_HEAD_RE.test(s.title));
-  const verifySecs = unnumbered.length > 0 ? unnumbered : checks;
+  const templateChecks = checks.some(
+    (s) => s.level === 2 && !NUM_HEAD_RE.test(s.title) && EXEMPT_EXACT_RE.test(bareTitle(s.title))
+  );
+  const verifySecs = templateChecks ? checks.filter((s) => !NUM_HEAD_RE.test(s.title)) : checks;
   const verifyItems = verifySecs.flatMap((s) => s.body.filter((line) => line.kind === "text" && LIST_ITEM_RE.test(line.text))).map((line) => line.text);
   const fencedItems = verifySecs.flatMap((s) => s.body.filter((line) => line.kind === "fenced" && line.text.trim() !== "")).map((line) => line.text);
   const all = [...verifyItems, ...fencedItems];
