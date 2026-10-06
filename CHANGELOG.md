@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.23.0] - 2026-10-06
+
+### Fixed
+
+- **A draft could be rejected for checks it never wrote.** The rule that every verification
+  item names a command or an observable result read the draft's title, and any numbered
+  layer whose name held a word like "validation" or "tests", as if they were its checks, so
+  a draft with concrete checks was dropped for its own steps. It now reads only the checks
+  section, and a numbered checks section is set aside only when the draft also has the
+  template's own unnumbered Verification section. The rule is no looser: "matched" now
+  counts as a result beside "matches", and an instruction such as "Match the two paths"
+  does not.
+
+### Changed
+
+- **A mined draft is added to a project only from the repository it was mined in.** It used
+  to be committed into its origin from wherever the review ran, and into the reviewer's own
+  repository once its origin was gone. Approved from another repository, from outside one,
+  or after that checkout is gone, adding it to a project is now refused before anything is
+  written or asked, and the refusal names the repository by a short fingerprint rather than
+  its path. Run the review from the repository the draft was mined in; a second worktree of
+  the same repository counts as another checkout. Keeping it for yourself and sharing it
+  with the team are unchanged, and the demo's scratch repository keeps its own rules.
+
+### Security
+
+- **Authors recorded outside git's commit data no longer reach a draft.** The person screen
+  knows the names git records, and the handle a database changelog, a manifest or a note
+  writes is usually spelled another way. Author values in those files, and `@author` tags
+  anywhere, are now replaced with `(withheld)` before the model sees them, and counted;
+  role words such as `team` or `system` are kept.
+
 ## [0.22.0] - 2026-10-06
 
 ### Added
