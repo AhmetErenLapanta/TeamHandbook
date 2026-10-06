@@ -3,28 +3,25 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeRemoteUrl, renameSkillMd, uniqueSlug } from "./distill.js";
+import { normalizeRemoteUrl, renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import type { GroundedCase } from "./distill.js";
 import {
   assertSafeGitUrl,
   commitMessagePrefix,
   commitSubject,
-  decideCommitSubject,
-  proposalFingerprint,
-  pushFailureReason,
-  pushRuleSubject,
   readTeamCommitPrefix,
   runGit,
-  teamBranchPrefix,
   teamCommitPrefix,
   teamCommitPrefixFix,
 } from "./init.js";
-import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
+import { runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, noRequestPossible, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
+import { decidePush, openRequest, pushBranch, pushFailure, requestPushOptions, versionPast } from "./branch.js";
+import type { PushChoice, Pushed, VersionClaim } from "./branch.js";
 import { auditSkillDir, identityInSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { auditServer, declaredServerNames, mergeServersIntoMcpJson, refusalMessage } from "./mcp.js";
@@ -128,8 +125,11 @@ export interface Collision {
  * what the team already uses, and the only person entitled to ask for it is the one who
  * was shown the refusal. `as` is the other answer - send it under a different name - and
  * it is the one the suffix used to pick silently on the publisher's behalf.
+ *
+ * The branch, its hints and the answer about a version another branch already claims ride
+ * along as `PushChoice`, decided in branch.ts for every route that pushes.
  */
-export interface PublishOptions {
+export interface PublishOptions extends PushChoice {
   /**
    * `true` replaces whatever this request collides with; a list of names replaces only
    * those. The list exists because one request can carry a selection: a publisher shown
@@ -184,16 +184,11 @@ export interface PublishOutcome {
   version?: string;
   prUrl?: string;
   manualUrl?: string;
-  // the branch prefix this push had to discover because the forge refused the default
-  // one; the caller persists it so no later skill pays the same round trip
-  learnedBranchPrefix?: string;
-  // the commit prefix this push read out of the team repository because this machine had
-  // none; the caller persists it, so a teammate who joined before the repository recorded
-  // one picks it up on their next share instead of being refused again
-  learnedCommitPrefix?: string;
   error?: string;
   // why the forge CLI couldn't auto-open the PR (branch is pushed; link is manual)
   prError?: string;
+  // the PR body, when GitLab opened the request from the push and could not attach it
+  unattachedDescription?: string;
   // the subject the commit was made with, prefix included: what the user is told went
   // out, rather than what they were offered
   commitMessage?: string;
@@ -202,6 +197,8 @@ export interface PublishOutcome {
   proposedMessage?: string;
   // the fingerprint of that subject, which a delegated run has to name back
   proposalHash?: string;
+  // the branch shown on that same refusal, to be confirmed or changed
+  proposedBranch?: string;
 }
 
 /**
@@ -218,62 +215,23 @@ export interface PublishOutcome {
  * Best-effort by design: a repository whose scaffold has not been merged yet has no
  * plugin.json, and a skill is still worth publishing.
  */
-export function bumpPluginVersion(repoDir: string): string | null {
+export function bumpPluginVersion(repoDir: string, past: VersionClaim[] = []): string | null {
   const file = join(repoDir, ".claude-plugin", "plugin.json");
   try {
     const plugin = JSON.parse(readFileSync(file, "utf8"));
-    const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
+    const current = String(plugin.version ?? "0.1.0");
+    const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
-    plugin.version = parts.join(".");
+    // Past every unmerged branch already claiming a number, when the user chose that: the
+    // version line then conflicts with theirs instead of merging as identical and reaching
+    // nobody, and a conflict is something a reviewer sees.
+    plugin.version = past.length ? versionPast(current, past) : parts.join(".");
     writeFileSync(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
   }
-}
-
-// A forge that polices branch names quotes its rule when it refuses one. Patterns are
-// short; anything longer is not a naming rule we can reason about, and building a
-// RegExp out of it is not worth the risk.
-const MAX_BRANCH_PATTERN_CHARS = 200;
-
-/**
- * The branch to retry with after a forge rejected the branch NAME, or null when there
- * is nothing to derive one from.
- *
- * This is not a guess. A group that polices branch names almost always polices commit
- * messages too, so the team already answered this question during /handbook:init and
- * had the answer accepted by the same server - it is sitting in the config as
- * commitPrefix. And the rejection quotes the pattern, so the derived name is checked
- * against it before anything is pushed: if it does not match, we do not push it and the
- * developer gets the rule instead. The alternative was sending them to hand-edit
- * ~/.teamhandbook/config.json, which is a file a sandboxed session may not be allowed
- * to touch at all.
- */
-export function retryBranchAfterNameRejection(
-  err: unknown,
-  team: TeamConfig,
-  slug: string,
-): { branch: string; prefix: string } | null {
-  const raw = String(err instanceof Error ? err.message : err);
-  // A different rule wants a different knob, and GitLab words three of them the same way,
-  // so the rule is read from the subject it names rather than from the one word it omits:
-  // deriving a branch out of a rejection that was really about the commit author's email
-  // would push a second time to be refused for the same reason.
-  if (pushRuleSubject(raw) !== "branch-name") return null;
-  const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
-  if (!pattern || pattern.length > MAX_BRANCH_PATTERN_CHARS) return null;
-  const commitPrefix = team.commitPrefix?.trim().replace(/-+$/, "");
-  if (!commitPrefix) return null;
-  const prefix = `${commitPrefix}-`;
-  const branch = `${prefix}${slug}`;
-  try {
-    if (!new RegExp(pattern).test(branch)) return null;
-  } catch {
-    return null; // not a regex we can evaluate; report the rule instead of guessing
-  }
-  return { branch, prefix };
 }
 
 /**
@@ -322,61 +280,6 @@ function cloneTeamRepo(git: GitRunner, repoUrl: string, repoDir: string, workdir
 }
 
 /**
- * The branch names the team repo already has.
- *
- * A previous approve may have pushed a branch whose PR is still open (or was abandoned):
- * checking only what is committed would reuse that name and the push would be rejected
- * non-fast-forward, locking the slug forever. Best-effort - an offline failure here costs
- * nothing, because the push itself still reports what went wrong.
- */
-function listRemoteBranches(git: GitRunner, repoDir: string): Set<string> {
-  try {
-    const out = git(["ls-remote", "--heads", "origin"], repoDir);
-    return new Set(
-      String(out ?? "")
-        .split("\n")
-        .map((line) => line.split("\t")[1] ?? "")
-        .filter(Boolean)
-        .map((ref) => ref.replace("refs/heads/", "")),
-    );
-  } catch {
-    return new Set<string>();
-  }
-}
-
-/**
- * Push the branch, and if the forge refuses the NAME, retry under the prefix the team
- * already proved acceptable to this server.
- *
- * The default branch name is the one thing here the team never chose. If the forge refuses
- * it, recover from what they did choose rather than failing and asking them to configure
- * something first. The caller's slug was made unique against the DEFAULT prefix, so it
- * cannot have ruled out a collision under the derived one: refusing to push is the safe
- * half, and the other half is that the message the developer then gets - set branchPrefix
- * and try again - is also the fix, because the next run picks the name against the right
- * prefix and suffixes past it.
- */
-function pushBranch(
-  git: GitRunner,
-  repoDir: string,
-  branch: string,
-  team: TeamConfig,
-  slug: string,
-  remoteBranches: Set<string>,
-): { branch: string; learnedBranchPrefix?: string } {
-  try {
-    git(["push", "-u", "origin", branch], repoDir);
-    return { branch };
-  } catch (err) {
-    const retry = retryBranchAfterNameRejection(err, team, slug);
-    if (!retry || remoteBranches.has(retry.branch)) throw err;
-    git(["branch", "-m", retry.branch], repoDir);
-    git(["push", "-u", "origin", retry.branch], repoDir);
-    return { branch: retry.branch, learnedBranchPrefix: retry.prefix };
-  }
-}
-
-/**
  * A skill the team already has is never written over silently.
  *
  * This used to be the one kind of thing that answered the question differently: a server
@@ -411,21 +314,17 @@ function skillCollisionMessage(name: string, chosen: boolean): string {
  *
  * A prefix this machine already knows is never overwritten from the repository: it may
  * have been corrected by hand after a rejection, and the config is where that correction
- * lives. An empty recorded prefix is learned like any other - the team saying "no prefix"
- * is an answer, and remembering it stops this lookup repeating.
+ * lives. Nor is the one read here written into the config: it is read again on every push,
+ * which costs nothing because the clone is already there, and a push that quietly rewrote
+ * the user's settings is what this product stopped doing.
  */
-function commitPrefixForPush(team: TeamConfig, repoDir: string): { team: TeamConfig; prefix: string; learned?: string } {
+function commitPrefixForPush(team: TeamConfig, repoDir: string): { team: TeamConfig; prefix: string } {
   if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
   const recorded = readTeamCommitPrefix(repoDir);
   if (recorded.prefix === undefined) return { team, prefix: teamCommitPrefix(team) };
-  // The whole config, not just the message: retryBranchAfterNameRejection derives a branch
-  // from commitPrefix, so a joiner who learns the prefix here also gets the branch-name
-  // recovery that was unreachable without it.
-  return {
-    team: { ...team, commitPrefix: recorded.prefix },
-    prefix: commitMessagePrefix(recorded.prefix),
-    learned: recorded.prefix,
-  };
+  // The whole config, not just the message: the branch proposal takes a ticket key from
+  // commitPrefix, so a joiner who reads the prefix here gets a proposal shaped like it too.
+  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
 }
 
 export function publishCandidate(
@@ -436,7 +335,6 @@ export function publishCandidate(
   forge: ForgeRunner = runForge,
   options: PublishOptions = {},
 ): PublishOutcome {
-  const prefix = teamBranchPrefix(team);
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -487,7 +385,6 @@ export function publishCandidate(
     if (cloneError) return { ok: false, error: cloneError };
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
-    const remoteBranches = listRemoteBranches(git, repoDir);
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
     const occupied = existsSync(join(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
@@ -497,16 +394,6 @@ export function publishCandidate(
         error: skillCollisionMessage(skillSlug, options.as !== undefined),
       };
     }
-    // The BRANCH name is still made unique, and separately from the directory name, because
-    // the two answer different questions. A previous approve may have pushed
-    // handbook/<slug> whose PR is still open (or was abandoned); reusing that name gets the
-    // push rejected non-fast-forward, and the slug is then locked forever. That is true of
-    // an update too - which is exactly a second branch for a name that already went out
-    // once - so the guard has to survive --update, and it does by living here instead of in
-    // the directory name it used to be welded to.
-    const branchSlug = uniqueSlug(skillSlug, (s) => remoteBranches.has(`${prefix}${s}`));
-    let branch = `${prefix}${branchSlug}`;
-    let learnedBranchPrefix: string | undefined;
     let version: string | null = null;
     const title = buildPrTitle(skillSlug, occupied);
     // After the clone, because the proposal has to carry the prefix this push will really
@@ -515,25 +402,21 @@ export function publishCandidate(
     // is the one about the name rather than one about wording they would have to give
     // twice. Before the checkout, so a run without a decision leaves no branch behind.
     const proposal = commitSubject(commitPrefix, title);
-    const choice = options.commitMessage ?? {};
-    // A delegated wording is honoured only if the request it was given for can actually be
-    // opened, and the run that has not been asked yet needs the same answer so it does not
-    // offer a delegation that is going to be refused. Asked before the push, because after
-    // it the commit carrying that wording is already on the team's remote with nothing to
-    // carry it further - and not asked at all when the reviewer gave their own words,
-    // which need no merge request to be legitimate.
-    const unavailable =
-      choice.message === undefined ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
-    const decided = decideCommitSubject(
-      choice,
-      proposal,
-      commitPrefix,
-      "approve it again",
-      unavailable ? noRequestPossible(unavailable) : undefined,
-    );
-    if ("error" in decided) {
-      return { ok: false, error: decided.error, proposedMessage: proposal, proposalHash: proposalFingerprint(proposal) };
-    }
+    const decided = decidePush({
+      git,
+      forge,
+      repoDir,
+      team: pushTeam.team,
+      slug: skillSlug,
+      choice: options,
+      message: options.commitMessage ?? {},
+      proposedMessage: proposal,
+      messagePrefix: commitPrefix,
+      rerun: "approve it again",
+    });
+    if (!decided.ok) return decided;
+    const { branch } = decided;
+    let pushed: Pushed;
     try {
       git(["checkout", "-b", branch], repoDir);
       // An update replaces the team's copy rather than merging into it: a file the new
@@ -548,43 +431,27 @@ export function publishCandidate(
         join(repoDir, skillDir),
         skillSlug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, skillSlug),
       );
-      version = bumpPluginVersion(repoDir);
+      version = bumpPluginVersion(repoDir, decided.claims);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", decided.subject], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, branchSlug, remoteBranches);
-      branch = pushed.branch;
-      learnedBranchPrefix = pushed.learnedBranchPrefix;
+      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
     } catch (err) {
       return {
         ok: false,
-        error: pushFailureReason(
-          team.repoUrl,
-          branch,
-          err,
-          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits ' +
-            '(for example "TEAM-1-"), then approve again; it is remembered for every skill after that.',
-          teamCommitPrefixFix(pushTeam.team, "approve again"),
-        ),
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "approve it again", teamCommitPrefixFix(pushTeam.team, "approve again")),
       };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
-    const learned = {
-      ...(learnedBranchPrefix ? { learnedBranchPrefix } : {}),
-      ...(pushTeam.learned !== undefined ? { learnedCommitPrefix: pushTeam.learned } : {}),
-    };
-    const named = { skillDir, skillSlug, commitMessage: decided.subject, ...(occupied ? { updatedExisting: true } : {}) };
-    const pr = openPr(team.repoUrl, branch, title, body, repoDir, forge);
-    if (pr.url) {
-      return { ok: true, branch, ...named, prUrl: pr.url, ...(version ? { version } : {}), ...learned };
-    }
+    const request = openRequest(team.repoUrl, branch, title, body, repoDir, forge, decided.forgeProblem, pushed);
     return {
       ok: true,
       branch,
-      ...named,
-      manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined,
+      skillDir,
+      skillSlug,
+      commitMessage: decided.subject,
+      ...(occupied ? { updatedExisting: true } : {}),
       ...(version ? { version } : {}),
-      ...(pr.error ? { prError: pr.error } : {}),
-      ...learned,
+      ...request,
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });
@@ -644,10 +511,8 @@ export interface TeamPublishOutcome {
   version?: string;
   prUrl?: string;
   manualUrl?: string;
-  learnedBranchPrefix?: string;
-  // the commit prefix read out of the team repository for this push, when this machine had
-  // none of its own; persisted by the caller so the next share needs no lookup
-  learnedCommitPrefix?: string;
+  // the PR body, when GitLab opened the request from the push and could not attach it
+  unattachedDescription?: string;
   // variables each teammate must set before the server will start for them
   requiresEnv?: string[];
   startsProcess?: boolean;
@@ -659,6 +524,8 @@ export interface TeamPublishOutcome {
   proposedMessage?: string;
   // the fingerprint of that subject, which a delegated run has to name back
   proposalHash?: string;
+  // the branch shown on that same refusal, to be confirmed or changed
+  proposedBranch?: string;
 }
 
 /** A server that cleared the audit, kept together with the audit that cleared it. */
@@ -1227,7 +1094,6 @@ export function publishTeamSelection(
   }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, refused, error: identity.error };
-  const prefix = teamBranchPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
   const repoDir = join(workdir, "repo");
   try {
@@ -1235,7 +1101,6 @@ export function publishTeamSelection(
     if (cloneError) return { ok: false, refused, error: cloneError };
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
-    const remoteBranches = listRemoteBranches(git, repoDir);
     const target = join(repoDir, TEAM_MCP_FILE);
     let merged = "";
     let collided: string[] = [];
@@ -1324,10 +1189,7 @@ export function publishTeamSelection(
             ? "mcp"
             : "commands";
     const first = slugifySkillName(all[0]!);
-    const base = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
-    const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
-    let branch = `${prefix}${slug}`;
-    let learnedBranchPrefix: string | undefined;
+    const slug = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     let version: string | null = null;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     // Last of the refusals, and deliberately so: the run that asks for a decision is also
@@ -1335,27 +1197,21 @@ export function publishTeamSelection(
     // proposal knowing which of the things they picked it actually covers. It sits before
     // the checkout, so a selection with no decision leaves no branch and no clone state.
     const proposal = commitSubject(commitPrefix, title);
-    const choice = options.commitMessage ?? {};
-    const stopped = (error: string): TeamPublishOutcome => ({
-      ok: false,
-      ...single,
-      refused,
-      error,
+    const decided = decidePush({
+      git,
+      forge,
+      repoDir,
+      team: pushTeam.team,
+      slug,
+      choice: options,
+      message: options.commitMessage ?? {},
       proposedMessage: proposal,
-      proposalHash: proposalFingerprint(proposal),
+      messagePrefix: commitPrefix,
+      rerun: "share them again",
     });
-    // See publishCandidate for why this is asked here, and only when the user gave no
-    // wording of their own.
-    const unavailable =
-      choice.message === undefined ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
-    const decided = decideCommitSubject(
-      choice,
-      proposal,
-      commitPrefix,
-      "share them again",
-      unavailable ? noRequestPossible(unavailable) : undefined,
-    );
-    if ("error" in decided) return stopped(decided.error);
+    if (!decided.ok) return { ...decided, ...single, refused };
+    const { branch } = decided;
+    let pushed: Pushed;
     try {
       git(["checkout", "-b", branch], repoDir);
       if (going.length) writeFileSync(target, merged);
@@ -1372,38 +1228,31 @@ export function publishTeamSelection(
         // gets copied, so a file added between the audit and here cannot ride along.
         copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
-      version = bumpPluginVersion(repoDir);
+      version = bumpPluginVersion(repoDir, decided.claims);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", decided.subject], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
-      branch = pushed.branch;
-      learnedBranchPrefix = pushed.learnedBranchPrefix;
+      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
     } catch (err) {
       return {
         ok: false,
         ...single,
         refused,
-        error: pushFailureReason(
-          team.repoUrl,
-          branch,
-          err,
-          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits ' +
-            '(for example "TEAM-1-"), then run this again.',
-          teamCommitPrefixFix(pushTeam.team, "run this again"),
-        ),
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "share them again", teamCommitPrefixFix(pushTeam.team, "run this again")),
       };
     }
     const requiresEnv: string[] = [];
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const pr = openPr(
+    const request = openRequest(
       team.repoUrl,
       branch,
       title,
       buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated, goingSkills),
       repoDir,
       forge,
+      decided.forgeProblem,
+      pushed,
     );
     return {
       ok: true,
@@ -1418,10 +1267,7 @@ export function publishTeamSelection(
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...(version ? { version } : {}),
-      ...(pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? undefined }),
-      ...(pr.url ? {} : pr.error ? { prError: pr.error } : {}),
-      ...(learnedBranchPrefix ? { learnedBranchPrefix } : {}),
-      ...(pushTeam.learned !== undefined ? { learnedCommitPrefix: pushTeam.learned } : {}),
+      ...request,
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });

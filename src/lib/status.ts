@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
@@ -14,6 +15,7 @@ import { loadNotifyConfig } from "./notify.js";
 import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
 import { displayPath } from "./display-path.js";
+import { marketplacesRoot, nonInteractiveEnv } from "./init.js";
 
 /**
  * The installed plugin's version, for support/bug reports. The bundle runs from
@@ -21,18 +23,97 @@ import { displayPath } from "./display-path.js";
  * couple of levels looking for .claude-plugin/plugin.json.
  */
 export function pluginVersion(): string {
+  const root = pluginRoot();
+  if (!root) return "unknown";
+  try {
+    const parsed = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8"));
+    if (typeof parsed?.version === "string") return parsed.version;
+  } catch {
+    // unreadable after all
+  }
+  return "unknown";
+}
+
+/** The directory the running plugin was installed into: the one holding its manifest. */
+export function pluginRoot(): string | null {
   const here = dirname(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
-      const parsed = JSON.parse(
-        readFileSync(join(here, up, ".claude-plugin", "plugin.json"), "utf8"),
-      );
-      if (typeof parsed?.version === "string") return parsed.version;
+      const parsed = JSON.parse(readFileSync(join(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join(here, up);
     } catch {
       // keep walking
     }
   }
-  return "unknown";
+  return null;
+}
+
+/** A git call short enough to sit inside a status screen: a release check that stalls the
+ * screen it decorates is worse than no release check. */
+const RELEASE_CHECK_TIMEOUT_MS = 5_000;
+
+export type ReleaseLookup = (args: string[], cwd: string) => string;
+
+export const lookupRelease: ReleaseLookup = (args, cwd) =>
+  execFileSync("git", args, {
+    cwd,
+    stdio: ["ignore", "pipe", "ignore"],
+    encoding: "utf8",
+    env: nonInteractiveEnv(),
+    timeout: RELEASE_CHECK_TIMEOUT_MS,
+  });
+
+/**
+ * The latest release tag of the repository this plugin was installed from, when it is
+ * newer than the running version; null otherwise, and null whenever it cannot be known.
+ *
+ * Claude Code runs an installed plugin from a copy, `plugins/cache/<marketplace>/<plugin>/
+ * <version>`, which is not a git repository; the marketplace it came from is a clone, at
+ * `plugins/marketplaces/<marketplace>`, and its origin is where releases are tagged. So the
+ * marketplace is read off the path the plugin runs from, and the clone is asked for the
+ * tags its origin has - one `ls-remote`, no model, no other request. Anything that does
+ * not fit (a checkout run by hand, no network, a fork without tags) is silence: an old
+ * version is worth one line, never an error.
+ */
+export function newerRelease(
+  installed: string,
+  root: string | null = pluginRoot(),
+  marketRoot: string = marketplacesRoot(),
+  git: ReleaseLookup = lookupRelease,
+): string | null {
+  if (!root || !versionNumbers(installed)) return null;
+  const versionDir = resolve(root);
+  if (basename(dirname(dirname(dirname(versionDir)))) !== "cache") return null;
+  const marketplace = basename(dirname(dirname(versionDir)));
+  let out: string;
+  try {
+    out = String(git(["ls-remote", "--tags", "origin"], join(marketRoot, marketplace)) ?? "");
+  } catch {
+    return null;
+  }
+  let latest: string | null = null;
+  for (const line of out.split("\n")) {
+    const tag = line.split("\t")[1]?.match(/^refs\/tags\/v?(\d+\.\d+\.\d+)$/)?.[1];
+    if (tag && (latest === null || laterThan(tag, latest))) latest = tag;
+  }
+  return latest && laterThan(latest, installed) ? latest : null;
+}
+
+function versionNumbers(version: string): number[] | null {
+  const parts = version.split(".").map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
+}
+
+function laterThan(a: string, b: string): boolean {
+  const x = versionNumbers(a)!;
+  const y = versionNumbers(b)!;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! > y[i]!;
+  return false;
+}
+
+/** The one line both screens print when the installed version is behind. */
+export function newerReleaseLine(installed: string, newer: string): string {
+  return `${installed} is installed and a newer version is available (${newer}) - update it from /plugin`;
 }
 
 export interface LedgerStats {
@@ -124,6 +205,8 @@ export function pipelineAggregate(home: string = handbookHome()): PipelineAggreg
 export interface StatusReport {
   home: string;
   version: string;
+  /** a newer release than the installed version, when one is known */
+  newerVersion?: string;
   ledger: LedgerStats;
   queue: { pending: number; approved: number; rejected: number; archived: number };
   /** queue directories whose candidate.json is unusable, or that cannot be read at all.
@@ -157,7 +240,7 @@ export interface StatusReport {
   };
 }
 
-export function gatherStatus(home: string = handbookHome()): StatusReport {
+export function gatherStatus(home: string = handbookHome(), release: (installed: string) => string | null = newerRelease): StatusReport {
   const candidates = listCandidates(home);
   const count = (status: string) => candidates.filter((c) => c.status === status).length;
   const score = loadScoreConfig(home);
@@ -168,9 +251,12 @@ export function gatherStatus(home: string = handbookHome()): StatusReport {
   // delivery mode is persisted at approval time - inferring it from the
   // deliveredTo string misclassifies local-path team repos and Windows paths
   const teamShared = approved.filter((c) => c.deliveredMode === "team").length;
+  const version = pluginVersion();
+  const newerVersion = release(version);
   return {
     home,
-    version: pluginVersion(),
+    version,
+    ...(newerVersion ? { newerVersion } : {}),
     ledger: ledgerStats(home),
     queue: {
       pending: count("pending"),
@@ -240,6 +326,7 @@ export function formatStatus(report: StatusReport): string {
   const { ledger, queue, unreadable, lastRun, config } = report;
   const lines = [
     `TeamHandbook status  (v${report.version}, ${displayPath(report.home)})`,
+    ...(report.newerVersion ? [`Version:         ${newerReleaseLine(report.version, report.newerVersion)}`] : []),
     "",
     `Detector:        ${report.detector.postToolUse} tool calls seen, ${report.detector.bashFailuresCaptured} failures captured, ${report.detector.pairsResolved} pairs resolved`,
     `Signal ledger:   ${ledger.total} signals (${ledger.candidates} candidate, ${ledger.weak} weak), ${ledger.distinctFingerprints} distinct fingerprints`,

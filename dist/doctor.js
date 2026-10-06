@@ -1,7 +1,7 @@
 // src/lib/doctor.ts
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join9 } from "node:path";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join10 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
@@ -55,9 +55,9 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname, join as join5 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { dirname, join as join6 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync3 } from "node:fs";
@@ -92,10 +92,142 @@ import { join as join4 } from "node:path";
 import { promisify } from "node:util";
 
 // src/lib/identity.ts
+import { execFileSync } from "node:child_process";
+import { homedir as homedir2, userInfo } from "node:os";
+import { basename } from "node:path";
+var GENERIC_ACCOUNT = /* @__PURE__ */ new Set([
+  "user",
+  "users",
+  "username",
+  "you",
+  "me",
+  "home",
+  "root",
+  "admin",
+  "administrator",
+  "runner",
+  "ubuntu",
+  "debian",
+  "alpine",
+  "docker",
+  "container",
+  "node",
+  "vscode",
+  "devcontainer",
+  "codespace",
+  "shared",
+  "public",
+  "dev",
+  "developer",
+  "test",
+  "build",
+  "builder",
+  "ci",
+  "jenkins",
+  "deploy",
+  "app",
+  "service",
+  "worker",
+  "git",
+  "www-data",
+  "nobody"
+]);
+var MIN_NAME_CHARS = 4;
 var HOME_PATH = new RegExp(
   "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
   "g"
 );
+var EMAIL = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+var ROLE_MAILBOX = /* @__PURE__ */ new Set([
+  "admin",
+  "bot",
+  "build",
+  "builder",
+  "ci",
+  "deploy",
+  "git",
+  "infra",
+  "jenkins",
+  "no-reply",
+  "noreply",
+  "ops",
+  "platform",
+  "release",
+  "root",
+  "security",
+  "support",
+  "team"
+]);
+var RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$/i;
+var ROLE_MAILBOX_DOMAIN = /(?:^|\.)users\.noreply\.github\.com$/i;
+var FORGE_OWNER_BEFORE = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/$/;
+var escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function usableName(name) {
+  return name.length >= MIN_NAME_CHARS && !GENERIC_ACCOUNT.has(name.toLowerCase());
+}
+function gitConfig(key) {
+  try {
+    return execFileSync("git", ["config", "--get", key], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 2e3
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+function gitAuthorName() {
+  const name = gitConfig("user.name");
+  return name && /\s/.test(name) ? name : null;
+}
+function readHostIdentity() {
+  const candidates = [];
+  try {
+    candidates.push(userInfo().username);
+  } catch {
+  }
+  try {
+    candidates.push(basename(homedir2()));
+  } catch {
+  }
+  candidates.push(gitAuthorName());
+  const names = [];
+  for (const name of candidates) {
+    if (!name || !usableName(name)) continue;
+    if (!names.some((seen) => seen.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return { names };
+}
+var cached = null;
+function hostIdentity() {
+  if (!cached) cached = readHostIdentity();
+  return cached;
+}
+function traces(text, host) {
+  const found = [];
+  for (const match of text.matchAll(HOME_PATH)) {
+    if (GENERIC_ACCOUNT.has((match[1] ?? "").toLowerCase())) continue;
+    found.push({ class: "home-path", index: match.index, length: match[0].length, replacement: "~" });
+  }
+  for (const match of text.matchAll(EMAIL)) {
+    const local = (match[1] ?? "").toLowerCase();
+    if (ROLE_MAILBOX.has(local)) continue;
+    if (RESERVED_DOMAIN.test(match[2] ?? "") || ROLE_MAILBOX_DOMAIN.test(match[2] ?? "")) continue;
+    found.push({ class: "email", index: match.index, length: match[0].length, replacement: "<email>" });
+  }
+  if (host.names.length > 0) {
+    const ordered = [...host.names].sort((a, b) => b.length - a.length);
+    const names = new RegExp(`\\b(?:${ordered.map(escapeRe).join("|")})\\b`, "gi");
+    for (const match of text.matchAll(names)) {
+      if (FORGE_OWNER_BEFORE.test(text.slice(Math.max(0, match.index - 80), match.index))) continue;
+      found.push({ class: "os-username", index: match.index, length: match[0].length, replacement: "<user>" });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+function detectIdentity(text, host = hostIdentity()) {
+  return traces(text, host)[0]?.class ?? null;
+}
 
 // src/lib/prompt-safety.ts
 var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
@@ -248,6 +380,18 @@ var GLOBAL_TWIN = new Map(
     new RegExp(p.re.source, p.re.flags + "g")
   ])
 );
+function detectSecret(text) {
+  for (const { name, re, reject } of SECRET_PATTERNS) {
+    if (!reject) {
+      if (re.test(text)) return name;
+      continue;
+    }
+    for (const match of text.matchAll(GLOBAL_TWIN.get(name))) {
+      if (!reject(match[0])) return name;
+    }
+  }
+  return null;
+}
 
 // src/lib/score.ts
 var execFileAsync = promisify(execFile);
@@ -454,11 +598,60 @@ function hostFromUrl(url) {
   if (!normalized) return null;
   return normalized.slice(0, normalized.indexOf("/"));
 }
+function forgeTool(repoUrl) {
+  const host = hostFromUrl(repoUrl);
+  return host && host.includes("github") ? "gh" : "glab";
+}
+function forgeSignInProblem(repoUrl, repoDir, forge) {
+  const tool = forgeTool(repoUrl);
+  const host = hostFromUrl(repoUrl);
+  const attempts = host ? [["auth", "status", "--hostname", host], ["auth", "status"]] : [["auth", "status"]];
+  let last = "";
+  for (const args of attempts) {
+    try {
+      forge(tool, args, repoDir);
+      return null;
+    } catch (err) {
+      const e = err;
+      if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      last = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+      if (!/unknown (flag|shorthand)/i.test(stderr)) break;
+    }
+  }
+  return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
+}
+
+// src/lib/branch.ts
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join5 } from "node:path";
+var BRANCH_EXAMPLE_MAX = 100;
+function branchExampleProblem(value) {
+  if (value.length > BRANCH_EXAMPLE_MAX) return `longer than ${BRANCH_EXAMPLE_MAX} characters`;
+  if (/\p{C}/u.test(value)) return "carrying a control character";
+  const identity = detectIdentity(value);
+  if (identity) return `carrying a trace of a machine (${identity})`;
+  const secret = detectSecret(value);
+  if (secret) return `carrying what looks like a ${secret}`;
+  return null;
+}
+function readTeamBranchExample(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  const value = raw.trim();
+  const problem = branchExampleProblem(value);
+  return problem ? { problem } : { example: value };
+}
 
 // src/lib/display-path.ts
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { sep } from "node:path";
-function displayPath(path, userHome = homedir2()) {
+function displayPath(path, userHome = homedir3()) {
   if (typeof path !== "string") return String(path);
   if (!userHome) return path;
   if (path === userHome) return "~";
@@ -680,7 +873,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -689,7 +882,7 @@ function readTeamCommitPrefix(repoDir) {
   const problem = commitPrefixProblem(value);
   return problem ? { problem } : { prefix: value };
 }
-function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
+function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample) {
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -726,6 +919,8 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
     [TEAM_PREFIX_FILE]: JSON.stringify(
       {
         commitPrefix: commitPrefix.trim(),
+        // Only when someone recorded one: a key written empty would read as an answer.
+        ...branchExample ? { branchExample } : {},
         comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it."
       },
       null,
@@ -743,13 +938,22 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false) {
   }
   return files;
 }
+function nonInteractiveEnv(base = process.env) {
+  return {
+    ...base,
+    GIT_TERMINAL_PROMPT: "0",
+    GLAB_NO_PROMPT: "1",
+    GH_PROMPT_DISABLED: "1",
+    NO_COLOR: "1"
+  };
+}
 function marketplacesRoot() {
-  return join5(homedir3(), ".claude", "plugins", "marketplaces");
+  return join6(homedir4(), ".claude", "plugins", "marketplaces");
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname2, join as join6, relative } from "node:path";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2, join as join7, relative } from "node:path";
 var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
 var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
 var CI_MARKER = "scripts/bump-version.mjs";
@@ -760,7 +964,7 @@ function isTeamOwned(path) {
 }
 function readIfPresent(file) {
   try {
-    return readFileSync5(file, "utf8");
+    return readFileSync6(file, "utf8");
   } catch {
     return null;
   }
@@ -768,7 +972,7 @@ function readIfPresent(file) {
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
   for (const part of path.split("/")) {
-    current = join6(current, part);
+    current = join7(current, part);
     let stat;
     try {
       stat = lstatSync(current);
@@ -830,11 +1034,12 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
-function upgradeCandidates(repoDir, team) {
-  const withCi = existsSync3(join6(repoDir, CI_MARKER));
+function upgradeCandidates(repoDir, team, branchExample) {
+  const withCi = existsSync3(join7(repoDir, CI_MARKER));
+  const example = branchExample ?? readTeamBranchExample(repoDir).example;
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
-  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi);
+  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi, example);
   const known = commitPrefixIsKnown(team) || recorded !== void 0;
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
@@ -857,14 +1062,14 @@ function upgradeCandidates(repoDir, team) {
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join6(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join6(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join7(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join7(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
 }
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
-    const existing = readIfPresent(join6(repoDir, path));
+    const existing = readIfPresent(join7(repoDir, path));
     if (existing === null) return { path, state: "absent" };
     return { path, state: existing === content ? "current" : "differs" };
   });
@@ -921,40 +1126,88 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-import { readFileSync as readFileSync6 } from "node:fs";
-import { dirname as dirname3, join as join8 } from "node:path";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { basename as basename3, dirname as dirname3, join as join9, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/notify.ts
 var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 
 // src/lib/pipeline.ts
-import { basename, join as join7 } from "node:path";
+import { basename as basename2, join as join8 } from "node:path";
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join7(home, "pipeline.log");
+  return join8(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
 // src/lib/status.ts
 function pluginVersion() {
+  const root = pluginRoot();
+  if (!root) return "unknown";
+  try {
+    const parsed = JSON.parse(readFileSync7(join9(root, ".claude-plugin", "plugin.json"), "utf8"));
+    if (typeof parsed?.version === "string") return parsed.version;
+  } catch {
+  }
+  return "unknown";
+}
+function pluginRoot() {
   const here = dirname3(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
-      const parsed = JSON.parse(
-        readFileSync6(join8(here, up, ".claude-plugin", "plugin.json"), "utf8")
-      );
-      if (typeof parsed?.version === "string") return parsed.version;
+      const parsed = JSON.parse(readFileSync7(join9(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join9(here, up);
     } catch {
     }
   }
-  return "unknown";
+  return null;
+}
+var RELEASE_CHECK_TIMEOUT_MS = 5e3;
+var lookupRelease = (args, cwd) => execFileSync2("git", args, {
+  cwd,
+  stdio: ["ignore", "pipe", "ignore"],
+  encoding: "utf8",
+  env: nonInteractiveEnv(),
+  timeout: RELEASE_CHECK_TIMEOUT_MS
+});
+function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
+  if (!root || !versionNumbers(installed)) return null;
+  const versionDir = resolve(root);
+  if (basename3(dirname3(dirname3(dirname3(versionDir)))) !== "cache") return null;
+  const marketplace = basename3(dirname3(dirname3(versionDir)));
+  let out;
+  try {
+    out = String(git(["ls-remote", "--tags", "origin"], join9(marketRoot, marketplace)) ?? "");
+  } catch {
+    return null;
+  }
+  let latest = null;
+  for (const line of out.split("\n")) {
+    const tag = line.split("	")[1]?.match(/^refs\/tags\/v?(\d+\.\d+\.\d+)$/)?.[1];
+    if (tag && (latest === null || laterThan(tag, latest))) latest = tag;
+  }
+  return latest && laterThan(latest, installed) ? latest : null;
+}
+function versionNumbers(version) {
+  const parts = version.split(".").map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
+}
+function laterThan(a, b) {
+  const x = versionNumbers(a);
+  const y = versionNumbers(b);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+function newerReleaseLine(installed, newer) {
+  return `${installed} is installed and a newer version is available (${newer}) - update it from /plugin`;
 }
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync6(pipelineLogFile(home), "utf8");
+    raw = readFileSync7(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -970,7 +1223,7 @@ function lastPipelineRun(home = handbookHome()) {
 }
 
 // src/lib/doctor.ts
-var runCommand = (cmd, args, timeoutMs, options) => execFileSync(cmd, args, {
+var runCommand = (cmd, args, timeoutMs, options) => execFileSync3(cmd, args, {
   encoding: "utf8",
   timeout: timeoutMs,
   stdio: ["ignore", "pipe", "pipe"],
@@ -1117,7 +1370,7 @@ function checkGitIdentity(home, run) {
   );
 }
 function checkHomeWritable(home) {
-  const probe = join9(home, `.doctor-probe-${process.pid}`);
+  const probe = join10(home, `.doctor-probe-${process.pid}`);
   try {
     mkdirSync5(home, { recursive: true });
     writeFileSync4(probe, "ok");
@@ -1128,10 +1381,10 @@ function checkHomeWritable(home) {
   }
 }
 function checkConfig(home) {
-  const file = join9(home, "config.json");
+  const file = join10(home, "config.json");
   if (!existsSync4(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync7(file, "utf8"));
+    const parsed = JSON.parse(readFileSync8(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -1163,10 +1416,10 @@ function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync7(join9(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync8(join10(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync3(join9(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync3(join10(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
@@ -1204,22 +1457,14 @@ function checkTeamRepo(home, run) {
 function checkForge(home, run) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const tool = (hostFromUrl(team.repoUrl) ?? "").includes("github") ? "gh" : "glab";
-  try {
-    run(tool, ["auth", "status"], 1e4);
-    return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
-  } catch (err) {
-    if (err?.code === "ENOENT") {
-      return warn(
-        "forge CLI",
-        `${tool} not installed - approvals still push a branch and print a manual PR link; install ${tool} to auto-open PRs`
-      );
-    }
-    return warn(
-      "forge CLI",
-      `${tool} installed but not authenticated - run \`${tool} auth login\` (approvals still print a manual link)`
-    );
+  const tool = forgeTool(team.repoUrl);
+  const problem = forgeSignInProblem(team.repoUrl, home, (cli, args) => run(cli, args, 1e4));
+  if (!problem) return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
+  const instead = tool === "glab" && hostFromUrl(team.repoUrl) ? "approvals still push a branch asking GitLab to open the request, or print a link" : "approvals still push a branch and print a manual PR link";
+  if (problem.includes("not installed")) {
+    return warn("forge CLI", `${tool} not installed - ${instead}; install ${tool} to auto-open PRs`);
   }
+  return warn("forge CLI", `${problem} - run \`${tool} auth login\` (${instead})`);
 }
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1227,7 +1472,7 @@ function isPlainObject(value) {
 function declaredMcpServerNames(mcpFile) {
   let raw;
   try {
-    raw = readFileSync7(mcpFile, "utf8");
+    raw = readFileSync8(mcpFile, "utf8");
   } catch {
     return { error: "unreadable" };
   }
@@ -1258,7 +1503,7 @@ function parseMcpListing(output) {
 function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const mcpFile = join9(marketRoot, team.marketplaceName, ".mcp.json");
+  const mcpFile = join10(marketRoot, team.marketplaceName, ".mcp.json");
   if (!existsSync4(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
@@ -1308,7 +1553,7 @@ function checkLastRun(home) {
     const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join9(home, "pipeline.log"))})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join10(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -1318,11 +1563,18 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join9(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join10(home, "abandoned.jsonl"))} once claude works again`
   );
 }
-function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot()) {
+function checkRelease(version, run, marketRoot, root) {
+  const newer = newerRelease(version, root, marketRoot, (args, cwd) => run("git", args, 5e3, { cwd }));
+  return newer ? warn("version", newerReleaseLine(version, newer)) : null;
+}
+function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot(), root = pluginRoot()) {
+  const version = pluginVersion();
+  const release = checkRelease(version, run, marketRoot, root);
   const checks = [
+    ...release ? [release] : [],
     checkNode(),
     ...checkClaudeCli(run, home),
     checkHomeWritable(home),
@@ -1339,7 +1591,7 @@ function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketp
   checks.push(checkLastRun(home));
   const abandoned = checkAbandoned(home);
   if (abandoned) checks.push(abandoned);
-  return { version: pluginVersion(), checks };
+  return { version, checks };
 }
 var MARKS = { ok: "\u2714", warn: "\u26A0", fail: "\u2718" };
 function formatDoctor(report2) {

@@ -28,9 +28,24 @@ import {
  */
 const APPROVED = { message: "chore: the case under test" } as const;
 
+/**
+ * The two runs a refresh takes when the user confirms the branch it proposes: the first
+ * shows the name and pushes nothing, the second names it back.
+ */
 type UpgradeArgs = Parameters<typeof applyUpgradeDeciding>;
-function applyUpgrade(team: UpgradeArgs[0], paths: UpgradeArgs[1], git?: UpgradeArgs[2], forge?: UpgradeArgs[3]) {
-  return applyUpgradeDeciding(team, paths, git, forge, APPROVED);
+function applyUpgrade(
+  team: UpgradeArgs[0],
+  paths: UpgradeArgs[1],
+  git?: UpgradeArgs[2],
+  forge?: UpgradeArgs[3],
+  message: UpgradeArgs[4] = APPROVED,
+  choice: UpgradeArgs[5] = {},
+) {
+  if (choice.branch !== undefined) return applyUpgradeDeciding(team, paths, git, forge, message, choice);
+  const probe = applyUpgradeDeciding(team, paths, git, forge, message, choice);
+  return !probe.ok && probe.proposedBranch
+    ? applyUpgradeDeciding(team, paths, git, forge, message, { ...choice, branch: probe.proposedBranch })
+    : probe;
 }
 
 // Every case here drives real git against a real bare repository, because the thing under
@@ -373,17 +388,22 @@ describe("applyUpgrade", () => {
       args[0] === "auth" ? "Logged in to acme.example as dev" : "https://acme.example/mr/2";
     const probe = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, signedInForge);
 
-    const result = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, signedInForge, {
-      delegated: probe.proposalHash!,
-    });
+    const result = applyUpgradeDeciding(
+      teamFor(remote),
+      ["README.md"],
+      gitWithIdentity,
+      signedInForge,
+      { delegated: probe.proposalHash! },
+      { branch: probe.proposedBranch! },
+    );
 
-    expect(result).toMatchObject({ ok: true, commitMessage: probe.proposedMessage });
+    expect(result).toMatchObject({ ok: true, commitMessage: probe.proposedMessage, branch: "refresh-scaffold" });
   });
 
   it("given a message the user approved, when a refresh is sent, then the refresh commit carries it", () => {
     const remote = staleRepo();
 
-    const result = applyUpgradeDeciding(teamFor(remote), ["README.md"], gitWithIdentity, noForge, {
+    const result = applyUpgrade(teamFor(remote), ["README.md"], gitWithIdentity, noForge, {
       message: "chore: bring our scaffold up to date",
     });
 
@@ -407,7 +427,7 @@ describe("applyUpgrade", () => {
 
     const result = applyUpgrade(teamFor(remote), ["README.md"], gitWithIdentity, noForge);
 
-    expect(result).toMatchObject({ ok: true, branch: "handbook/refresh-scaffold", refreshed: ["README.md"] });
+    expect(result).toMatchObject({ ok: true, branch: "refresh-scaffold", refreshed: ["README.md"] });
     expect(show(remote, result.branch!, "README.md")).toContain("/handbook:join");
     // the file a team is most likely to have edited was not named, so it is untouched
     expect(show(remote, result.branch!, "hooks/notice.mjs")).toBe("// the team edited this by hand\nconsole.log('ours');\n");
@@ -880,7 +900,8 @@ describe("formatUpgradePlan", () => {
       ...TEAM_CONTENT,
     });
 
-    const text = formatUpgradePlan(planUpgrade(teamFor(remote)));
+    const signedIn = (_tool: "gh" | "glab", args: string[]) => (args[0] === "auth" ? "Logged in" : "");
+    const text = formatUpgradePlan(planUpgrade(teamFor(remote), undefined, signedIn));
 
     expect(text).toContain("--file README.md");
     // The screen that asks which files to send is the screen that shows what the commit

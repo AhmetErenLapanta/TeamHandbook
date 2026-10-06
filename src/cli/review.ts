@@ -25,12 +25,15 @@ import { lastPipelineRun } from "../lib/status.js";
 import { handbookHome } from "../lib/session-state.js";
 import { candidatesDir } from "../lib/skill-index.js";
 import { displayPath } from "../lib/display-path.js";
+import { runGit } from "../lib/init.js";
+import { branchHints } from "../lib/branch.js";
 
 function usage(): never {
   console.error(
     "usage: review.js <list|show <slug>|approve <slug...>|reject <slug...>|sweep|restore [manifest]> " +
       "[--all] [--never] [--archived] [--dry-run] [--to personal|project|team] [--update] [--as <name>] " +
-      "[--message <commit message>] [--delegate-message <fingerprint>]",
+      "[--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] " +
+      "[--version-after-open]",
   );
   process.exit(2);
 }
@@ -241,6 +244,14 @@ async function main(): Promise<void> {
   if (given("--message") && !message) usage();
   const delegateMessage = valueOf("--delegate-message");
   if (given("--delegate-message") && !delegateMessage) usage();
+  // The branch a team delivery goes out on, the other half of the question asked before
+  // every push: used exactly as given, and for this one request only. The hint is a branch
+  // the reviewer named earlier in the session, lending only its ticket key to a proposal.
+  const branch = valueOf("--branch");
+  if (given("--branch") && !branch) usage();
+  const branchHint = valueOf("--branch-hint");
+  if (given("--branch-hint") && !branchHint) usage();
+  const versionAfterOpen = args.includes("--version-after-open");
   const positional = args.filter((a, i) => !a.startsWith("--") && !consumed.has(i));
   const [cmd = "list", ...slugArgs] = positional;
   const home = handbookHome();
@@ -299,10 +310,19 @@ async function main(): Promise<void> {
   // which is the consent model of this whole command turned inside out.
   // A commit message joins them: one sentence is not consent for several different
   // commits, and `--all --message` would put the same claim on every one of them.
-  if ((as || update || message !== undefined || delegateMessage !== undefined) && (all || slugs.length > 1)) usage();
+  // A branch is one more answer about one request: two candidates cannot both go out on it.
+  if (
+    (as || update || message !== undefined || delegateMessage !== undefined || branch !== undefined || versionAfterOpen) &&
+    (all || slugs.length > 1)
+  ) {
+    usage();
+  }
   const options = {
     ...(update ? { update } : {}),
     ...(as ? { as } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(versionAfterOpen ? { versionAfterOpen } : {}),
+    hints: branchHints(process.cwd(), runGit, branchHint),
     commitMessage: {
       ...(message !== undefined ? { message } : {}),
       ...(delegateMessage !== undefined ? { delegated: delegateMessage } : {}),

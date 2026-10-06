@@ -8,25 +8,7 @@ import { join as join2 } from "node:path";
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
-
-// src/lib/fs-atomic.ts
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-var seq = 0;
-function writeFileAtomic(file, data) {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${seq++}-${process.hrtime.bigint().toString(36)}`;
-  try {
-    writeFileSync(tmp, data);
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-// src/lib/session-state.ts
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
@@ -34,7 +16,7 @@ function handbookHome() {
 function handbookWorkdir(prefix, home = handbookHome()) {
   try {
     const root = join(home, "tmp");
-    mkdirSync2(root, { recursive: true });
+    mkdirSync(root, { recursive: true });
     return mkdtempSync(join(root, prefix));
   } catch {
     return mkdtempSync(join(tmpdir(), prefix));
@@ -67,10 +49,10 @@ function configIsBroken(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { execFileSync as execFileSync3 } from "node:child_process";
+import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join5 } from "node:path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join6 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
@@ -220,7 +202,7 @@ var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
 var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
 
 // src/lib/queue.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync3 } from "node:fs";
 import { basename as basename2, join as join4 } from "node:path";
 
 // src/lib/skill-index.ts
@@ -427,8 +409,8 @@ function detectSecret(text) {
 }
 
 // src/lib/skill-files.ts
-import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { copyFileSync, mkdirSync as mkdirSync2, readdirSync as readdirSync2, writeFileSync } from "node:fs";
+import { dirname, join as join3 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -454,12 +436,12 @@ function listSkillFiles(dir) {
   return { files, skipped };
 }
 function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDir).files) {
-  mkdirSync3(destDir, { recursive: true });
-  writeFileSync2(join3(destDir, "SKILL.md"), skillMd);
+  mkdirSync2(destDir, { recursive: true });
+  writeFileSync(join3(destDir, "SKILL.md"), skillMd);
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
     const target = join3(destDir, rel);
-    mkdirSync3(dirname2(target), { recursive: true });
+    mkdirSync2(dirname(target), { recursive: true });
     copyFileSync(join3(srcDir, rel), target);
   }
 }
@@ -654,6 +636,271 @@ function openPr(repoUrl, branch, title, body, repoDir, forge) {
 function noRequestPossible(reason) {
   return `no merge request can be opened from this machine (${reason})`;
 }
+function forgeNotice(repoUrl, problem) {
+  const byPush = forgeTool(repoUrl) === "glab" && hostFromUrl(repoUrl) !== null;
+  return (byPush ? `This machine cannot open the merge request with glab (${problem}): the branch will be pushed asking GitLab to open the request itself, and a link printed if it does not.` : `This machine cannot open the merge request (${problem}): the branch will be pushed and a link printed.`) + ' For the same reason "you decide" is not an answer to the commit message here: the wording is asked of you.';
+}
+
+// src/lib/branch.ts
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join5 } from "node:path";
+var TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+/;
+function ticketKey(name) {
+  return name?.trim().match(TICKET_KEY)?.[0];
+}
+function currentBranch(cwd, git) {
+  try {
+    return String(git(["symbolic-ref", "--short", "-q", "HEAD"], cwd) ?? "").trim() || void 0;
+  } catch {
+    return void 0;
+  }
+}
+function branchHints(cwd, git, previous) {
+  return { current: currentBranch(cwd, git), ...previous ? { previous } : {} };
+}
+function proposeBranch(slug, team, example, hints, taken) {
+  const free = (name) => uniqueSlug(name, (candidate) => taken.has(candidate));
+  const key = ticketKey(hints.current) ?? ticketKey(hints.previous);
+  if (key) return { branch: free(`${key}-${slug}`) };
+  const prefix = team.branchPrefix?.trim();
+  if (prefix) return { branch: free(`${prefix}${slug}`) };
+  const commitKey = ticketKey(team.commitPrefix);
+  if (commitKey) return { branch: free(`${commitKey}-${slug}`) };
+  if (example) {
+    if (ticketKey(example)) return { template: `<TICKET>-${slug}`, example };
+    const slash = example.lastIndexOf("/");
+    if (slash > 0) return { branch: free(`${example.slice(0, slash + 1)}${slug}`) };
+  }
+  return { branch: free(slug) };
+}
+var BRANCH_NAME_MAX = 200;
+function branchNameProblem(name, git, cwd) {
+  if (!name.trim() || name !== name.trim()) return "it is empty or starts or ends with a space";
+  if (name.length > BRANCH_NAME_MAX) return `it is longer than ${BRANCH_NAME_MAX} characters`;
+  if (/\p{C}/u.test(name)) return "it carries a control character";
+  const identity = detectIdentity(name);
+  if (identity) return `it carries a trace of this machine (${identity}), and every teammate reads the branch list`;
+  const secret = detectSecret(name);
+  if (secret) return `it carries what looks like a ${secret}, and every teammate reads the branch list`;
+  if (name.startsWith("-") || name.includes("@{")) return "git does not accept it as a branch name";
+  try {
+    git(["check-ref-format", "--branch", name], cwd);
+  } catch {
+    return "git does not accept it as a branch name";
+  }
+  return null;
+}
+var BRANCH_EXAMPLE_MAX = 100;
+function branchExampleProblem(value) {
+  if (value.length > BRANCH_EXAMPLE_MAX) return `longer than ${BRANCH_EXAMPLE_MAX} characters`;
+  if (/\p{C}/u.test(value)) return "carrying a control character";
+  const identity = detectIdentity(value);
+  if (identity) return `carrying a trace of a machine (${identity})`;
+  const secret = detectSecret(value);
+  if (secret) return `carrying what looks like a ${secret}`;
+  return null;
+}
+function readTeamBranchExample(repoDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.branchExample;
+  } catch {
+    return {};
+  }
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  const value = raw.trim();
+  const problem = branchExampleProblem(value);
+  return problem ? { problem } : { example: value };
+}
+function remoteHeads(git, repoDir) {
+  try {
+    const heads = /* @__PURE__ */ new Map();
+    for (const line of String(git(["ls-remote", "--heads", "origin"], repoDir) ?? "").split("\n")) {
+      const [sha, ref] = line.split("	");
+      if (sha && ref?.startsWith("refs/heads/")) heads.set(ref.slice("refs/heads/".length), sha.trim());
+    }
+    return heads;
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+}
+function versionParts(version) {
+  const parts = version.split(".").map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
+}
+function compareVersions(a, b) {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
+function readPluginVersion(repoDir) {
+  try {
+    const version = JSON.parse(readFileSync4(join5(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
+    return typeof version === "string" ? version : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function openVersionClaims(git, repoDir, heads, current) {
+  if (!current || !versionParts(current)) return [];
+  try {
+    const tip = String(git(["rev-parse", "HEAD"], repoDir) ?? "").trim();
+    const others = [...heads].filter(([, sha]) => sha !== tip).map(([branch]) => branch);
+    if (!others.length) return [];
+    git(
+      ["fetch", "--quiet", "--depth", "1", "origin", ...others.map((b) => `+refs/heads/${b}:refs/remotes/origin/${b}`)],
+      repoDir
+    );
+    const claims = [];
+    for (const branch of others) {
+      let version;
+      try {
+        const manifest = git(["show", `refs/remotes/origin/${branch}:.claude-plugin/plugin.json`], repoDir);
+        version = JSON.parse(String(manifest ?? ""))?.version;
+      } catch {
+        continue;
+      }
+      if (typeof version === "string" && (compareVersions(version, current) ?? 0) > 0) claims.push({ branch, version });
+    }
+    return claims;
+  } catch {
+    return [];
+  }
+}
+function highest(versions) {
+  return versions.reduce(
+    (top, v) => top === void 0 || (compareVersions(v, top) ?? 0) > 0 ? v : top,
+    void 0
+  );
+}
+function versionPast(current, claims) {
+  const top = versionParts(highest([current, ...claims.map((c) => c.version)]));
+  return [top[0], top[1], top[2] + 1].join(".");
+}
+function claimMessage(claims, current, rerun) {
+  const named = claims.map((c) => `"${c.branch}" (${c.version})`).join(", ");
+  return `the team repository has ${claims.length === 1 ? "a branch" : "branches"} that ${claims.length === 1 ? "is" : "are"} not merged and already raise${claims.length === 1 ? "s" : ""} the plugin past ${current}: ${named}. If this request raises it to the same number and both are merged, the second one reaches nobody - the version line merges as identical and no teammate's copy refreshes for it. Either send this one as ${versionPast(current, claims)}, past ${claims.length === 1 ? "it" : "them"} - ${rerun} with \`--version-after-open\` - or stop here and merge or close ${claims.length === 1 ? "that branch" : "those branches"} first. Nothing was committed and nothing was pushed.`;
+}
+function shownBranch(proposal) {
+  return "branch" in proposal ? `\`${proposal.branch}\`` : `\`${proposal.template}\` (branches here look like \`${proposal.example}\`: which ticket is this?)`;
+}
+function pushQuestion(branch, message) {
+  if (branch && message !== null) {
+    return `Branch ${shownBranch(branch)} \xB7 message \`${message}\` - confirm or change either.`;
+  }
+  if (branch) return `Branch ${shownBranch(branch)} - confirm or change it.`;
+  return `Message \`${message}\` - confirm or change it.`;
+}
+function previewPush(git, forge, repoDir, team, slug, hints = {}) {
+  const heads = remoteHeads(git, repoDir);
+  const taken = new Set(heads.keys());
+  const current = readPluginVersion(repoDir);
+  return {
+    taken,
+    proposal: proposeBranch(slug, team, readTeamBranchExample(repoDir).example ?? team.branchExample, hints, taken),
+    forgeProblem: forgeSignInProblem(team.repoUrl, repoDir, forge),
+    ...current ? { current } : {},
+    claims: openVersionClaims(git, repoDir, heads, current)
+  };
+}
+function versionClaimProblem(preview, rerun) {
+  return preview.claims.length && preview.current ? claimMessage(preview.claims, preview.current, rerun) : null;
+}
+function decidePush(input) {
+  const { git, repoDir, team, choice, message, proposedMessage, rerun } = input;
+  const preview = previewPush(git, input.forge, repoDir, team, input.slug, choice.hints);
+  const { forgeProblem } = preview;
+  const decided = decideCommitSubject(
+    message,
+    proposedMessage,
+    input.messagePrefix,
+    rerun,
+    forgeProblem ? noRequestPossible(forgeProblem) : void 0
+  );
+  let branchShown = null;
+  let branchSaid = null;
+  if (choice.branch === void 0) {
+    const unusable = "branch" in preview.proposal ? branchNameProblem(preview.proposal.branch, git, repoDir) : null;
+    branchShown = unusable ? null : preview.proposal;
+    branchSaid = unusable ? `branch name required: the branch this would propose cannot be used (${unusable}), so ask the user for one and ${rerun} with \`--branch <name>\`.` : `branch name required: nothing is pushed under a name the user has not seen. Show it to them with the message, then ${rerun} with \`--branch <name>\`: the one above if they confirmed it, or the one they gave.`;
+  } else {
+    const problem = branchNameProblem(choice.branch, git, repoDir);
+    if (problem) {
+      branchShown = { branch: choice.branch };
+      branchSaid = `"${choice.branch}" cannot be the branch: ${problem}. Ask for another and ${rerun} with \`--branch <name>\`.`;
+    } else if (preview.taken.has(choice.branch)) {
+      branchShown = { branch: choice.branch };
+      branchSaid = `the team repository already has a branch named "${choice.branch}", which may carry an open request of its own, so nothing was pushed over it and no other name was picked for you. Ask for another name and ${rerun} with \`--branch <name>\`, or merge or delete that branch first.`;
+    }
+  }
+  const claimSaid = choice.versionAfterOpen ? null : versionClaimProblem(preview, rerun);
+  if (!("error" in decided) && !branchSaid && !claimSaid) {
+    return { ok: true, branch: choice.branch, subject: decided.subject, claims: preview.claims, forgeProblem };
+  }
+  const asksMessage = "error" in decided && message.message === void 0 && message.delegated === void 0 && commitMessageProblem(proposedMessage) === null;
+  const asked = branchShown || asksMessage ? [pushQuestion(branchShown, asksMessage ? proposedMessage : null)] : [];
+  return {
+    ok: false,
+    error: [
+      ...asked,
+      ..."error" in decided ? [decided.error] : [],
+      ...branchSaid ? [branchSaid] : [],
+      ...claimSaid ? [claimSaid] : [],
+      // On the screen that asks, before anything is pushed: the user learns how the request
+      // will reach the forge while they can still do something about it, not after the push.
+      ...asked.length && forgeProblem ? [forgeNotice(team.repoUrl, forgeProblem)] : []
+    ].join("\n"),
+    ...branchShown && "branch" in branchShown ? { proposedBranch: branchShown.branch } : {},
+    proposedMessage,
+    proposalHash: proposalFingerprint(proposedMessage)
+  };
+}
+function requestPushOptions(repoUrl, forgeProblem, title) {
+  if (!forgeProblem || forgeTool(repoUrl) !== "glab" || !hostFromUrl(repoUrl)) return [];
+  return ["-o", "merge_request.create", "-o", `merge_request.title=${title}`, "-o", "merge_request.remove_source_branch"];
+}
+function pushBranch(git, repoDir, ref, options = []) {
+  const push = (extra) => String(git(["push", ...extra, "origin", ref], repoDir) ?? "");
+  if (!options.length) return { output: push([]), optionsSent: false };
+  try {
+    return { output: push(options), optionsSent: true };
+  } catch (err) {
+    if (!/does not support push options/i.test(String(err instanceof Error ? err.message : err))) throw err;
+    return { output: push([]), optionsSent: false };
+  }
+}
+function openedRequestUrl(output) {
+  return output.match(/https?:\/\/\S+?\/-\/merge_requests\/\d+(?=\s|$)/)?.[0] ?? null;
+}
+function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
+  const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
+  if (!forgeProblem) {
+    const pr = openPr(repoUrl, branch, title, body, repoDir, forge);
+    return pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} };
+  }
+  if (pushed.optionsSent) {
+    const url = openedRequestUrl(pushed.output);
+    if (url) return { prUrl: url, unattachedDescription: body };
+    return { manualUrl, prError: `${forgeProblem}, and GitLab did not report opening a request for the push` };
+  }
+  return { manualUrl, prError: forgeProblem };
+}
+function pushFailure(repoUrl, branch, subject, err, rerun, commitPrefixFix) {
+  const fix = `Nothing reached the repository. ${pushQuestion({ branch }, subject)} Ask for a name the rule accepts, then ${rerun} with \`--branch <name>\`.`;
+  const error = pushFailureReason(repoUrl, branch, err, fix, commitPrefixFix);
+  return pushRuleSubject(String(err instanceof Error ? err.message : err)) === "branch-name" ? { error, proposedBranch: branch, proposedMessage: subject } : { error };
+}
+function unattachedDescriptionLines(description) {
+  if (!description) return [];
+  return [
+    "",
+    "GitLab opened the request from the push, and a push cannot carry its description. Paste this into it:",
+    "",
+    ...description.split("\n").map((line) => line ? `    ${line}` : "")
+  ];
+}
 
 // src/lib/display-path.ts
 import { homedir as homedir3 } from "node:os";
@@ -674,15 +921,11 @@ function assertSafeGitUrl(url) {
     throw new Error(`unsafe or unsupported git URL: ${url}`);
   }
 }
-var DEFAULT_BRANCH_PREFIX = "handbook/";
 function commitMessagePrefix(prefix) {
   return prefix?.trim() ? `${prefix.trim()} ` : "";
 }
 function teamCommitPrefix(config) {
   return commitMessagePrefix(config?.commitPrefix);
-}
-function teamBranchPrefix(config) {
-  return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
 }
 function proposalFingerprint(proposal) {
   return createHash("sha256").update(proposal).digest("hex").slice(0, 8);
@@ -755,20 +998,6 @@ function loadTeamConfig(home = handbookHome()) {
   }
   return null;
 }
-var BrokenConfigError = class extends Error {
-  constructor(home) {
-    super(
-      `${displayPath(join5(home, "config.json"))} exists but is not valid JSON. TeamHandbook will not rewrite it, because doing so would silently discard settings you wrote - including the privacy switches, which are currently failing closed. Fix the JSON (or delete the file) and try again.`
-    );
-    this.name = "BrokenConfigError";
-  }
-};
-function saveTeamConfig(team, home = handbookHome()) {
-  if (configIsBroken(home)) throw new BrokenConfigError(home);
-  const config = readConfigFile(home);
-  config.team = team;
-  writeFileAtomic(join5(home, "config.json"), JSON.stringify(config, null, 2) + "\n");
-}
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
     hooks: {
@@ -790,7 +1019,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -815,8 +1044,27 @@ function summarizeGitStderr(stderr, tailLines = 3) {
   const tail = lines.slice(-tailLines).filter((line) => !explanations.includes(line));
   return [...explanations, ...tail].join("\n");
 }
+function pushReplying(args, cwd) {
+  const run = spawnSync("git", args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    env: nonInteractiveEnv(),
+    timeout: GIT_TIMEOUT_MS
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), {
+      status: run.status,
+      stdout: run.stdout,
+      stderr: run.stderr
+    });
+  }
+  return `${run.stdout}${run.stderr}`;
+}
 function runGit(args, cwd) {
   try {
+    if (args[0] === "push") return pushReplying(args, cwd);
     return execFileSync3("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -870,7 +1118,7 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
   const forbidden = raw.match(/contains the forbidden pattern\s*'([^']+)'/)?.[1];
   const subject = pushRuleSubject(raw);
   if (subject === "branch-name") {
-    return `${url} rejected the branch NAME "${branch}": this project requires branch names ${pattern ? `matching ${pattern}` : "of a shape it did not quote"}. Nothing is wrong with your access. ${branchPrefixFix}`;
+    return `${url} rejected the branch NAME "${branch}". It said: ${remoteSaid[0] ?? detail} Nothing is wrong with your access. ${branchPrefixFix}`;
   }
   if (text.includes("protected") || text.includes("not allowed to push")) {
     return `${url} refused the push to ${branch}: ${remoteSaid[0]?.replace(/\.$/, "") ?? "that branch is protected"}. Ask for the role that lets you write there, or have someone who has it push once.`;
@@ -901,12 +1149,12 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 // src/lib/share.ts
 import { readdirSync as readdirSync6, statSync as statSync2 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename4, join as join9 } from "node:path";
+import { basename as basename4, join as join10 } from "node:path";
 
 // src/lib/mcp.ts
-import { readFileSync as readFileSync5 } from "node:fs";
+import { readFileSync as readFileSync6 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var PURE_VAR_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 var CREDENTIAL_BEARING_FIELDS = ["headers", "env"];
 function isPlainObject(value) {
@@ -914,12 +1162,12 @@ function isPlainObject(value) {
 }
 function claudeConfigFile() {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join6(dir || homedir4(), ".claude.json");
+  return join7(dir || homedir4(), ".claude.json");
 }
 function readLocalServers(file = claudeConfigFile(), cwd = process.cwd()) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync5(file, "utf8"));
+    parsed = JSON.parse(readFileSync6(file, "utf8"));
   } catch {
     return [];
   }
@@ -1088,17 +1336,17 @@ function refusalSummary(audit) {
 }
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync6, readdirSync as readdirSync5, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join9 } from "node:path";
 
 // src/lib/commands.ts
-import { readdirSync as readdirSync4, readFileSync as readFileSync6 } from "node:fs";
+import { readdirSync as readdirSync4, readFileSync as readFileSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { basename as basename3, join as join7 } from "node:path";
+import { basename as basename3, join as join8 } from "node:path";
 function localCommandDirs(userHome = homedir5(), cwd = process.cwd()) {
   return [
-    { dir: join7(userHome, ".claude", "commands"), scope: "personal" },
-    { dir: join7(cwd, ".claude", "commands"), scope: "project" }
+    { dir: join8(userHome, ".claude", "commands"), scope: "personal" },
+    { dir: join8(cwd, ".claude", "commands"), scope: "project" }
   ];
 }
 function readLocalCommands(userHome = homedir5(), cwd = process.cwd()) {
@@ -1112,7 +1360,7 @@ function readLocalCommands(userHome = homedir5(), cwd = process.cwd()) {
     }
     for (const entry of entries.sort()) {
       const name = basename3(entry, ".md");
-      byName.set(name, { name, scope, file: join7(dir, entry) });
+      byName.set(name, { name, scope, file: join8(dir, entry) });
     }
   }
   return [...byName.values()];
@@ -1129,7 +1377,7 @@ function auditCommand(file) {
   if (!isSafeSlug(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let content;
   try {
-    content = readFileSync6(file, "utf8");
+    content = readFileSync7(file, "utf8");
   } catch {
     return { shareable: false, reason: "unreadable", detail: basename3(file) };
   }
@@ -1171,36 +1419,20 @@ function commandRefusalMessage(name, audit) {
 function mayUpdate(options, name) {
   return options.update === true || Array.isArray(options.update) && options.update.includes(name);
 }
-function bumpPluginVersion(repoDir) {
-  const file = join8(repoDir, ".claude-plugin", "plugin.json");
+function bumpPluginVersion(repoDir, past = []) {
+  const file = join9(repoDir, ".claude-plugin", "plugin.json");
   try {
-    const plugin = JSON.parse(readFileSync7(file, "utf8"));
-    const parts = String(plugin.version ?? "0.1.0").split(".").map(Number);
+    const plugin = JSON.parse(readFileSync8(file, "utf8"));
+    const current = String(plugin.version ?? "0.1.0");
+    const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
-    plugin.version = parts.join(".");
-    writeFileSync4(file, JSON.stringify(plugin, null, 2) + "\n");
+    plugin.version = past.length ? versionPast(current, past) : parts.join(".");
+    writeFileSync3(file, JSON.stringify(plugin, null, 2) + "\n");
     return plugin.version;
   } catch {
     return null;
   }
-}
-var MAX_BRANCH_PATTERN_CHARS = 200;
-function retryBranchAfterNameRejection(err, team, slug) {
-  const raw = String(err instanceof Error ? err.message : err);
-  if (pushRuleSubject(raw) !== "branch-name") return null;
-  const pattern = raw.match(/does not follow the pattern\s*'([^']+)'/)?.[1];
-  if (!pattern || pattern.length > MAX_BRANCH_PATTERN_CHARS) return null;
-  const commitPrefix = team.commitPrefix?.trim().replace(/-+$/, "");
-  if (!commitPrefix) return null;
-  const prefix = `${commitPrefix}-`;
-  const branch = `${prefix}${slug}`;
-  try {
-    if (!new RegExp(pattern).test(branch)) return null;
-  } catch {
-    return null;
-  }
-  return { branch, prefix };
 }
 function resolveGitIdentity(git) {
   const read = (key) => {
@@ -1230,28 +1462,6 @@ function cloneTeamRepo(git, repoUrl, repoDir, workdir) {
     return `git clone failed (is the team repo reachable?): ${String(err)}`;
   }
 }
-function listRemoteBranches(git, repoDir) {
-  try {
-    const out = git(["ls-remote", "--heads", "origin"], repoDir);
-    return new Set(
-      String(out ?? "").split("\n").map((line) => line.split("	")[1] ?? "").filter(Boolean).map((ref) => ref.replace("refs/heads/", ""))
-    );
-  } catch {
-    return /* @__PURE__ */ new Set();
-  }
-}
-function pushBranch(git, repoDir, branch, team, slug, remoteBranches) {
-  try {
-    git(["push", "-u", "origin", branch], repoDir);
-    return { branch };
-  } catch (err) {
-    const retry = retryBranchAfterNameRejection(err, team, slug);
-    if (!retry || remoteBranches.has(retry.branch)) throw err;
-    git(["branch", "-m", retry.branch], repoDir);
-    git(["push", "-u", "origin", retry.branch], repoDir);
-    return { branch: retry.branch, learnedBranchPrefix: retry.prefix };
-  }
-}
 function skillCollisionMessage(name, chosen) {
   const taken = `the team repository already has a skill named "${name}" (skills/${name}/). Nothing was written.`;
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
@@ -1260,11 +1470,7 @@ function commitPrefixForPush(team, repoDir) {
   if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
   const recorded = readTeamCommitPrefix(repoDir);
   if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
-  return {
-    team: { ...team, commitPrefix: recorded.prefix },
-    prefix: commitMessagePrefix(recorded.prefix),
-    learned: recorded.prefix
-  };
+  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
 }
 var TEAM_MCP_FILE = ".mcp.json";
 var TEAM_COMMANDS_DIR = "commands";
@@ -1506,19 +1712,19 @@ function teamAssets(team, git = runGit) {
     return null;
   }
   const workdir = handbookWorkdir("handbook-index-");
-  const repoDir = join8(workdir, "repo");
+  const repoDir = join9(workdir, "repo");
   try {
     if (cloneTeamRepo(git, team.repoUrl, repoDir, workdir)) return null;
-    const mcpFile = join8(repoDir, TEAM_MCP_FILE);
+    const mcpFile = join9(repoDir, TEAM_MCP_FILE);
     return {
-      skills: namesIn(join8(repoDir, "skills")),
-      servers: declaredServerNames(existsSync3(mcpFile) ? readFileSync7(mcpFile, "utf8") : null),
-      commands: namesIn(join8(repoDir, TEAM_COMMANDS_DIR), ".md")
+      skills: namesIn(join9(repoDir, "skills")),
+      servers: declaredServerNames(existsSync3(mcpFile) ? readFileSync8(mcpFile, "utf8") : null),
+      commands: namesIn(join9(repoDir, TEAM_COMMANDS_DIR), ".md")
     };
   } catch {
     return null;
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    rmSync2(workdir, { recursive: true, force: true });
   }
 }
 function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
@@ -1599,23 +1805,21 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
   }
   const identity = resolveGitIdentity(git);
   if ("error" in identity) return { ok: false, refused, error: identity.error };
-  const prefix = teamBranchPrefix(team);
   const workdir = handbookWorkdir("handbook-mcp-");
-  const repoDir = join8(workdir, "repo");
+  const repoDir = join9(workdir, "repo");
   try {
     const cloneError = cloneTeamRepo(git, team.repoUrl, repoDir, workdir);
     if (cloneError) return { ok: false, refused, error: cloneError };
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
-    const remoteBranches = listRemoteBranches(git, repoDir);
-    const target = join8(repoDir, TEAM_MCP_FILE);
+    const target = join9(repoDir, TEAM_MCP_FILE);
     let merged = "";
     let collided = [];
     let replacedServers = [];
     if (subjects.length) {
       try {
         ({ merged, collided, replaced: replacedServers } = mergeServersIntoMcpJson(
-          existsSync3(target) ? readFileSync7(target, "utf8") : null,
+          existsSync3(target) ? readFileSync8(target, "utf8") : null,
           subjects.map((s) => s.entry),
           (name) => mayUpdate(options, name)
         ));
@@ -1632,7 +1836,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingCommands = [];
     const replacedCommands = [];
     for (const command of commands) {
-      if (existsSync3(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
+      if (existsSync3(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`))) {
         if (!mayUpdate(options, command.name)) {
           collisions.push(commandCollisionMessage(command.name));
           refused.push({
@@ -1650,7 +1854,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const goingSkills = [];
     const replacedSkills = [];
     for (const skill of skills) {
-      if (existsSync3(join8(repoDir, TEAM_SKILLS_DIR, skill.name))) {
+      if (existsSync3(join9(repoDir, TEAM_SKILLS_DIR, skill.name))) {
         if (!mayUpdate(options, skill.name)) {
           collisions.push(skillCollisionMessage(skill.name, false));
           refused.push({
@@ -1679,74 +1883,62 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const all = [...skillNames, ...names, ...commandNames];
     const label = [skillNames.length ? "skills" : "", names.length ? "mcp" : "", commandNames.length ? "commands" : ""].filter(Boolean).length > 1 ? "share" : skillNames.length ? "skills" : names.length ? "mcp" : "commands";
     const first = slugifySkillName(all[0]);
-    const base = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
-    const slug = uniqueSlug(base, (s) => remoteBranches.has(`${prefix}${s}`));
-    let branch = `${prefix}${slug}`;
-    let learnedBranchPrefix;
+    const slug = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     let version = null;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     const proposal = commitSubject(commitPrefix, title);
-    const choice = options.commitMessage ?? {};
-    const stopped = (error) => ({
-      ok: false,
-      ...single,
-      refused,
-      error,
+    const decided = decidePush({
+      git,
+      forge,
+      repoDir,
+      team: pushTeam.team,
+      slug,
+      choice: options,
+      message: options.commitMessage ?? {},
       proposedMessage: proposal,
-      proposalHash: proposalFingerprint(proposal)
+      messagePrefix: commitPrefix,
+      rerun: "share them again"
     });
-    const unavailable = choice.message === void 0 ? forgeSignInProblem(team.repoUrl, repoDir, forge) : null;
-    const decided = decideCommitSubject(
-      choice,
-      proposal,
-      commitPrefix,
-      "share them again",
-      unavailable ? noRequestPossible(unavailable) : void 0
-    );
-    if ("error" in decided) return stopped(decided.error);
+    if (!decided.ok) return { ...decided, ...single, refused };
+    const { branch } = decided;
+    let pushed;
     try {
       git(["checkout", "-b", branch], repoDir);
-      if (going.length) writeFileSync4(target, merged);
-      if (goingCommands.length) mkdirSync6(join8(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
+      if (going.length) writeFileSync3(target, merged);
+      if (goingCommands.length) mkdirSync5(join9(repoDir, TEAM_COMMANDS_DIR), { recursive: true });
       for (const command of goingCommands) {
-        writeFileSync4(join8(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
+        writeFileSync3(join9(repoDir, TEAM_COMMANDS_DIR, `${command.name}.md`), command.content);
       }
       for (const skill of goingSkills) {
-        const dest = join8(repoDir, TEAM_SKILLS_DIR, skill.name);
-        if (replacedSkills.includes(skill.name)) rmSync3(dest, { recursive: true, force: true });
+        const dest = join9(repoDir, TEAM_SKILLS_DIR, skill.name);
+        if (replacedSkills.includes(skill.name)) rmSync2(dest, { recursive: true, force: true });
         copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
-      version = bumpPluginVersion(repoDir);
+      version = bumpPluginVersion(repoDir, decided.claims);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", decided.subject], repoDir);
-      const pushed = pushBranch(git, repoDir, branch, pushTeam.team, slug, remoteBranches);
-      branch = pushed.branch;
-      learnedBranchPrefix = pushed.learnedBranchPrefix;
+      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
     } catch (err) {
       return {
         ok: false,
         ...single,
         refused,
-        error: pushFailureReason(
-          team.repoUrl,
-          branch,
-          err,
-          'Set "branchPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that fits (for example "TEAM-1-"), then run this again.',
-          teamCommitPrefixFix(pushTeam.team, "run this again")
-        )
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "share them again", teamCommitPrefixFix(pushTeam.team, "run this again"))
       };
     }
     const requiresEnv = [];
     for (const { audit } of going) {
       for (const name of audit.requiresEnv) if (!requiresEnv.includes(name)) requiresEnv.push(name);
     }
-    const pr = openPr(
+    const request = openRequest(
       team.repoUrl,
       branch,
       title,
       buildSelectionPrBody(going, goingCommands, team.marketplaceName, updated, goingSkills),
       repoDir,
-      forge
+      forge,
+      decided.forgeProblem,
+      pushed
     );
     return {
       ok: true,
@@ -1761,21 +1953,18 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...version ? { version } : {},
-      ...pr.url ? { prUrl: pr.url } : { manualUrl: manualPrUrl(team.repoUrl, branch) ?? void 0 },
-      ...pr.url ? {} : pr.error ? { prError: pr.error } : {},
-      ...learnedBranchPrefix ? { learnedBranchPrefix } : {},
-      ...pushTeam.learned !== void 0 ? { learnedCommitPrefix: pushTeam.learned } : {}
+      ...request
     };
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    rmSync2(workdir, { recursive: true, force: true });
   }
 }
 
 // src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join9(paths.userHome ?? homedir6(), ".claude", "skills"), scope: "personal" },
-    { dir: join9(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
+    { dir: join10(paths.userHome ?? homedir6(), ".claude", "skills"), scope: "personal" },
+    { dir: join10(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
 function isDirectory(path) {
@@ -1838,8 +2027,8 @@ function buildInventory(paths = {}, teamHas = null) {
       continue;
     }
     for (const entry of entries.sort()) {
-      if (!isDirectory(join9(dir, entry))) continue;
-      byName.set(entry, onTeam(readSkillDir(join9(dir, entry), scope), teamHas?.skills));
+      if (!isDirectory(join10(dir, entry))) continue;
+      byName.set(entry, onTeam(readSkillDir(join10(dir, entry), scope), teamHas?.skills));
     }
   }
   const servers = readLocalServers(paths.configFile ?? claudeConfigFile(), paths.cwd ?? process.cwd()).map(
@@ -1858,7 +2047,7 @@ function oneLine(text) {
 function onTeamNote(item) {
   return item.onTeam ? "  already on the team: picking it sends an update to their copy" : "";
 }
-function formatInventory(inv) {
+function formatInventory(inv, forge) {
   if (!inv.skills.length && !inv.servers.length && !inv.commands.length) {
     return "No skills, MCP servers or commands are set up on this machine or in this project, so there is nothing to take to the team yet.";
   }
@@ -1906,9 +2095,15 @@ function formatInventory(inv) {
     "Nothing is selected and nothing has been shared. A skill or a command carrying a",
     "credential is refused rather than redacted, and anything in a server's headers or env",
     "that is not a plain ${VAR} reference stays here: the name of a secret can travel, the",
-    "secret cannot."
+    "secret cannot.",
+    ...forge ? ["", forge] : []
   );
   return lines.join("\n");
+}
+function forgeLine(team, forge = runForge, cwd = process.cwd()) {
+  if (!team) return void 0;
+  const problem = forgeSignInProblem(team.repoUrl, cwd, forge);
+  return problem ? forgeNotice(team.repoUrl, problem) : void 0;
 }
 function shareSelection(selection, team, paths = {}, git = runGit, forge = runForge, options = {}) {
   const result = { refused: [] };
@@ -2038,6 +2233,7 @@ function formatShareResult(result, marketplaceName) {
         "    this never writes to ~/.claude/commands, so both names keep working."
       );
     }
+    lines.push(...unattachedDescriptionLines(shared.unattachedDescription));
   }
   if (shared && !shared.ok && shared.proposedMessage && shared.error) {
     lines.push(shared.error);
@@ -2076,7 +2272,7 @@ function formatShareResult(result, marketplaceName) {
 // src/cli/share.ts
 function usage() {
   console.error(
-    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>)"
+    "usage: share.js [list]\n       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... [--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>) --branch <name> [--branch-hint <name>] [--version-after-open]"
   );
   process.exit(2);
 }
@@ -2090,7 +2286,10 @@ var SKILL_PATH = "--skill-path";
 var UPDATE = "--update";
 var MESSAGE = "--message";
 var DELEGATE_MESSAGE = "--delegate-message";
-var VALUE_FLAGS = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE];
+var BRANCH = "--branch";
+var BRANCH_HINT = "--branch-hint";
+var VERSION_AFTER_OPEN = "--version-after-open";
+var VALUE_FLAGS = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE, BRANCH, BRANCH_HINT];
 function valueOf(args, flag) {
   const at = args.indexOf(flag);
   if (at === -1) return void 0;
@@ -2140,13 +2339,13 @@ function main() {
   const args = process.argv.slice(2);
   const selected = args.some((a) => FLAGS.includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
-  const messaged = args.includes(MESSAGE) || args.includes(DELEGATE_MESSAGE);
+  const messaged = [MESSAGE, DELEGATE_MESSAGE, BRANCH, BRANCH_HINT, VERSION_AFTER_OPEN].some((flag) => args.includes(flag));
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
   if (rest.length || cmd !== "list" && cmd !== "share") usage();
   if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     const config = loadTeamConfig();
-    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
+    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null), forgeLine(config)));
     if (!config) {
       console.log(
         "\nNo team repository is configured yet, so nothing on this screen has anywhere to go: run /handbook:init (or /handbook:join <url>) first."
@@ -2169,15 +2368,14 @@ function main() {
     return;
   }
   const team = loadTeamConfig();
+  const branch = valueOf(args, BRANCH);
   const result = shareSelection(selection, team, {}, void 0, void 0, {
     ...updates.length ? { update: updates } : {},
-    commitMessage: parseCommitMessage(args)
+    commitMessage: parseCommitMessage(args),
+    ...branch !== void 0 ? { branch } : {},
+    hints: branchHints(process.cwd(), runGit, valueOf(args, BRANCH_HINT)),
+    ...args.includes(VERSION_AFTER_OPEN) ? { versionAfterOpen: true } : {}
   });
-  const learned = {
-    ...result.team?.learnedBranchPrefix ? { branchPrefix: result.team.learnedBranchPrefix } : {},
-    ...result.team?.learnedCommitPrefix !== void 0 ? { commitPrefix: result.team.learnedCommitPrefix } : {}
-  };
-  if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
   if (result.refused.length || result.team && !result.team.ok) process.exitCode = 1;
 }

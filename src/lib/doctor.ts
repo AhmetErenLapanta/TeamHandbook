@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
+import { forgeSignInProblem, forgeTool } from "./forge.js";
 import type { TeamConfig } from "./init.js";
 import { countStaleSkeleton } from "./upgrade.js";
 import {
@@ -15,7 +16,7 @@ import {
 } from "./score.js";
 import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
-import { lastPipelineRun, pluginVersion } from "./status.js";
+import { lastPipelineRun, newerRelease, newerReleaseLine, pluginRoot, pluginVersion } from "./status.js";
 import { displayPath } from "./display-path.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
@@ -365,25 +366,25 @@ function checkTeamRepo(home: string, run: CommandRunner): DoctorCheck {
   return ok("team repo", `${team.repoUrl} reachable`);
 }
 
+/**
+ * Whether a merge request can be opened from this machine, asked of the same check every
+ * push makes before it pushes. This used to be a second copy of that check, and the two
+ * could disagree: the doctor asked about any account, the push about this repository's host.
+ */
 function checkForge(home: string, run: CommandRunner): DoctorCheck | null {
   const team = loadTeamConfig(home);
   if (!team) return null; // solo mode never opens PRs
-  const tool = (hostFromUrl(team.repoUrl) ?? "").includes("github") ? "gh" : "glab";
-  try {
-    run(tool, ["auth", "status"], 10_000);
-    return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
-  } catch (err) {
-    if ((err as { code?: string })?.code === "ENOENT") {
-      return warn(
-        "forge CLI",
-        `${tool} not installed - approvals still push a branch and print a manual PR link; install ${tool} to auto-open PRs`,
-      );
-    }
-    return warn(
-      "forge CLI",
-      `${tool} installed but not authenticated - run \`${tool} auth login\` (approvals still print a manual link)`,
-    );
+  const tool = forgeTool(team.repoUrl);
+  const problem = forgeSignInProblem(team.repoUrl, home, (cli, args) => run(cli, args, 10_000));
+  if (!problem) return ok("forge CLI", `${tool} authenticated - approvals can auto-open PRs`);
+  const instead =
+    tool === "glab" && hostFromUrl(team.repoUrl)
+      ? "approvals still push a branch asking GitLab to open the request, or print a link"
+      : "approvals still push a branch and print a manual PR link";
+  if (problem.includes("not installed")) {
+    return warn("forge CLI", `${tool} not installed - ${instead}; install ${tool} to auto-open PRs`);
   }
+  return warn("forge CLI", `${problem} - run \`${tool} auth login\` (${instead})`);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -536,12 +537,28 @@ function checkAbandoned(home: string): DoctorCheck | null {
   );
 }
 
+/** The installed version against the latest release, said only when it is behind. The same
+ * lookup status makes, through the doctor's own runner, and silent wherever status is. */
+function checkRelease(
+  version: string,
+  run: CommandRunner,
+  marketRoot: string,
+  root: string | null,
+): DoctorCheck | null {
+  const newer = newerRelease(version, root, marketRoot, (args, cwd) => run("git", args, 5_000, { cwd }));
+  return newer ? warn("version", newerReleaseLine(version, newer)) : null;
+}
+
 export function runDoctor(
   home: string = handbookHome(),
   run: CommandRunner = runCommand,
   marketRoot: string = marketplacesRoot(),
+  root: string | null = pluginRoot(),
 ): DoctorReport {
+  const version = pluginVersion();
+  const release = checkRelease(version, run, marketRoot, root);
   const checks: DoctorCheck[] = [
+    ...(release ? [release] : []),
     checkNode(),
     ...checkClaudeCli(run, home),
     checkHomeWritable(home),
@@ -558,7 +575,7 @@ export function runDoctor(
   checks.push(checkLastRun(home));
   const abandoned = checkAbandoned(home);
   if (abandoned) checks.push(abandoned);
-  return { version: pluginVersion(), checks };
+  return { version, checks };
 }
 
 const MARKS: Record<CheckLevel, string> = { ok: "✔", warn: "⚠", fail: "✘" };

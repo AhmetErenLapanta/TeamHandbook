@@ -1,16 +1,18 @@
 import { resolve as toAbsolutePath } from "node:path";
 import { configIsBroken } from "../lib/config.js";
-import { loadTeamConfig, saveTeamConfig } from "../lib/init.js";
-import { buildInventory, formatInventory, formatShareResult, shareSelection } from "../lib/share.js";
+import { loadTeamConfig, runGit } from "../lib/init.js";
+import { buildInventory, forgeLine, formatInventory, formatShareResult, shareSelection } from "../lib/share.js";
 import type { Inventory, Selection } from "../lib/share.js";
 import { teamAssets } from "../lib/publish.js";
 import type { CommitMessageChoice } from "../lib/init.js";
+import { branchHints } from "../lib/branch.js";
 
 function usage(): never {
   console.error(
     "usage: share.js [list]\n" +
       "       share.js share [--skill <name>]... [--skill-path <dir>]... [--mcp <name>]... " +
-      "[--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>)",
+      "[--command <name>]... [--update <name>]... (--message <commit message> | --delegate-message <fingerprint>) " +
+      "--branch <name> [--branch-hint <name>] [--version-after-open]",
   );
   process.exit(2);
 }
@@ -62,6 +64,18 @@ const UPDATE = "--update";
 const MESSAGE = "--message";
 const DELEGATE_MESSAGE = "--delegate-message";
 
+/**
+ * The branch the request goes out on, the other half of the one question asked before
+ * every push. `--branch` is used exactly as given and is never written anywhere: it names
+ * this request, not every request after it. `--branch-hint` is a branch the user named
+ * earlier in this session, which only lends its ticket key to the proposal.
+ * `--version-after-open` is the answer to an unmerged branch already claiming the version
+ * this request would raise to.
+ */
+const BRANCH = "--branch";
+const BRANCH_HINT = "--branch-hint";
+const VERSION_AFTER_OPEN = "--version-after-open";
+
 /** Every flag that swallows the argument after it, so the positional reader below knows
  * which bare words are values and which are the command. All of them take one, including
  * `--delegate-message`, whose value is the fingerprint of the proposal the user was shown.
@@ -69,7 +83,7 @@ const DELEGATE_MESSAGE = "--delegate-message";
  * --skill x` eats the word `share`, the command falls back to `list`, and the guard below
  * sends a `list` carrying message flags to the usage line rather than silently printing an
  * inventory. A fingerprint that is not one is refused in the library besides. */
-const VALUE_FLAGS: readonly string[] = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE];
+const VALUE_FLAGS: readonly string[] = [...FLAGS, SKILL_PATH, UPDATE, MESSAGE, DELEGATE_MESSAGE, BRANCH, BRANCH_HINT];
 
 /** The value behind a flag, refused rather than guessed at when it is missing. */
 function valueOf(args: string[], flag: string): string | undefined {
@@ -133,7 +147,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const selected = args.some((a) => (FLAGS as readonly string[]).includes(a) || a === SKILL_PATH);
   const update = args.includes(UPDATE);
-  const messaged = args.includes(MESSAGE) || args.includes(DELEGATE_MESSAGE);
+  const messaged = [MESSAGE, DELEGATE_MESSAGE, BRANCH, BRANCH_HINT, VERSION_AFTER_OPEN].some((flag) => args.includes(flag));
   const [cmd = "list", ...rest] = args.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(args[i - 1] ?? ""));
   if (rest.length || (cmd !== "list" && cmd !== "share")) usage();
   // A selection passed to the read-only screen would print the list and silently throw
@@ -146,7 +160,7 @@ function main(): void {
     // the manager picks knowing, and a repository that cannot be reached simply means no
     // labels rather than a screen that will not open.
     const config = loadTeamConfig();
-    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null)));
+    console.log(formatInventory(buildInventory({}, config ? teamAssets(config) : null), forgeLine(config)));
     if (!config) {
       console.log(
         "\nNo team repository is configured yet, so nothing on this screen has anywhere to go: " +
@@ -173,20 +187,14 @@ function main(): void {
     return;
   }
   const team = loadTeamConfig();
+  const branch = valueOf(args, BRANCH);
   const result = shareSelection(selection, team, {}, undefined, undefined, {
     ...(updates.length ? { update: updates } : {}),
     commitMessage: parseCommitMessage(args),
+    ...(branch !== undefined ? { branch } : {}),
+    hints: branchHints(process.cwd(), runGit, valueOf(args, BRANCH_HINT)),
+    ...(args.includes(VERSION_AFTER_OPEN) ? { versionAfterOpen: true } : {}),
   });
-  // Two prefixes can come back from one push, and they are written in ONE save: the forge
-  // refused the default branch name and the push recovered under the team's own prefix, and
-  // the repository turned out to record the commit prefix this machine joined too early to
-  // receive. Saving them separately would have the second write overwrite the first, since
-  // each starts from the same stale `team`.
-  const learned = {
-    ...(result.team?.learnedBranchPrefix ? { branchPrefix: result.team.learnedBranchPrefix } : {}),
-    ...(result.team?.learnedCommitPrefix !== undefined ? { commitPrefix: result.team.learnedCommitPrefix } : {}),
-  };
-  if (team && Object.keys(learned).length) saveTeamConfig({ ...team, ...learned });
   console.log(formatShareResult(result, team?.marketplaceName));
   // A refusal is not a crash: some of the selection may have travelled. The exit code says
   // "not everything you asked for happened", and the text above says which part. A request

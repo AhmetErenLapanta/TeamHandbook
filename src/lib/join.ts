@@ -15,6 +15,7 @@ import { cloneFailureReason } from "./git-errors.js";
 import type { GitRunner } from "./init.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { displayPath } from "./display-path.js";
+import { readTeamBranchExample } from "./branch.js";
 
 export interface JoinResult {
   ok: boolean;
@@ -28,6 +29,8 @@ export interface JoinResult {
    * and it could not be taken. Never empty for a join that learned nothing: a prefix that
    * goes missing silently is the failure this whole path exists to end. */
   prefixNote?: string;
+  /** one branch name the way this repository names branches, when it records one */
+  branchExample?: string;
 }
 
 function readMarketplaceName(repoDir: string): string | null {
@@ -137,6 +140,10 @@ export function joinTeamRepo(
     // at all: the commit-message prefix belongs to the forge's push rule, not to the person
     // who ran /handbook:init, so every member needs it and only that one machine was told.
     const recorded = readTeamCommitPrefix(repoDir);
+    // The third: how a branch is named here, as one example an administrator wrote. Every
+    // push proposes a name in its shape, so a teammate's first proposal already looks
+    // like the team's branches instead of like this product's.
+    const { example } = readTeamBranchExample(repoDir);
     // An absent prefix is written as an ABSENT key, never as "". commitPrefixIsKnown reads
     // a string - any string - as "this machine knows the answer", so writing "" here would
     // tell a later `/handbook:init --upgrade` on this machine that the team has no prefix
@@ -148,6 +155,7 @@ export function joinTeamRepo(
         marketplaceName: name,
         joinedAt: now,
         ...(recorded.prefix !== undefined ? { commitPrefix: recorded.prefix } : {}),
+        ...(example ? { branchExample: example } : {}),
       },
       home,
     );
@@ -158,6 +166,7 @@ export function joinTeamRepo(
       home,
       ...(recorded.prefix ? { commitPrefix: recorded.prefix } : {}),
       ...(recorded.prefix === undefined ? { prefixNote: prefixNote(recorded.problem) } : {}),
+      ...(example ? { branchExample: example } : {}),
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });
@@ -196,6 +205,7 @@ export function formatJoinSuccess(result: JoinResult): string {
     "",
     "  engine:  approved skills will now target this repository",
     ...(result.commitPrefix ? [`  commits: titled "${result.commitPrefix} ...", the prefix this repository records`] : []),
+    ...(result.branchExample ? [`  branches: proposed in the shape of "${result.branchExample}", the example this repository records`] : []),
     `  config:  team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
     "",
     ...(result.prefixNote ? [result.prefixNote, ""] : []),

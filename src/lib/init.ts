@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
 import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
+import { pushBranch } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
@@ -33,15 +34,19 @@ export interface TeamConfig {
   marketplaceName: string;
   initializedAt?: string;
   joinedAt?: string;
-  // What every branch this tool pushes is named with. Default "handbook/", which reads
-  // well and groups them - but organisations enforce branch naming rules, and one real
-  // GitLab group rejected `handbook/scaffold` outright because branches there must look
-  // like `TEAM-42-something`. Every skill shared with the team would have been rejected
-  // the same way, so this is not decoration.
+  // What the scaffold branch is named with, default "handbook/", and afterwards one of
+  // the sources a share's branch proposal is taken from. Organisations enforce branch
+  // naming rules, and one real GitLab group rejected `handbook/scaffold` outright because
+  // branches there must look like `TEAM-42-something`. Only /handbook:init writes it: a
+  // name the user gives a single push is theirs for that push, not a new setting.
   branchPrefix?: string;
   // Prepended to every commit message this tool writes, for the same reason as
   // branchPrefix: a group that polices branch names usually polices commit messages too.
   commitPrefix?: string;
+  // One branch name written the way the team names branches, read from the team
+  // repository at join. Only the shape of a proposal comes from it; the user still
+  // confirms or changes every branch before it is pushed.
+  branchExample?: string;
 }
 
 export const DEFAULT_BRANCH_PREFIX = "handbook/";
@@ -61,9 +66,6 @@ export function teamCommitPrefix(config: TeamConfig | null): string {
   return commitMessagePrefix(config?.commitPrefix);
 }
 
-export function teamBranchPrefix(config: TeamConfig | null): string {
-  return config?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
-}
 
 /**
  * What the user decided about the message a commit of theirs will carry.
@@ -554,7 +556,14 @@ export function readTeamCommitPrefix(repoDir: string): { prefix?: string; proble
   return problem ? { problem } : { prefix: value };
 }
 
-export function skeletonFiles(name: string, url: string, host: string | null, commitPrefix = "", withCi = false): Record<string, string> {
+export function skeletonFiles(
+  name: string,
+  url: string,
+  host: string | null,
+  commitPrefix = "",
+  withCi = false,
+  branchExample?: string,
+): Record<string, string> {
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -595,6 +604,8 @@ export function skeletonFiles(name: string, url: string, host: string | null, co
       JSON.stringify(
         {
           commitPrefix: commitPrefix.trim(),
+          // Only when someone recorded one: a key written empty would read as an answer.
+          ...(branchExample ? { branchExample } : {}),
           comment:
             "Written by TeamHandbook. commitPrefix is what this project's forge requires at the " +
             "front of a commit message; /handbook:join reads it, so a teammate's first share " +
@@ -707,8 +718,36 @@ export function summarizeGitStderr(stderr: string, tailLines = 3): string {
   return [...explanations, ...tail].join("\n");
 }
 
+/**
+ * A push, returning everything git printed rather than stdout alone.
+ *
+ * The forge's reply to a push reaches git on the side channel and git relays it on stderr,
+ * every `remote:` line of it - and on GitLab that reply is where the merge request a push
+ * option just opened is announced. Thrown in the same shape execFileSync throws, so a
+ * refused push is classified exactly as before.
+ */
+function pushReplying(args: string[], cwd: string): string {
+  const run = spawnSync("git", args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    env: nonInteractiveEnv(),
+    timeout: GIT_TIMEOUT_MS,
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), {
+      status: run.status,
+      stdout: run.stdout,
+      stderr: run.stderr,
+    });
+  }
+  return `${run.stdout}${run.stderr}`;
+}
+
 export function runGit(args: string[], cwd: string): string {
   try {
+    if (args[0] === "push") return pushReplying(args, cwd);
     return execFileSync("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -889,10 +928,11 @@ export function pushFailureReason(
   const forbidden = raw.match(/contains the forbidden pattern\s*'([^']+)'/)?.[1];
   const subject = pushRuleSubject(raw);
 
+  // The forge's own sentence, word for word: the rule is the server's to state, and a
+  // paraphrase is one more place for it to be stated wrong.
   if (subject === "branch-name") {
     return (
-      `${url} rejected the branch NAME "${branch}": this project requires branch names ` +
-      `${pattern ? `matching ${pattern}` : "of a shape it did not quote"}. ` +
+      `${url} rejected the branch NAME "${branch}". It said: ${remoteSaid[0] ?? detail} ` +
       `Nothing is wrong with your access. ${branchPrefixFix}`
     );
   }
@@ -1111,7 +1151,7 @@ export function initTeamRepo(
     // to the same repository under the same rules. "TeamHandbook@localhost" was an
     // author waiting to be refused.
     git([...identity, "commit", "-m", decided.subject], repoDir);
-    git(["push", "origin", direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`], repoDir);
+    pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
   } catch (err) {
     return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
   }

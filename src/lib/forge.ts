@@ -134,3 +134,22 @@ export function openPr(
 export function noRequestPossible(reason: string): string {
   return `no merge request can be opened from this machine (${reason})`;
 }
+
+/**
+ * What happens to the request when the forge CLI cannot open it, said before the push.
+ *
+ * Learning it from a result that has already pushed is too late to do anything about it -
+ * install the CLI, sign in, or decide to open the request by hand - and "you decide" is
+ * refused for the same reason, so the two are said together. On GitLab the push itself
+ * asks for the request, which is why the sentence differs by forge.
+ */
+export function forgeNotice(repoUrl: string, problem: string): string {
+  const byPush = forgeTool(repoUrl) === "glab" && hostFromUrl(repoUrl) !== null;
+  return (
+    (byPush
+      ? `This machine cannot open the merge request with glab (${problem}): the branch will be pushed asking ` +
+        "GitLab to open the request itself, and a link printed if it does not."
+      : `This machine cannot open the merge request (${problem}): the branch will be pushed and a link printed.`) +
+    ' For the same reason "you decide" is not an answer to the commit message here: the wording is asked of you.'
+  );
+}
