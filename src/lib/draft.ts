@@ -464,6 +464,11 @@ export interface EvidencePacket {
      * there to read.
      */
     withheld?: number;
+    /**
+     * Author values masked inside lines that were kept. A count of values, not of pieces: the line
+     * stays in the packet, so it belongs to none of the piece counts above.
+     */
+    authorFields?: number;
     reasons: Record<string, number>;
   };
 }
@@ -613,6 +618,14 @@ export function buildEvidence(shape: Shape, index: UnitIndex, options: EvidenceO
   // gives the default packet exactly as it was before the counts existed, byte for byte.
   const withhold = (count = 1) => (dropped.withheld = (dropped.withheld ?? 0) + count);
   const skipHunk = () => (dropped.hunksSkipped = (dropped.hunksSkipped ?? 0) + 1);
+  // After the screens, over the lines that are kept: a value the name set knows has already cost
+  // its whole piece, exactly as before, and this catches the one it could not know.
+  const maskAuthors = (lines: string[], path: string): string[] =>
+    lines.map((line) => {
+      const { text, masked } = maskAuthorFields(line, path);
+      if (masked) dropped.authorFields = (dropped.authorFields ?? 0) + masked;
+      return text;
+    });
   const roleOf = options.roleOf ?? ((repo: string, path: string) => fallbackRole(shape, repo, path));
 
   const { rows, droppedRows } = buildFileMap(shape, records, roleOf, limits.coreShare, numbers, pathScreen, drop);
@@ -628,7 +641,7 @@ export function buildEvidence(shape: Shape, index: UnitIndex, options: EvidenceO
     fileMapDropped: droppedRows,
     delivery: deployOrder(records, pathScreen, drop),
     subjects: collectSubjects(records, limits.maxSubjects, screen, numbers, drop),
-    hunks: collectHunks(rows, records, limits, roleOf, hunkScreen, numbers, drop, withhold, skipHunk, options.run),
+    hunks: collectHunks(rows, records, limits, roleOf, hunkScreen, numbers, drop, withhold, skipHunk, maskAuthors, options.run),
     fixes: collectFixes(records, shape, roleOf, limits.maxFixes, screen, pathScreen, numbers),
     siblings: siblingSeries(records, screen, numbers, drop),
     rubric: {
@@ -678,6 +691,7 @@ export function buildEvidence(shape: Shape, index: UnitIndex, options: EvidenceO
         drop,
         () => (dropped.filesSkipped = (dropped.filesSkipped ?? 0) + 1),
         withhold,
+        maskAuthors,
         options.run,
       );
       dropped.files = dropped.files ?? 0;
@@ -694,6 +708,7 @@ export function buildEvidence(shape: Shape, index: UnitIndex, options: EvidenceO
         () => (dropped.configLines = (dropped.configLines ?? 0) + 1),
         () => (dropped.configsSkipped = (dropped.configsSkipped ?? 0) + 1),
         withhold,
+        maskAuthors,
         options.run,
       );
       dropped.configs = dropped.configs ?? 0;
@@ -916,6 +931,7 @@ function collectHunks(
   drop: (reason: DropReason, what: "hunks") => void,
   withhold: () => void,
   skip: () => void,
+  maskAuthors: (lines: string[], path: string) => string[],
   run?: GitRunner,
 ): Hunk[] {
   const out: Hunk[] = [];
@@ -966,7 +982,7 @@ function collectHunks(
           drop(reason, "hunks");
           continue;
         }
-        const lines = all.slice(0, limits.maxHunkLines);
+        const lines = maskAuthors(all.slice(0, limits.maxHunkLines), found.path);
         out.push({
           role: row.role,
           unit: abstractTickets(record.key, numbers),
@@ -1170,6 +1186,68 @@ function isWithheldFile(path: string): boolean {
 }
 
 /**
+ * The files in which `author` is a FIELD of a record a tool writes - a database changelog's
+ * changeset, a manifest, a data file - rather than a variable or a type in code, where
+ * `author: String` names nobody and masking it would only corrupt the evidence.
+ */
+const RECORD_FILE_RE = /\.(xml|ya?ml|json|properties|toml|sql)$/i;
+const AUTHOR_QUOTED_RE = /(\bauthor["']?[ \t]*[:=][ \t]*)(["'])([^"'\n]*)\2/gi;
+const AUTHOR_BARE_RE = /(\bauthor[ \t]*[:=][ \t]*)([^\s"'{[][^,}\]#\n]*)/gi;
+/** A documentation tag names a person in any file, so it is masked wherever it is written. */
+const AUTHOR_TAG_RE = /(@author[ \t]+)([^\n*]*[^\s*])/gi;
+/** A formatted SQL changelog writes its author in front of the changeset id. */
+const CHANGESET_RE = /(--[ \t]*changeset[ \t]+)([^:\s]+)(?=:)/gi;
+/** Values that name a role rather than a person, which are kept. A short list on purpose: a
+ * value not on it is masked, because a handle that slips through is a person on the way out. */
+const ROLE_AUTHORS = new Set([
+  "team",
+  "system",
+  "admin",
+  "bot",
+  "ci",
+  "automation",
+  "generated",
+  "liquibase",
+  "flyway",
+  "migration",
+  "dba",
+  "developer",
+  "developers",
+  "unknown",
+  "anonymous",
+]);
+const WITHHELD_AUTHOR = "(withheld)";
+
+/**
+ * One quoted line with every author field's value masked in place, and how many were.
+ *
+ * The name screen cannot do this: it is built from commit author names, and the handle a
+ * changelog records is usually spelled some other way. Measured on a long history, about one
+ * changelog author value in five sat in a diff the screen passed, and none of those values was a
+ * commit author's name in any spelling. The value is masked rather than the line dropped, because
+ * the line around it - the changeset, its id, the table it touches - is exactly the evidence.
+ */
+export function maskAuthorFields(line: string, path: string): { text: string; masked: number } {
+  let masked = 0;
+  const mask = (value: string): string => {
+    if (!value.trim() || ROLE_AUTHORS.has(value.trim().toLowerCase())) return value;
+    masked++;
+    return WITHHELD_AUTHOR;
+  };
+  let text = line.replace(AUTHOR_TAG_RE, (_match, head: string, value: string) => head + mask(value));
+  if (RECORD_FILE_RE.test(path)) {
+    text = text
+      .replace(AUTHOR_QUOTED_RE, (_match, head: string, quote: string, value: string) => head + quote + mask(value) + quote)
+      .replace(AUTHOR_BARE_RE, (_match, head: string, value: string) => {
+        const kept = value.trimEnd();
+        return head + mask(kept) + value.slice(kept.length);
+      })
+      .replace(CHANGESET_RE, (_match, head: string, value: string) => head + mask(value));
+  }
+  return { text, masked };
+}
+
+/**
  * A line that carries a signature or a schema rather than a body: a declaration, a field, a key.
  *
  * Language-independent on purpose, and crude on purpose. The trim has to work on a repository
@@ -1257,6 +1335,7 @@ function collectFiles(
   drop: (reason: DropReason, what: "files") => void,
   skip: () => void,
   withhold: () => void,
+  maskAuthors: (lines: string[], path: string) => string[],
   run?: GitRunner,
 ): FileSnippet[] {
   const of = records.length;
@@ -1312,7 +1391,7 @@ function collectFiles(
     out.push({
       role: row.role,
       path: abstractTickets(key, numbers),
-      lines: lines.map((line) => abstractTickets(line, numbers)),
+      lines: maskAuthors(lines, path).map((line) => abstractTickets(line, numbers)),
       omitted,
     });
   }
@@ -1341,6 +1420,7 @@ function collectConfigs(
   lineHit: () => void,
   skip: () => void,
   withhold: () => void,
+  maskAuthors: (lines: string[], path: string) => string[],
   run?: GitRunner,
 ): ConfigSnippet[] {
   const touched = new Map<string, { repo: string; repoPath: string; ref?: string; path: string; units: number; shas: { sha: string; repoPath: string }[] }>();
@@ -1421,7 +1501,7 @@ function collectConfigs(
     }
     out.push({
       path: abstractTickets(key, numbers),
-      lines: chosen.map((i) => abstractTickets(all[i]!, numbers)),
+      lines: maskAuthors(chosen.map((i) => all[i]!), entry.path).map((line) => abstractTickets(line, numbers)),
       omitted: all.length - chosen.length,
     });
   }

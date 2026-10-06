@@ -284,6 +284,14 @@ things on either side of it:
   a path carrying a listed term is dropped whole. `/handbook:mine` itself passes no term
   list, so on that path the layer is empty. A path that names a person is withheld and the
   row keeps its counts; a role that names a person is dropped with its row.
+- **Author fields in quoted lines** - a database changelog's changeset author, a manifest's
+  `author`, a properties or YAML `author` key, a formatted SQL `--changeset` author, and a
+  `@author` tag in any file - have their value replaced with `(withheld)` and counted,
+  whatever the value is, unless it is one of a short list of role words (`team`, `system`,
+  `bot` and the like). The handle such a field records is rarely the name git records, so
+  the person screen above cannot be relied on to know it. Key forms are masked only in
+  record files (XML, YAML, JSON, properties, TOML, SQL), where `author` is a field rather
+  than a variable or a type in code.
 
 Author names are held in memory only: the list itself never enters a packet, a prompt or
 a file, and it is rebuilt from git each run.

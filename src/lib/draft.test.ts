@@ -13,6 +13,7 @@ import {
   draftSkill,
   holdoutSplit,
   isIncidentalPath,
+  maskAuthorFields,
   quotedPaths,
   readUnitIndex,
   trimToSignature,
@@ -301,6 +302,92 @@ describe("screening the diffs a packet would quote", () => {
     // The packet is still built: the clean files of those same jobs are still evidence.
     expect(packet.fileMap.length).toBeGreaterThan(0);
     expect(packet.units).toBe(2);
+  });
+});
+
+/**
+ * A database changelog records who wrote each change in a field of its own, and that handle is
+ * rarely spelled the way the commit author is, so the name set built from commit authors cannot
+ * see it. The commits here are made by people whose names share nothing with the handle.
+ */
+describe("masking the author a changelog records", () => {
+  let fixture: Fixture;
+  let shape: Shape;
+  let index: UnitIndex;
+
+  beforeAll(() => {
+    fixture = createFixture();
+    const api = fixture.repo("acme-api");
+    const app = fixture.repo("acme-app");
+    api.commit({ files: { "README.md": "x\n" }, subject: "initial", author: "Ada Lovelace" });
+    app.commit({ files: { "README.md": "x\n" }, subject: "initial", author: "Ada Lovelace" });
+    ENTITIES.slice(0, 6).forEach((entity, i) => {
+      const table = entity.toLowerCase();
+      api.commit({
+        files: {
+          [`db/changes/${table}DueDateChanges.yaml`]: [
+            "databaseChangeLog:",
+            "  - changeSet:",
+            `      id: add-${table}-due-date`,
+            "      author: jdoe",
+            "  - changeSet:",
+            `      id: index-${table}-due-date`,
+            "      author: TEAM",
+            "",
+          ].join("\n"),
+          [`src/model/${entity}Entity.kt`]: `class ${entity}Entity(val dueDate${i}: String)\n`,
+        },
+        subject: `TEAM-${71 + i} add dueDate${i} to ${entity}`,
+        author: AUTHORS[i % AUTHORS.length]!,
+      });
+      app.commit({
+        files: { [`src/api/${table}Types.ts`]: `export type ${entity} = { dueDate${i}: string }\n` },
+        subject: `TEAM-${71 + i} show dueDate${i} on the ${entity} form`,
+        author: AUTHORS[i % AUTHORS.length]!,
+      });
+    });
+    shape = mineShapes([api.path, app.path], { minRecurrence: 4, minProposers: 4, minRoles: 2 }).shapes[0]!;
+    index = readUnitIndex([api.path, app.path]);
+  });
+  afterAll(() => fixture.cleanup());
+
+  it("given a changelog whose author field holds a handle no commit author shares, when quoted, then the value is masked and counted", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    const quoted = packet.hunks.map((h) => h.lines.join("\n")).join("\n");
+    expect(quoted).toContain("author: (withheld)");
+    expect(quoted).not.toMatch(/jdoe/i);
+    expect(packet.dropped.authorFields).toBeGreaterThan(0);
+  });
+
+  it("given an author field naming a role, when quoted, then it is kept", () => {
+    const { packet } = buildEvidence(shape, index, { host: HOST });
+    expect(packet.hunks.map((h) => h.lines.join("\n")).join("\n")).toContain("author: TEAM");
+  });
+
+  it("given a packet with no author field in it, when built, then the count is absent rather than zero", () => {
+    const seeded = createFixture();
+    try {
+      const { repos } = seedDraftHistory(seeded);
+      const plain = mineShapes(repos, { minRecurrence: 4, minProposers: 4, minRoles: 2 }).shapes[0]!;
+      const { packet } = buildEvidence(plain, readUnitIndex(repos), { host: HOST });
+      expect("authorFields" in packet.dropped).toBe(false);
+    } finally {
+      seeded.cleanup();
+    }
+  });
+
+  it.each([
+    ["a changelog attribute", '    <changeSet id="1" author="jdoe">', "db/changelog.xml", '    <changeSet id="1" author="(withheld)">'],
+    ["a capitalised handle", '    <changeSet id="1" author="JDOE">', "db/changelog.xml", '    <changeSet id="1" author="(withheld)">'],
+    ["a manifest field", '  "author": "Jane Doe",', "package.json", '  "author": "(withheld)",'],
+    ["a properties line", "author=jdoe", "app.properties", "author=(withheld)"],
+    ["a formatted SQL changeset", "--changeset jdoe:42", "db/changes.sql", "--changeset (withheld):42"],
+    ["a documentation tag in source", " * @author Jane Doe */", "src/Ledger.java", " * @author (withheld) */"],
+    ["a role", '    <changeSet id="1" author="system">', "db/changelog.xml", '    <changeSet id="1" author="system">'],
+    ["a type in source code", "  val author: String,", "src/Book.kt", "  val author: String,"],
+  ])("given %s, when masked, then the line reads as expected", (_label, line, path, expected) => {
+    expect(maskAuthorFields(line, path).text).toBe(expected);
+    expect(maskAuthorFields(line, path).masked).toBe(line === expected ? 0 : 1);
   });
 });
 
