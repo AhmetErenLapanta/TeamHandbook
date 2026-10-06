@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FORMAT_PATTERNS, checkSkillFormat, failedRules, formatPasses, splitFrontmatter } from "./skill-format.js";
@@ -519,5 +519,26 @@ describe("a fixed section that carries a number anyway", () => {
   it("given a numbered file map heading with its count, when checked, then it is still the map", () => {
     const text = DRAFT.replace("## File map (9 past changes)", "## 6. File map (9 past changes)");
     expect(rules(text)).toEqual([]);
+  });
+});
+
+describe("the drafts the repository shows to readers", () => {
+  const repoRoot = join(__dirname, "..", "..");
+  const examples = readdirSync(join(repoRoot, "docs", "examples"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join("docs", "examples", entry.name, "SKILL.md"));
+
+  it("given every draft shown as an example or replayed by the demo, when checked as strictly as a fresh draft, then each passes", () => {
+    // given the examples the README links and the draft the demo replays
+    const shown = [...examples, join("demo", "recorded-draft.md")];
+    expect(examples.length).toBeGreaterThan(0);
+
+    // when each is held to the gate a draft meets on its way into the queue, then none fails:
+    // a showcase the product itself would refuse to write is not a showcase of the product
+    for (const path of shown) {
+      const findings = checkSkillFormat(readFileSync(join(repoRoot, path), "utf8"), { extended: true });
+      expect(failedRules(findings), path).toEqual([]);
+      expect(formatPasses(findings), path).toBe(true);
+    }
   });
 });

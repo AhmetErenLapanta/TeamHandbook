@@ -2,43 +2,66 @@
 
 [![CI](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Node: >= 22](https://img.shields.io/badge/node-%3E%3D%2022-brightgreen)](package.json)
 
-**Your team's Claude Code setup, in one git repository.** One person creates it, everyone
-else connects once, and every skill, MCP server, or slash command the team approves shows
-up on its own.
+**The work your repository keeps repeating, written down as skills your whole team has.**
+TeamHandbook reads your git history, finds the jobs that change the same files the same way
+time after time, and drafts a skill for the one you pick. One person approves it in review,
+it lands in the repository, and the team has it from their next session.
 
-[What your team gets](#what-your-team-gets) · [Install](#install) ·
+[The first day](#the-first-day) · [What a draft is](#what-a-draft-is) · [Install](#install) ·
 [Who approves what](#nothing-ships-until-you-say-so) ·
 [Why you might not want this](#why-you-might-not-want-this)
 
-<img src="docs/handbook-one-to-team.svg" alt="A skill, an MCP server, or a command that is already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to four teammates, and each of them has it at their next session, with nothing to install by hand." width="880">
+<img src="docs/handbook-one-to-team.svg" alt="The work your repository keeps repeating, drafted as a skill, or an MCP server or a command already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to the rest of the team, and each of them has it at their next session, with nothing to install by hand." width="880">
 
-## What this is
+## The first day
 
-TeamHandbook is a Claude Code plugin that makes one git repository your team's shared
-setup: the skills everybody should have loaded, the MCP servers everybody needs
-configured, the slash commands everybody should share. That repository is a Claude Code
-plugin marketplace, so Claude Code itself does the delivering.
+One person sets up the team's repository, once, with `/handbook:init`. Everyone else keeps
+working where they already work.
 
-You explain a rule to Claude. Your teammates explain theirs, in their own sessions.
-Everybody learns something today, and nobody else finds out. What one of you learns
-should belong to all of you.
+In any repository, `/handbook:mine` lists the work its history repeats: the files each
+piece of work touches, how often it was done, and by how many people. Listing reads git and
+nothing else, so it makes no model call and sends nothing. Pick one with
+`/handbook:mine draft <n>` and TeamHandbook writes a draft skill from that one workflow's
+screened evidence, through your own `claude` CLI. The draft waits in `/handbook:review`,
+where you read it, fill in what it could not know, and decide where it goes. Adding it to
+the project writes it into that repository's `.claude/skills/` and commits it, once you
+have approved the commit message; push it like any other commit, and everyone who pulls
+has it at their next session. Sharing it with the team opens a merge request on the team's
+repository instead.
 
-Approving something sends it to that repository as a merge request. Merge it and each
-teammate's copy picks it up at their next session: no CI, no access token, and nobody
-needing push rights on a protected branch.
+## What a draft is
 
-## What your team gets
+A draft is not a finished skill, and it does not pretend to be one. It carries:
 
-Four things can go from your machine to the handbook, and each one travels as a merge
-request that raises the repository's plugin version. That version is Claude Code's signal
-that the plugin moved, which is what makes every teammate's copy refresh.
+- **a skeleton of the steps**, in the order the past changes took them;
+- **a file map the history measured**: the files the work touches, and how consistently;
+- **what the history could not show**, listed as open questions. Much of any job never
+  reaches git, so the draft asks rather than guesses, and you answer at review.
 
-| What you share | Command | What lands in the repo |
+[A draft mined from an open-source repository's history](docs/examples/change-cache-backend-api/SKILL.md)
+shows the first two on real work ([where it came from](docs/examples/README.md)).
+`/handbook:demo` walks the whole path on a scratch repository without calling a model.
+
+## What reaches your team
+
+TeamHandbook is a Claude Code plugin, and besides the drafts it writes from history it
+makes one git repository your team's shared setup: the skills, MCP servers and slash
+commands everybody should have. That repository is a Claude Code plugin marketplace, so
+Claude Code itself does the delivering. Merge a request there and each teammate's copy
+picks it up at their next session: no CI, no access token, and nobody needing push rights
+on a protected branch.
+
+| What you share | Command | Where it lands |
 |---|---|---|
-| A skill the harvest proposed | `/handbook:review` | `skills/<name>/`, with the evidence it came from, plus a version bump |
-| A skill you wrote yourself | `/handbook:share` | `skills/<name>/`, with every file it carries, plus a version bump |
-| An MCP server already configured on this machine | `/handbook:share` | an entry in the repo's `.mcp.json`, plus a version bump |
-| A slash command already installed on this machine | `/handbook:share` | `commands/<name>.md`, plus a version bump |
+| A draft from your repository's history | `/handbook:review` | that repository's `.claude/skills/<name>/`, committed once you approve the message; or the team repository's `skills/<name>/` |
+| A skill you wrote yourself | `/handbook:share` | the team repository's `skills/<name>/`, with every file it carries |
+| An MCP server already configured on this machine | `/handbook:share` | an entry in the team repository's `.mcp.json` |
+| A slash command already installed on this machine | `/handbook:share` | the team repository's `commands/<name>.md` |
+
+Everything that goes to the team repository travels as a merge request that raises its
+plugin version. That version is Claude Code's signal that the plugin moved, which is what
+makes every teammate's copy refresh. A draft added to its own project travels the way the
+code does: commit, push, pull.
 
 Nothing else is automated, and the repository is an ordinary plugin repo: agents and
 hooks can be committed to it by hand and reach everyone the same way, as long as the
@@ -61,9 +84,8 @@ One person, once.
 /plugin install handbook@teamhandbook
 ```
 
-Choose **"Install for you (user scope)"** when Claude Code asks: repeats are counted
-across all your projects, so scoping it to one repository hides the thing it looks for.
-Not project scope, which installs it for everyone who clones the repo
+Choose **"Install for you (user scope)"** when Claude Code asks, not project scope, which
+installs it for everyone who clones the repo
 ([why](SECURITY.md#install-it-for-yourself-not-for-your-teammates)).
 
 Restart Claude Code so the hooks load, then:
@@ -132,27 +154,25 @@ correctly: they are not, yet.
 
 ## Nothing ships until you say so
 
-<img src="docs/handbook-approve-arrive.svg" alt="One skill, on two machines. On the left, /handbook:review on the machine that captured it, as the engine underneath prints it: a pending candidate called no-db-mocks, marked a correction, scored 8 out of 10 across recurrence, unfindability, generality, durability and cost of error, suggested for the team, and noted as something this developer has told Claude in 3 sessions. Below it the skill itself, then the grounded case it came from: the developer's own sentence, never mock the DB here, use the testcontainer fixture; the command that failed, npm run test:integration, and the error it gave; the command that resolved it and the file edited for the fix. The verdict is the last block: shared with the team as a pull request, whose link is printed, and the line under it says somebody has to merge that request before every teammate gets it at their next session, and that the same request raises the handbook to v0.1.1, which is what makes their copies refresh. On the right, a teammate's next session, which opens with one line from the team plugin saying one new skill has arrived since their last session, and the same skill file, whole, now on their machine." width="880">
-
 Two decisions hide behind that sentence, and each one belongs to the person it affects.
 
 ### What leaves your machine
 
-`/handbook:review` shows each candidate with the evidence that produced it - your own
-words, the failing command, the fix - and then asks where the skill goes:
+`/handbook:review` shows each draft with what it was written from - for a draft from
+history, its file map and the questions it could not answer - and then asks where it goes:
 
 - **Share with the team** - a merge request to the handbook repo: everyone, every project
 - **Add to the project it came from** - that project's `.claude/skills`, named in the
-  question: commit it and it travels with the code. A skill installs where it was
-  captured, not whichever project you are reviewing from
+  question. A draft from history is committed there for you, once you approve the commit
+  message; anything else is copied there for you to commit. A skill installs where it came
+  from, not whichever project you are reviewing from
 - **Keep for yourself** - `~/.claude/skills`: every project you open, nobody else
-- **Reject** - not worth keeping, and it can be silenced for good
+- **Reject** - not worth keeping
 
 You can also ask for an edit before deciding, or leave one pending and come back. Nothing
-the harvest proposed moves anywhere without that verdict, and the answer that sends it to
-the team ends in a merge request somebody reviews. A skill you wrote yourself has no
-verdict to wait for: you pick it on the `/handbook:share` screen, and that picking is the
-approval.
+TeamHandbook wrote moves anywhere without that verdict, and the answer that sends it to the
+team ends in a merge request somebody reviews. A skill you wrote yourself has no verdict to
+wait for: you pick it on the `/handbook:share` screen, and that picking is the approval.
 
 ### What arrives on your machine
 
@@ -175,33 +195,33 @@ thing: it drops the contribution target and leaves the subscription alone.
 ## Why you might not want this
 
 - **You are working alone.** It runs solo, and approved skills land in `~/.claude/skills`
-  with no team repo involved. A queue you review by yourself is a poor trade against
-  Claude Code's own memory, which keeps what you tell it without asking first. Running
-  this pays off once other people read from the repository.
-- **The harvest is one model call, and the model changed what it found.** On a single
-  prompt from a real session, three runs per model, the default (`sonnet`) proposed the
-  developer's stated rule 3 times out of 3 and `haiku` 1 in 3 - too little to put a rate
-  on. A skill buried in a very long session can still be missed, and the model can propose
-  something plausible but wrong, which is why nothing installs itself.
+  or the project with no team repo involved. The payoff is other people: a draft approved
+  once is worth most when the people who repeat that work read it too.
+- **A draft is a start, not a skill.** Much of any job never reaches git - the reason, the
+  conversation, the check somebody ran by hand - and the draft can only list that as open
+  questions. Expect to answer them before approving.
+- **A young repository has nothing to find.** It takes several jobs that touched the same
+  files before the same work can be recognised twice. A repository whose commits each do
+  something different lists nothing, and that is the right answer.
+- **Drafting is one model call, and the reply is held to a standard.** A draft that fails
+  the format check or the screen is dropped rather than repaired, so asking can come back
+  with nothing kept: ask again, or pick another. The model can also write something
+  plausible but wrong, which is why nothing it writes installs itself.
+- **The screen is pattern matching.** Secrets, traces of this machine and the names of the
+  people who did the work are screened out of what is sent and of what comes back, but a
+  secret in a format the detector does not know, or a part of a name common enough in the
+  code to read as a word, can get through. Read a draft before approving it;
+  [SECURITY.md](SECURITY.md#what-handbookmine-reads-and-sends) says where the limits are.
 - **A private handbook has a setup step you cannot automate away.** Every teammate needs
   access to the repository and git credentials on their own machine, and that is a
   one-time interactive sign-in they run in their own terminal. A plugin can never stop to
   ask for a password, so without it the commands fail with a bare git error.
-- **A correction needs you to have said it.** Fix Claude's approach by editing the file
-  yourself and there is nothing to quote.
-- **Only conversational prose is read.** A skill living purely in tool output reaches the
-  harvest only through the deterministic error-to-fix pairs the hooks captured.
-- **Repeat matching is word overlap, not understanding.** Two phrasings of one rule match
-  when they share most of their content words, and a word wearing a different suffix
-  still counts as the same word - so it works whatever language you teach in, including
-  one where every ending changes. A rule restated in completely different words reads as
-  new. The bias is deliberate: a missed repeat, never a false one.
 - **State is per-machine.** `~/.teamhandbook/` does not sync; team approvals travel
   through the merged request.
 
 ## How it works
 
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a skill TeamHandbook proposed out of a session, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal that the plugin moved. Every teammate's next session refreshes on that version and reports what landed, with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a draft TeamHandbook wrote, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal that the plugin moved. Every teammate's next session refreshes on that version and reports what landed, with nothing installed or configured by hand." width="880">
 
 - **One merge request for a whole selection.** Everything you pick travels together,
   skills included, because each one raises the version and two requests opened before
@@ -209,7 +229,8 @@ thing: it drops the contribution target and leaves the subscription alone.
 - **The commit says what you said.** TeamHandbook never commits with a message you have not
   seen; you can delegate the wording only at the moment the merge request is opened, and
   only for the exact sentence you were shown. Where no request can be opened - an empty
-  repository, or a machine with no `gh`/`glab` signed in - the wording is yours to give.
+  repository, a draft committed into its own project, or a machine with no `gh`/`glab`
+  signed in - the wording is yours to give.
 - **The version bump is the delivery.** Nothing pushes to your teammates. The raised
   version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
   moved, and refreshing on it is something each copy does for itself.
@@ -222,20 +243,17 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ### Where the skills come from
 
-The servers and commands you share are already on your machine. Skills are the one thing
-that has to be noticed first, and noticing never happens on its own, so that inlet is
-automatic: TeamHandbook reads each finished session and proposes what it found. This is
-the `/handbook:learn` and `/handbook:review` path, not the loop in the diagram above.
+The servers and commands you share are already on your machine, and so are the skills you
+wrote yourself. The rest come from your repository's history: `/handbook:mine` reads it
+when you ask, and nothing reads it on its own.
 
-- **Capture is a hook, not a tool call.** The model won't remember to save a skill at
-  the worst moment - a failing build, a frustrated developer. Hooks fire every time.
-- **A free check decides whether the model runs at all.** A trivial session - a
-  question, a couple of `ls` calls - is never harvested and costs nothing.
-- **Five criteria**, 0-2 each: recurrence, unfindability, generality, durability, cost
-  of error. A skill needs **>=4/10** to reach your queue, and at most the top three per
-  session do. The score decides what is worth *asking about*, not what ships.
-- **Every skill carries its receipt**: your quoted words, the failing command, the fix,
-  so you can judge it in seconds instead of trusting it.
+The lesson harvest is switched off by default. Turned on, it reads each finished session
+and proposes what it found - a rule you stated, a fix you made, a procedure you completed -
+as a skill waiting in `/handbook:review` for the same verdict as any draft. Turn it on with
+`{"harvest": {"lessons": true}}` in `~/.teamhandbook/config.json`; `/handbook:learn`, which
+captures one thing from the session you are in, follows the same switch. It is one model
+call per finished session, can miss something buried in a long one, and can propose
+something plausible but wrong, which is why nothing it proposes installs itself.
 
 The output is a spec-compliant [Agent Skill](https://agentskills.io). Delete
 TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKILL.md`.
@@ -244,23 +262,25 @@ TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKIL
 
 | Command | What it does |
 |---|---|
-| `/handbook:mine` | List the work this repository keeps repeating, and draft a skill out of one of them. Listing reads git history and sends nothing. |
-| `/handbook:review` | Keep, scope, share, edit, or reject each skill TeamHandbook captured. **Nothing it captured ships without this.** |
+| `/handbook:mine` | List the work this repository keeps repeating; `draft <n>` turns one into a draft skill. Listing reads git history and sends nothing. |
+| `/handbook:review` | Keep, add to the project, share, edit, or reject each draft. **Nothing TeamHandbook wrote ships without this.** |
+| `/handbook:share` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
 | `/handbook:init` | Scaffold the team handbook repo and print the message your team needs. |
 | `/handbook:init --upgrade` | Bring an existing team repo's scaffold up to this version: shows the diff, you pick file by file. |
 | `/handbook:join <url>` | Point this machine at an existing team handbook. |
-| `/handbook:share` | List every skill, MCP server, and slash command on this machine; pick which ones the team gets. |
-| `/handbook:demo` | Walk the whole loop on a scratch project, in about five minutes. |
-| `/handbook:learn` | Capture something on demand instead of waiting for the session to end. |
-| `/handbook:status` | Queue, ledger, how often your skills actually fired, config. |
+| `/handbook:status` | Queue, ledger, how often your skills actually fired, harvest state, config. |
+| `/handbook:demo` | Walk the whole path on a scratch repository: the list, a draft, the review screen. No model call unless you ask for a live draft. |
+| `/handbook:learn` | Capture one thing from this session as a skill. Follows the lesson harvest's switch, so it is off until you turn that on. |
 | `/handbook:doctor` | Diagnose node, the `claude` CLI, hooks, config, team repo. |
 | `/handbook:leave` | Drop the team target and go back to solo. Deletes no skills. |
 
 ## Privacy
 
-To find the skill, TeamHandbook sends a slice of the finished session to **your own**
-`claude` CLI - no bundled key, no third-party model, no telemetry. Exactly what is read,
-what is never read, and every file it writes: [SECURITY.md](SECURITY.md).
+Listing sends nothing. A draft sends the screened evidence for the one workflow you picked
+to **your own** `claude` CLI - no bundled key, no third-party model, no telemetry - and the
+lesson harvest, when you turn it on, sends a redacted slice of each finished session the
+same way. Exactly what is read, what is never read, and every file it writes:
+[SECURITY.md](SECURITY.md).
 
 The per-session harvest **ships switched off.** Turn it on, or the rest off, in
 `~/.teamhandbook/config.json`:
@@ -275,7 +295,7 @@ All three fail **closed** if the file cannot be parsed. Capture keeps running wh
 they say: the hooks that record errors and activity write to your machine and send
 nothing. `/handbook:mine`, which reads git history rather than a session, is unaffected
 by any of them. Secrets are redacted before anything
-is written or sent, though detection is pattern matching - eyeball a candidate before
+is written or sent, though detection is pattern matching - read a draft before
 approving it.
 
 ## Development

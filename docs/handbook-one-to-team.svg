@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 250" width="880" height="250"
      role="img" aria-labelledby="t d"
      font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
-  <title id="t">A skill, an MCP server, or a command, approved once, reaches the whole team</title>
-  <desc id="d">A skill, an MCP server, or a command that is already on your machine, drawn as three
-    boxes above a single figure who approves one of them. A line carries that approval down into
+  <title id="t">The work your repository repeats, an MCP server, or a command, approved once, reaches the whole team</title>
+  <desc id="d">The work your repository keeps repeating, drafted as a skill, or an MCP server or a
+    command that is already on your machine, drawn as three boxes above a single figure who
+    approves one of them. A line carries that approval down into
     one repository. From there, lines fan out to four teammates, and each of them has it at their
     next session, with nothing to install by hand.</desc>
 
@@ -39,7 +40,7 @@
   <path d="M209 18 H215 L219 22 V34 H209 Z" fill="none" stroke="#1f6feb" stroke-width="1.4"/>
   <path d="M215 18 V22 H219" fill="none" stroke="#1f6feb" stroke-width="1.4"/>
   <path d="M211 26 H216 M211 30 H214" fill="none" stroke="#1f6feb" stroke-width="1.4" stroke-linecap="round"/>
-  <text x="248" y="30" font-size="12" font-weight="600" fill="#77797d">skill</text>
+  <text x="230" y="30" font-size="12" font-weight="600" fill="#77797d">repeated work</text>
 
   <rect x="365" y="8" width="150" height="36" rx="7" fill="none" stroke="#7d8590"/>
   <path d="M379 22 V17 M383 22 V17" fill="none" stroke="#1f6feb" stroke-width="1.4" stroke-linecap="round"/>
