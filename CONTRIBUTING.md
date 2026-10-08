@@ -15,8 +15,8 @@ npm run typecheck   # tsc --noEmit
 ```
 
 The plugin runs `dist/`, not `src/` - **after editing anything under `src/`, run
-`npm run build`** and commit the updated bundles; each bundle inlines the `src/lib/` code
-it imports. `dist/` is
+`npm run build`** and commit the updated bundles in the same commit; each bundle inlines
+the `src/lib/` code it imports. `dist/` is
 committed on purpose (the plugin is installed by git clone).
 
 **No lockfile is committed**, and `.gitignore` keeps it out. Claude Code installs a

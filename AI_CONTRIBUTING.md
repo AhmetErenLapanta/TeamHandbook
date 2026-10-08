@@ -172,9 +172,11 @@ the files under "Outside the ladder".
     (must route) or `fp-gelistirme` (must fire nothing), never a tag of the held-out half.
   - Then, if your human agrees to spend about ten cents, run the one case once. It needs the
     `claude` CLI signed in, and `--trust-plugin` answers the first-run prompt that would
-    otherwise wait forever in a non-interactive shell:
+    otherwise wait forever in a non-interactive shell. Run it from a fresh clone of your
+    committed branch, not from the checkout you work in (section 7 says why):
 
     ```
+    git clone <your checkout> <empty directory> && cd <empty directory>
     evals/run-suite.sh nl-gelistirme --case <new-case> --runs 1 \
       --model claude-sonnet-5 --max-cost-usd 1 --trust-plugin
     ```
@@ -222,7 +224,8 @@ the files under "Outside the ladder".
   SECURITY.md; [CLAUDE.md](CLAUDE.md#where-to-look-before-you-change-something) says
   what that change then owes.
 - **Verify:** the test you wrote first fails before your change and passes after it; the
-  definition of done in section 6.
+  rebuild rule in [CLAUDE.md, Conventions](CLAUDE.md#conventions), which covers `src/lib/`
+  too; the definition of done in section 6.
 - **In the pull request:** the behaviour before and after, and the test that pins it.
 
 ### Step 3: a feature, or anything at a trust boundary
@@ -244,7 +247,8 @@ the files under "Outside the ladder".
     ([CLAUDE.md, Where to look](CLAUDE.md#where-to-look-before-you-change-something)). You
     do not run the held-out suite, and cannot without reading it. Say in the pull request
     that the routing suite needs a rerun, and the maintainer runs it.
-- **Verify:** everything in section 6, plus the trust-boundary module's own tests.
+- **Verify:** the rebuild rule in [CLAUDE.md, Conventions](CLAUDE.md#conventions);
+  everything in section 6, plus the boundary module's own tests.
 - **In the pull request:** for a capture, gate or secret change, the failure case it
   prevents, as the [pull request template](.github/pull_request_template.md) asks.
 
@@ -263,8 +267,8 @@ section), `LICENSE`, `NOTICE`, `demo/`, `docs/examples/*/SKILL.md`, `docs/*.svg`
    [CONTRIBUTING.md, Ground rules](CONTRIBUTING.md#ground-rules) asks for, and watch it
    fail.
 3. Make the change.
-4. If anything under `src/` changed: `npm run build`, and commit what it wrote to `dist/`
-   ([CLAUDE.md, Conventions](CLAUDE.md#conventions)).
+4. If anything under `src/` changed: the rebuild rule in
+   [CLAUDE.md, Conventions](CLAUDE.md#conventions).
 5. `npm test`, then `npm run typecheck`.
 6. Commit. The format is in [CONTRIBUTING.md](CONTRIBUTING.md#pull-requests). An example
    from this repository's history: `Nothing proved that a path into someone's home
@@ -298,7 +302,7 @@ section), `LICENSE`, `NOTICE`, `demo/`, `docs/examples/*/SKILL.md`, `docs/*.svg`
 
 ## 7. Common mistakes
 
-The first six were reproduced on a fresh clone before they were written down. The last
+The first seven were reproduced on a fresh clone before they were written down. The last
 group is the opposite case: nothing turns red, and that is the trap.
 
 **Every test passed and `npm test` still exited 1.**
@@ -330,8 +334,10 @@ group is the opposite case: nothing turns red, and that is the trap.
 - Cause: something under `src/` changed and the rebuilt bundles were not committed. A
   change only under `src/lib/` counts: a one-line edit to `src/lib/status.ts` changed
   `dist/doctor.js` and `dist/status.js`.
-- Do: `npm run build`, commit `dist/`, and check that `git status --porcelain -- dist/`
-  prints nothing.
+- Do: run `npm run build` after every `src/` edit and let `git status --porcelain -- dist/`
+  decide rather than a guess: a comment-only edit to the same file left `dist/` unchanged.
+  Commit whatever it lists, as the rebuild rule in
+  [CLAUDE.md, Conventions](CLAUDE.md#conventions) says.
 
 **`npm install` suggests `npm audit fix --force`.**
 - Symptom: `4 vulnerabilities (2 moderate, 2 critical)` and the suggestion to run it.
@@ -348,6 +354,15 @@ group is the opposite case: nothing turns red, and that is the trap.
   collects its copy of every test as well.
 - Do: keep worktrees outside the repository, or run `npx vitest run --exclude '.claude/**'`.
   Never commit `.claude/`.
+
+**A single eval run comes back INVALID at $0.00.**
+- Symptom: `never reached the model ($0.00)` and `INVALID: 100.0% of runs did not happen`;
+  the run's error in the result JSON reads `a plugin directory holds more than 20000
+  entries to check for eval directories`.
+- Cause: the harness walks the whole plugin directory, untracked files included. Reproduced
+  with 21,000 empty files in a clone's root; the same clone without them, `node_modules`
+  included, holds under 2,000 entries and runs normally.
+- Do: commit, clone your branch into an empty directory and run the case there (Step 1).
 
 **Mistakes nothing will flag.** These leave `npm test` and CI green: CI runs typecheck,
 test, build and the `dist/` check ([ci.yml](.github/workflows/ci.yml)), and none of them

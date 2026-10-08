@@ -27,8 +27,9 @@ you hit - and offers each one as a personal, project, or team skill. See
 
 ## Conventions
 
-- After editing anything under `src/`, run `npm run build` - the plugin runs `dist/`,
-  not `src/`, and each bundle inlines the `src/lib/` code it imports.
+- After editing anything under `src/`, run `npm run build` and put what it changes in
+  `dist/` in the same commit - the plugin runs `dist/`, not `src/`, and each bundle
+  inlines the `src/lib/` code it imports.
 - Tests are vitest, colocated as `*.test.ts`. Cover `lib/` services; the thin
   hook/CLI entrypoints are exercised by the lib tests they call.
 - A function that reads or writes under the handbook home takes its root as a defaulted
