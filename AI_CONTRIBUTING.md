@@ -27,6 +27,9 @@ guide is the bug: say so in your pull request.
    | `/handbook:mine` or the drafts it writes | [What `/handbook:mine` reads and sends](SECURITY.md#what-handbookmine-reads-and-sends) |
    | how the `claude -p` child is started | [The model call](SECURITY.md#the-model-call) |
    | `/handbook:join`, or anything read from a team repository | [A team repository you joined](SECURITY.md#a-team-repository-you-joined) |
+   | how a session is recognized as repeated work | [Recognizing a workflow in a session](SECURITY.md#recognizing-a-workflow-in-a-session) |
+   | the skill health report or the share screen's overlap warning | [Skill health](SECURITY.md#skill-health) |
+   | a new file or directory the plugin keeps | [Removing your data](SECURITY.md#removing-your-data) |
 
 4. [evals/README.md](evals/README.md#two-halves-and-why), "Two halves, and why", but only if
    you will touch `evals/`, a `commands/*.md` frontmatter or a `skills/*/SKILL.md`
@@ -53,11 +56,15 @@ share    /handbook:share -> lib/share (the pick is the approval) -> lib/publish
 ```
 
 Every arrow that ends outside `~/.teamhandbook/` passes one of the modules below. They are
-the trust boundaries, and the promise each one keeps lives in the file on the right:
+the main trust boundaries, and the promise each one keeps lives in the file on the right.
+The table explains them; the complete list, which the ladder uses, is computed by a
+command in Step 2, so it stays right as modules are added.
 
 | Module (`src/lib/`) | What it guards | The promise lives in |
 |---|---|---|
-| `secrets.ts` | secret detection, used at every place something is persisted | [CLAUDE.md, invariants](CLAUDE.md#non-negotiable-invariants-dont-regress-these) |
+| `secrets.ts`, `secret-corpus.ts` | secret detection, used at every place something is persisted, and the lines it is measured against | [CLAUDE.md, invariants](CLAUDE.md#non-negotiable-invariants-dont-regress-these) |
+| `identity.ts` | finding and masking this machine's user name and home path in text that leaves | [What leaves your machine](SECURITY.md#what-leaves-your-machine) |
+| `config.ts` | reading the switches that keep sending off; a config file that cannot be parsed counts as off | [What leaves your machine](SECURITY.md#what-leaves-your-machine) |
 | `capture.ts`, `signals.ts` | what the hooks persist; a secret-bearing occurrence is dropped, signals are sanitized before `signals.jsonl` | [What it reads](SECURITY.md#what-it-reads), [What it writes](SECURITY.md#what-it-writes-and-where) |
 | `transcript.ts` | the session slice, redacted line by line before it enters the harvest prompt | [CLAUDE.md, invariants](CLAUDE.md#non-negotiable-invariants-dont-regress-these) |
 | `queue.ts` | the secret and identity audit of a skill directory | [What it writes](SECURITY.md#what-it-writes-and-where) |
@@ -66,12 +73,12 @@ the trust boundaries, and the promise each one keeps lives in the file on the ri
 | `harvest.ts` | the harvest prompt, and dropping a reply it cannot parse | [CLAUDE.md, conventions](CLAUDE.md#conventions) |
 | `deliver.ts`, `publish.ts`, `branch.ts`, `forge.ts`, `init.ts` | approval before delivery, every push, every merge request | [What leaves your machine](SECURITY.md#what-leaves-your-machine) |
 | `share.ts` | the pick screen, which is the act of consent for sharing | [CLAUDE.md, invariants](CLAUDE.md#non-negotiable-invariants-dont-regress-these) |
+| `mcp.ts`, `commands.ts` | refusing an MCP server or a slash command that carries a credential before it is shared | [What leaves your machine](SECURITY.md#what-leaves-your-machine) |
+| `mine.ts`, `mine-command.ts` | what `/handbook:mine` reads from git history and puts in its model call | [What `/handbook:mine` reads and sends](SECURITY.md#what-handbookmine-reads-and-sends) |
+| `session-workflow.ts` | what is recorded when a session looks like repeated work | [Recognizing a workflow in a session](SECURITY.md#recognizing-a-workflow-in-a-session) |
 | `join.ts` | the values read out of a team repository someone else controls | [A team repository you joined](SECURITY.md#a-team-repository-you-joined) |
 | `gate.ts` | the legacy recurrence threshold no automatic path reaches | [CLAUDE.md, invariants](CLAUDE.md#non-negotiable-invariants-dont-regress-these) |
 | `corrections.ts`, `teachings.ts` | non-English phrases kept as detector data | [CLAUDE.md, conventions](CLAUDE.md#conventions) |
-
-`draft.ts`, `distill.ts`, `judge.ts` and `sweep.ts` build model prompts too. They call
-`fenceUntrusted`, and that call is the part that guards something.
 
 Why `dist/` is committed is in [CLAUDE.md, Layout](CLAUDE.md#layout), and when to rebuild
 it in [CLAUDE.md, Conventions](CLAUDE.md#conventions). One consequence is not written down
@@ -193,29 +200,34 @@ the files under "Outside the ladder".
 - **Work:** a bug fix or a small behaviour change in a module that is not a trust boundary,
   with its test.
 - **Safe zone:**
-  - `src/lib/*.ts` that are not in the trust-boundary table in section 2, and the
-    `*.test.ts` beside each
+  - a `src/lib/*.ts` module that is not a boundary (below), and the `*.test.ts` beside it
   - `src/cli/*.ts`, except `review.ts`, `share.ts`, `init.ts` and `join.ts`, the entrypoints
     that lead to an approval, a push or a repository someone else controls
   - `dist/`, only as `npm run build` writes it
   - `commands/*.md` and `skills/*/SKILL.md` below the frontmatter, except the bodies of
     `commands/review.md` and `commands/share.md`
   - an existing case under `evals/gelistirme/`
-- **Do not touch:** every module in the trust-boundary table, `src/hooks/`, the four
-  entrypoints above, the frontmatter of any `commands/*.md` or `skills/*/SKILL.md`, and the
-  bodies of `commands/review.md` and `commands/share.md`. Each of those is Step 3.
-- **Verify:** the test you wrote first fails before your change and passes after it; the
-  definition of done in section 6. If you touched `draft.ts`, `distill.ts`, `judge.ts` or
-  `sweep.ts`, this prints nothing:
+- **Do not touch:** the boundary modules, `src/hooks/`, the four entrypoints above, the
+  frontmatter of any `commands/*.md` or `skills/*/SKILL.md`, and the bodies of
+  `commands/review.md` and `commands/share.md`. Each of those is Step 3. The boundary
+  modules are the six this command searches for, every module that imports one of them,
+  and `config.ts`, `teachings.ts` and `secret-corpus.ts`:
 
   ```
-  git diff master...HEAD -- src/lib | grep -E '^[-+].*fenceUntrusted'
+  git grep -lE 'from "\./(secrets|identity|prompt-safety|branch|forge|publish)\.js"' \
+    -- 'src/lib/*.ts' ':!*.test.ts'
   ```
+
+  A module outside that set is still Step 3 if your change would break a promise in
+  SECURITY.md; [CLAUDE.md](CLAUDE.md#where-to-look-before-you-change-something) says
+  what that change then owes.
+- **Verify:** the test you wrote first fails before your change and passes after it; the
+  definition of done in section 6.
 - **In the pull request:** the behaviour before and after, and the test that pins it.
 
 ### Step 3: a feature, or anything at a trust boundary
 
-- **Work:** a new command or flag; any change to a module in the trust-boundary table, to
+- **Work:** a new command or flag; any change to a boundary module (Step 2 lists them), to
   `src/hooks/`, to `src/cli/review.ts`, `share.ts`, `init.ts` or `join.ts`, to a command's or
   skill's frontmatter, or to the bodies of `commands/review.md` and `commands/share.md`,
   which carry the approval dialog.
@@ -223,15 +235,15 @@ the files under "Outside the ladder".
   the shape. The [feature request template](.github/ISSUE_TEMPLATE/feature_request.md) asks
   what the change has to handle.
 - **What comes with it:**
-  - A change to what the plugin reads, writes or sends edits [SECURITY.md](SECURITY.md) in
-    the same pull request. The rule is in
-    [CLAUDE.md](CLAUDE.md#where-to-look-before-you-change-something).
+  - SECURITY.md, under the rule in
+    [CLAUDE.md, Where to look](CLAUDE.md#where-to-look-before-you-change-something):
+    "A change that breaks one edits it too."
   - A new command needs a `commands/<name>.md` for its `src/cli/<name>.ts` and a row in the
     README's command table; `src/lib/plugin-manifest.test.ts` fails without either.
-  - A changed `description:` line makes the routing headline stale
-    ([CLAUDE.md](CLAUDE.md#where-to-look-before-you-change-something)). You do not run the
-    held-out suite, and cannot without reading it. Say in the pull request that the routing
-    suite needs a rerun, and the maintainer runs it.
+  - A changed `description:` line: "the number is stale until it is rerun"
+    ([CLAUDE.md, Where to look](CLAUDE.md#where-to-look-before-you-change-something)). You
+    do not run the held-out suite, and cannot without reading it. Say in the pull request
+    that the routing suite needs a rerun, and the maintainer runs it.
 - **Verify:** everything in section 6, plus the trust-boundary module's own tests.
 - **In the pull request:** for a capture, gate or secret change, the failure case it
   prevents, as the [pull request template](.github/pull_request_template.md) asks.
@@ -275,10 +287,12 @@ section), `LICENSE`, `NOTICE`, `demo/`, `docs/examples/*/SKILL.md`, `docs/*.svg`
 - [ ] `git diff --stat master...HEAD` lists only files your step allows.
 - [ ] `git diff --name-only master...HEAD -- evals/tutma` prints nothing.
 - [ ] `git diff master...HEAD | grep -E '^\+.*(/Users|/home)/'` prints nothing, and no
-      added line carries a secret, an e-mail address, an OS user name or a session id
-      ([CLAUDE.md, conventions](CLAUDE.md#conventions)).
+      added line carries what [CLAUDE.md, Conventions](CLAUDE.md#conventions) keeps out of
+      a commit, or what section 8 adds to that list.
 - [ ] The commit message follows [CONTRIBUTING.md](CONTRIBUTING.md#pull-requests).
-- [ ] If the change reads, writes or sends anything new, `SECURITY.md` is in the diff.
+- [ ] The SECURITY.md rule in
+      [CLAUDE.md, Where to look](CLAUDE.md#where-to-look-before-you-change-something)
+      holds for your diff.
 - [ ] If a `description:` line changed, the pull request says the routing suite needs a
       rerun.
 
@@ -365,6 +379,7 @@ looks at the following.
 - Product output is English, with the exceptions
   [CLAUDE.md, conventions](CLAUDE.md#conventions) lists. Write code comments and the pull
   request in English too.
-- Before adding a dependency or touching a pin, read
-  [CONTRIBUTING.md, Development setup](CONTRIBUTING.md#development-setup) and
-  [Ground rules](CONTRIBUTING.md#ground-rules). Do not run `npm audit fix` (section 7).
+- `package.json` is outside the ladder, so a new dependency or a different pin is a
+  proposal in an issue, not a change in your pull request.
+  [CONTRIBUTING.md, Development setup](CONTRIBUTING.md#development-setup) says how the
+  maintainer bumps one. Do not run `npm audit fix` (section 7).
