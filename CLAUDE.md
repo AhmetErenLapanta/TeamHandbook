@@ -1,5 +1,7 @@
 # CLAUDE.md - working in this repo
 
+Contributing from outside this team? Start at [AI_CONTRIBUTING.md](AI_CONTRIBUTING.md).
+
 TeamHandbook is a Claude Code plugin (TypeScript/Node) that harvests durable lessons from
 real coding sessions - the corrections you gave, the procedures you completed, the traps
 you hit - and offers each one as a personal, project, or team skill. See
@@ -25,8 +27,8 @@ you hit - and offers each one as a personal, project, or team skill. See
 
 ## Conventions
 
-- After editing anything under `src/hooks/` or `src/cli/`, run `npm run build` -
-  the plugin runs `dist/`, not `src/`.
+- After editing anything under `src/`, run `npm run build` - the plugin runs `dist/`,
+  not `src/`, and each bundle inlines the `src/lib/` code it imports.
 - Tests are vitest, colocated as `*.test.ts`. Cover `lib/` services; the thin
   hook/CLI entrypoints are exercised by the lib tests they call.
 - A function that reads or writes under the handbook home takes its root as a defaulted

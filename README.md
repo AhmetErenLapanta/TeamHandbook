@@ -312,6 +312,8 @@ npm run typecheck
 `dist/` is committed on purpose: the plugin is installed by git clone, so the built
 hooks must be present.
 
+Contributing with a coding agent? Start at [AI_CONTRIBUTING.md](AI_CONTRIBUTING.md).
+
 ## License
 
 [Apache-2.0](LICENSE).

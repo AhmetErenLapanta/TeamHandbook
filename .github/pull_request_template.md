@@ -11,3 +11,8 @@ failure case it prevents.
 - [ ] Trust invariants intact: nothing delivered without `/handbook:review`
       approval; secrets can't reach disk; untrusted text stays fenced in prompts
 - [ ] Tests added/updated for `src/lib/` changes
+
+**Agent-assisted contribution (optional)**
+- Task (issue #):
+- Minutes from clone to this pull request:
+- Times a human stepped in to redirect the agent:

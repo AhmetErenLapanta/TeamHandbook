@@ -1,5 +1,7 @@
 # Contributing to TeamHandbook
 
+Contributing from outside this team? Start at [AI_CONTRIBUTING.md](AI_CONTRIBUTING.md).
+
 Thanks for your interest. TeamHandbook is a small, focused codebase; contributions
 that keep it that way are very welcome.
 
@@ -12,8 +14,9 @@ npm test            # vitest
 npm run typecheck   # tsc --noEmit
 ```
 
-The plugin runs `dist/`, not `src/` - **after editing anything under `src/hooks/`
-or `src/cli/`, run `npm run build`** and commit the updated bundles. `dist/` is
+The plugin runs `dist/`, not `src/` - **after editing anything under `src/`, run
+`npm run build`** and commit the updated bundles; each bundle inlines the `src/lib/` code
+it imports. `dist/` is
 committed on purpose (the plugin is installed by git clone).
 
 **No lockfile is committed**, and `.gitignore` keeps it out. Claude Code installs a
