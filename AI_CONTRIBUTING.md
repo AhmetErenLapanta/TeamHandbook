@@ -311,7 +311,8 @@ Run these from your own checkout, not from the clone Step 1 uses for the eval ru
       `Timeout calling "onTaskUpdate"` means re-run (section 7); any other unhandled error
       is a failure.
 - [ ] `npm run typecheck` exits 0.
-- [ ] `git diff --stat master...HEAD` lists only files your step allows.
+- [ ] `git diff --stat master...HEAD` lists only files your step allows, or the files a
+      `good first agent task` issue names.
 - [ ] `git diff --name-only master...HEAD -- evals/tutma` prints nothing.
 - [ ] `git diff master...HEAD | grep -E '^\+.*(/Users|/home)/'` prints nothing, and no
       added line carries what [CLAUDE.md, Conventions](CLAUDE.md#conventions) keeps out of
