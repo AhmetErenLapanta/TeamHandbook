@@ -126,8 +126,15 @@ The failures are in `branch.test.ts`, `deliver.test.ts`, `init.test.ts`, `join.t
 Pick the lowest step your task fits. If the task needs a file from a higher step, it is a
 higher-step task: say so to your human before you start, not in the pull request.
 
-**At every step, never:** open, list or search `evals/tutma/`; edit `dist/` by hand; touch
-the files under "Outside the ladder".
+An issue labelled `good first agent task` names its step, and the maintainer chose that
+step with the diff in view, sometimes below what the file rules here would say (an opening
+paragraph of a command's instructions, one regular expression in a boundary module). Take
+the issue's step over your own reading of this section. If the work grows past what the
+issue describes, stop and tell your human before you continue.
+
+Every tracked file sits in exactly one of Step 1, Step 2, Step 3 or "Outside the ladder":
+the lowest step allowed to change it. A higher step may change it too, and Step 2 names the
+parts of a file that need Step 3. The rules in section 8 apply at every step.
 
 ### Step 1: documentation and new eval cases
 
@@ -170,10 +177,12 @@ the files under "Outside the ladder".
     That prints `True False` for a case that expects `/handbook:leave`; put your own
     command in the first string and a neighbour in the second. Tag the case `nl-gelistirme`
     (must route) or `fp-gelistirme` (must fire nothing), never a tag of the held-out half.
-  - Then, if your human agrees to spend about ten cents, run the one case once. It needs the
-    `claude` CLI signed in, and `--trust-plugin` answers the first-run prompt that would
+  - Then, if your human agrees to spend well under a dollar, run the one case once. It needs
+    the `claude` CLI signed in, and `--trust-plugin` answers the first-run prompt that would
     otherwise wait forever in a non-interactive shell. Run it from a fresh clone of your
-    committed branch, not from the checkout you work in (section 7 says why):
+    committed branch, not from the checkout you work in (section 7 says why), and come back
+    to your own checkout when it finishes: the clone has no `master`, so the checks in
+    section 6 do not work there.
 
     ```
     git clone <your checkout> <empty directory> && cd <empty directory>
@@ -181,7 +190,8 @@ the files under "Outside the ladder".
       --model claude-sonnet-5 --max-cost-usd 1 --trust-plugin
     ```
 
-    Measured on an existing case: 15 s and $0.08, ending in
+    Two runs of this command on an existing case cost $0.08 in 15 s and $0.31 in 118 s;
+    `--max-cost-usd 1` stops it at a dollar. The first ended in
 
     ```
       score (valid runs only) : 1.0000
@@ -197,43 +207,50 @@ the files under "Outside the ladder".
 - **In the pull request:** what was unclear before; for an eval case, the sentence's
   intent, the two check outputs and the run output if you ran it.
 
-### Step 2: a small change under `src/lib/`
+### Step 2: a small change outside the trust boundaries
 
-- **Work:** a bug fix or a small behaviour change in a module that is not a trust boundary,
-  with its test.
+- **Work:** a bug fix or a small behaviour change in a module or entrypoint that is not a
+  trust boundary, with its test, or in a command's instructions.
 - **Safe zone:**
-  - a `src/lib/*.ts` module that is not a boundary (below), and the `*.test.ts` beside it
-  - `src/cli/*.ts`, except `review.ts`, `share.ts`, `init.ts` and `join.ts`, the entrypoints
-    that lead to an approval, a push or a repository someone else controls
+  - a `src/lib/*.ts` module or `src/cli/*.ts` entrypoint the command below does not list,
+    and the `*.test.ts` beside it
   - `dist/`, only as `npm run build` writes it
-  - `commands/*.md` and `skills/*/SKILL.md` below the frontmatter, except the bodies of
+  - `commands/*.md` and `skills/*/SKILL.md` below the frontmatter, except
     `commands/review.md` and `commands/share.md`
   - an existing case under `evals/gelistirme/`
-- **Do not touch:** the boundary modules, `src/hooks/`, the four entrypoints above, the
-  frontmatter of any `commands/*.md` or `skills/*/SKILL.md`, and the bodies of
-  `commands/review.md` and `commands/share.md`. Each of those is Step 3. The boundary
-  modules are the six this command searches for, every module that imports one of them,
-  and `config.ts`, `teachings.ts` and `secret-corpus.ts`:
+- **Do not touch:** the files the command below lists, `src/hooks/`, the frontmatter of
+  any `commands/*.md` or `skills/*/SKILL.md`, `commands/review.md` and
+  `commands/share.md`, and anything else under `src/` that is neither a module, an
+  entrypoint nor the test beside one. Each of those is Step 3. The command lists the
+  boundaries: nine modules by name, every `src/lib/` module that imports one of them, and
+  every `src/cli/` entrypoint that imports any of those:
 
   ```
-  git grep -lE 'from "\./(secrets|identity|prompt-safety|branch|forge|publish)\.js"' \
-    -- 'src/lib/*.ts' ':!*.test.ts'
+  named='secrets|identity|prompt-safety|branch|forge|publish|config|teachings|secret-corpus'
+  lib=$(git grep -lE "from \"\./($named)\.js\"" -- 'src/lib/*.ts' ':!*.test.ts' | sed 's#src/lib/##; s#\.ts$##' | paste -sd'|' -)
+  echo "$named|$lib" | tr '|' '\n' | sed 's#.*#src/lib/&.ts#' | sort -u
+  git grep -lE "from \"\.\./lib/($named|$lib)\.js\"" -- 'src/cli/*.ts'
   ```
 
-  A module outside that set is still Step 3 if your change would break a promise in
-  SECURITY.md; [CLAUDE.md](CLAUDE.md#where-to-look-before-you-change-something) says
-  what that change then owes.
-- **Verify:** the test you wrote first fails before your change and passes after it; the
-  rebuild rule in [CLAUDE.md, Conventions](CLAUDE.md#conventions), which covers `src/lib/`
-  too; the definition of done in section 6.
-- **In the pull request:** the behaviour before and after, and the test that pins it.
+  Three of the nine import none of the others and still guard something: `config.ts` reads
+  the switches that keep sending off, `teachings.ts` holds detector phrases as data, and
+  `secret-corpus.ts` is what the secret detector is measured against. The command looks one
+  import deep, so a file outside its list is still Step 3 if your change would break a
+  promise in SECURITY.md; [CLAUDE.md](CLAUDE.md#where-to-look-before-you-change-something)
+  says what that change then owes.
+- **Verify:** for a module or an entrypoint, the test you wrote first fails before your
+  change and passes after it, and the rebuild rule in
+  [CLAUDE.md, Conventions](CLAUDE.md#conventions) holds, `src/lib/` included. For a change
+  only to a markdown body or an existing eval case, Step 1's verification instead. Then the
+  definition of done in section 6.
+- **In the pull request:** the behaviour before and after, and for code the test that pins
+  it.
 
 ### Step 3: a feature, or anything at a trust boundary
 
-- **Work:** a new command or flag; any change to a boundary module (Step 2 lists them), to
-  `src/hooks/`, to `src/cli/review.ts`, `share.ts`, `init.ts` or `join.ts`, to a command's or
-  skill's frontmatter, or to the bodies of `commands/review.md` and `commands/share.md`,
-  which carry the approval dialog.
+- **Work:** a new command or flag; any change to a file Step 2's command lists, to
+  `src/hooks/`, to a command's or skill's frontmatter, or to `commands/review.md` and
+  `commands/share.md`, whose bodies carry the approval dialog.
 - **Before you start:** open an issue or link one, and wait for the maintainer to agree to
   the shape. The [feature request template](.github/ISSUE_TEMPLATE/feature_request.md) asks
   what the change has to handle.
@@ -254,11 +271,14 @@ the files under "Outside the ladder".
 
 ### Outside the ladder
 
-Changed only by the maintainer: `hooks/hooks.json`, `.claude-plugin/`, `package.json` (the
-pins and the version), `scripts/build.mjs`, `.github/workflows/`, `vitest.config.ts`,
-`tsconfig.json`, `CHANGELOG.md` (its newest entry is a released version, not an Unreleased
-section), `LICENSE`, `NOTICE`, `demo/`, `docs/examples/*/SKILL.md`, `docs/*.svg`,
-`evals/kontrol/`, `evals/hasat/`, `evals/enjeksiyon/`, `evals/run-suite.sh`.
+Every tracked file the three steps do not name is changed only by the maintainer. That
+includes `CLAUDE.md`, `AGENTS.md`, `CODE_OF_CONDUCT.md`, `.gitignore`,
+`.github/pull_request_template.md`, `.github/workflows/`, `hooks/hooks.json`,
+`.claude-plugin/`, `package.json` (the pins and the version), `scripts/build.mjs`,
+`vitest.config.ts`, `tsconfig.json`, `CHANGELOG.md` (its newest entry is a released version,
+not an Unreleased section), `LICENSE`, `NOTICE`, `demo/`, `docs/examples/*/SKILL.md`,
+`docs/*.svg`, `evals/README.md`, `evals/run-suite.sh`, `evals/kontrol/`, `evals/hasat/`,
+`evals/enjeksiyon/`, and `evals/tutma/`, which nobody else opens either.
 
 ## 5. The flow
 
@@ -276,11 +296,14 @@ section), `LICENSE`, `NOTICE`, `demo/`, `docs/examples/*/SKILL.md`, `docs/*.svg`
 7. Pushing to your fork and opening the pull request are your human's decisions: ask before
    either. Fill in the [template](.github/pull_request_template.md), including its optional
    block at the end if you can.
-8. Merging is the maintainer's. The first pull request a new contributor opens from a fork
-   runs no CI until a maintainer approves the run (the repository's Actions policy is
-   `first_time_contributors`), so no checks at first is expected, not a failure.
+8. Merging is the maintainer's. Until a contributor has a commit merged here, CI on their
+   pull requests from a fork waits for a maintainer to approve each run (the repository's
+   Actions policy is `first_time_contributors`), so no checks at first is expected, not a
+   failure.
 
 ## 6. Definition of done
+
+Run these from your own checkout, not from the clone Step 1 uses for the eval run.
 
 - [ ] `npm run build`, then `git status --porcelain -- dist/` prints nothing.
 - [ ] `npm test` ends with `Test Files  N passed (N)` and `Tests  N passed (N)`, with no
@@ -343,7 +366,8 @@ group is the opposite case: nothing turns red, and that is the trap.
 - Symptom: `4 vulnerabilities (2 moderate, 2 critical)` and the suggestion to run it.
 - Cause: the advisories are in the development toolchain, and the fix is a major-version
   jump. Run in a throwaway clone, it rewrote `"vitest": "3.2.7"` to `"^5.0.3"` and
-  `"esbuild": "0.23.1"` to `"^0.28.2"`, and the next build rewrote every bundle in `dist/`.
+  `"esbuild": "0.23.1"` to `"^0.28.2"`, and the next build rewrote almost every bundle in
+  `dist/` (14 of 16).
 - Do: leave it. Why the pins are exact and how one is bumped deliberately is in
   [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 

@@ -5,7 +5,7 @@ What this changes and the reason. For capture/gate/secret changes, name the
 failure case it prevents.
 
 **Checklist**
-- [ ] `npm run build` (bundles committed if hooks/CLIs changed)
+- [ ] `npm run build` (rebuilt `dist/` committed if anything under `src/` changed)
 - [ ] `npm test` passes
 - [ ] `npm run typecheck` clean
 - [ ] Trust invariants intact: nothing delivered without `/handbook:review`
@@ -14,5 +14,5 @@ failure case it prevents.
 
 **Agent-assisted contribution (optional)**
 - Task (issue #):
-- Minutes from clone to this pull request:
+- Minutes from clone to this pull request (your human fills this in):
 - Times a human stepped in to redirect the agent:
