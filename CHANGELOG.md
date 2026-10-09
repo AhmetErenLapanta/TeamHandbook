@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.23.1] - 2026-10-09
+
+### Added
+
+- **`AI_CONTRIBUTING.md`, one entry point for a coding agent contributing from outside.**
+  It sets out the reading order, the data flow and the modules that guard each trust
+  boundary on one screen, the setup commands as measured on a fresh clone, a contribution
+  ladder that places every tracked file on exactly one step, the flow and the definition of
+  done, common failures reproduced with their fixes, and instructions addressed to the
+  agent itself.
+- **The pull request template has an optional "Agent-assisted contribution" block:** the
+  issue it answers, how long it took from clone to pull request, and how often a person
+  stepped in to redirect the agent.
+
+### Changed
+
+- **The rebuild rule covers everything under `src/`.** `CLAUDE.md`, `CONTRIBUTING.md` and the
+  pull request template asked for a rebuild only after the hook or command entry points
+  changed, but every bundle inlines the library code it imports, so a change anywhere under
+  `src/` changes `dist/`. The rebuilt bundles go in the same commit as the change.
+
 ## [0.23.0] - 2026-10-06
 
 ### Fixed
