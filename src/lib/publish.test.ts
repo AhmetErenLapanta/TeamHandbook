@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -177,6 +177,82 @@ describe("bumpPluginVersion", () => {
     writeFileSync(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "acme", version: "next" }));
 
     expect(bumpPluginVersion(dir)).toBeNull();
+  });
+
+  it("given a plugin.json committed as a link, when bumping, then the file it points at is left alone", () => {
+    // given a manifest that is a link to a JSON file outside the clone
+    const outside = mkdtempSync(join(tmpdir(), "handbook-outside-"));
+    try {
+      const target = join(outside, "settings.json");
+      writeFileSync(target, JSON.stringify({ theme: "dark" }));
+      symlinkSync(target, join(dir, ".claude-plugin", "plugin.json"));
+      // when the version is bumped
+      const version = bumpPluginVersion(dir);
+      // then nothing is raised and the linked file gained no version key
+      expect(version).toBeNull();
+      expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ theme: "dark" });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a team repository that commits a symbolic link", () => {
+  const gitlab: McpServerEntry = {
+    name: "gitlab",
+    scope: "user",
+    config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+  };
+  let outside: string;
+
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), "handbook-outside-"));
+  });
+  afterEach(() => rmSync(outside, { recursive: true, force: true }));
+
+  function linkedTeamRepo(links: Record<string, string>): string {
+    const bare = mkdtempSync(join(tmpdir(), "handbook-team-"));
+    execFileSync("git", ["init", "--bare", "-b", "main", bare]);
+    const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
+    try {
+      execFileSync("git", ["clone", bare, join(seed, "repo")], { stdio: "ignore" });
+      const repo = join(seed, "repo");
+      mkdirSync(join(repo, ".claude-plugin"), { recursive: true });
+      writeFileSync(join(repo, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "acme", version: "0.1.0" }));
+      for (const [path, target] of Object.entries(links)) symlinkSync(target, join(repo, path));
+      gitIn(repo, ["add", "-A"]);
+      gitIn(repo, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
+      gitIn(repo, ["push", "origin", "main"]);
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+    }
+    return bare;
+  }
+
+  it("given .mcp.json linked to a file outside the clone, when a server is shared, then that file is never written", () => {
+    // given a team repository whose .mcp.json points at the reviewer's own config
+    const config = join(outside, "claude.json");
+    const original = JSON.stringify({ mcpServers: { private: { type: "stdio", command: "secret-tool" } } });
+    writeFileSync(config, original);
+    remote = linkedTeamRepo({ ".mcp.json": config });
+    // when a server is shared to it
+    const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "");
+    // then the share is refused before any write, and the linked file is byte for byte as it was
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("symbolic link");
+    expect(readFileSync(config, "utf8")).toBe(original);
+    expect(gitIn(remote, ["branch", "--list"])).not.toContain("mcp-gitlab");
+  });
+
+  it("given a skills directory linked outside the clone, when a skill is approved to the team, then nothing is copied there", () => {
+    // given a team repository whose skills directory points somewhere else on this machine
+    remote = linkedTeamRepo({ skills: outside });
+    // when a skill is approved to it
+    const result = publishCandidate(candidateDir, meta(), { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "");
+    // then it is refused and the directory the link points at gained nothing
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("symbolic link");
+    expect(readdirSync(outside)).toEqual([]);
   });
 });
 

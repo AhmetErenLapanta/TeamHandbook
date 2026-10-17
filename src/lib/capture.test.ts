@@ -193,6 +193,20 @@ describe("secret redaction at the session boundary", () => {
     sessionHasNoSecret();
   });
 
+  it("given a Slack token in the error output, when the failure is captured, then nothing is written", () => {
+    // given stderr quoting a token whose digit runs the normalization masks
+    const token = "xox" + "b-123456789012-1234567890123-" + "AbCdEfGhIjKlMnOpQrStUvWx";
+    const input = bashFailure({ error: `Exit code 1\nslack: invalid_auth (${token})` });
+    // when the failure is captured
+    const captured = captureBashFailure(input, home);
+    // then the occurrence is dropped and counted, and the token is nowhere on disk
+    expect(captured).toBe(false);
+    expect(loadSessionState("s1", home).openErrors).toEqual([]);
+    expect(readCounters(home).redactionBlocked).toBe(1);
+    const file = join(home, "sessions", "s1.json");
+    if (existsSync(file)) expect(readFileSync(file, "utf8")).not.toContain("AbCdEfGhIjKl");
+  });
+
   it("captures a CLEAN recurrence of a secret-tainted error and pairs it (no silent loss)", () => {
     // occurrence 1 carries an inline secret in the command → dropped
     expect(

@@ -1,8 +1,8 @@
 import { handbookWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { normalizeRemoteUrl, renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import type { GroundedCase } from "./distill.js";
@@ -202,6 +202,50 @@ export interface PublishOutcome {
 }
 
 /**
+ * The first component of `path`, under `repoDir`, that is a symbolic link, or null when
+ * the whole chain is ordinary directories and files.
+ *
+ * A git repository can commit a symbolic link (mode `120000`), and a clone materializes
+ * it as one. `writeFileSync` and `mkdirSync` both FOLLOW a link, so a repository that
+ * commits `README.md` as a link to something in the reader's home directory turns a read
+ * of that repository into a write to their home - measured, on the plan path, with no
+ * approval given and "Nothing has been changed" printed underneath. Nothing in the
+ * scaffold is a link, so a link on a scaffold path is never a file this can refresh: it
+ * is dropped, and said out loud.
+ */
+export function symlinkOnPath(repoDir: string, path: string): string | null {
+  let current = repoDir;
+  for (const part of path.split("/")) {
+    current = join(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return null; // absent, so nothing below it exists to follow either
+    }
+    if (stat.isSymbolicLink()) return relative(repoDir, current);
+  }
+  return null;
+}
+
+/**
+ * Refuses a share before its first write when a path it writes runs through a committed link:
+ * a `.mcp.json` linked to `~/.claude.json` was rewritten, and a linked `skills` was deleted.
+ */
+function linkedPathRefusal(repoDir: string, paths: string[]): string | null {
+  for (const path of paths) {
+    const link = symlinkOnPath(repoDir, path);
+    if (link) {
+      return (
+        `"${path}" cannot be written: the team repository carries a symbolic link at "${link}", and ` +
+        "following it would write outside the repository. Nothing was changed."
+      );
+    }
+  }
+  return null;
+}
+
+/**
  * Raise the plugin version in the same request as the skill.
  *
  * The version string is Claude Code's only signal that a plugin moved: without a new
@@ -213,10 +257,11 @@ export interface PublishOutcome {
  * arrives atomically with the skill it belongs to, and gets reviewed alongside it.
  *
  * Best-effort by design: a repository whose scaffold has not been merged yet has no
- * plugin.json, and a skill is still worth publishing.
+ * plugin.json, and a skill is still worth publishing. A linked plugin.json counts as absent.
  */
 export function bumpPluginVersion(repoDir: string, past: VersionClaim[] = []): string | null {
   const file = join(repoDir, ".claude-plugin", "plugin.json");
+  if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync(file, "utf8"));
     const current = String(plugin.version ?? "0.1.0");
@@ -386,6 +431,8 @@ export function publishCandidate(
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
+    const linked = linkedPathRefusal(repoDir, [skillDir]);
+    if (linked) return { ok: false, error: linked };
     const occupied = existsSync(join(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
@@ -1102,6 +1149,12 @@ export function publishTeamSelection(
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
     const target = join(repoDir, TEAM_MCP_FILE);
+    const linked = linkedPathRefusal(repoDir, [
+      ...(subjects.length ? [TEAM_MCP_FILE] : []),
+      ...commands.map((command) => `${TEAM_COMMANDS_DIR}/${commandFile(command.name)}`),
+      ...skills.map((skill) => `${TEAM_SKILLS_DIR}/${skill.name}`),
+    ]);
+    if (linked) return { ok: false, ...single, refused, error: linked };
     let merged = "";
     let collided: string[] = [];
     let replacedServers: string[] = [];

@@ -19,110 +19,6 @@ function parseHookInput(raw) {
 
 // src/lib/normalize.ts
 import { createHash } from "node:crypto";
-var ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-var OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-var ESC_RE = /\x1b[()][A-Za-z0-9]|\x1b[@-Z\\-_]/g;
-var MAX_LINES = 40;
-var MAX_CHARS = 2e3;
-function normalizeErrorText(text) {
-  return text.replace(/\r\n?/g, "\n").replace(OSC_RE, "").replace(ANSI_RE, "").replace(ESC_RE, "").split("\n").slice(0, MAX_LINES).join("\n").replace(/\/(?:Users|home|private|tmp|var)\/[^\s:'"()]+/g, "<path>").replace(/0x[0-9a-fA-F]+/g, "<hex>").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>").replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>").replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, "[<time>]").replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|m|h)\b/g, "<dur>").replace(/\bin \d+m \d+(?:\.\d+)?s?\b/g, "in <dur>").replace(/:\d+(?::\d+)?\b/g, ":<n>").replace(/\bline \d+/gi, "line <n>").replace(/\bport \d+/gi, "port <n>").replace(/\b(process|pid|worker)\s+\d+/gi, "$1 <n>").replace(/\b\d{2,}\b/g, "<n>").replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim().slice(0, MAX_CHARS);
-}
-var SUBCOMMAND_RE = /^[a-z][a-z0-9:_-]*$/i;
-var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "time", "env", "command", "nice", "xargs", "npx", "bunx"]);
-var WRAPPERS_WITH_ARG = /* @__PURE__ */ new Set(["timeout", "nice"]);
-var SUB_WITH_ARG = /* @__PURE__ */ new Set(["run", "exec", "x"]);
-function commandFamily(command) {
-  const segments = command.split(/&&|\|\||;|\|/).map((s) => s.trim().replace(/^[([{]\s*/, "").replace(/[)\]}]\s*$/, "").trim()).filter((s) => s && !/^cd\s/.test(s) && s !== "cd");
-  const segment = segments[segments.length - 1] ?? "";
-  let tokens = segment.split(/\s+/).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
-  while (tokens.length > 0 && (WRAPPERS.has(tokens[0]) || WRAPPERS_WITH_ARG.has(tokens[0]))) {
-    const head = tokens[0];
-    tokens = tokens.slice(1);
-    if (WRAPPERS_WITH_ARG.has(head)) {
-      while (tokens.length > 0 && /^-|^\d/.test(tokens[0])) tokens = tokens.slice(1);
-    }
-  }
-  const first = tokens[0];
-  if (!first) return "unknown";
-  const cmd = first.split("/").pop() ?? first;
-  const parts = [cmd];
-  const rest = tokens.slice(1).filter((t) => !t.startsWith("-"));
-  const sub = rest[0];
-  if (sub && SUBCOMMAND_RE.test(sub)) {
-    parts.push(sub);
-    const arg = rest[1];
-    if (SUB_WITH_ARG.has(sub) && arg && SUBCOMMAND_RE.test(arg)) {
-      parts.push(arg);
-    }
-  }
-  return parts.join(" ");
-}
-function fingerprint(family, normalizedError) {
-  return createHash("sha256").update(`${family}\0${normalizedError}`).digest("hex").slice(0, 16);
-}
-
-// src/lib/tool-response.ts
-var STDOUT_TAIL_CHARS = 2e3;
-var EXIT_CODE_KEYS = ["code", "exit_code", "exitCode", "returnCode"];
-var EXIT_CODE_TEXT = /\bexit code[:\s]+(\d{1,3})\b/i;
-var INTERRUPT_CODES = /* @__PURE__ */ new Set([124, 130, 137, 143, 144, 145]);
-function extractExitCode(response) {
-  if (Array.isArray(response)) return extractExitCode(contentBlocksText(response));
-  if (typeof response === "string") {
-    const m = response.match(EXIT_CODE_TEXT);
-    return m ? Number(m[1]) : void 0;
-  }
-  if (typeof response !== "object" || response === null) return void 0;
-  const record = response;
-  for (const key of EXIT_CODE_KEYS) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isInteger(value)) return value;
-  }
-  return void 0;
-}
-function bashFailure(input) {
-  if (input.hook_event_name === "PostToolUseFailure") {
-    const text = typeof input.error === "string" ? input.error : "";
-    const code2 = extractExitCode(text);
-    return {
-      errorText: text,
-      interrupted: input.is_interrupt === true || code2 !== void 0 && INTERRUPT_CODES.has(code2)
-    };
-  }
-  const code = extractExitCode(input.tool_response);
-  if (code !== void 0 && code !== 0) {
-    return { errorText: errorTextFromResponse(input.tool_response), interrupted: INTERRUPT_CODES.has(code) };
-  }
-  return null;
-}
-function isBashSuccess(input) {
-  if (input.hook_event_name === "PostToolUseFailure") return false;
-  if (typeof input.error === "string" && input.error.trim()) return false;
-  const r = input.tool_response;
-  const code = extractExitCode(r);
-  if (code !== void 0) return code === 0;
-  if (typeof r !== "object" || r === null || Array.isArray(r)) return false;
-  const record = r;
-  const hasResultShape = ["stdout", "stderr", "interrupted"].some((k) => k in record);
-  return hasResultShape && record["interrupted"] !== true;
-}
-function contentBlocksText(response) {
-  if (!Array.isArray(response)) return "";
-  return response.map((b) => b && typeof b === "object" ? b["text"] : b).filter((t) => typeof t === "string").join("\n");
-}
-function errorTextFromResponse(response) {
-  if (typeof response === "string") return response;
-  if (Array.isArray(response)) return contentBlocksText(response).slice(-STDOUT_TAIL_CHARS);
-  if (typeof response !== "object" || response === null) return "";
-  const record = response;
-  const stderr = record["stderr"];
-  if (typeof stderr === "string" && stderr.trim()) return stderr;
-  const stdout = record["stdout"];
-  if (typeof stdout === "string" && stdout.trim()) return stdout.slice(-STDOUT_TAIL_CHARS);
-  const text = record["text"];
-  if (typeof text === "string" && text.trim()) return text.slice(-STDOUT_TAIL_CHARS);
-  return "";
-}
 
 // src/lib/secrets.ts
 var PLACEHOLDER_VALUE = /^(?:[xX]+|changeme[0-9]{0,6}|placeholder[0-9]{0,6}|dummy[a-z-]{0,10}|your[-_][a-z-]{0,16}|example[a-z-]{0,10}|redacted)$/;
@@ -298,6 +194,125 @@ function signalSecret(fields) {
       fields.task?.verification ?? ""
     ].join("\n")
   );
+}
+
+// src/lib/normalize.ts
+var ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+var OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+var ESC_RE = /\x1b[()][A-Za-z0-9]|\x1b[@-Z\\-_]/g;
+var MAX_LINES = 40;
+var MAX_CHARS = 2e3;
+function normalizeErrorText(text) {
+  const lines = text.replace(/\r\n?/g, "\n").replace(OSC_RE, "").replace(ANSI_RE, "").replace(ESC_RE, "").split("\n").slice(0, MAX_LINES).map((line) => detectSecret(line) ? line : maskVolatile(line));
+  return capKeepingSecretLinesWhole(
+    lines.join("\n").replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim()
+  );
+}
+function maskVolatile(line) {
+  return line.replace(/\/(?:Users|home|private|tmp|var)\/[^\s:'"()]+/g, "<path>").replace(/0x[0-9a-fA-F]+/g, "<hex>").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>").replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>").replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, "[<time>]").replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|m|h)\b/g, "<dur>").replace(/\bin \d+m \d+(?:\.\d+)?s?\b/g, "in <dur>").replace(/:\d+(?::\d+)?\b/g, ":<n>").replace(/\bline \d+/gi, "line <n>").replace(/\bport \d+/gi, "port <n>").replace(/\b(process|pid|worker)\s+\d+/gi, "$1 <n>").replace(/\b\d{2,}\b/g, "<n>");
+}
+function capKeepingSecretLinesWhole(text) {
+  if (text.length <= MAX_CHARS) return text;
+  const start = text.lastIndexOf("\n", MAX_CHARS - 1) + 1;
+  const end = text.indexOf("\n", MAX_CHARS);
+  const cutLine = text.slice(start, end === -1 ? text.length : end);
+  return detectSecret(cutLine) ? text.slice(0, start).trimEnd() : text.slice(0, MAX_CHARS);
+}
+var SUBCOMMAND_RE = /^[a-z][a-z0-9:_-]*$/i;
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "time", "env", "command", "nice", "xargs", "npx", "bunx"]);
+var WRAPPERS_WITH_ARG = /* @__PURE__ */ new Set(["timeout", "nice"]);
+var SUB_WITH_ARG = /* @__PURE__ */ new Set(["run", "exec", "x"]);
+function commandFamily(command) {
+  const segments = command.split(/&&|\|\||;|\|/).map((s) => s.trim().replace(/^[([{]\s*/, "").replace(/[)\]}]\s*$/, "").trim()).filter((s) => s && !/^cd\s/.test(s) && s !== "cd");
+  const segment = segments[segments.length - 1] ?? "";
+  let tokens = segment.split(/\s+/).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+  while (tokens.length > 0 && (WRAPPERS.has(tokens[0]) || WRAPPERS_WITH_ARG.has(tokens[0]))) {
+    const head = tokens[0];
+    tokens = tokens.slice(1);
+    if (WRAPPERS_WITH_ARG.has(head)) {
+      while (tokens.length > 0 && /^-|^\d/.test(tokens[0])) tokens = tokens.slice(1);
+    }
+  }
+  const first = tokens[0];
+  if (!first) return "unknown";
+  const cmd = first.split("/").pop() ?? first;
+  const parts = [cmd];
+  const rest = tokens.slice(1).filter((t) => !t.startsWith("-"));
+  const sub = rest[0];
+  if (sub && SUBCOMMAND_RE.test(sub)) {
+    parts.push(sub);
+    const arg = rest[1];
+    if (SUB_WITH_ARG.has(sub) && arg && SUBCOMMAND_RE.test(arg)) {
+      parts.push(arg);
+    }
+  }
+  return parts.join(" ");
+}
+function fingerprint(family, normalizedError) {
+  return createHash("sha256").update(`${family}\0${normalizedError}`).digest("hex").slice(0, 16);
+}
+
+// src/lib/tool-response.ts
+var STDOUT_TAIL_CHARS = 2e3;
+var EXIT_CODE_KEYS = ["code", "exit_code", "exitCode", "returnCode"];
+var EXIT_CODE_TEXT = /\bexit code[:\s]+(\d{1,3})\b/i;
+var INTERRUPT_CODES = /* @__PURE__ */ new Set([124, 130, 137, 143, 144, 145]);
+function extractExitCode(response) {
+  if (Array.isArray(response)) return extractExitCode(contentBlocksText(response));
+  if (typeof response === "string") {
+    const m = response.match(EXIT_CODE_TEXT);
+    return m ? Number(m[1]) : void 0;
+  }
+  if (typeof response !== "object" || response === null) return void 0;
+  const record = response;
+  for (const key of EXIT_CODE_KEYS) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isInteger(value)) return value;
+  }
+  return void 0;
+}
+function bashFailure(input) {
+  if (input.hook_event_name === "PostToolUseFailure") {
+    const text = typeof input.error === "string" ? input.error : "";
+    const code2 = extractExitCode(text);
+    return {
+      errorText: text,
+      interrupted: input.is_interrupt === true || code2 !== void 0 && INTERRUPT_CODES.has(code2)
+    };
+  }
+  const code = extractExitCode(input.tool_response);
+  if (code !== void 0 && code !== 0) {
+    return { errorText: errorTextFromResponse(input.tool_response), interrupted: INTERRUPT_CODES.has(code) };
+  }
+  return null;
+}
+function isBashSuccess(input) {
+  if (input.hook_event_name === "PostToolUseFailure") return false;
+  if (typeof input.error === "string" && input.error.trim()) return false;
+  const r = input.tool_response;
+  const code = extractExitCode(r);
+  if (code !== void 0) return code === 0;
+  if (typeof r !== "object" || r === null || Array.isArray(r)) return false;
+  const record = r;
+  const hasResultShape = ["stdout", "stderr", "interrupted"].some((k) => k in record);
+  return hasResultShape && record["interrupted"] !== true;
+}
+function contentBlocksText(response) {
+  if (!Array.isArray(response)) return "";
+  return response.map((b) => b && typeof b === "object" ? b["text"] : b).filter((t) => typeof t === "string").join("\n");
+}
+function errorTextFromResponse(response) {
+  if (typeof response === "string") return response;
+  if (Array.isArray(response)) return contentBlocksText(response).slice(-STDOUT_TAIL_CHARS);
+  if (typeof response !== "object" || response === null) return "";
+  const record = response;
+  const stderr = record["stderr"];
+  if (typeof stderr === "string" && stderr.trim()) return stderr;
+  const stdout = record["stdout"];
+  if (typeof stdout === "string" && stdout.trim()) return stdout.slice(-STDOUT_TAIL_CHARS);
+  const text = record["text"];
+  if (typeof text === "string" && text.trim()) return text.slice(-STDOUT_TAIL_CHARS);
+  return "";
 }
 
 // src/lib/counters.ts
@@ -1550,7 +1565,8 @@ function recordWorkflowEvent(input, home = handbookHome(), deps = {}) {
       if (!locator.locate(step.path)) continue;
       trail.green = false;
       trail.masked = false;
-      if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
+      const keep = !trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS;
+      if (keep && !detectSecret(step.path)) trail.edits.push(step.path);
       changed = true;
     } else if (step.kind === "check") {
       trail.green = step.green;

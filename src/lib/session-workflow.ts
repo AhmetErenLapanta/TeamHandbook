@@ -429,7 +429,9 @@ export function recordWorkflowEvent(
       if (!locator.locate(step.path)) continue;
       trail.green = false;
       trail.masked = false;
-      if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
+      // The write still counts, but a secret-shaped path stays out of the session file.
+      const keep = !trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS;
+      if (keep && !detectSecret(step.path)) trail.edits.push(step.path);
       changed = true;
     } else if (step.kind === "check") {
       trail.green = step.green;

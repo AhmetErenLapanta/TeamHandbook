@@ -45,14 +45,15 @@ export type CommandRunner = (
   cmd: string,
   args: string[],
   timeoutMs: number,
-  options?: { env?: NodeJS.ProcessEnv; cwd?: string },
+  options?: { env?: NodeJS.ProcessEnv; cwd?: string; input?: string },
 ) => string;
 
 export const runCommand: CommandRunner = (cmd, args, timeoutMs, options) =>
   execFileSync(cmd, args, {
     encoding: "utf8",
     timeout: timeoutMs,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [options?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    ...(options?.input === undefined ? {} : { input: options.input }),
     ...(options?.cwd ? { cwd: options.cwd } : {}),
     // never let git/ssh block on an interactive prompt; stdin is closed anyway
     env: options?.env ?? {
@@ -147,6 +148,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
         reply = run("claude", invocation.args, PROBE_TIMEOUT_MS, {
           env: invocation.env,
           cwd: invocation.cwd,
+          input: invocation.input,
         });
       } finally {
         invocation.done();

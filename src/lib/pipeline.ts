@@ -20,12 +20,12 @@ import { signalSecret } from "./secrets.js";
 import { incrementRedactionBlocked, bumpCounter } from "./counters.js";
 import { runRuleSieves } from "./gate.js";
 import type { DropReason } from "./gate.js";
-import { loadScoreConfig, runClaudeCli, scoreSignal } from "./score.js";
+import { gateAutoEnabled, loadScoreConfig, runClaudeCli, scoreSignal } from "./score.js";
 import { distillVerdict, gitRemoteUrl, loadDistillConfig, writeCandidate } from "./distill.js";
 import { defaultSkillDirs, listExistingSkills } from "./skill-index.js";
 import type { SkillSummary } from "./skill-index.js";
 import { candidateMetaFromArtifact, writeCandidateMeta } from "./queue.js";
-import { LESSON_HARVEST_OFF, harvestSession, lessonHarvestEnabled } from "./harvest.js";
+import { AUTO_HARVEST_OFF, LESSON_HARVEST_OFF, harvestSession, lessonHarvestEnabled, loadHarvestConfig } from "./harvest.js";
 import type { HarvestDeps, HarvestJob, HarvestSummary } from "./harvest.js";
 
 // ── harvest job hand-off ────────────────────────────────────────────────────
@@ -467,9 +467,12 @@ export async function runHarvestJob(
     return { outcome: "skipped", reason, written: [] };
   }
   // A job queued before the switch was turned off must not still reach the model: the
-  // queue outlives the setting that filled it.
+  // queue outlives the setting that filled it. All three switches, as at queue time.
   if (!lessonHarvestEnabled(home)) {
     return { outcome: "skipped", reason: LESSON_HARVEST_OFF, written: [] };
+  }
+  if (!gateAutoEnabled(home) || !loadHarvestConfig(home).enabled) {
+    return { outcome: "skipped", reason: AUTO_HARVEST_OFF, written: [] };
   }
   const summary = await harvestSession(job, home, deps);
   const log: PipelineSummary = {

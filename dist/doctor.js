@@ -482,12 +482,13 @@ function childEnv(source = process.env) {
   return env;
 }
 function childInvocation(input) {
-  const args = ["-p", input.prompt];
+  const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
   const cwd = mkdtempSync2(join4(tmpdir2(), "teamhandbook-child-"));
   return {
     args,
+    input: input.prompt,
     env: childEnv(),
     cwd,
     done: () => rmSync2(cwd, { recursive: true, force: true })
@@ -654,8 +655,8 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join10 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync9, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join11 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -1131,11 +1132,13 @@ function marketplacesRoot() {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname2, join as join7, relative } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname3, join as join8 } from "node:path";
 
 // src/lib/publish.ts
 init_session_state();
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2, join as join7, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -1148,23 +1151,7 @@ init_queue();
 init_secrets();
 init_identity();
 
-// src/lib/upgrade.ts
-init_session_state();
-var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
-var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
-var CI_MARKER = "scripts/bump-version.mjs";
-var TEAM_OWNED_DIRS = ["skills/", "commands/", "agents/"];
-var TEAM_OWNED_FILES = [".mcp.json"];
-function isTeamOwned(path) {
-  return TEAM_OWNED_DIRS.some((dir) => path.startsWith(dir)) || TEAM_OWNED_FILES.includes(path);
-}
-function readIfPresent(file) {
-  try {
-    return readFileSync6(file, "utf8");
-  } catch {
-    return null;
-  }
-}
+// src/lib/publish.ts
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
   for (const part of path.split("/")) {
@@ -1178,6 +1165,24 @@ function symlinkOnPath(repoDir, path) {
     if (stat.isSymbolicLink()) return relative(repoDir, current);
   }
   return null;
+}
+
+// src/lib/upgrade.ts
+init_session_state();
+var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
+var MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
+var CI_MARKER = "scripts/bump-version.mjs";
+var TEAM_OWNED_DIRS = ["skills/", "commands/", "agents/"];
+var TEAM_OWNED_FILES = [".mcp.json"];
+function isTeamOwned(path) {
+  return TEAM_OWNED_DIRS.some((dir) => path.startsWith(dir)) || TEAM_OWNED_FILES.includes(path);
+}
+function readIfPresent(file) {
+  try {
+    return readFileSync7(file, "utf8");
+  } catch {
+    return null;
+  }
 }
 function parseObject(text) {
   try {
@@ -1231,7 +1236,7 @@ function prefixDependentPaths(team, withCi) {
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
 function upgradeCandidates(repoDir, team, branchExample) {
-  const withCi = existsSync3(join7(repoDir, CI_MARKER));
+  const withCi = existsSync4(join8(repoDir, CI_MARKER));
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
@@ -1258,14 +1263,14 @@ function upgradeCandidates(repoDir, team, branchExample) {
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join7(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join7(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join8(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join8(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
 }
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
-    const existing = readIfPresent(join7(repoDir, path));
+    const existing = readIfPresent(join8(repoDir, path));
     if (existing === null) return { path, state: "absent" };
     return { path, state: existing === content ? "current" : "differs" };
   });
@@ -1346,8 +1351,8 @@ function loadHarvestConfig(home = handbookHome()) {
 // src/lib/status.ts
 init_session_state();
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readFileSync as readFileSync7 } from "node:fs";
-import { basename as basename3, dirname as dirname3, join as join9, resolve } from "node:path";
+import { readFileSync as readFileSync8 } from "node:fs";
+import { basename as basename3, dirname as dirname4, join as join10, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/signals.ts
@@ -1397,7 +1402,7 @@ var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 init_score();
 
 // src/lib/pipeline.ts
-import { basename as basename2, join as join8 } from "node:path";
+import { basename as basename2, join as join9 } from "node:path";
 init_fs_atomic();
 init_session_state();
 init_secrets();
@@ -1412,7 +1417,7 @@ init_skill_index();
 init_queue();
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join8(home, "pipeline.log");
+  return join9(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -1438,18 +1443,18 @@ function pluginVersion() {
   const root = pluginRoot();
   if (!root) return "unknown";
   try {
-    const parsed = JSON.parse(readFileSync7(join9(root, ".claude-plugin", "plugin.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync8(join10(root, ".claude-plugin", "plugin.json"), "utf8"));
     if (typeof parsed?.version === "string") return parsed.version;
   } catch {
   }
   return "unknown";
 }
 function pluginRoot() {
-  const here = dirname3(fileURLToPath(import.meta.url));
+  const here = dirname4(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
-      const parsed = JSON.parse(readFileSync7(join9(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join9(here, up);
+      const parsed = JSON.parse(readFileSync8(join10(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join10(here, up);
     } catch {
     }
   }
@@ -1466,11 +1471,11 @@ var lookupRelease = (args, cwd) => execFileSync2("git", args, {
 function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
   if (!root || !versionNumbers(installed)) return null;
   const versionDir = resolve(root);
-  if (basename3(dirname3(dirname3(dirname3(versionDir)))) !== "cache") return null;
-  const marketplace = basename3(dirname3(dirname3(versionDir)));
+  if (basename3(dirname4(dirname4(dirname4(versionDir)))) !== "cache") return null;
+  const marketplace = basename3(dirname4(dirname4(versionDir)));
   let out;
   try {
-    out = String(git(["ls-remote", "--tags", "origin"], join9(marketRoot, marketplace)) ?? "");
+    out = String(git(["ls-remote", "--tags", "origin"], join10(marketRoot, marketplace)) ?? "");
   } catch {
     return null;
   }
@@ -1497,7 +1502,7 @@ function newerReleaseLine(installed, newer) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync7(pipelineLogFile(home), "utf8");
+    raw = readFileSync8(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -1516,7 +1521,8 @@ function lastPipelineRun(home = handbookHome()) {
 var runCommand = (cmd, args, timeoutMs, options) => execFileSync3(cmd, args, {
   encoding: "utf8",
   timeout: timeoutMs,
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: [options?.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"],
+  ...options?.input === void 0 ? {} : { input: options.input },
   ...options?.cwd ? { cwd: options.cwd } : {},
   // never let git/ssh block on an interactive prompt; stdin is closed anyway
   env: options?.env ?? {
@@ -1584,7 +1590,8 @@ function checkClaudeCli(run, home) {
       try {
         reply = run("claude", invocation.args, PROBE_TIMEOUT_MS, {
           env: invocation.env,
-          cwd: invocation.cwd
+          cwd: invocation.cwd,
+          input: invocation.input
         });
       } finally {
         invocation.done();
@@ -1660,21 +1667,21 @@ function checkGitIdentity(home, run) {
   );
 }
 function checkHomeWritable(home) {
-  const probe = join10(home, `.doctor-probe-${process.pid}`);
+  const probe = join11(home, `.doctor-probe-${process.pid}`);
   try {
-    mkdirSync5(home, { recursive: true });
-    writeFileSync4(probe, "ok");
-    rmSync4(probe, { force: true });
+    mkdirSync6(home, { recursive: true });
+    writeFileSync5(probe, "ok");
+    rmSync5(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 function checkConfig(home) {
-  const file = join10(home, "config.json");
-  if (!existsSync4(file)) return ok("config", "no config.json (defaults apply)");
+  const file = join11(home, "config.json");
+  if (!existsSync5(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync8(file, "utf8"));
+    const parsed = JSON.parse(readFileSync9(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -1706,10 +1713,10 @@ function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync8(join10(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync9(join11(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync3(join10(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync4(join11(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
@@ -1717,7 +1724,7 @@ function remoteDistributionState(team, run) {
   } catch {
     return null;
   } finally {
-    rmSync4(dir, { recursive: true, force: true });
+    rmSync5(dir, { recursive: true, force: true });
   }
 }
 function checkTeamRepo(home, run) {
@@ -1763,7 +1770,7 @@ function isPlainObject(value) {
 function declaredMcpServerNames(mcpFile) {
   let raw;
   try {
-    raw = readFileSync8(mcpFile, "utf8");
+    raw = readFileSync9(mcpFile, "utf8");
   } catch {
     return { error: "unreadable" };
   }
@@ -1794,8 +1801,8 @@ function parseMcpListing(output) {
 function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const mcpFile = join10(marketRoot, team.marketplaceName, ".mcp.json");
-  if (!existsSync4(mcpFile)) {
+  const mcpFile = join11(marketRoot, team.marketplaceName, ".mcp.json");
+  if (!existsSync5(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
   const declared = declaredMcpServerNames(mcpFile);
@@ -1844,7 +1851,7 @@ function checkLastRun(home) {
     const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join10(home, "pipeline.log"))})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join11(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -1854,7 +1861,7 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join10(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join11(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function checkRelease(version, run, marketRoot, root) {

@@ -20,7 +20,7 @@ import { readCandidateMeta } from "./queue.js";
 import type { ClaudeRunner } from "./score.js";
 import { ledgerFingerprintCounts } from "./signals.js";
 import type { Signal } from "./signals.js";
-import { LESSON_HARVEST_OFF } from "./harvest.js";
+import { AUTO_HARVEST_OFF, LESSON_HARVEST_OFF } from "./harvest.js";
 import type { HarvestJob } from "./harvest.js";
 import { candidatesDir } from "./skill-index.js";
 import { emptySessionState, loadSessionState, saveSessionState } from "./session-state.js";
@@ -236,6 +236,30 @@ describe("the lesson harvest switched off", () => {
     });
     // then it is skipped for the switch, before the transcript reaches the model
     expect(summary).toMatchObject({ outcome: "skipped", reason: LESSON_HARVEST_OFF });
+    expect(calls).toHaveLength(0);
+    expect(existsSync(candidatesDir(home))).toBe(false);
+  });
+
+  it.each([
+    ["gate.auto", { gate: { auto: false } }],
+    ["harvest.enabled", { harvest: { enabled: false } }],
+  ])("given %s turned off after the job was queued, when it is run, then no model is called", async (_name, off) => {
+    // given lessons on, and an older privacy switch turned off while the job waited
+    const overrides = off as { gate?: object; harvest?: object };
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({ ...overrides, harvest: { lessons: true, ...(overrides.harvest ?? {}) } }),
+    );
+    const calls: string[] = [];
+    // when the runner reaches it
+    const summary = await runHarvestJob(job(home), home, {
+      listSkills: () => [],
+      skillDirs: () => [],
+      remoteUrl: () => null,
+      runner: fakeRunner(calls),
+    });
+    // then it is skipped for that switch and nothing reached the model
+    expect(summary).toMatchObject({ outcome: "skipped", reason: AUTO_HARVEST_OFF });
     expect(calls).toHaveLength(0);
     expect(existsSync(candidatesDir(home))).toBe(false);
   });

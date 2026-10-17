@@ -741,6 +741,11 @@ function loadMutedFingerprints(home = handbookHome()) {
 
 // src/lib/score.ts
 var execFileAsync = promisify(execFile);
+function gateAutoEnabled(home = handbookHome()) {
+  if (configIsBroken(home)) return false;
+  const gate = readConfigFile(home).gate;
+  return gate?.auto !== false;
+}
 function stripAnsi(text) {
   return text.replace(/\u001B\[[0-9;]*m/g, "");
 }
@@ -900,12 +905,13 @@ function childEnv(source = process.env) {
   return env;
 }
 function childInvocation(input) {
-  const args = ["-p", input.prompt];
+  const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
   const cwd = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
   return {
     args,
+    input: input.prompt,
     env: childEnv(),
     cwd,
     done: () => rmSync2(cwd, { recursive: true, force: true })
@@ -923,7 +929,7 @@ var runClaudeCli = async (prompt, model, timeoutMs) => {
   if (stdin) {
     stdin.on("error", () => {
     });
-    stdin.end();
+    stdin.end(invocation.input);
   }
   try {
     const { stdout } = await call;
@@ -1351,9 +1357,6 @@ function readTranscriptTexts(path) {
   }
   return entries;
 }
-function cap(text, max) {
-  return text.length <= max ? text : `${text.slice(0, max)}\u2026`;
-}
 function lineAt2(text, offset) {
   const start = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
   const end = text.indexOf("\n", offset);
@@ -1365,10 +1368,13 @@ function capUserTurn(text) {
   const tail = tailWindow(text);
   return tail ? `${head}\u2026${tail}` : `${head}\u2026`;
 }
-function headWindow(text) {
-  const line = lineAt2(text, USER_HEAD);
-  const splitsASecretLine = line.start < USER_HEAD && USER_HEAD < line.end && !!detectSecret(text.slice(line.start, line.end));
-  const to = splitsASecretLine ? line.start : USER_HEAD;
+function capAssistantTurn(text) {
+  return text.length <= PER_ASSISTANT_CAP ? text : `${headWindow(text, PER_ASSISTANT_CAP)}\u2026`;
+}
+function headWindow(text, at = USER_HEAD) {
+  const line = lineAt2(text, at);
+  const splitsASecretLine = line.start < at && at < line.end && !!detectSecret(text.slice(line.start, line.end));
+  const to = splitsASecretLine ? line.start : at;
   const cut = text.slice(0, to);
   if (/\s/.test(text[to] ?? " ")) return cut.trimEnd();
   return cut.replace(/\S+$/, "").trimEnd() || cut;
@@ -1450,7 +1456,7 @@ function sliceTranscript(entries, budget = 4e4) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (entry.role !== "assistant") continue;
-    const text = cap(entry.text, PER_ASSISTANT_CAP);
+    const text = capAssistantTurn(entry.text);
     if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
@@ -1461,15 +1467,30 @@ function sliceTranscript(entries, budget = 4e4) {
     return `${role}: ${body}`;
   }).join("\n\n");
 }
+var SECRET_WINDOW_LINES = 4;
 function redactSlice(slice) {
-  let redacted = 0;
-  const clean = slice.split("\n").map((line) => {
-    const hit = detectSecret(line);
-    if (!hit) return line;
-    redacted += 1;
-    return `[redacted:${hit}]`;
-  }).join("\n");
-  return { clean, redacted };
+  const lines = slice.split("\n");
+  const own = lines.map((line) => detectSecret(line));
+  const hits = [...own];
+  for (let size = 2; size <= SECRET_WINDOW_LINES; size++) {
+    for (let from = 0; from + size <= lines.length; from++) {
+      const hit = secretAcrossLines(lines, own, hits, from, from + size);
+      if (!hit) continue;
+      for (let i = from; i < from + size; i++) hits[i] = hit;
+    }
+  }
+  const clean = lines.map((line, i) => hits[i] ? `[redacted:${hits[i]}]` : line).join("\n");
+  return { clean, redacted: hits.filter(Boolean).length };
+}
+function secretAcrossLines(lines, own, hits, from, to) {
+  const masked = lines.slice(from, to).map((line, i) => hits[from + i] ? "" : line);
+  const hidden = detectSecret(masked.join("\n"));
+  if (hidden) return hidden;
+  const raw = lines.slice(from, to).join("\n");
+  const found = locateSecret(raw);
+  if (!found) return null;
+  const startLine = from + (raw.slice(0, found.index).match(/\n/g)?.length ?? 0);
+  return own[startLine] === found.pattern || hits[startLine] === found.pattern ? null : found.pattern;
 }
 function buildTranscriptSlice(path, budget = 4e4) {
   const { clean, redacted } = redactSlice(sliceTranscript(readTranscriptTexts(path), budget));
@@ -1502,6 +1523,7 @@ function lessonHarvestEnabled(home = handbookHome()) {
   return !configIsBroken(home) && harvest?.lessons === true;
 }
 var LESSON_HARVEST_OFF = `lesson harvest is off; enable it with {"harvest": {"lessons": true}} in your TeamHandbook config.json. Mining a repository's history with /handbook:mine is unaffected.`;
+var AUTO_HARVEST_OFF = 'automatic harvest is off ({"gate": {"auto": false}} or {"harvest": {"enabled": false}} in config.json); the queued session was not sent.';
 function loadHarvestConfig(home = handbookHome()) {
   const harvest = readConfigFile(home).harvest;
   const num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
@@ -2203,6 +2225,9 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
   }
   if (!lessonHarvestEnabled(home)) {
     return { outcome: "skipped", reason: LESSON_HARVEST_OFF, written: [] };
+  }
+  if (!gateAutoEnabled(home) || !loadHarvestConfig(home).enabled) {
+    return { outcome: "skipped", reason: AUTO_HARVEST_OFF, written: [] };
   }
   const summary = await harvestSession(job, home, deps);
   const log = {

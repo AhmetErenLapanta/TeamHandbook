@@ -333,6 +333,28 @@ describe("runClaudeCli against a real claude process", () => {
   const STDIN_WARNING =
     "Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.";
 
+  it("given a prompt, when the runner calls claude, then the prompt arrives on stdin and is absent from the command line", async () => {
+    // given a claude that reports its own arguments and then echoes what it read on stdin
+    fakeClaude(`#!/bin/sh\nprintf 'args:%s\\n' "$*"\ncat\n`);
+    // when the runner calls it with a prompt
+    const reply = await runClaudeCli("the conversation slice", "haiku", 20_000);
+    // then the prompt came through stdin, and the arguments carry only flags
+    const [argsLine, ...rest] = reply.split("\n");
+    expect(argsLine).toMatch(/^args:-p --model haiku/);
+    expect(argsLine).not.toContain("conversation slice");
+    expect(rest.join("\n")).toBe("the conversation slice");
+  });
+
+  it("given a prompt larger than one Linux argument may be, when the runner calls claude, then it is still delivered whole", async () => {
+    // given a prompt past the 128 KiB argv limit
+    fakeClaude(`#!/bin/sh\nwc -c | tr -d ' '\n`);
+    const prompt = "é".repeat(80_000);
+    // when the runner calls it
+    const reply = await runClaudeCli(prompt, "haiku", 20_000);
+    // then every byte reached the child
+    expect(Number(reply.trim())).toBe(Buffer.byteLength(prompt));
+  });
+
   it("given a claude that warns on stderr and exits 0, when the runner calls it, then the run succeeds", async () => {
     fakeClaude(`#!/bin/sh\nprintf '${STDIN_WARNING}\\n' >&2\nprintf 'the reply\\n'\nexit 0\n`);
     await expect(runClaudeCli("prompt", "haiku", 20_000)).resolves.toBe("the reply\n");

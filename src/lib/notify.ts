@@ -5,7 +5,7 @@ import { handbookHome } from "./session-state.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { readCounters } from "./counters.js";
 import { loadTeamConfig, teamSkillsDir } from "./init.js";
-import { listCandidates } from "./queue.js";
+import { isSafeSlug, listCandidates } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { reviewQueue } from "./review-list.js";
 import { readSkillUsage, handbookSkills, summarizeUsage } from "./usage.js";
@@ -485,8 +485,12 @@ export function sessionStartNotice(
   const watchedDirs = [join(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
+  // Only names shaped like a slug: this notice is hook output in a session that can run tools,
+  // and a pulled repository could set `name: |` to a block of instructions.
   const newSkills = watchedDirs
-    .flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home))
+    .flatMap((dir) =>
+      diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name).filter(isSafeSlug), home),
+    )
     .sort();
   return buildSessionStartSummary({
     pending: rest.length,

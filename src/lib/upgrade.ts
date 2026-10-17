@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { forgeNotice, hostFromUrl, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import {
@@ -15,7 +15,7 @@ import {
   TEAM_PREFIX_FILE,
 } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
-import { bumpPluginVersion } from "./publish.js";
+import { bumpPluginVersion, symlinkOnPath } from "./publish.js";
 import {
   branchAnswer,
   branchNameProblem,
@@ -87,33 +87,6 @@ function readIfPresent(file: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * The first component of `path`, under `repoDir`, that is a symbolic link, or null when
- * the whole chain is ordinary directories and files.
- *
- * A git repository can commit a symbolic link (mode `120000`), and a clone materializes
- * it as one. `writeFileSync` and `mkdirSync` both FOLLOW a link, so a repository that
- * commits `README.md` as a link to something in the reader's home directory turns a read
- * of that repository into a write to their home - measured, on the plan path, with no
- * approval given and "Nothing has been changed" printed underneath. Nothing in the
- * scaffold is a link, so a link on a scaffold path is never a file this can refresh: it
- * is dropped, and said out loud.
- */
-export function symlinkOnPath(repoDir: string, path: string): string | null {
-  let current = repoDir;
-  for (const part of path.split("/")) {
-    current = join(current, part);
-    let stat;
-    try {
-      stat = lstatSync(current);
-    } catch {
-      return null; // absent, so nothing below it exists to follow either
-    }
-    if (stat.isSymbolicLink()) return relative(repoDir, current);
-  }
-  return null;
 }
 
 function parseObject(text: string): Record<string, unknown> | null {
