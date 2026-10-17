@@ -48,20 +48,31 @@ export type CommandRunner = (
   options?: { env?: NodeJS.ProcessEnv; cwd?: string; input?: string },
 ) => string;
 
-export const runCommand: CommandRunner = (cmd, args, timeoutMs, options) =>
-  execFileSync(cmd, args, {
-    encoding: "utf8",
-    timeout: timeoutMs,
-    stdio: [options?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    ...(options?.input === undefined ? {} : { input: options.input }),
-    ...(options?.cwd ? { cwd: options.cwd } : {}),
-    // never let git/ssh block on an interactive prompt; stdin is closed anyway
-    env: options?.env ?? {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
-    },
-  }).trim();
+export const runCommand: CommandRunner = (cmd, args, timeoutMs, options) => {
+  try {
+    return execFileSync(cmd, args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      stdio: [options?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      ...(options?.input === undefined ? {} : { input: options.input }),
+      ...(options?.cwd ? { cwd: options.cwd } : {}),
+      // never let git/ssh block on an interactive prompt; stdin is closed anyway
+      env: options?.env ?? {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
+      },
+    }).trim();
+  } catch (err) {
+    // A child that exits 0 without reading its input leaves our write on a closed pipe; its
+    // exit status, not the pipe, says whether it worked.
+    const failed = err as { code?: string; status?: number | null; stdout?: unknown };
+    if (failed.code === "EPIPE" && failed.status === 0 && typeof failed.stdout === "string") {
+      return failed.stdout.trim();
+    }
+    throw err;
+  }
+};
 
 function ok(name: string, detail: string): DoctorCheck {
   return { name, level: "ok", detail };

@@ -1518,19 +1518,29 @@ function lastPipelineRun(home = handbookHome()) {
 }
 
 // src/lib/doctor.ts
-var runCommand = (cmd, args, timeoutMs, options) => execFileSync3(cmd, args, {
-  encoding: "utf8",
-  timeout: timeoutMs,
-  stdio: [options?.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"],
-  ...options?.input === void 0 ? {} : { input: options.input },
-  ...options?.cwd ? { cwd: options.cwd } : {},
-  // never let git/ssh block on an interactive prompt; stdin is closed anyway
-  env: options?.env ?? {
-    ...process.env,
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_SSH_COMMAND: "ssh -oBatchMode=yes"
+var runCommand = (cmd, args, timeoutMs, options) => {
+  try {
+    return execFileSync3(cmd, args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      stdio: [options?.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"],
+      ...options?.input === void 0 ? {} : { input: options.input },
+      ...options?.cwd ? { cwd: options.cwd } : {},
+      // never let git/ssh block on an interactive prompt; stdin is closed anyway
+      env: options?.env ?? {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_SSH_COMMAND: "ssh -oBatchMode=yes"
+      }
+    }).trim();
+  } catch (err) {
+    const failed = err;
+    if (failed.code === "EPIPE" && failed.status === 0 && typeof failed.stdout === "string") {
+      return failed.stdout.trim();
+    }
+    throw err;
   }
-}).trim();
+};
 function ok(name, detail) {
   return { name, level: "ok", detail };
 }
