@@ -27,8 +27,8 @@ var init_fs_atomic = __esm({
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { dirname as dirname2, join } from "node:path";
+import { closeSync, mkdirSync as mkdirSync2, mkdtempSync, openSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
@@ -41,12 +41,13 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
-var EDIT_ATTACH_WINDOW_MS, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
+var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
     "use strict";
     init_fs_atomic();
     EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+    SLEEPER = new Int32Array(new SharedArrayBuffer(4));
     SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
     SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
   }
@@ -594,7 +595,7 @@ var init_secrets = __esm({
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync3, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -625,7 +626,7 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
     const target = join4(destDir, rel);
-    mkdirSync3(dirname2(target), { recursive: true });
+    mkdirSync3(dirname3(target), { recursive: true });
     copyFileSync(join4(srcDir, rel), target);
   }
 }
@@ -1330,13 +1331,13 @@ import { join as join15 } from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync8, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename4, dirname as dirname6, join as join11, relative as relative2 } from "node:path";
+import { basename as basename4, dirname as dirname7, join as join11, relative as relative2 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join8 } from "node:path";
+import { dirname as dirname4, join as join8 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -2007,7 +2008,7 @@ init_skill_files();
 // src/lib/publish.ts
 init_session_state();
 import { existsSync as existsSync4, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname4, join as join9 } from "node:path";
+import { dirname as dirname5, join as join9 } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -2256,7 +2257,7 @@ init_session_state();
 // src/lib/session-workflow.ts
 import { appendFileSync, mkdirSync as mkdirSync7, readFileSync as readFileSync7, realpathSync, statSync as statSync2, writeFileSync as writeFileSync5 } from "node:fs";
 init_config();
-import { basename as basename3, dirname as dirname5, join as join10, relative, resolve, sep as sep2 } from "node:path";
+import { basename as basename3, dirname as dirname6, join as join10, relative, resolve, sep as sep2 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -2300,7 +2301,7 @@ function repositoryOf(dir) {
       }
     } catch {
     }
-    const up = dirname5(at);
+    const up = dirname6(at);
     if (up === at) return null;
     at = up;
   }
@@ -2621,7 +2622,7 @@ function commitProjectSkill(git, repoDir, target, subject) {
 }
 function uninstall(target, skillsDir) {
   rmSync5(target, { recursive: true, force: true });
-  for (const dir of [skillsDir, dirname6(skillsDir)]) {
+  for (const dir of [skillsDir, dirname7(skillsDir)]) {
     try {
       rmdirSync(dir);
     } catch {

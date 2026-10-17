@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,11 +10,12 @@ import {
   minedRecordFile,
   recordWorkflowEvent,
   repositoryOf,
+  retireDeadSessions,
   WORKFLOW_LINE_FIELDS,
   workflowsFile,
 } from "./session-workflow.js";
 import type { MinedRecord, RepoFile, WorkflowDeps, WorkflowLine } from "./session-workflow.js";
-import { loadSessionState } from "./session-state.js";
+import { emptySessionState, loadSessionState, saveSessionState } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { runMineCommand } from "./mine-run.js";
 import { createFixture, seedStandardHistory } from "./mine-fixture.js";
@@ -383,5 +384,49 @@ describe("what is not recorded", () => {
       workflowEntrypointSeen: 0,
       workflowEntrypointMissing: 1,
     });
+  });
+});
+
+describe("retireDeadSessions", () => {
+  it("given a session file a week old, when sessions are retired, then its open errors reach the ledger and it is counted", () => {
+    // given a session that died with an open error, untouched for eight days
+    saveSessionState(
+      {
+        ...emptySessionState("dead"),
+        openErrors: [
+          {
+            fingerprint: "deadbeefdeadbeef",
+            family: "npm test",
+            command: "npm test",
+            error: "1 test failed",
+            cwd: api,
+            count: 1,
+            firstSeenAt: "2026-08-01T00:00:00Z",
+            lastSeenAt: "2026-08-01T00:00:00Z",
+            edits: [],
+          },
+        ],
+      },
+      home,
+    );
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(join(home, "sessions", "dead.json"), old, old);
+    // when the next session start retires it
+    const retired = retireDeadSessions(home, Date.now(), deps());
+    // then the evidence is in the ledger, the file is gone, and the session is counted as unknown
+    expect(retired).toBe(1);
+    expect(readFileSync(join(home, "signals.jsonl"), "utf8")).toContain("deadbeefdeadbeef");
+    expect(existsSync(join(home, "sessions", "dead.json"))).toBe(false);
+    expect(readCounters(home)).toMatchObject({ workflowSessions: 1, workflowEntrypointMissing: 1 });
+  });
+
+  it("given a session file younger than a week, when sessions are retired, then it is left alone", () => {
+    // given a session idle for a day
+    saveSessionState({ ...emptySessionState("idle") }, home);
+    const dayOld = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    utimesSync(join(home, "sessions", "idle.json"), dayOld, dayOld);
+    // when sessions are retired, then nothing happens to it
+    expect(retireDeadSessions(home, Date.now(), deps())).toBe(0);
+    expect(existsSync(join(home, "sessions", "idle.json"))).toBe(true);
   });
 });

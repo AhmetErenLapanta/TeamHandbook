@@ -14,6 +14,7 @@ import {
   assembleSkillMd,
   gitRemoteUrl,
   normalizeRemoteUrl,
+  relativizeEdits,
   remoteUrlForEdits,
   slugifySkillName,
   uniqueSlug,
@@ -693,7 +694,7 @@ export function harvestFingerprint(item: HarvestItem): string {
 
 // ── artifact assembly ───────────────────────────────────────────────────────
 
-function groundedCaseFor(item: HarvestItem, evidence: HarvestEvidence, now: string): GroundedCase {
+function groundedCaseFor(item: HarvestItem, evidence: HarvestEvidence, now: string, cwd: string): GroundedCase {
   const pair = evidence.pairs.find((p) => `pair:${p.fingerprint}` === item.source);
   return {
     fingerprint: harvestFingerprint(item),
@@ -701,7 +702,9 @@ function groundedCaseFor(item: HarvestItem, evidence: HarvestEvidence, now: stri
     command: pair?.command ?? "",
     error: pair?.error ?? "",
     resolvedCommand: pair?.resolvedCommand ?? null,
-    edits: pair?.edits ?? [],
+    // relative to the repository, as /handbook:learn writes them: an absolute path names
+    // this machine's home, and a candidate carrying one is refused for the team or a project
+    edits: relativizeEdits(pair?.edits ?? [], pair?.cwd || cwd),
     expect: item.expect,
     gate: { total: item.total, scores: item.scores },
     ...(item.task ? { task: item.task } : {}),
@@ -775,11 +778,13 @@ export async function harvestSession(
     .slice(0, 20)
     .map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
 
-  // match before prompting, and in one call: this both reads the memory of past
-  // teachings and folds this session into it
+  // Matched before prompting but folded in only once a reply has been read: a failed call
+  // re-queues the job, and a retry would otherwise find this session's own prompts recorded
+  // and count them as an earlier session.
+  const taught = (job.evidence.corrections ?? []).map((c) => c.text);
   const evidence: HarvestEvidence = {
     ...job.evidence,
-    echoes: recordAndMatchTeachings((job.evidence.corrections ?? []).map((c) => c.text), home),
+    echoes: recordAndMatchTeachings(taught, home, undefined, false),
   };
 
   const prompt = buildHarvestPrompt({
@@ -807,6 +812,7 @@ export async function harvestSession(
   if (items === null) {
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
+  recordAndMatchTeachings(taught, home);
 
   const measured = items.map((i) => withMeasuredRecurrence(i, evidence.echoes, evidence.recurrence));
   const { kept, dropped } = sieveHarvestItems(measured, {
@@ -842,7 +848,7 @@ export async function harvestSession(
         scope,
         item.kind,
       ),
-      groundedCase: groundedCaseFor(item, job.evidence, now()),
+      groundedCase: groundedCaseFor(item, job.evidence, now(), job.cwd),
     };
     const dir = writeCandidate(artifact, home);
     // Read back what was actually written, not what the model sent: the grounded case is

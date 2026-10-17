@@ -4,8 +4,8 @@ import { join as join2 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { dirname as dirname2, join } from "node:path";
+import { closeSync, mkdirSync as mkdirSync2, mkdtempSync, openSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -37,6 +37,7 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
@@ -67,7 +68,7 @@ function configIsBroken(home = handbookHome()) {
 import { execFileSync as execFileSync4, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/lib/score.ts
 import { execFile } from "node:child_process";
@@ -1247,7 +1248,7 @@ function writeSkeletonPreserving(dir, files) {
       skipped.push(path);
       continue;
     }
-    mkdirSync3(dirname2(target), { recursive: true });
+    mkdirSync3(dirname3(target), { recursive: true });
     writeFileSync2(target, content);
     written.push(path);
   }
@@ -1579,11 +1580,11 @@ function formatInitSuccess(result) {
 
 // src/lib/upgrade.ts
 import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname4, join as join6, relative } from "node:path";
+import { dirname as dirname5, join as join6, relative } from "node:path";
 
 // src/lib/publish.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join5 } from "node:path";
+import { dirname as dirname4, join as join5 } from "node:path";
 function bumpPluginVersion(repoDir, past = []) {
   const file = join5(repoDir, ".claude-plugin", "plugin.json");
   try {
@@ -1770,7 +1771,7 @@ function writeCandidates(repoDir, candidates, paths) {
   }
   for (const path of paths) {
     const target = join6(repoDir, path);
-    mkdirSync5(dirname4(target), { recursive: true });
+    mkdirSync5(dirname5(target), { recursive: true });
     writeFileSync4(target, candidates[path]);
   }
   return null;
@@ -1851,7 +1852,7 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
       const cacheinfo = [];
       for (const path of paths) {
         const file = join6(scratch, path);
-        mkdirSync5(dirname4(file), { recursive: true });
+        mkdirSync5(dirname5(file), { recursive: true });
         writeFileSync4(file, candidates.files[path]);
         const sha = String(git(["hash-object", "-w", "--", file], repoDir) ?? "").trim();
         cacheinfo.push("--cacheinfo", `${modes.get(path) ?? "100644"},${sha},${path}`);

@@ -9,10 +9,10 @@ import { bumpCounter } from "./counters.js";
 import { detectIdentity, hostIdentity } from "./identity.js";
 import type { HostIdentity } from "./identity.js";
 import { detectSecret } from "./secrets.js";
-import { sessionSignalCount } from "./signals.js";
+import { flushSessionEnd, sessionSignalCount } from "./signals.js";
 import { isBashSuccess } from "./tool-response.js";
 import { writeFileAtomic } from "./fs-atomic.js";
-import { handbookHome, loadSessionState, saveSessionState } from "./session-state.js";
+import { deadSessionIds, handbookHome, loadSessionState, saveSessionState, withSessionLock } from "./session-state.js";
 import type { SessionState, WorkflowSignal, WorkflowTrail } from "./session-state.js";
 import {
   buildRoleResolver,
@@ -484,6 +484,30 @@ export function finishWorkflowSession(
   if (!trail.green || trail.fired.includes("S2")) return null;
   const outcome = writeLine(state, trail, "S2", found, home, deps);
   return outcome === "hygiene" ? null : outcome;
+}
+
+/**
+ * What SessionEnd would have done for each session that never got one, once its file is old
+ * enough that nothing behind it is alive: its open errors reach the ledger and it is counted,
+ * where cleanup used to delete both. Which entrypoint ran it is unknown by then, and counted so.
+ */
+export function retireDeadSessions(
+  home: string = handbookHome(),
+  now: number = Date.now(),
+  deps: WorkflowDeps = {},
+): number {
+  const ids = deadSessionIds(home, now);
+  for (const id of ids) {
+    withSessionLock(
+      id,
+      () => {
+        finishWorkflowSession({ session_id: id }, loadSessionState(id, home), home, { ...deps, entrypoint: "" });
+        flushSessionEnd(id, home);
+      },
+      home,
+    );
+  }
+  return ids.length;
 }
 
 interface Found {

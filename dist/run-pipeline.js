@@ -14,16 +14,16 @@ import { basename as basename3, join as join12 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname4, join as join8 } from "node:path";
+import { dirname as dirname5, join as join8 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute, join as join7 } from "node:path";
+import { dirname as dirname4, isAbsolute, join as join7 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname as dirname2, join } from "node:path";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -46,6 +46,7 @@ var EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
+var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
@@ -614,7 +615,7 @@ function signalSecret(fields) {
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync2, readdirSync as readdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -965,7 +966,7 @@ function gitRemoteUrl(cwd) {
   }
 }
 function remoteUrlForEdits(paths, lookup = gitRemoteUrl) {
-  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname3(p)));
+  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname4(p)));
   const remotes = /* @__PURE__ */ new Set();
   for (const dir of dirs) {
     const remote = lookup(dir);
@@ -1025,6 +1026,10 @@ ${draft.body}` : draft.body;
     "skill against its evidence when it is edited, challenged, or suspected of being stale.",
     ""
   ].join("\n");
+}
+function relativizeEdits(edits, cwd) {
+  const prefix = cwd.endsWith("/") ? cwd : cwd + "/";
+  return edits.map((e) => e.startsWith(prefix) ? e.slice(prefix.length) : e);
 }
 function renameSkillMd(skillMd, newSlug) {
   return skillMd.replace(/^name:.*$/m, `name: ${newSlug}`);
@@ -1270,7 +1275,7 @@ function readTeachings(home = handbookHome()) {
     return [];
   }
 }
-function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString()) {
+function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString(), persist = true) {
   const store = readTeachings(home);
   const echoes = [];
   const seenThisSession = [];
@@ -1296,7 +1301,7 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
       });
     }
   }
-  if (seenThisSession.length > 0) {
+  if (persist && seenThisSession.length > 0) {
     const trimmed = store.sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, STORE_LIMIT);
     writeFileAtomic(teachingsFile(home), JSON.stringify(trimmed, null, 2) + "\n");
   }
@@ -1845,7 +1850,7 @@ function harvestFingerprint(item) {
   if (pairFp) return pairFp;
   return createHash("sha256").update(`${item.kind}:${slugifySkillName(item.name) ?? item.name}`).digest("hex").slice(0, 16);
 }
-function groundedCaseFor(item, evidence, now) {
+function groundedCaseFor(item, evidence, now, cwd) {
   const pair = evidence.pairs.find((p) => `pair:${p.fingerprint}` === item.source);
   return {
     fingerprint: harvestFingerprint(item),
@@ -1853,7 +1858,9 @@ function groundedCaseFor(item, evidence, now) {
     command: pair?.command ?? "",
     error: pair?.error ?? "",
     resolvedCommand: pair?.resolvedCommand ?? null,
-    edits: pair?.edits ?? [],
+    // relative to the repository, as /handbook:learn writes them: an absolute path names
+    // this machine's home, and a candidate carrying one is refused for the team or a project
+    edits: relativizeEdits(pair?.edits ?? [], pair?.cwd || cwd),
     expect: item.expect,
     gate: { total: item.total, scores: item.scores },
     ...item.task ? { task: item.task } : {},
@@ -1877,9 +1884,10 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   const dirs = deps.skillDirs ? deps.skillDirs(home, job.cwd) : defaultHarvestSkillDirs(home, job.cwd);
   const existingSkills = deps.listSkills ? deps.listSkills(dirs) : listSkillsSafe(dirs);
   const recentDecisions = listCandidates(home).filter((c) => c.status !== "archived").slice(0, 20).map((c) => `- ${c.slug} [${c.status}]: ${c.description}`);
+  const taught = (job.evidence.corrections ?? []).map((c) => c.text);
   const evidence = {
     ...job.evidence,
-    echoes: recordAndMatchTeachings((job.evidence.corrections ?? []).map((c) => c.text), home)
+    echoes: recordAndMatchTeachings(taught, home, void 0, false)
   };
   const prompt = buildHarvestPrompt({
     slice,
@@ -1903,6 +1911,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   if (items === null) {
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
+  recordAndMatchTeachings(taught, home);
   const measured = items.map((i) => withMeasuredRecurrence(i, evidence.echoes, evidence.recurrence));
   const { kept, dropped } = sieveHarvestItems(measured, {
     existingSkillNames: new Set(existingSkills.map((s) => s.name)),
@@ -1934,7 +1943,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
         scope,
         item.kind
       ),
-      groundedCase: groundedCaseFor(item, job.evidence, now())
+      groundedCase: groundedCaseFor(item, job.evidence, now(), job.cwd)
     };
     const dir = writeCandidate(artifact, home);
     const trace = identityInSkillDir(dir);
@@ -2182,6 +2191,20 @@ function cleanupStaleHarvestMarkers(home, now = Date.now()) {
     }
   }
 }
+var CLAIM_HEARTBEAT_MS = 6e4;
+function keepClaimsFresh(files, everyMs = CLAIM_HEARTBEAT_MS) {
+  const timer = setInterval(() => {
+    const at = /* @__PURE__ */ new Date();
+    for (const file of files) {
+      try {
+        utimesSync(file, at, at);
+      } catch {
+      }
+    }
+  }, everyMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
 async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   const marker = harvestMarkerFile(job, home);
   if (marker && !claimHarvest(marker, home)) {
@@ -2204,7 +2227,14 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
   if (!lessonHarvestEnabled(home)) {
     return { outcome: "skipped", reason: LESSON_HARVEST_OFF, written: [] };
   }
-  const summary = await harvestSession(job, home, deps);
+  const stopMarker = marker ? keepClaimsFresh([marker]) : () => {
+  };
+  let summary;
+  try {
+    summary = await harvestSession(job, home, deps);
+  } finally {
+    stopMarker();
+  }
   const log = {
     received: summary.produced ?? 0,
     sievedOut: summary.dropped?.length ?? 0,
@@ -2247,12 +2277,18 @@ async function runHarvestJob(job, home = handbookHome(), deps = {}, now = () => 
 
 // src/cli/run-pipeline.ts
 async function main() {
-  for (const { job, claimedFile } of drainHarvestJobs()) {
-    try {
-      await runHarvestJob(job);
-    } finally {
-      releaseHarvestJob(claimedFile);
+  const claims = drainHarvestJobs();
+  const stop = keepClaimsFresh(claims.map((claim) => claim.claimedFile));
+  try {
+    for (const { job, claimedFile } of claims) {
+      try {
+        await runHarvestJob(job);
+      } finally {
+        releaseHarvestJob(claimedFile);
+      }
     }
+  } finally {
+    stop();
   }
 }
 main().then(

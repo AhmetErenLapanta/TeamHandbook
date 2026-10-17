@@ -56,8 +56,8 @@ function fingerprint(family, normalizedError) {
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { dirname as dirname2, join } from "node:path";
+import { closeSync, mkdirSync as mkdirSync2, mkdtempSync, openSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -115,6 +115,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...typeof parsed.harvestedBytes === "number" ? { harvestedBytes: parsed.harvestedBytes } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
       ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {},
       ...workflow ? { workflow } : {}
@@ -126,6 +127,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
 function saveSessionState(state, home = handbookHome()) {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
 }
+var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
 
@@ -267,12 +269,12 @@ import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname3, join as join7 } from "node:path";
+import { dirname as dirname4, join as join7 } from "node:path";
 
 // src/lib/distill.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, isAbsolute, join as join6 } from "node:path";
+import { dirname as dirname3, isAbsolute, join as join6 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync2 } from "node:fs";
@@ -1226,7 +1228,7 @@ function gitRemoteUrl(cwd) {
   }
 }
 function remoteUrlForEdits(paths, lookup = gitRemoteUrl) {
-  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname2(p)));
+  const dirs = new Set(paths.filter(isAbsolute).map((p) => dirname3(p)));
   const remotes = /* @__PURE__ */ new Set();
   for (const dir of dirs) {
     const remote = lookup(dir);

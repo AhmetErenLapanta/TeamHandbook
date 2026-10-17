@@ -306,8 +306,8 @@ import { join as join2 } from "node:path";
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { dirname as dirname2, join } from "node:path";
+import { closeSync, mkdirSync as mkdirSync2, mkdtempSync, openSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -367,6 +367,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...typeof parsed.harvestedBytes === "number" ? { harvestedBytes: parsed.harvestedBytes } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
       ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {},
       ...workflow ? { workflow } : {}
@@ -377,6 +378,42 @@ function loadSessionState(sessionId, home = handbookHome()) {
 }
 function saveSessionState(state, home = handbookHome()) {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
+}
+var LOCK_WAIT_MS = 2e3;
+var LOCK_STALE_MS = 1e4;
+var LOCK_RETRY_MS = 10;
+var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
+function withSessionLock(sessionId, fn, home = handbookHome(), waitMs = LOCK_WAIT_MS) {
+  if (!sessionId) return fn();
+  const lock = `${sessionFile(sessionId, home)}.lock`;
+  const held = acquireLock(lock, waitMs);
+  try {
+    return fn();
+  } finally {
+    if (held) rmSync2(lock, { force: true });
+  }
+}
+function acquireLock(lock, waitMs) {
+  const deadline = Date.now() + waitMs;
+  for (; ; ) {
+    try {
+      mkdirSync2(dirname2(lock), { recursive: true });
+      closeSync(openSync(lock, "wx"));
+      return true;
+    } catch (err) {
+      if (err?.code !== "EEXIST") return false;
+    }
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        rmSync2(lock, { force: true });
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(SLEEPER, 0, 0, LOCK_RETRY_MS);
+  }
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
@@ -811,7 +848,7 @@ import { createHash as createHash2, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync5, realpathSync, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename3, dirname as dirname2, join as join6, relative, resolve as resolve2, sep } from "node:path";
+import { basename as basename3, dirname as dirname3, join as join6, relative, resolve as resolve2, sep } from "node:path";
 
 // src/lib/signals.ts
 import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
@@ -1386,14 +1423,14 @@ function repositoryOf(dir) {
       }
     } catch {
     }
-    const up = dirname2(at);
+    const up = dirname3(at);
     if (up === at) return null;
     at = up;
   }
 }
 var diskLocator = {
   locate(path) {
-    const found = repositoryOf(dirname2(path));
+    const found = repositoryOf(dirname3(path));
     if (!found) return null;
     const rel = relative(found.checkout, path).split(sep).join("/");
     if (!rel || rel.startsWith("../") || rel === ".git" || rel.startsWith(".git/")) return null;
@@ -1724,18 +1761,20 @@ async function main() {
     recordSkillCall(input);
     return;
   }
-  recordWorkflowEvent(input);
-  recordActivity(input);
-  if (captureBashFailure(input)) {
-    bumpCounter("bashFailuresCaptured");
-    return;
-  }
-  const resolved = captureBashSuccess(input);
-  if (resolved > 0) {
-    bumpCounter("pairsResolved", handbookHome(), resolved);
-    return;
-  }
-  captureFileEdit(input);
+  withSessionLock(input.session_id, () => {
+    recordWorkflowEvent(input);
+    recordActivity(input);
+    if (captureBashFailure(input)) {
+      bumpCounter("bashFailuresCaptured");
+      return;
+    }
+    const resolved = captureBashSuccess(input);
+    if (resolved > 0) {
+      bumpCounter("pairsResolved", handbookHome(), resolved);
+      return;
+    }
+    captureFileEdit(input);
+  });
 }
 main().then(
   () => process.exit(0),

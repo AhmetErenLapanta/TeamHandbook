@@ -12,16 +12,17 @@ var init_fs_atomic = __esm({
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
-var EDIT_ATTACH_WINDOW_MS, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
+var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
     "use strict";
     init_fs_atomic();
     EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+    SLEEPER = new Int32Array(new SharedArrayBuffer(4));
     SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
     SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
   }
@@ -627,7 +628,7 @@ var init_skill_format = __esm({
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { readFileSync as readFileSync9 } from "node:fs";
-import { basename as basename6, dirname as dirname4, join as join13, resolve as resolve2 } from "node:path";
+import { basename as basename6, dirname as dirname5, join as join13, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/lib/signals.ts
@@ -694,7 +695,7 @@ import { basename as basename3, join as join9 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir3 } from "node:os";
-import { dirname, join as join7 } from "node:path";
+import { dirname as dirname2, join as join7 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -774,7 +775,7 @@ init_session_state();
 // src/lib/session-workflow.ts
 import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 init_config();
-import { basename as basename2, dirname as dirname2, join as join8, relative, resolve, sep as sep2 } from "node:path";
+import { basename as basename2, dirname as dirname3, join as join8, relative, resolve, sep as sep2 } from "node:path";
 init_identity();
 init_secrets();
 init_fs_atomic();
@@ -1277,7 +1278,7 @@ function repositoryOf(dir) {
       }
     } catch {
     }
-    const up = dirname2(at);
+    const up = dirname3(at);
     if (up === at) return null;
     at = up;
   }
@@ -1535,7 +1536,7 @@ var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFileSync as readFileSync8, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename5, dirname as dirname3, join as join12, relative as relative2, sep as sep3 } from "node:path";
+import { basename as basename5, dirname as dirname4, join as join12, relative as relative2, sep as sep3 } from "node:path";
 
 // src/lib/draft.ts
 init_identity();
@@ -1698,7 +1699,7 @@ function pathMatcher(pattern, repo) {
   const role = anyDepth || wildcard ? segment : null;
   const slash = body.lastIndexOf("/");
   const areaForm = wildcard && slash > 0 && body.slice(slash + 1).includes("*") ? matcherFor(`${body.slice(0, slash)}/*${body.slice(slash)}`) : null;
-  const areas = areaForm ? new Set(repo.tree.files.filter((f) => !VENDORED.test(f) && areaForm.test(f)).map((f) => dirname3(f))) : null;
+  const areas = areaForm ? new Set(repo.tree.files.filter((f) => !VENDORED.test(f) && areaForm.test(f)).map((f) => dirname4(f))) : null;
   const area = areas && areas.size >= MIN_AREAS ? areaForm : null;
   return (path) => !VENDORED.test(path) && (rooted(path) || (role?.test(path) ?? false) || (area?.test(path) ?? false));
 }
@@ -1822,7 +1823,7 @@ function deliveredSkills(home) {
   return [...out.values()];
 }
 function projectBase(checkout, skillDir) {
-  const rel = relative2(checkout, dirname3(dirname3(dirname3(skillDir)))).split(sep3).join("/");
+  const rel = relative2(checkout, dirname4(dirname4(dirname4(skillDir)))).split(sep3).join("/");
   return rel.startsWith("..") ? "" : rel;
 }
 function installedSkills(home = handbookHome(), userHome = homedir4(), cwd = process.cwd()) {
@@ -1923,7 +1924,7 @@ function pluginVersion() {
   return "unknown";
 }
 function pluginRoot() {
-  const here = dirname4(fileURLToPath(import.meta.url));
+  const here = dirname5(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(readFileSync9(join13(here, up, ".claude-plugin", "plugin.json"), "utf8"));
@@ -1944,8 +1945,8 @@ var lookupRelease = (args, cwd) => execFileSync3("git", args, {
 function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
   if (!root || !versionNumbers(installed)) return null;
   const versionDir = resolve2(root);
-  if (basename6(dirname4(dirname4(dirname4(versionDir)))) !== "cache") return null;
-  const marketplace = basename6(dirname4(dirname4(versionDir)));
+  if (basename6(dirname5(dirname5(dirname5(versionDir)))) !== "cache") return null;
+  const marketplace = basename6(dirname5(dirname5(versionDir)));
   let out;
   try {
     out = String(git(["ls-remote", "--tags", "origin"], join13(marketRoot, marketplace)) ?? "");

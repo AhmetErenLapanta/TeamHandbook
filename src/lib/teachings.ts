@@ -212,6 +212,7 @@ export function recordAndMatchTeachings(
   texts: string[],
   home: string = handbookHome(),
   at: string = new Date().toISOString(),
+  persist: boolean = true,
 ): Echo[] {
   const store = readTeachings(home);
   const echoes: Echo[] = [];
@@ -240,7 +241,7 @@ export function recordAndMatchTeachings(
       });
     }
   }
-  if (seenThisSession.length > 0) {
+  if (persist && seenThisSession.length > 0) {
     // keep the most recently taught, so the store stays bounded without ever
     // dropping something the developer is actively repeating
     const trimmed = store.sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, STORE_LIMIT);
