@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.24.0] - 2026-10-19
+
+### Added
+
+- **The README names the people who contributed code,** in a Contributors section that
+  points to this changelog and to the repository's contributors page.
+
+### Fixed
+
+- **Work waiting in the queue is no longer sent after the privacy switches are turned off.**
+  Every one of them is read again right before anything is sent.
+- **Parallel tool calls no longer drop each other's session writes.** Each hook writes the
+  session under a lock, a short-lived `.lock` file beside the session file.
+- **A retried harvest no longer counts its own teachings as taught before,** and neither
+  does a session harvested twice, once when it was salvaged and again when it ended.
+- **Harvested error-fix candidates no longer carry absolute paths,** so they are no longer
+  refused when delivered to the team or to a project.
+- **Queued requests no longer go stale while they wait their turn:** the duplicated model
+  call and the duplicated candidate are gone.
+- **A session that crashed leaves its evidence in the ledger even with the harvest off.**
+  Once a session that never ended is a week old, its open errors reach the ledger and it is
+  counted before its file is cleaned up, where cleanup used to delete both.
+- **A session salvaged mid-way is harvested again at its end if its transcript grew.**
+- **Statements in SECURITY.md that did not match the code now do.**
+
+### Security
+
+- **A secret split across several lines no longer reaches the harvest prompt.** A short
+  window of neighbouring lines is read together, so a secret no single line carries is
+  still found, and the whole run of lines is redacted.
+- **Normalizing an error message no longer blinds the secret scan.** Masking runs of digits
+  broke the pattern for Slack and Telegram tokens, which then reached the session file and
+  the evidence ledger. A line the detector flags now reaches the scan unmasked and the event
+  is dropped, and the length cap no longer splits a flagged line.
+- **A symbolic link in the team repository can no longer make a write land outside the
+  clone.** A linked `.mcp.json`, `skills` directory or `plugin.json` is refused before the
+  first write.
+- **The model call's prompt travels on the child process's input, not its command line,**
+  so another user on the machine cannot read it from the process list, and a large prompt
+  no longer runs into the command-line length limit on Linux.
+- **A workflow line is not written when a path it would record looks like a credential,**
+  and the dropped line is counted.
+- **The session-start notice prints only skill names shaped like a slug.**
+
+Contributed by @maksutspahi.
+
 ## [0.23.1] - 2026-10-09
 
 ### Added
