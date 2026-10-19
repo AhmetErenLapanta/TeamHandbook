@@ -17,6 +17,8 @@ import {
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion, symlinkOnPath } from "./publish.js";
 import {
+  assignmentNoteLines,
+  assignmentRecordProblem,
   branchAnswer,
   branchNameProblem,
   branchTrace,
@@ -26,13 +28,14 @@ import {
   pushBranch,
   pushFailure,
   pushQuestion,
+  readRecordedAssignment,
   readTeamBranchExample,
   requestPushOptions,
   unattachedDescriptionLines,
   versionClaimProblem,
   versionPast,
 } from "./branch.js";
-import type { BranchProposal, PushChoice, Pushed, VersionClaim } from "./branch.js";
+import type { BranchProposal, PushChoice, Pushed, RecordedAssignment, VersionClaim } from "./branch.js";
 import { handbookWorkdir } from "./session-state.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
@@ -227,12 +230,20 @@ export interface CandidateSet {
  * itself. A repository scaffolded before that formatting was fixed does report its CI
  * file as stale, which is what the file being out of date means.
  */
-export function upgradeCandidates(repoDir: string, team: TeamConfig, branchExample?: string): CandidateSet {
+export function upgradeCandidates(
+  repoDir: string,
+  team: TeamConfig,
+  branchExample?: string,
+  assignment: RecordedAssignment = {},
+): CandidateSet {
   const withCi = existsSync(join(repoDir, CI_MARKER));
   // The example the repository already records is carried across unless a new one was
   // given. A machine that never heard of it would otherwise regenerate the team file
   // without it and offer, as a refresh, to delete what an administrator wrote there.
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
+  // The reviewers and labels likewise, each list on its own and exactly as written: a new
+  // reviewer list leaves the labels alone, and a refresh is not the place to edit either.
+  const assigned = { ...readRecordedAssignment(repoDir), ...assignment };
   // The repository is asked before this machine is written off as not knowing. A teammate
   // who joined before the handbook recorded its prefix has nothing in their config, but the
   // repository they are refreshing may have been given the record since - and regenerating
@@ -241,7 +252,15 @@ export function upgradeCandidates(repoDir: string, team: TeamConfig, branchExamp
   // not knowing the answer.
   const recorded = commitPrefixIsKnown(team) ? undefined : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
-  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi, example);
+  const generated = skeletonFiles(
+    team.marketplaceName,
+    team.repoUrl,
+    hostFromUrl(team.repoUrl),
+    prefix,
+    withCi,
+    example,
+    assigned,
+  );
   const known = commitPrefixIsKnown(team) || recorded !== undefined;
   const unknownPrefix = known ? new Set<string>() : prefixDependentPaths(team, withCi);
   const files: Record<string, string> = {};
@@ -346,6 +365,22 @@ export interface UpgradePlan {
 export interface UpgradeChoice extends PushChoice {
   /** One branch name the way this repository names branches, to record in the team file. */
   branchExample?: string;
+  /** The reviewers every request to this repository is opened with, to record in the team file. */
+  reviewers?: string[];
+  /** The labels every request to this repository is opened with, to record in the team file. */
+  labels?: string[];
+}
+
+/** What a refresh was asked to record in the team file beyond its scaffold files. */
+function recordsAsked(choice: UpgradeChoice): boolean {
+  return choice.branchExample !== undefined || choice.reviewers !== undefined || choice.labels !== undefined;
+}
+
+function assignmentAsked(choice: UpgradeChoice): RecordedAssignment {
+  return {
+    ...(choice.reviewers !== undefined ? { reviewers: choice.reviewers } : {}),
+    ...(choice.labels !== undefined ? { labels: choice.labels } : {}),
+  };
 }
 
 export interface UpgradeResult {
@@ -370,6 +405,8 @@ export interface UpgradeResult {
   proposedBranch?: string;
   /** The request body, when GitLab opened the request from the push and could not attach it. */
   unattachedDescription?: string;
+  /** What the request could not carry of the team's reviewers and labels, and why. */
+  assignmentNotes?: string[];
 }
 
 /** The name every refresh branch is proposed from. */
@@ -577,7 +614,7 @@ export function planUpgrade(
     if (cloneError) return { ok: false, error: cloneError };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
-    const candidates = upgradeCandidates(repoDir, team, choice.branchExample);
+    const candidates = upgradeCandidates(repoDir, team, choice.branchExample, assignmentAsked(choice));
     const files = classify(repoDir, candidates.files);
     const paths = refreshable(files);
     const unreadable = unreadableManifests(repoDir, candidates);
@@ -668,9 +705,11 @@ export function applyUpgrade(
   commitMessage: CommitMessageChoice = {},
   choice: UpgradeChoice = {},
 ): UpgradeResult {
-  if (!paths.length && choice.branchExample === undefined) {
+  if (!paths.length && !recordsAsked(choice)) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
   }
+  const assignmentProblem = assignmentRecordProblem(assignmentAsked(choice));
+  if (assignmentProblem) return { ok: false, error: assignmentProblem };
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -693,15 +732,16 @@ export function applyUpgrade(
     if (cloneError) return { ok: false, error: cloneError };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
-    const candidates = upgradeCandidates(repoDir, team, choice.branchExample);
+    const candidates = upgradeCandidates(repoDir, team, choice.branchExample, assignmentAsked(choice));
     const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
-    // Giving the example is the approval of the one file it is written into, so that file
-    // joins the request without being named twice - unless it already says exactly that.
-    if (choice.branchExample !== undefined && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
+    // Giving the example, the reviewers or the labels is the approval of the one file they
+    // are written into, so that file joins the request without being named twice - unless
+    // it already says exactly that.
+    if (recordsAsked(choice) && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
       paths = [...paths, TEAM_PREFIX_FILE];
     }
     if (!paths.length) {
-      return { ok: false, error: `${TEAM_PREFIX_FILE} already records that example, so nothing was changed.` };
+      return { ok: false, error: `${TEAM_PREFIX_FILE} already records that, so nothing was changed.` };
     }
     // Refusing an unknown path by name is what keeps the red lines from depending on the
     // caller: the only writable paths in existence are the ones today's skeleton emits,
@@ -948,6 +988,7 @@ export function formatUpgradeResult(result: UpgradeResult): string {
     ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
     "",
     "Nothing reaches anyone until that is merged.",
+    ...assignmentNoteLines(result.assignmentNotes),
     ...unattachedDescriptionLines(result.unattachedDescription),
   ].join("\n");
 }

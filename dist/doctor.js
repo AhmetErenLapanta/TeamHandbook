@@ -814,6 +814,23 @@ function readTeamBranchExample(repoDir) {
   const problem = branchExampleProblem(value);
   return problem ? { problem } : { example: value };
 }
+function readTeamFile(repoDir) {
+  try {
+    const raw = JSON.parse(readFileSync4(join5(repoDir, TEAM_PREFIX_FILE), "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+function readRecordedAssignment(repoDir) {
+  const raw = readTeamFile(repoDir);
+  const recorded = {};
+  for (const kind of ["reviewers", "labels"]) {
+    const value = raw[kind];
+    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) recorded[kind] = value;
+  }
+  return recorded;
+}
 function versionParts(version) {
   const parts = version.split(".").map(Number);
   return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
@@ -967,6 +984,12 @@ If auto-update is off for this marketplace, a merge reaches you only after these
 To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
 menu. When you announce a merge to the team, include these two commands.
 
+### Who reviews a request
+
+The requests TeamHandbook opens here carry the reviewers and labels listed in
+\`.teamhandbook.json\`, and none while it lists none. To change them, run
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`.
+
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
@@ -1097,7 +1120,7 @@ function readTeamCommitPrefix(repoDir) {
   const problem = commitPrefixProblem(value);
   return problem ? { problem } : { prefix: value };
 }
-function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample) {
+function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}) {
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -1136,7 +1159,11 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
         commitPrefix: commitPrefix.trim(),
         // Only when someone recorded one: a key written empty would read as an answer.
         ...branchExample ? { branchExample } : {},
-        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it."
+        // Written as given, an empty list included: [] is the team saying nobody, while a
+        // key left out is a team that has not said.
+        ...assignment.reviewers !== void 0 ? { reviewers: assignment.reviewers } : {},
+        ...assignment.labels !== void 0 ? { labels: assignment.labels } : {},
+        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. reviewers and labels, when present, are added to every request TeamHandbook opens here; an empty list adds none."
       },
       null,
       2
@@ -1270,12 +1297,21 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
-function upgradeCandidates(repoDir, team, branchExample) {
+function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
   const withCi = existsSync4(join8(repoDir, CI_MARKER));
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
+  const assigned = { ...readRecordedAssignment(repoDir), ...assignment };
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
-  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi, example);
+  const generated = skeletonFiles(
+    team.marketplaceName,
+    team.repoUrl,
+    hostFromUrl(team.repoUrl),
+    prefix,
+    withCi,
+    example,
+    assigned
+  );
   const known = commitPrefixIsKnown(team) || recorded !== void 0;
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};

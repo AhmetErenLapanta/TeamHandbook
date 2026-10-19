@@ -268,7 +268,10 @@ These, and only these:
    manifests it carries the team's own entries across rather than replacing them. An
    example branch name you give it with `--branch-example` is screened like a branch and
    written into the team's `.teamhandbook.json` in that same request, for teammates who
-   join afterwards to read.
+   join afterwards to read. Reviewer and label names given with `--reviewers` and
+   `--labels`, at setup or on a refresh, are written there the same way, and every request
+   TeamHandbook opens to that repository reads them back from its clone and sends them to
+   the forge as the request's reviewers and labels.
 4. **A release check, carrying nothing of yours:** `/handbook:status` and
    `/handbook:doctor` ask the repository this plugin was installed from for its release
    tags - one `git ls-remote --tags`, run in the marketplace clone Claude Code keeps - to
@@ -570,7 +573,20 @@ only ever shown as a proposal you confirm or change, and it is accepted only whe
 most 100 characters, carries no control character, and holds no trace of a machine and
 nothing the secret detector flags; otherwise it is left out.
 
-Those three are what `/handbook:join` itself reads. A repository you have joined also ships
+The reviewer and label lists in the same file are not read by `/handbook:join`; they are
+read from the clone each time a request to that repository is opened, and go to `gh` or
+`glab` as that request's `--reviewer` and `--label`. That is a command line, so an entry
+travels only when it is at most 100 characters, carries no control character, no trace
+of a machine and nothing the secret detector flags, and has the shape of a username
+(letters, digits, `.`, `-`, `_`, one optional leading `@`) or of a label (no comma, which
+would split it); a list of more than 20 is not used at all. Each value travels as part of
+one `--flag=value` argument, so none can be read as an option of its own. Whatever is left
+out is counted, by reason and never quoted, in the result; the request is opened without
+it rather than refused. If the forge refuses the assignment itself, the request is asked
+for once more without it, and only when the failed call did not already report the request
+it opened.
+
+The name, the prefix and the example are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what
 you already have - including into the prompt that decides whether a new candidate
 duplicates one. A name is therefore screened too, at the point it would otherwise become

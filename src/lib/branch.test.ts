@@ -5,23 +5,32 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  assignmentRecordProblem,
   branchNameProblem,
   openedRequestUrl,
   proposeBranch,
   pushQuestion,
+  readTeamAssignment,
   requestPushOptions,
 } from "./branch.js";
-import { approveAndDeliver } from "./deliver.js";
+import { approveAndDeliver, formatApproveResult } from "./deliver.js";
 import { forgeNotice, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
-import { loadTeamConfig, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
+import { formatInitSuccess, initTeamRepo, loadTeamConfig, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { formatJoinSuccess, joinTeamRepo } from "./join.js";
 import { publishTeamSelection } from "./publish.js";
 import { writeCandidateMeta } from "./queue.js";
 import { buildInventory, forgeLine, formatInventory, formatShareResult } from "./share.js";
 import { candidatesDir } from "./skill-index.js";
-import { applyUpgrade, formatUpgradePlan, planUpgrade, refreshAudience, upgradeCandidates } from "./upgrade.js";
+import {
+  applyUpgrade,
+  formatUpgradePlan,
+  formatUpgradeResult,
+  planUpgrade,
+  refreshAudience,
+  upgradeCandidates,
+} from "./upgrade.js";
 import { formatStatus, gatherStatus, newerRelease } from "./status.js";
 import { runDoctor } from "./doctor.js";
 import type { CommandRunner } from "./doctor.js";
@@ -683,7 +692,8 @@ describe("the example branch a team records", () => {
             branchExample: "PROJ-123-short-description",
             comment:
               "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit " +
-              "message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it.",
+              "message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. " +
+              "reviewers and labels, when present, are added to every request TeamHandbook opens here; an empty list adds none.",
           },
           null,
           2,
@@ -871,5 +881,320 @@ describe("the refresh plan and a branch the user gave", () => {
 
     expect(text).toContain("Branch `TEAM-12-refresh` · message `chore: refresh the team handbook scaffold` - confirm or change either.");
     expect(text).not.toContain("cannot be used");
+  });
+});
+
+/** The team file as a repository records it, with whatever reviewers and labels a case needs. */
+function teamFile(extra: Record<string, unknown>): Record<string, string> {
+  return { [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix: "", ...extra }, null, 2) + "\n" };
+}
+
+function teamFileIn(extra: Record<string, unknown>): string {
+  const dir = temp("handbook-teamfile-");
+  writeAll(dir, teamFile(extra));
+  return dir;
+}
+
+/** A project with a README and nothing else: what /handbook:init is pointed at. */
+function plainProject(): string {
+  const repo = createGitLabRepo({ seed: { "README.md": "" } });
+  repos.push(repo);
+  return repo.url;
+}
+
+/** A machine with the CLI, signed in: every create call is kept and answered with a request. */
+function recordingForge(reply = "https://gitlab.com/acme/skills/-/merge_requests/1\n") {
+  const creates: string[][] = [];
+  const forge: ForgeRunner = (_tool, args) => {
+    if (args[0] === "auth") return "Logged in";
+    creates.push(args);
+    return reply;
+  };
+  return { forge, creates };
+}
+
+const assignmentFlagsOf = (args: string[] | undefined) =>
+  (args ?? []).filter((arg) => arg.startsWith("--reviewer") || arg.startsWith("--label"));
+
+describe("the reviewers and labels a team file holds", () => {
+  it("given neither key, when the request reads it, then nothing is assigned and nothing is said", () => {
+    expect(readTeamAssignment(teamFileIn({}))).toEqual({ assignment: { reviewers: [], labels: [] }, dropped: null });
+  });
+
+  it("given empty lists, when the request reads them, then nothing is assigned and nothing is said", () => {
+    expect(readTeamAssignment(teamFileIn({ reviewers: [], labels: [] }))).toEqual({
+      assignment: { reviewers: [], labels: [] },
+      dropped: null,
+    });
+  });
+
+  it("given names the way people type them, when the request reads them, then the @ is dropped and scoped or local labels are kept", () => {
+    const read = readTeamAssignment(teamFileIn({ reviewers: ["@ada.lovelace", "grace_hopper"], labels: ["type::docs", "équipe"] }));
+
+    expect(read).toEqual({
+      assignment: { reviewers: ["ada.lovelace", "grace_hopper"], labels: ["type::docs", "équipe"] },
+      dropped: null,
+    });
+  });
+
+  it("given a value that is not a list, when the request reads it, then it is left out and said", () => {
+    const read = readTeamAssignment(teamFileIn({ reviewers: "ada", labels: ["skills"] }));
+
+    expect(read.assignment).toEqual({ reviewers: [], labels: ["skills"] });
+    expect(read.dropped).toBe(`${TEAM_PREFIX_FILE} holds values this request left out (reviewers is not a list).`);
+  });
+
+  it("given more than twenty entries, when the request reads them, then none of them is used", () => {
+    const reviewers = Array.from({ length: 21 }, (_, i) => `dev${i}`);
+
+    const read = readTeamAssignment(teamFileIn({ reviewers }));
+
+    expect(read.assignment.reviewers).toEqual([]);
+    expect(read.dropped).toContain("reviewers lists 21 entries, more than 20, so none of them is used");
+  });
+
+  it("given one bad entry of each kind, when the request reads them, then each is counted by its reason and none is quoted", () => {
+    const token = "glpat-" + "x".repeat(24);
+    const read = readTeamAssignment(
+      teamFileIn({
+        reviewers: ["ada", "a".repeat(101), "ada\u001b[2J", token, "/home/alice/notes", "ada lovelace", 7],
+        labels: ["skills", "backend,commons"],
+      }),
+    );
+
+    expect(read.assignment).toEqual({ reviewers: ["ada"], labels: ["skills"] });
+    expect(read.dropped).toBe(
+      `${TEAM_PREFIX_FILE} holds values this request left out (reviewers: 1 longer than 100 characters, ` +
+        "1 carrying a control character, 1 carrying what looks like a gitlab-token, " +
+        "1 carrying a trace of a machine (home-path), 1 not a username, 1 not a name; labels: 1 not a label name).",
+    );
+    for (const value of [token, "alice", "lovelace", "commons"]) expect(read.dropped).not.toContain(value);
+  });
+
+  it("given two entries failing the same way, when the request reads them, then the reason is counted once with both", () => {
+    const read = readTeamAssignment(teamFileIn({ reviewers: ["ada lovelace", "grace hopper"] }));
+
+    expect(read.dropped).toContain("reviewers: 2 not a username");
+  });
+});
+
+describe("recording the reviewers and labels", () => {
+  it("given no lists, when the team file is written, then neither key is in it", () => {
+    const recorded = JSON.parse(skeletonFiles("acme-skills", GITLAB, "gitlab.com")[TEAM_PREFIX_FILE]!);
+
+    expect(recorded).not.toHaveProperty("reviewers");
+    expect(recorded).not.toHaveProperty("labels");
+  });
+
+  it("given an empty reviewer list and no labels, when the team file is written, then it says nobody and says nothing of labels", () => {
+    const recorded = JSON.parse(skeletonFiles("acme-skills", GITLAB, "gitlab.com", "", false, undefined, { reviewers: [] })[TEAM_PREFIX_FILE]!);
+
+    expect(recorded.reviewers).toEqual([]);
+    expect(recorded).not.toHaveProperty("labels");
+  });
+
+  it("given a list that cannot be recorded, when it is checked, then the whole list is refused and the entry is not quoted", () => {
+    expect(assignmentRecordProblem({ reviewers: Array.from({ length: 21 }, (_, i) => `dev${i}`) })).toBe(
+      "21 reviewers cannot be recorded: more than 20. Nothing was changed.",
+    );
+    const traced = assignmentRecordProblem({ reviewers: ["ada"], labels: ["/home/alice/x"] });
+    expect(traced).toBe("labels entry 1 cannot be recorded: carrying a trace of a machine (home-path). Nothing was changed.");
+    expect(assignmentRecordProblem({ reviewers: ["ada"], labels: [] })).toBeNull();
+  });
+
+  it("given reviewers at setup, when the scaffold is pushed, then the team file carries them and the scaffold request is assigned", () => {
+    const bare = plainProject();
+    const { forge, creates } = recordingForge();
+
+    const result = initTeamRepo(bare, "acme-skills", home, gitAs, undefined, forge, undefined, "", false, APPROVED, {
+      reviewers: ["@ada"],
+      labels: [],
+    });
+
+    expect(result).toMatchObject({ ok: true, branch: "handbook/scaffold" });
+    const recorded = JSON.parse(execFileSync("git", ["-C", bare, "show", `handbook/scaffold:${TEAM_PREFIX_FILE}`], { encoding: "utf8" }));
+    expect(recorded).toMatchObject({ reviewers: ["@ada"], labels: [] });
+    expect(assignmentFlagsOf(creates[0])).toEqual(["--reviewer=ada"]);
+    expect(readFileSync(join(home, "config.json"), "utf8")).not.toContain("reviewers");
+  });
+
+  it("given a list that cannot be recorded at setup, when init runs, then nothing reaches the repository", () => {
+    const bare = plainProject();
+
+    const result = initTeamRepo(bare, "acme-skills", home, gitAs, undefined, noForge, undefined, "", false, APPROVED, {
+      reviewers: ["ada lovelace"],
+    });
+
+    expect(result).toEqual({ ok: false, error: "reviewers entry 1 cannot be recorded: not a username. Nothing was changed." });
+    expect(execFileSync("git", ["-C", bare, "branch", "--list"], { encoding: "utf8" })).not.toContain("scaffold");
+  });
+
+  it("given an empty reviewer list on a refresh, when it is recorded, then the file says nobody and keeps the team's labels", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] }));
+
+    const result = applyUpgrade(teamFor(bare), [], gitAs, noForge, APPROVED, { branch: "TEAM-12-reviewers", reviewers: [] });
+
+    expect(result).toMatchObject({ ok: true, refreshed: [TEAM_PREFIX_FILE] });
+    const recorded = JSON.parse(execFileSync("git", ["-C", bare, "show", `TEAM-12-reviewers:${TEAM_PREFIX_FILE}`], { encoding: "utf8" }));
+    expect(recorded).toMatchObject({ reviewers: [], labels: ["skills"] });
+  });
+
+  it("given a list that cannot be recorded on a refresh, when it runs, then nothing is pushed", () => {
+    const bare = bareHandbook();
+
+    const result = applyUpgrade(teamFor(bare), [], gitAs, noForge, APPROVED, {
+      branch: "TEAM-12-reviewers",
+      reviewers: ["/home/alice/x"],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).not.toContain("alice");
+    expect(execFileSync("git", ["-C", bare, "branch", "--list"], { encoding: "utf8" })).not.toContain("TEAM-12");
+  });
+
+  it("given a machine that never heard of the lists, when it plans a refresh, then the team file keeps them as written", () => {
+    const bare = bareHandbook(teamFile({ reviewers: [], labels: ["skills"] }));
+    const work = temp("handbook-clone-");
+    execFileSync("git", ["clone", bare, join(work, "repo")], { stdio: "ignore" });
+
+    const recorded = JSON.parse(upgradeCandidates(join(work, "repo"), teamFor(bare)).files[TEAM_PREFIX_FILE]!);
+
+    expect(recorded).toMatchObject({ reviewers: [], labels: ["skills"] });
+  });
+});
+
+describe("a request carries what the team file says when it is opened", () => {
+  const shareOn = (team: TeamConfig, forge: ForgeRunner, branch: string, git: GitRunner = gitAs) =>
+    publishTeamSelection({ skills: [{ name: `skill-${branch.toLowerCase()}`, dir: localSkill(`skill-${branch.toLowerCase()}`) }] }, team, git, forge, {
+      commitMessage: APPROVED,
+      branch,
+    });
+
+  it("given a team that changes its list after a teammate joined, when the teammate shares again, then the request takes the new list without a new join", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["@ada"], labels: ["skills"] }));
+    expect(joinTeamRepo(bare, home, gitAs)).toMatchObject({ ok: true });
+    const team = loadTeamConfig(home)!;
+    const { forge, creates } = recordingForge();
+
+    expect(shareOn(team, forge, "TEAM-12")).toMatchObject({ ok: true });
+    expect(assignmentFlagsOf(creates.at(-1))).toEqual(["--reviewer=ada", "--label=skills"]);
+    execFileSync("git", ["-C", bare, "update-ref", "refs/heads/main", "refs/heads/TEAM-12"]);
+
+    expect(applyUpgrade(team, [], gitAs, forge, APPROVED, { branch: "TEAM-13", reviewers: ["grace"] })).toMatchObject({ ok: true });
+    // the refresh that records the new list is itself opened with it
+    expect(assignmentFlagsOf(creates.at(-1))).toEqual(["--reviewer=grace", "--label=skills"]);
+    execFileSync("git", ["-C", bare, "update-ref", "refs/heads/main", "refs/heads/TEAM-13"]);
+
+    expect(shareOn(loadTeamConfig(home)!, forge, "TEAM-14")).toMatchObject({ ok: true });
+    expect(assignmentFlagsOf(creates.at(-1))).toEqual(["--reviewer=grace", "--label=skills"]);
+    expect(readFileSync(join(home, "config.json"), "utf8")).not.toContain("grace");
+  });
+
+  it("given a reviewer the forge refuses, when a share is opened, then the request is opened once more without it and the result says what to add", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["adaa"] }));
+    const creates: string[][] = [];
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      creates.push(args);
+      if (assignmentFlagsOf(args).length) throw Object.assign(new Error("Command failed"), { stderr: "failed to find user by name : adaa\n" });
+      return "https://gitlab.com/acme/skills/-/merge_requests/3\n";
+    };
+
+    const result = shareOn(teamFor(bare), forge, "TEAM-12");
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/3" });
+    expect(creates).toHaveLength(2);
+    const text = formatShareResult({ team: result, refused: [] });
+    expect(text).toContain(
+      "The request was opened without reviewers @adaa: the forge refused them (failed to find user by name : adaa). " +
+        `Add them on the request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with ` +
+        "/handbook:init --upgrade --reviewers or --labels.",
+    );
+  });
+
+  it("given an entry the request left out, when a review approval goes to the team, then its result says so", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["ada", "ada lovelace"] }));
+    seedCandidate("my-skill");
+    const { forge, creates } = recordingForge();
+
+    const result = approveAndDeliver(home, "my-skill", home, undefined, teamFor(bare), gitAs, forge, "team", undefined, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(assignmentFlagsOf(creates[0])).toEqual(["--reviewer=ada"]);
+    expect(formatApproveResult("my-skill", result)).toContain(
+      `${TEAM_PREFIX_FILE} holds values this request left out (reviewers: 1 not a username).`,
+    );
+  });
+
+  it("given a refresh whose reviewers the forge refused after opening it, when the result is shown, then the request stands and the note is printed", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["adaa"] }));
+    const { forge, creates } = recordingForge();
+    const refusing: ForgeRunner = (tool, args, cwd) => {
+      if (args[0] !== "auth" && assignmentFlagsOf(args).length) {
+        creates.push(args);
+        throw Object.assign(new Error("Command failed"), {
+          stdout: "https://github.com/acme/skills/pull/4\n",
+          stderr: "pull request update failed: could not request reviewer: 'adaa' not found\n",
+        });
+      }
+      return forge(tool, args, cwd);
+    };
+
+    const result = applyUpgrade(teamFor(bare), ["README.md"], gitAs, refusing, APPROVED, { branch: "TEAM-12-refresh" });
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/4" });
+    expect(creates).toHaveLength(1);
+    expect(formatUpgradeResult(result)).toContain("The request was opened without reviewers @adaa");
+  });
+
+  it("given a scaffold request with no CLI to open it, when init is shown, then the reviewers to add are printed", () => {
+    const bare = plainProject();
+
+    const result = initTeamRepo(bare, "acme-skills", home, gitAs, undefined, noForge, undefined, "", false, APPROVED, {
+      reviewers: ["ada"],
+    });
+
+    expect(result).toMatchObject({ ok: true, manualUrl: undefined });
+    expect(formatInitSuccess(result)).toContain("Add reviewers @ada to the request when you open it.");
+  });
+});
+
+describe("the reviewers and labels without the forge CLI", () => {
+  it("given GitLab and no glab, when GitLab opens the request from the push, then the assignment is printed beside the description", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["ada", "grace"], labels: ["skills"] }));
+
+    const result = publishTeamSelection(
+      { skills: [{ name: "my-skill", dir: localSkill("my-skill") }] },
+      teamFor(GITLAB),
+      hostedAt(GITLAB, bare, () => OPENED),
+      noForge,
+      { commitMessage: APPROVED, branch: "TEAM-12" },
+    );
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
+    const text = formatShareResult({ team: result, refused: [] });
+    expect(text).toContain(
+      "GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: " +
+        "add reviewers @ada, @grace; labels skills on it by hand.",
+    );
+    expect(text).toContain("Paste this into it:");
+  });
+
+  it("given GitHub and no gh, when the branch is pushed, then the link comes with the assignment to add", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["ada"] }));
+
+    const result = publishTeamSelection(
+      { skills: [{ name: "my-skill", dir: localSkill("my-skill") }] },
+      teamFor(GITHUB),
+      hostedAt(GITHUB, bare),
+      noForge,
+      { commitMessage: APPROVED, branch: "TEAM-12" },
+    );
+
+    expect(result).toMatchObject({ ok: true, manualUrl: "https://github.com/acme/skills/pull/new/TEAM-12" });
+    expect(result.assignmentNotes).toEqual(["Add reviewers @ada to the request when you open it."]);
   });
 });

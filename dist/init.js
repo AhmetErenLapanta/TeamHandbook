@@ -477,25 +477,50 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   }
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
-function openPr(repoUrl, branch, title, body, repoDir, forge) {
-  const host = hostFromUrl(repoUrl);
-  try {
-    const out = forgeTool(repoUrl) === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+function openedRequestUrl(output) {
+  return output.match(/https?:\/\/\S+?\/(?:-\/merge_requests|pull)\/\d+(?=\s|$)/)?.[0] ?? null;
+}
+function assignmentFlags(assignment) {
+  return [
+    ...assignment.reviewers.length ? [`--reviewer=${assignment.reviewers.join(",")}`] : [],
+    ...assignment.labels.length ? [`--label=${assignment.labels.join(",")}`] : []
+  ];
+}
+function forgeFailure(tool, err) {
+  const e = err;
+  if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  return (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+}
+function requestUrlIn(err) {
+  const e = err;
+  return openedRequestUrl(`${typeof e?.stdout === "string" ? e.stdout : ""}
+${typeof e?.stderr === "string" ? e.stderr : ""}`);
+}
+function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { reviewers: [], labels: [] }) {
+  const tool = forgeTool(repoUrl);
+  const create = (extra) => extractUrl(
+    tool === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body, ...extra], repoDir) : forge(
       "glab",
-      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, ...extra, "--yes"],
       repoDir
-    );
-    return { url: extractUrl(out) };
+    )
+  );
+  const flags = assignmentFlags(assignment);
+  try {
+    return { url: create(flags) };
   } catch (err) {
-    const e = err;
-    const tool = forgeTool(repoUrl);
-    let reason;
-    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
-    else {
-      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      reason = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+    const reason = forgeFailure(tool, err);
+    const code = err?.code;
+    if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
+    const opened = requestUrlIn(err);
+    if (opened) return { url: opened, unassigned: reason };
+    try {
+      return { url: create([]), unassigned: reason };
+    } catch (retryErr) {
+      const existing = requestUrlIn(retryErr);
+      return existing ? { url: existing, unassigned: reason } : { url: null, error: forgeFailure(tool, retryErr) };
     }
-    return { url: null, error: reason };
   }
 }
 function noRequestPossible(reason) {
@@ -581,6 +606,102 @@ function readTeamBranchExample(repoDir) {
   const value = raw.trim();
   const problem = branchExampleProblem(value);
   return problem ? { problem } : { example: value };
+}
+var ASSIGNMENT_MAX_ENTRIES = 20;
+var ASSIGNMENT_ENTRY_MAX = 100;
+var USERNAME = /^@?[A-Za-z0-9._-]+$/;
+var LABEL = /^[\p{L}\p{N}._:/ -]+$/u;
+function assignmentEntryProblem(kind, value) {
+  if (typeof value !== "string" || !value.trim()) return "not a name";
+  const entry = value.trim();
+  if (entry.length > ASSIGNMENT_ENTRY_MAX) return `longer than ${ASSIGNMENT_ENTRY_MAX} characters`;
+  if (/\p{C}/u.test(entry)) return "carrying a control character";
+  const identity = detectIdentity(entry);
+  if (identity) return `carrying a trace of a machine (${identity})`;
+  const secret = detectSecret(entry);
+  if (secret) return `carrying what looks like a ${secret}`;
+  if (kind === "reviewers" && !USERNAME.test(entry)) return "not a username";
+  if (kind === "labels" && !LABEL.test(entry)) return "not a label name";
+  return null;
+}
+function assignmentRecordProblem(recorded) {
+  for (const kind of ["reviewers", "labels"]) {
+    const values = recorded[kind];
+    if (values === void 0) continue;
+    if (values.length > ASSIGNMENT_MAX_ENTRIES) {
+      return `${values.length} ${kind} cannot be recorded: more than ${ASSIGNMENT_MAX_ENTRIES}. Nothing was changed.`;
+    }
+    for (const [at, value] of values.entries()) {
+      const problem = assignmentEntryProblem(kind, value);
+      if (problem) return `${kind} entry ${at + 1} cannot be recorded: ${problem}. Nothing was changed.`;
+    }
+  }
+  return null;
+}
+function readTeamFile(repoDir) {
+  try {
+    const raw = JSON.parse(readFileSync3(join3(repoDir, TEAM_PREFIX_FILE), "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+function readRecordedAssignment(repoDir) {
+  const raw = readTeamFile(repoDir);
+  const recorded = {};
+  for (const kind of ["reviewers", "labels"]) {
+    const value = raw[kind];
+    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) recorded[kind] = value;
+  }
+  return recorded;
+}
+function readTeamAssignment(repoDir) {
+  const raw = readTeamFile(repoDir);
+  const assignment = { reviewers: [], labels: [] };
+  const said = [];
+  for (const kind of ["reviewers", "labels"]) {
+    const value = raw[kind];
+    if (value === void 0) continue;
+    if (!Array.isArray(value)) {
+      said.push(`${kind} is not a list`);
+      continue;
+    }
+    if (value.length > ASSIGNMENT_MAX_ENTRIES) {
+      said.push(`${kind} lists ${value.length} entries, more than ${ASSIGNMENT_MAX_ENTRIES}, so none of them is used`);
+      continue;
+    }
+    const reasons = /* @__PURE__ */ new Map();
+    for (const entry of value) {
+      const problem = assignmentEntryProblem(kind, entry);
+      if (problem) reasons.set(problem, (reasons.get(problem) ?? 0) + 1);
+      else assignment[kind].push(entry.trim().replace(/^@/, ""));
+    }
+    if (reasons.size) said.push(`${kind}: ${[...reasons].map(([reason, count]) => `${count} ${reason}`).join(", ")}`);
+  }
+  return {
+    assignment,
+    dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null
+  };
+}
+function assignmentList(assignment) {
+  const parts = [
+    ...assignment.reviewers.length ? [`reviewers ${assignment.reviewers.map((name) => `@${name}`).join(", ")}`] : [],
+    ...assignment.labels.length ? [`labels ${assignment.labels.join(", ")}`] : []
+  ];
+  return parts.length ? parts.join("; ") : null;
+}
+function assignmentNotes(dropped, assignment, pr) {
+  const list = assignmentList(assignment);
+  return [
+    ...dropped ? [dropped] : [],
+    ...list && pr.url && pr.unassigned ? [
+      `The request was opened without ${list}: the forge refused them (${pr.unassigned}). Add them on the request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`
+    ] : [],
+    ...list && !pr.url ? [`Add ${list} to the request when you open it.`] : []
+  ];
+}
+function assignmentNoteLines(notes) {
+  return notes?.length ? ["", ...notes] : [];
 }
 function remoteHeads(git, repoDir) {
   try {
@@ -758,21 +879,26 @@ function pushBranch(git, repoDir, ref, options = []) {
     return { output: push([]), optionsSent: false };
   }
 }
-function openedRequestUrl(output) {
-  return output.match(/https?:\/\/\S+?\/-\/merge_requests\/\d+(?=\s|$)/)?.[0] ?? null;
-}
 function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
+  const { assignment, dropped } = readTeamAssignment(repoDir);
+  const withNotes = (outcome, notes) => notes.length ? { ...outcome, assignmentNotes: notes } : outcome;
   if (!forgeProblem) {
-    const pr = openPr(repoUrl, branch, title, body, repoDir, forge);
-    return pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} };
+    const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
+    const notes = assignmentNotes(dropped, assignment, pr);
+    return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} }, notes);
   }
-  if (pushed.optionsSent) {
-    const url = openedRequestUrl(pushed.output);
-    if (url) return { prUrl: url, unattachedDescription: body };
-    return { manualUrl, prError: `${forgeProblem}, and GitLab did not report opening a request for the push` };
+  const url = pushed.optionsSent ? openedRequestUrl(pushed.output) : null;
+  if (url) {
+    const list = assignmentList(assignment);
+    const notes = [
+      ...dropped ? [dropped] : [],
+      ...list ? [`GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: add ${list} on it by hand.`] : []
+    ];
+    return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
-  return { manualUrl, prError: forgeProblem };
+  const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
+  return withNotes({ manualUrl, prError }, assignmentNotes(dropped, assignment, { url: null }));
 }
 function pushFailure(repoUrl, branch, subject, err, rerun, commitPrefixFix) {
   const fix = [
@@ -1063,6 +1189,12 @@ If auto-update is off for this marketplace, a merge reaches you only after these
 To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
 menu. When you announce a merge to the team, include these two commands.
 
+### Who reviews a request
+
+The requests TeamHandbook opens here carry the reviewers and labels listed in
+\`.teamhandbook.json\`, and none while it lists none. To change them, run
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`.
+
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
@@ -1193,7 +1325,7 @@ function readTeamCommitPrefix(repoDir) {
   const problem = commitPrefixProblem(value);
   return problem ? { problem } : { prefix: value };
 }
-function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample) {
+function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}) {
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -1232,7 +1364,11 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
         commitPrefix: commitPrefix.trim(),
         // Only when someone recorded one: a key written empty would read as an answer.
         ...branchExample ? { branchExample } : {},
-        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it."
+        // Written as given, an empty list included: [] is the team saying nobody, while a
+        // key left out is a team that has not said.
+        ...assignment.reviewers !== void 0 ? { reviewers: assignment.reviewers } : {},
+        ...assignment.labels !== void 0 ? { labels: assignment.labels } : {},
+        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. reviewers and labels, when present, are added to every request TeamHandbook opens here; an empty list adds none."
       },
       null,
       2
@@ -1399,8 +1535,10 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
   }
   return `pushing the scaffold to ${branch} on ${url} failed: ${detail}`;
 }
-function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString(), forge = runForge, branchPrefix = DEFAULT_BRANCH_PREFIX, commitPrefix = "", withCi = false, commitMessage = {}) {
+function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* @__PURE__ */ new Date()).toISOString(), forge = runForge, branchPrefix = DEFAULT_BRANCH_PREFIX, commitPrefix = "", withCi = false, commitMessage = {}, assignment = {}) {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
+  const assignmentProblem = assignmentRecordProblem(assignment);
+  if (assignmentProblem) return { ok: false, error: assignmentProblem };
   try {
     assertSafeGitUrl(url);
   } catch (err) {
@@ -1480,7 +1618,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   if ("error" in decided) return stopped(decided.error);
   const { skipped } = writeSkeletonPreserving(
     repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi)
+    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment)
   );
   const scaffoldBranch = `${branchPrefix}scaffold`;
   const direct = isEmptyRepo;
@@ -1494,7 +1632,9 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   }
   let prUrl = null;
   let prError;
+  let notes = [];
   if (!direct) {
+    const { assignment: assigned, dropped } = readTeamAssignment(repoDir);
     const opened = openPr(
       url,
       scaffoldBranch,
@@ -1503,10 +1643,12 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
 
 Opened by TeamHandbook.`,
       repoDir,
-      forge
+      forge,
+      assigned
     );
     prUrl = opened.url;
     prError = opened.error;
+    notes = assignmentNotes(dropped, assigned, opened);
   }
   saveTeamConfig(
     {
@@ -1531,6 +1673,7 @@ Opened by TeamHandbook.`,
     commitMessage: decided.subject,
     ...prUrl ? { prUrl } : {},
     ...prError ? { prError } : {},
+    ...notes.length ? { assignmentNotes: notes } : {},
     ...!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
   };
 }
@@ -1560,6 +1703,7 @@ function formatInitSuccess(result) {
     // wording may be the user's own, and it may have gained the team's prefix on the way.
     ...result.commitMessage ? [`  commit:      ${result.commitMessage}`] : [],
     `  config:      team repo saved to ${displayPath(join4(result.home ?? "", "config.json"))}`,
+    ...assignmentNoteLines(result.assignmentNotes),
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The
@@ -1698,12 +1842,21 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
-function upgradeCandidates(repoDir, team, branchExample) {
+function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
   const withCi = existsSync4(join6(repoDir, CI_MARKER));
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
+  const assigned = { ...readRecordedAssignment(repoDir), ...assignment };
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
-  const generated = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), prefix, withCi, example);
+  const generated = skeletonFiles(
+    team.marketplaceName,
+    team.repoUrl,
+    hostFromUrl(team.repoUrl),
+    prefix,
+    withCi,
+    example,
+    assigned
+  );
   const known = commitPrefixIsKnown(team) || recorded !== void 0;
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
@@ -1732,6 +1885,15 @@ function upgradeCandidates(repoDir, team, branchExample) {
   return { files, linked, withheld };
 }
 var REFRESH_COMMIT_TITLE = "chore: refresh the team handbook scaffold";
+function recordsAsked(choice) {
+  return choice.branchExample !== void 0 || choice.reviewers !== void 0 || choice.labels !== void 0;
+}
+function assignmentAsked(choice) {
+  return {
+    ...choice.reviewers !== void 0 ? { reviewers: choice.reviewers } : {},
+    ...choice.labels !== void 0 ? { labels: choice.labels } : {}
+  };
+}
 var REFRESH_SLUG = "refresh-scaffold";
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
@@ -1834,7 +1996,7 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     if (cloneError) return { ok: false, error: cloneError };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
-    const candidates = upgradeCandidates(repoDir, team, choice.branchExample);
+    const candidates = upgradeCandidates(repoDir, team, choice.branchExample, assignmentAsked(choice));
     const files = classify(repoDir, candidates.files);
     const paths = refreshable(files);
     const unreadable = unreadableManifests(repoDir, candidates);
@@ -1891,9 +2053,11 @@ function branchExampleError(example, git, repoDir) {
   return `${named} cannot be recorded as the example branch name: ${problem}. Nothing was changed.`;
 }
 function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage = {}, choice = {}) {
-  if (!paths.length && choice.branchExample === void 0) {
+  if (!paths.length && !recordsAsked(choice)) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
   }
+  const assignmentProblem = assignmentRecordProblem(assignmentAsked(choice));
+  if (assignmentProblem) return { ok: false, error: assignmentProblem };
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -1913,13 +2077,13 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
     if (cloneError) return { ok: false, error: cloneError };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
-    const candidates = upgradeCandidates(repoDir, team, choice.branchExample);
+    const candidates = upgradeCandidates(repoDir, team, choice.branchExample, assignmentAsked(choice));
     const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
-    if (choice.branchExample !== void 0 && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
+    if (recordsAsked(choice) && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
       paths = [...paths, TEAM_PREFIX_FILE];
     }
     if (!paths.length) {
-      return { ok: false, error: `${TEAM_PREFIX_FILE} already records that example, so nothing was changed.` };
+      return { ok: false, error: `${TEAM_PREFIX_FILE} already records that, so nothing was changed.` };
     }
     for (const path of paths) {
       const withheld = [...candidates.linked, ...candidates.withheld].find((file) => file.path === path);
@@ -2109,6 +2273,7 @@ function formatUpgradeResult(result) {
     ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
     "",
     "Nothing reaches anyone until that is merged.",
+    ...assignmentNoteLines(result.assignmentNotes),
     ...unattachedDescriptionLines(result.unattachedDescription)
   ].join("\n");
 }
@@ -2116,7 +2281,7 @@ function formatUpgradeResult(result) {
 // src/cli/init.ts
 function usage() {
   console.error(
-    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message <fingerprint>]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>]"
+    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message <fingerprint>] [--reviewers <a,b>] [--labels <a,b>]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>] [--reviewers <a,b>] [--labels <a,b>]"
   );
   process.exit(2);
 }
@@ -2126,6 +2291,21 @@ function valueOf(args, flag) {
   const value = args[at + 1];
   if (!value || value.startsWith("--")) usage();
   return value;
+}
+function assignmentFrom(args) {
+  const listOf = (flag) => {
+    const at = args.indexOf(flag);
+    if (at === -1) return void 0;
+    const value = args[at + 1];
+    if (value === void 0 || value.startsWith("--")) usage();
+    return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  };
+  const reviewers = listOf("--reviewers");
+  const labels = listOf("--labels");
+  return {
+    ...reviewers !== void 0 ? { reviewers } : {},
+    ...labels !== void 0 ? { labels } : {}
+  };
 }
 function commitMessageFrom(args) {
   const message = valueOf(args, "--message");
@@ -2141,15 +2321,18 @@ function upgrade(args) {
   const branch = valueOf(args, "--branch");
   const hint = valueOf(args, "--branch-hint");
   const branchExample = valueOf(args, "--branch-example");
+  const assignment = assignmentFrom(args);
   const choice = {
     ...branch !== void 0 ? { branch } : {},
     ...branchExample !== void 0 ? { branchExample } : {},
+    ...assignment,
     ...args.includes("--version-after-open") ? { versionAfterOpen: true } : {},
     hints: branchHints(process.cwd(), runGit, hint)
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--upgrade" || args[i] === "--version-after-open") continue;
-    if (["--message", "--delegate-message", "--branch", "--branch-hint", "--branch-example"].includes(args[i])) {
+    const valued = ["--message", "--delegate-message", "--branch", "--branch-hint", "--branch-example", "--reviewers", "--labels"];
+    if (valued.includes(args[i])) {
       i++;
       continue;
     }
@@ -2171,7 +2354,7 @@ function upgrade(args) {
     );
     process.exit(1);
   }
-  if (!files.length && branchExample === void 0) {
+  if (!files.length && branchExample === void 0 && !Object.keys(assignment).length) {
     const plan = planUpgrade(team, void 0, void 0, choice);
     if (!plan.ok) {
       console.error(`error: ${plan.error}`);
@@ -2196,8 +2379,9 @@ function main() {
   let commitPrefix;
   let withCi = false;
   const commitMessage = commitMessageFrom(args);
+  const assignment = assignmentFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--message" || args[i] === "--delegate-message") {
+    if (["--message", "--delegate-message", "--reviewers", "--labels"].includes(args[i])) {
       i++;
     } else if (args[i] === "--name") {
       name = args[++i];
@@ -2227,7 +2411,8 @@ function main() {
     branchPrefix,
     commitPrefix,
     withCi,
-    commitMessage
+    commitMessage,
+    assignment
   );
   if (!result.ok) {
     console.error(`error: ${result.error}`);

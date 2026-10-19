@@ -1435,25 +1435,50 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   }
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
-function openPr(repoUrl, branch, title, body, repoDir, forge) {
-  const host = hostFromUrl(repoUrl);
-  try {
-    const out = forgeTool(repoUrl) === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir) : forge(
+function openedRequestUrl(output) {
+  return output.match(/https?:\/\/\S+?\/(?:-\/merge_requests|pull)\/\d+(?=\s|$)/)?.[0] ?? null;
+}
+function assignmentFlags(assignment) {
+  return [
+    ...assignment.reviewers.length ? [`--reviewer=${assignment.reviewers.join(",")}`] : [],
+    ...assignment.labels.length ? [`--label=${assignment.labels.join(",")}`] : []
+  ];
+}
+function forgeFailure(tool, err) {
+  const e = err;
+  if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  return (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+}
+function requestUrlIn(err) {
+  const e = err;
+  return openedRequestUrl(`${typeof e?.stdout === "string" ? e.stdout : ""}
+${typeof e?.stderr === "string" ? e.stderr : ""}`);
+}
+function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { reviewers: [], labels: [] }) {
+  const tool = forgeTool(repoUrl);
+  const create = (extra) => extractUrl(
+    tool === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body, ...extra], repoDir) : forge(
       "glab",
-      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+      ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, ...extra, "--yes"],
       repoDir
-    );
-    return { url: extractUrl(out) };
+    )
+  );
+  const flags = assignmentFlags(assignment);
+  try {
+    return { url: create(flags) };
   } catch (err) {
-    const e = err;
-    const tool = forgeTool(repoUrl);
-    let reason;
-    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
-    else {
-      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      reason = (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+    const reason = forgeFailure(tool, err);
+    const code = err?.code;
+    if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
+    const opened = requestUrlIn(err);
+    if (opened) return { url: opened, unassigned: reason };
+    try {
+      return { url: create([]), unassigned: reason };
+    } catch (retryErr) {
+      const existing = requestUrlIn(retryErr);
+      return existing ? { url: existing, unassigned: reason } : { url: null, error: forgeFailure(tool, retryErr) };
     }
-    return { url: null, error: reason };
   }
 }
 function noRequestPossible(reason) {
@@ -1541,6 +1566,79 @@ function readTeamBranchExample(repoDir) {
   const value = raw.trim();
   const problem = branchExampleProblem(value);
   return problem ? { problem } : { example: value };
+}
+var ASSIGNMENT_MAX_ENTRIES = 20;
+var ASSIGNMENT_ENTRY_MAX = 100;
+var USERNAME = /^@?[A-Za-z0-9._-]+$/;
+var LABEL = /^[\p{L}\p{N}._:/ -]+$/u;
+function assignmentEntryProblem(kind, value) {
+  if (typeof value !== "string" || !value.trim()) return "not a name";
+  const entry = value.trim();
+  if (entry.length > ASSIGNMENT_ENTRY_MAX) return `longer than ${ASSIGNMENT_ENTRY_MAX} characters`;
+  if (/\p{C}/u.test(entry)) return "carrying a control character";
+  const identity = detectIdentity(entry);
+  if (identity) return `carrying a trace of a machine (${identity})`;
+  const secret = detectSecret(entry);
+  if (secret) return `carrying what looks like a ${secret}`;
+  if (kind === "reviewers" && !USERNAME.test(entry)) return "not a username";
+  if (kind === "labels" && !LABEL.test(entry)) return "not a label name";
+  return null;
+}
+function readTeamFile(repoDir) {
+  try {
+    const raw = JSON.parse(readFileSync4(join7(repoDir, TEAM_PREFIX_FILE), "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+function readTeamAssignment(repoDir) {
+  const raw = readTeamFile(repoDir);
+  const assignment = { reviewers: [], labels: [] };
+  const said = [];
+  for (const kind of ["reviewers", "labels"]) {
+    const value = raw[kind];
+    if (value === void 0) continue;
+    if (!Array.isArray(value)) {
+      said.push(`${kind} is not a list`);
+      continue;
+    }
+    if (value.length > ASSIGNMENT_MAX_ENTRIES) {
+      said.push(`${kind} lists ${value.length} entries, more than ${ASSIGNMENT_MAX_ENTRIES}, so none of them is used`);
+      continue;
+    }
+    const reasons = /* @__PURE__ */ new Map();
+    for (const entry of value) {
+      const problem = assignmentEntryProblem(kind, entry);
+      if (problem) reasons.set(problem, (reasons.get(problem) ?? 0) + 1);
+      else assignment[kind].push(entry.trim().replace(/^@/, ""));
+    }
+    if (reasons.size) said.push(`${kind}: ${[...reasons].map(([reason, count]) => `${count} ${reason}`).join(", ")}`);
+  }
+  return {
+    assignment,
+    dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null
+  };
+}
+function assignmentList(assignment) {
+  const parts = [
+    ...assignment.reviewers.length ? [`reviewers ${assignment.reviewers.map((name) => `@${name}`).join(", ")}`] : [],
+    ...assignment.labels.length ? [`labels ${assignment.labels.join(", ")}`] : []
+  ];
+  return parts.length ? parts.join("; ") : null;
+}
+function assignmentNotes(dropped, assignment, pr) {
+  const list = assignmentList(assignment);
+  return [
+    ...dropped ? [dropped] : [],
+    ...list && pr.url && pr.unassigned ? [
+      `The request was opened without ${list}: the forge refused them (${pr.unassigned}). Add them on the request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`
+    ] : [],
+    ...list && !pr.url ? [`Add ${list} to the request when you open it.`] : []
+  ];
+}
+function assignmentNoteLines(notes) {
+  return notes?.length ? ["", ...notes] : [];
 }
 function remoteHeads(git, repoDir) {
   try {
@@ -1718,21 +1816,26 @@ function pushBranch(git, repoDir, ref, options = []) {
     return { output: push([]), optionsSent: false };
   }
 }
-function openedRequestUrl(output) {
-  return output.match(/https?:\/\/\S+?\/-\/merge_requests\/\d+(?=\s|$)/)?.[0] ?? null;
-}
 function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
+  const { assignment, dropped } = readTeamAssignment(repoDir);
+  const withNotes = (outcome, notes) => notes.length ? { ...outcome, assignmentNotes: notes } : outcome;
   if (!forgeProblem) {
-    const pr = openPr(repoUrl, branch, title, body, repoDir, forge);
-    return pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} };
+    const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
+    const notes = assignmentNotes(dropped, assignment, pr);
+    return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} }, notes);
   }
-  if (pushed.optionsSent) {
-    const url = openedRequestUrl(pushed.output);
-    if (url) return { prUrl: url, unattachedDescription: body };
-    return { manualUrl, prError: `${forgeProblem}, and GitLab did not report opening a request for the push` };
+  const url = pushed.optionsSent ? openedRequestUrl(pushed.output) : null;
+  if (url) {
+    const list = assignmentList(assignment);
+    const notes = [
+      ...dropped ? [dropped] : [],
+      ...list ? [`GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: add ${list} on it by hand.`] : []
+    ];
+    return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
-  return { manualUrl, prError: forgeProblem };
+  const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
+  return withNotes({ manualUrl, prError }, assignmentNotes(dropped, assignment, { url: null }));
 }
 function pushFailure(repoUrl, branch, subject, err, rerun, commitPrefixFix) {
   const fix = [
@@ -2547,7 +2650,8 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
     ...published.version ? { version: published.version } : {},
     manualUrl: published.manualUrl,
     ...published.prError ? { prError: published.prError } : {},
-    ...published.unattachedDescription ? { unattachedDescription: published.unattachedDescription } : {}
+    ...published.unattachedDescription ? { unattachedDescription: published.unattachedDescription } : {},
+    ...published.assignmentNotes ? { assignmentNotes: published.assignmentNotes } : {}
   };
 }
 function deliverSolo(dir, meta, fallbackCwd, decidedAt, options, commit) {
@@ -2680,6 +2784,7 @@ function formatApproveResult(slug, result) {
       lines.push("The merge replaces their copy, so review the removed lines too, not only the added ones.");
     }
     if (result.commitMessage) lines.push(`The commit says: ${result.commitMessage}`);
+    lines.push(...assignmentNoteLines(result.assignmentNotes));
     lines.push(...unattachedDescriptionLines(result.unattachedDescription));
     return lines.join("\n");
   }

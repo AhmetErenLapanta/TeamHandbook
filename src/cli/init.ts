@@ -1,15 +1,17 @@
 import { configIsBroken } from "../lib/config.js";
 import { formatInitSuccess, initTeamRepo, loadTeamConfig, runGit } from "../lib/init.js";
 import { branchHints } from "../lib/branch.js";
+import type { RecordedAssignment } from "../lib/branch.js";
 import type { CommitMessageChoice } from "../lib/init.js";
 import { applyUpgrade, formatUpgradePlan, formatUpgradeResult, planUpgrade } from "../lib/upgrade.js";
 
 function usage(): never {
   console.error(
     "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] " +
-      "[--with-ci] [--message <commit message>] [--delegate-message <fingerprint>]\n" +
+      "[--with-ci] [--message <commit message>] [--delegate-message <fingerprint>] [--reviewers <a,b>] [--labels <a,b>]\n" +
       "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] " +
-      "[--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>]",
+      "[--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>] " +
+      "[--reviewers <a,b>] [--labels <a,b>]",
   );
   process.exit(2);
 }
@@ -27,6 +29,27 @@ function valueOf(args: string[], flag: string): string | undefined {
   const value = args[at + 1];
   if (!value || value.startsWith("--")) usage();
   return value;
+}
+
+/**
+ * The reviewers and labels to record, read off the command line, each only when its flag
+ * was given. An empty value is an answer of its own - `--reviewers ""` records that the team
+ * wants nobody - so it is kept apart from a flag left out, which records nothing.
+ */
+function assignmentFrom(args: string[]): RecordedAssignment {
+  const listOf = (flag: string): string[] | undefined => {
+    const at = args.indexOf(flag);
+    if (at === -1) return undefined;
+    const value = args[at + 1];
+    if (value === undefined || value.startsWith("--")) usage();
+    return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  };
+  const reviewers = listOf("--reviewers");
+  const labels = listOf("--labels");
+  return {
+    ...(reviewers !== undefined ? { reviewers } : {}),
+    ...(labels !== undefined ? { labels } : {}),
+  };
 }
 
 function commitMessageFrom(args: string[]): CommitMessageChoice {
@@ -56,9 +79,11 @@ function upgrade(args: string[]): void {
   const branch = valueOf(args, "--branch");
   const hint = valueOf(args, "--branch-hint");
   const branchExample = valueOf(args, "--branch-example");
+  const assignment = assignmentFrom(args);
   const choice = {
     ...(branch !== undefined ? { branch } : {}),
     ...(branchExample !== undefined ? { branchExample } : {}),
+    ...assignment,
     ...(args.includes("--version-after-open") ? { versionAfterOpen: true } : {}),
     hints: branchHints(process.cwd(), runGit, hint),
   };
@@ -66,7 +91,8 @@ function upgrade(args: string[]): void {
     if (args[i] === "--upgrade" || args[i] === "--version-after-open") continue;
     // Each takes a value, which is read above: stepping over it here is what keeps the
     // fingerprint or a branch name from being read as a --file path.
-    if (["--message", "--delegate-message", "--branch", "--branch-hint", "--branch-example"].includes(args[i]!)) {
+    const valued = ["--message", "--delegate-message", "--branch", "--branch-hint", "--branch-example", "--reviewers", "--labels"];
+    if (valued.includes(args[i]!)) {
       i++;
       continue;
     }
@@ -90,7 +116,7 @@ function upgrade(args: string[]): void {
     );
     process.exit(1);
   }
-  if (!files.length && branchExample === undefined) {
+  if (!files.length && branchExample === undefined && !Object.keys(assignment).length) {
     const plan = planUpgrade(team, undefined, undefined, choice);
     if (!plan.ok) {
       console.error(`error: ${plan.error}`);
@@ -116,8 +142,9 @@ function main(): void {
   let commitPrefix: string | undefined;
   let withCi = false;
   const commitMessage = commitMessageFrom(args);
+  const assignment = assignmentFrom(args);
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--message" || args[i] === "--delegate-message") {
+    if (["--message", "--delegate-message", "--reviewers", "--labels"].includes(args[i]!)) {
       // read already, and its value stepped over so it is not mistaken for the URL
       i++;
     } else if (args[i] === "--name") {
@@ -149,6 +176,7 @@ function main(): void {
     commitPrefix,
     withCi,
     commitMessage,
+    assignment,
   );
   if (!result.ok) {
     console.error(`error: ${result.error}`);

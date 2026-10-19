@@ -89,6 +89,11 @@ re-init. That loses the repository. Refresh it in place instead:
    goes on the same run as `--branch-example "<example>"`, which records it in
    `.teamhandbook.json` for everyone; every later proposal on every teammate's machine
    takes its shape. It is an example, not a rule: do not write a pattern for them.
+   **If the user wants the team's requests to arrive assigned**, the reviewers and labels
+   they name go on a run as `--reviewers <a,b>` and `--labels <a,b>` (`--reviewers ""`
+   records that there are none). They are written into `.teamhandbook.json` in that
+   request, and every request TeamHandbook opens to the repository afterwards carries them.
+   The names are the user's: never take them from the git history or the member list.
 4. **Read the plan's version line back to the user rather than promising a refresh.** The
    merge request normally raises the plugin version, which is what makes teammates' copies
    pick it up - but a repository whose version is not a three-part `MAJOR.MINOR.PATCH`

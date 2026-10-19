@@ -6,7 +6,8 @@ import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
 import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
-import { pushBranch } from "./branch.js";
+import { assignmentNoteLines, assignmentNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
+import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
@@ -404,6 +405,12 @@ If auto-update is off for this marketplace, a merge reaches you only after these
 To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
 menu. When you announce a merge to the team, include these two commands.
 
+### Who reviews a request
+
+The requests TeamHandbook opens here carry the reviewers and labels listed in
+\`.teamhandbook.json\`, and none while it lists none. To change them, run
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`.
+
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
@@ -586,6 +593,7 @@ export function skeletonFiles(
   commitPrefix = "",
   withCi = false,
   branchExample?: string,
+  assignment: RecordedAssignment = {},
 ): Record<string, string> {
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
@@ -629,10 +637,15 @@ export function skeletonFiles(
           commitPrefix: commitPrefix.trim(),
           // Only when someone recorded one: a key written empty would read as an answer.
           ...(branchExample ? { branchExample } : {}),
+          // Written as given, an empty list included: [] is the team saying nobody, while a
+          // key left out is a team that has not said.
+          ...(assignment.reviewers !== undefined ? { reviewers: assignment.reviewers } : {}),
+          ...(assignment.labels !== undefined ? { labels: assignment.labels } : {}),
           comment:
             "Written by TeamHandbook. commitPrefix is what this project's forge requires at the " +
             "front of a commit message; /handbook:join reads it, so a teammate's first share " +
-            "satisfies that rule instead of being refused by it.",
+            "satisfies that rule instead of being refused by it. reviewers and labels, when " +
+            "present, are added to every request TeamHandbook opens here; an empty list adds none.",
         },
         null,
         2,
@@ -1028,6 +1041,8 @@ export interface InitResult {
   prUrl?: string;
   manualUrl?: string;
   prError?: string;
+  // what the request could not carry of the team's reviewers and labels, and why
+  assignmentNotes?: string[];
   // files the repository already had, left untouched
   skipped?: string[];
   withCi?: boolean;
@@ -1051,8 +1066,11 @@ export function initTeamRepo(
   commitPrefix = "",
   withCi = false,
   commitMessage: CommitMessageChoice = {},
+  assignment: RecordedAssignment = {},
 ): InitResult {
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
+  const assignmentProblem = assignmentRecordProblem(assignment);
+  if (assignmentProblem) return { ok: false, error: assignmentProblem };
   try {
     assertSafeGitUrl(url);
   } catch (err) {
@@ -1156,7 +1174,7 @@ export function initTeamRepo(
   if ("error" in decided) return stopped(decided.error);
   const { skipped } = writeSkeletonPreserving(
     repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi),
+    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment),
   );
   // An empty repository has no default branch to open a merge request against, so the
   // first commit has to go straight to it. Everywhere else the scaffold arrives the way
@@ -1180,7 +1198,11 @@ export function initTeamRepo(
   }
   let prUrl: string | null = null;
   let prError: string | undefined;
+  let notes: string[] = [];
   if (!direct) {
+    // Read back from the clone rather than taken from the flags, so a team file the
+    // repository already had, and kept, is what the request is assigned by.
+    const { assignment: assigned, dropped } = readTeamAssignment(repoDir);
     const opened = openPr(
       url,
       scaffoldBranch,
@@ -1188,9 +1210,11 @@ export function initTeamRepo(
       `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.\n\nOpened by TeamHandbook.`,
       repoDir,
       forge,
+      assigned,
     );
     prUrl = opened.url;
     prError = opened.error;
+    notes = assignmentNotes(dropped, assigned, opened);
   }
   saveTeamConfig(
     {
@@ -1215,6 +1239,7 @@ export function initTeamRepo(
     commitMessage: decided.subject,
     ...(prUrl ? { prUrl } : {}),
     ...(prError ? { prError } : {}),
+    ...(notes.length ? { assignmentNotes: notes } : {}),
     ...(!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
   };
 }
@@ -1254,6 +1279,7 @@ export function formatInitSuccess(result: InitResult): string {
     // wording may be the user's own, and it may have gained the team's prefix on the way.
     ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     `  config:      team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
+    ...assignmentNoteLines(result.assignmentNotes),
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The

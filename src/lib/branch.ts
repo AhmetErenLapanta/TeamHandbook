@@ -1,8 +1,17 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { uniqueSlug } from "./distill.js";
-import { forgeNotice, forgeSignInProblem, forgeTool, hostFromUrl, manualPrUrl, noRequestPossible, openPr } from "./forge.js";
-import type { ForgeRunner } from "./forge.js";
+import {
+  forgeNotice,
+  forgeSignInProblem,
+  forgeTool,
+  hostFromUrl,
+  manualPrUrl,
+  noRequestPossible,
+  openedRequestUrl,
+  openPr,
+} from "./forge.js";
+import type { ForgeRunner, RequestAssignment } from "./forge.js";
 import {
   commitMessageProblem,
   decideCommitSubject,
@@ -187,6 +196,158 @@ export function readTeamBranchExample(repoDir: string): { example?: string; prob
   const value = raw.trim();
   const problem = branchExampleProblem(value);
   return problem ? { problem } : { example: value };
+}
+
+/** The two lists a team records for its requests, under the keys the team file uses. */
+export type AssignmentKind = "reviewers" | "labels";
+
+/** What a team file says about assignment: a key left out says nothing, an empty list says
+ * nobody, the same distinction the commit prefix keeps between absent and "". */
+export type RecordedAssignment = Partial<Record<AssignmentKind, string[]>>;
+
+// Read out of a repository somebody else controls and placed on a forge command line, so
+// held to the same family of checks as the example branch next to it. Twenty is far past
+// any review rota and well short of a pasted member list, which is an accident rather
+// than a choice; a hundred characters is longer than any name either forge allows.
+const ASSIGNMENT_MAX_ENTRIES = 20;
+const ASSIGNMENT_ENTRY_MAX = 100;
+// A username on either forge is letters, digits, dots, dashes and underscores; the `@` a
+// person types in front of one is accepted and dropped. A label is wider - GitLab's scoped
+// `type::bug` and labels with spaces or outside ASCII are ordinary - but never
+// a comma, which would split it into two on the comma-joined flag it travels in.
+const USERNAME = /^@?[A-Za-z0-9._-]+$/;
+const LABEL = /^[\p{L}\p{N}._:/ -]+$/u;
+
+/** Why one entry cannot be a reviewer or a label, or null. Said by class, never by
+ * quoting the entry, for the reason branchTrace gives. */
+function assignmentEntryProblem(kind: AssignmentKind, value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return "not a name";
+  const entry = value.trim();
+  if (entry.length > ASSIGNMENT_ENTRY_MAX) return `longer than ${ASSIGNMENT_ENTRY_MAX} characters`;
+  if (/\p{C}/u.test(entry)) return "carrying a control character";
+  const identity = detectIdentity(entry);
+  if (identity) return `carrying a trace of a machine (${identity})`;
+  const secret = detectSecret(entry);
+  if (secret) return `carrying what looks like a ${secret}`;
+  if (kind === "reviewers" && !USERNAME.test(entry)) return "not a username";
+  if (kind === "labels" && !LABEL.test(entry)) return "not a label name";
+  return null;
+}
+
+/** Why a list given on the command line cannot be recorded, or null. Refused whole rather
+ * than recorded in part: what goes into the team file is what the person typed. */
+export function assignmentRecordProblem(recorded: RecordedAssignment): string | null {
+  for (const kind of ["reviewers", "labels"] as const) {
+    const values = recorded[kind];
+    if (values === undefined) continue;
+    if (values.length > ASSIGNMENT_MAX_ENTRIES) {
+      return `${values.length} ${kind} cannot be recorded: more than ${ASSIGNMENT_MAX_ENTRIES}. Nothing was changed.`;
+    }
+    for (const [at, value] of values.entries()) {
+      const problem = assignmentEntryProblem(kind, value);
+      if (problem) return `${kind} entry ${at + 1} cannot be recorded: ${problem}. Nothing was changed.`;
+    }
+  }
+  return null;
+}
+
+function readTeamFile(repoDir: string): Record<string, unknown> {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(repoDir, TEAM_PREFIX_FILE), "utf8"));
+    return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  } catch {
+    return {}; // no file, or not JSON: a repository that records nothing
+  }
+}
+
+/** The lists a cloned team repository records, as written there, for a refresh to carry
+ * across. Anything that is not a list of strings is not a record this can keep. */
+export function readRecordedAssignment(repoDir: string): RecordedAssignment {
+  const raw = readTeamFile(repoDir);
+  const recorded: RecordedAssignment = {};
+  for (const kind of ["reviewers", "labels"] as const) {
+    const value = raw[kind];
+    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) recorded[kind] = value;
+  }
+  return recorded;
+}
+
+/**
+ * The reviewers and labels a request to this team repository carries, and what in the
+ * team file could not be used.
+ *
+ * Read from the clone the request is opened from rather than copied into this machine's
+ * config at join, because the request is the only moment they are needed: a team that
+ * changes its list reaches every teammate's next request without anyone joining again.
+ * A value that fails a check is left out and the request still goes, and every one left
+ * out is counted by its reason in `dropped`, so nothing is lost without the user being told.
+ */
+export function readTeamAssignment(repoDir: string): { assignment: RequestAssignment; dropped: string | null } {
+  const raw = readTeamFile(repoDir);
+  const assignment: RequestAssignment = { reviewers: [], labels: [] };
+  const said: string[] = [];
+  for (const kind of ["reviewers", "labels"] as const) {
+    const value = raw[kind];
+    if (value === undefined) continue;
+    if (!Array.isArray(value)) {
+      said.push(`${kind} is not a list`);
+      continue;
+    }
+    if (value.length > ASSIGNMENT_MAX_ENTRIES) {
+      said.push(`${kind} lists ${value.length} entries, more than ${ASSIGNMENT_MAX_ENTRIES}, so none of them is used`);
+      continue;
+    }
+    const reasons = new Map<string, number>();
+    for (const entry of value) {
+      const problem = assignmentEntryProblem(kind, entry);
+      if (problem) reasons.set(problem, (reasons.get(problem) ?? 0) + 1);
+      else assignment[kind].push((entry as string).trim().replace(/^@/, ""));
+    }
+    if (reasons.size) said.push(`${kind}: ${[...reasons].map(([reason, count]) => `${count} ${reason}`).join(", ")}`);
+  }
+  return {
+    assignment,
+    dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null,
+  };
+}
+
+/** The assignment as a person adds it by hand, or null when there is none. */
+function assignmentList(assignment: RequestAssignment): string | null {
+  const parts = [
+    ...(assignment.reviewers.length ? [`reviewers ${assignment.reviewers.map((name) => `@${name}`).join(", ")}`] : []),
+    ...(assignment.labels.length ? [`labels ${assignment.labels.join(", ")}`] : []),
+  ];
+  return parts.length ? parts.join("; ") : null;
+}
+
+/**
+ * What a result says about the assignment of its request: what the team file held that
+ * could not be used, and what the request still lacks - all of it when no request was
+ * opened from here, and what the forge refused when one was opened without it.
+ */
+export function assignmentNotes(
+  dropped: string | null,
+  assignment: RequestAssignment,
+  pr: { url: string | null; unassigned?: string },
+): string[] {
+  const list = assignmentList(assignment);
+  return [
+    ...(dropped ? [dropped] : []),
+    ...(list && pr.url && pr.unassigned
+      ? [
+          `The request was opened without ${list}: the forge refused them (${pr.unassigned}). Add them on the ` +
+            `request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with ` +
+            "/handbook:init --upgrade --reviewers or --labels.",
+        ]
+      : []),
+    ...(list && !pr.url ? [`Add ${list} to the request when you open it.`] : []),
+  ];
+}
+
+/** The lines a result prints about its reviewers and labels: what the team file held that
+ * could not be used, and what the request is still missing. */
+export function assignmentNoteLines(notes: string[] | undefined): string[] {
+  return notes?.length ? ["", ...notes] : [];
 }
 
 /** The repository's branches, by name, with the commit each one points at. */
@@ -553,16 +714,7 @@ export function pushBranch(git: GitRunner, repoDir: string, ref: string, options
   }
 }
 
-/**
- * The merge request GitLab reports having opened for a push, or null.
- *
- * Only a request with a number counts. GitLab prints a "create a merge request" link on
- * every push of a new branch, with or without push options, and reading that as an opened
- * request would tell the user something exists that does not.
- */
-export function openedRequestUrl(output: string): string | null {
-  return output.match(/https?:\/\/\S+?\/-\/merge_requests\/\d+(?=\s|$)/)?.[0] ?? null;
-}
+export { openedRequestUrl } from "./forge.js";
 
 export interface RequestOutcome {
   prUrl?: string;
@@ -571,6 +723,8 @@ export interface RequestOutcome {
   /** The description the request should carry and could not, when GitLab opened it from a
    * push: the reviewer still needs it, so the caller prints it to be pasted in. */
   unattachedDescription?: string;
+  /** What the request could not carry of the team's reviewers and labels, and why. */
+  assignmentNotes?: string[];
 }
 
 /** Open the merge request for a branch that has just been pushed, by whichever route this
@@ -586,16 +740,29 @@ export function openRequest(
   pushed: Pushed,
 ): RequestOutcome {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? undefined;
+  const { assignment, dropped } = readTeamAssignment(repoDir);
+  const withNotes = (outcome: RequestOutcome, notes: string[]): RequestOutcome =>
+    notes.length ? { ...outcome, assignmentNotes: notes } : outcome;
   if (!forgeProblem) {
-    const pr = openPr(repoUrl, branch, title, body, repoDir, forge);
-    return pr.url ? { prUrl: pr.url } : { manualUrl, ...(pr.error ? { prError: pr.error } : {}) };
+    const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
+    const notes = assignmentNotes(dropped, assignment, pr);
+    return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...(pr.error ? { prError: pr.error } : {}) }, notes);
   }
-  if (pushed.optionsSent) {
-    const url = openedRequestUrl(pushed.output);
-    if (url) return { prUrl: url, unattachedDescription: body };
-    return { manualUrl, prError: `${forgeProblem}, and GitLab did not report opening a request for the push` };
+  const url = pushed.optionsSent ? openedRequestUrl(pushed.output) : null;
+  if (url) {
+    const list = assignmentList(assignment);
+    // The same honest fall as the description beside it: a push carries neither, so what
+    // the request should have been assigned is printed for a person to add.
+    const notes = [
+      ...(dropped ? [dropped] : []),
+      ...(list
+        ? [`GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: add ${list} on it by hand.`]
+        : []),
+    ];
+    return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
-  return { manualUrl, prError: forgeProblem };
+  const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
+  return withNotes({ manualUrl, prError }, assignmentNotes(dropped, assignment, { url: null }));
 }
 
 /**

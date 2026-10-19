@@ -101,6 +101,57 @@ export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: Forg
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
 
+/** Who a request is assigned to and how it is labelled, as the team repository records it. */
+export interface RequestAssignment {
+  reviewers: string[];
+  labels: string[];
+}
+
+/**
+ * The request a forge reports having opened, or null.
+ *
+ * Only a request with a number counts. GitLab prints a "create a merge request" link on
+ * every push of a new branch, and GitHub a `pull/new/<branch>` one, with or without a
+ * request behind them; reading either as an opened request would tell the user something
+ * exists that does not.
+ */
+export function openedRequestUrl(output: string): string | null {
+  return output.match(/https?:\/\/\S+?\/(?:-\/merge_requests|pull)\/\d+(?=\s|$)/)?.[0] ?? null;
+}
+
+// The equals form, so a value can never be read as a flag of its own, and one comma-joined
+// value per flag, the form both CLIs document. An empty list adds no flag at all.
+function assignmentFlags(assignment: RequestAssignment): string[] {
+  return [
+    ...(assignment.reviewers.length ? [`--reviewer=${assignment.reviewers.join(",")}`] : []),
+    ...(assignment.labels.length ? [`--label=${assignment.labels.join(",")}`] : []),
+  ];
+}
+
+function forgeFailure(tool: "gh" | "glab", err: unknown): string {
+  const e = err as { code?: string; stderr?: string; message?: string };
+  if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
+  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+  return (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
+}
+
+function requestUrlIn(err: unknown): string | null {
+  const e = err as { stdout?: unknown; stderr?: unknown };
+  return openedRequestUrl(`${typeof e?.stdout === "string" ? e.stdout : ""}\n${typeof e?.stderr === "string" ? e.stderr : ""}`);
+}
+
+/**
+ * Open the request, carrying the team's reviewers and labels when it records any.
+ *
+ * One wrong name in the team file must not stop every share, so a request the forge
+ * refuses with its assignment is asked for once more without it, and `unassigned` says
+ * why the assignment did not go. The second ask is the dangerous one: gh creates the pull
+ * request first and requests reviewers after, printing the URL and failing when a login
+ * is unknown, so a blind retry would open a second request. The failed call's own output
+ * is read for an opened request before anything is retried, and a retry the forge answers
+ * with the request that already exists is that request too. A timeout is never retried:
+ * whether the request exists is exactly what it leaves unknown.
+ */
 export function openPr(
   repoUrl: string,
   branch: string,
@@ -108,31 +159,37 @@ export function openPr(
   body: string,
   repoDir: string,
   forge: ForgeRunner,
-): { url: string | null; error?: string } {
-  const host = hostFromUrl(repoUrl);
-  try {
-    const out =
-      forgeTool(repoUrl) === "gh"
-        ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body], repoDir)
+  assignment: RequestAssignment = { reviewers: [], labels: [] },
+): { url: string | null; error?: string; unassigned?: string } {
+  const tool = forgeTool(repoUrl);
+  const create = (extra: string[]) =>
+    extractUrl(
+      tool === "gh"
+        ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body, ...extra], repoDir)
         : forge(
             "glab",
-            ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, "--yes"],
+            ["mr", "create", "--source-branch", branch, "--title", title, "--description", body, ...extra, "--yes"],
             repoDir,
-          );
-    return { url: extractUrl(out) };
+          ),
+    );
+  const flags = assignmentFlags(assignment);
+  try {
+    return { url: create(flags) };
   } catch (err) {
     // The branch is already pushed, so this is a soft failure (fall back to a manual
     // link) - but surface WHY, so the user isn't left guessing that gh/glab just
     // needs installing or `gh auth login`.
-    const e = err as { code?: string; stderr?: string; message?: string };
-    const tool = forgeTool(repoUrl);
-    let reason: string;
-    if (e?.code === "ENOENT") reason = `the ${tool} CLI is not installed`;
-    else {
-      const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      reason = (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
+    const reason = forgeFailure(tool, err);
+    const code = (err as { code?: string })?.code;
+    if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
+    const opened = requestUrlIn(err);
+    if (opened) return { url: opened, unassigned: reason };
+    try {
+      return { url: create([]), unassigned: reason };
+    } catch (retryErr) {
+      const existing = requestUrlIn(retryErr);
+      return existing ? { url: existing, unassigned: reason } : { url: null, error: forgeFailure(tool, retryErr) };
     }
-    return { url: null, error: reason };
   }
 }
 
