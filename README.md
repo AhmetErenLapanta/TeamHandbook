@@ -314,6 +314,19 @@ hooks must be present.
 
 Contributing with a coding agent? Start at [AI_CONTRIBUTING.md](AI_CONTRIBUTING.md).
 
+## Contributors
+
+Part of what ships here was written by people who arrived through
+[AI_CONTRIBUTING.md](AI_CONTRIBUTING.md) and did the work with a coding agent.
+
+- [@ozers](https://github.com/ozers) - the move to Node 22, in 0.14.0
+- [@maksutspahi](https://github.com/maksutspahi) - the secret and boundary fixes, and the
+  harvest, salvage and parallel-hook fixes, in 0.24.0
+
+Each release names who contributed what in [CHANGELOG.md](CHANGELOG.md), and GitHub keeps
+the running list on the
+[contributors page](https://github.com/AhmetErenLapanta/TeamHandbook/graphs/contributors).
+
 ## License
 
 [Apache-2.0](LICENSE).
