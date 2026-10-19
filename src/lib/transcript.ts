@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { detectSecret } from "./secrets.js";
+import { detectSecret, locateSecret } from "./secrets.js";
 import { LINE_TERMINATOR_CLASS } from "./prompt-safety.js";
 
 // Claude Code writes one JSON object per transcript line. Schema verified
@@ -109,10 +109,6 @@ export function readTranscriptTexts(path: string): TranscriptEntry[] {
   return entries;
 }
 
-function cap(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
-}
-
 /** The bounds of the line a given offset falls inside, as that line stands in the whole turn. */
 function lineAt(text: string, offset: number): { start: number; end: number } {
   const start = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
@@ -152,11 +148,19 @@ function capUserTurn(text: string): string {
   return tail ? `${head}…${tail}` : `${head}…`;
 }
 
-function headWindow(text: string): string {
-  const line = lineAt(text, USER_HEAD);
+/**
+ * An assistant turn cut by the developer head's rules: a plain cut could keep half a token,
+ * too short for any rule to recognize.
+ */
+function capAssistantTurn(text: string): string {
+  return text.length <= PER_ASSISTANT_CAP ? text : `${headWindow(text, PER_ASSISTANT_CAP)}…`;
+}
+
+function headWindow(text: string, at: number = USER_HEAD): string {
+  const line = lineAt(text, at);
   const splitsASecretLine =
-    line.start < USER_HEAD && USER_HEAD < line.end && !!detectSecret(text.slice(line.start, line.end));
-  const to = splitsASecretLine ? line.start : USER_HEAD;
+    line.start < at && at < line.end && !!detectSecret(text.slice(line.start, line.end));
+  const to = splitsASecretLine ? line.start : at;
   const cut = text.slice(0, to);
   // Back off the partial word only when the cut actually lands inside one. A cut that already
   // sits on whitespace ends on a complete word, and stripping it anyway would throw away the
@@ -367,7 +371,7 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!;
     if (entry.role !== "assistant") continue;
-    const text = cap(entry.text, PER_ASSISTANT_CAP);
+    const text = capAssistantTurn(entry.text);
     if (text.length > remaining) continue;
     pick.set(i, text);
     remaining -= text.length;
@@ -386,24 +390,53 @@ export function sliceTranscript(entries: TranscriptEntry[], budget = 40_000): st
 }
 
 
+// A one-field-per-line `.netrc` entry takes three lines, and so does an access key id with its secret.
+const SECRET_WINDOW_LINES = 4;
+
 /**
  * The second belt: an inline secret (a token, an `API_KEY=…`) sitting inside prose
  * that is otherwise worth harvesting. Key material never reaches here - a message
  * carrying it was dropped whole by looksKeyBearing - so this stays a plain
  * line-by-line pass with no block state to get wrong.
+ *
+ * A second pass redacts any run of up to SECRET_WINDOW_LINES lines that holds a secret none of
+ * its lines holds alone, which is how a multi-line `.netrc` and an access key pair look.
  */
 export function redactSlice(slice: string): { clean: string; redacted: number } {
-  let redacted = 0;
-  const clean = slice
-    .split("\n")
-    .map((line) => {
-      const hit = detectSecret(line);
-      if (!hit) return line;
-      redacted += 1;
-      return `[redacted:${hit}]`;
-    })
-    .join("\n");
-  return { clean, redacted };
+  const lines = slice.split("\n");
+  const own = lines.map((line) => detectSecret(line));
+  const hits = [...own];
+  // smallest runs first, so a wider run never takes an innocent neighbour with it
+  for (let size = 2; size <= SECRET_WINDOW_LINES; size++) {
+    for (let from = 0; from + size <= lines.length; from++) {
+      const hit = secretAcrossLines(lines, own, hits, from, from + size);
+      if (!hit) continue;
+      for (let i = from; i < from + size; i++) hits[i] = hit;
+    }
+  }
+  const clean = lines.map((line, i) => (hits[i] ? `[redacted:${hits[i]}]` : line)).join("\n");
+  return { clean, redacted: hits.filter(Boolean).length };
+}
+
+/**
+ * The secret a run of lines holds beyond its lines one at a time, or null. Read raw too, since
+ * masking the flagged key id would hide the rule that pairs it with the secret below it.
+ */
+function secretAcrossLines(
+  lines: string[],
+  own: (string | null)[],
+  hits: (string | null)[],
+  from: number,
+  to: number,
+): string | null {
+  const masked = lines.slice(from, to).map((line, i) => (hits[from + i] ? "" : line));
+  const hidden = detectSecret(masked.join("\n"));
+  if (hidden) return hidden;
+  const raw = lines.slice(from, to).join("\n");
+  const found = locateSecret(raw);
+  if (!found) return null;
+  const startLine = from + (raw.slice(0, found.index).match(/\n/g)?.length ?? 0);
+  return own[startLine] === found.pattern || hits[startLine] === found.pattern ? null : found.pattern;
 }
 
 /** Read → slice → redact, ready to be fenced into the harvest prompt. */

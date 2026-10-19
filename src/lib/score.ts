@@ -515,6 +515,8 @@ export function childEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proces
 
 export interface ChildInvocation {
   args: string[];
+  /** the prompt, written to the child's stdin rather than carried in `args` */
+  input: string;
   env: NodeJS.ProcessEnv;
   cwd: string;
   /** removes the working directory; call it once the process has exited */
@@ -532,13 +534,16 @@ export interface ChildInvocation {
  *
  * `helpText` is a parameter rather than something read inside: the doctor already has it,
  * and reading it twice would let the two paths disagree about the same CLI.
+ *
+ * The prompt goes to stdin: in argv any local user could read it with `ps`, and Linux caps
+ * one argument at 128 KiB, so a long slice failed with E2BIG.
  */
 export function childInvocation(input: {
   prompt: string;
   model: string;
   helpText: string;
 }): ChildInvocation {
-  const args = ["-p", input.prompt];
+  const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
   // An EMPTY working directory, not the project. The child needs nothing from it: the
@@ -548,6 +553,7 @@ export function childInvocation(input: {
   const cwd = mkdtempSync(join(tmpdir(), "teamhandbook-child-"));
   return {
     args,
+    input: input.prompt,
     env: childEnv(),
     cwd,
     done: () => rmSync(cwd, { recursive: true, force: true }),
@@ -555,12 +561,8 @@ export function childInvocation(input: {
 }
 
 /**
- * The prompt travels as an argv argument, so the CLI has nothing to read from stdin -
- * but execFile hands the child an open pipe there and never closes it, and the CLI
- * reads a non-tty stdin as a prompt still on its way. Measured against the real binary:
- * every call sat 3s waiting for input that was never coming and then warned about it on
- * stderr (39.0s wall for a prompt that takes 33.4s with stdin closed). Ending the pipe
- * is the explicit redirect the warning itself asks for.
+ * The prompt is written to stdin and the pipe is then ended: measured against the real binary,
+ * a pipe left open made every call wait 3s for more input and warn about it on stderr.
  */
 export const runClaudeCli: ClaudeRunner = async (prompt, model, timeoutMs) => {
   const invocation = childInvocation({ prompt, model, helpText: await claudeHelpText() });
@@ -576,7 +578,7 @@ export const runClaudeCli: ClaudeRunner = async (prompt, model, timeoutMs) => {
     // Ending that one raises an unhandled stream error ON TOP OF the ENOENT the await
     // below is about to report, which would take the detached runner down with it.
     stdin.on("error", () => {});
-    stdin.end();
+    stdin.end(invocation.input);
   }
   try {
     const { stdout } = await call;

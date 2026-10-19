@@ -1338,12 +1338,13 @@ function childEnv(source = process.env) {
   return env;
 }
 function childInvocation(input) {
-  const args = ["-p", input.prompt];
+  const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
   const cwd = mkdtempSync(join6(tmpdir2(), "teamhandbook-child-"));
   return {
     args,
+    input: input.prompt,
     env: childEnv(),
     cwd,
     done: () => rmSync2(cwd, { recursive: true, force: true })
@@ -1489,7 +1490,7 @@ var init_score = __esm({
       if (stdin) {
         stdin.on("error", () => {
         });
-        stdin.end();
+        stdin.end(invocation.input);
       }
       try {
         const { stdout } = await call;

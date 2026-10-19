@@ -193,6 +193,50 @@ describe("secret redaction at the session boundary", () => {
     sessionHasNoSecret();
   });
 
+  it("given a Slack token in the error output, when the failure is captured, then nothing is written", () => {
+    // given stderr quoting a token whose digit runs the normalization masks
+    const token = "xox" + "b-123456789012-1234567890123-" + "AbCdEfGhIjKlMnOpQrStUvWx";
+    const input = bashFailure({ error: `Exit code 1\nslack: invalid_auth (${token})` });
+    // when the failure is captured
+    const captured = captureBashFailure(input, home);
+    // then the occurrence is dropped and counted, and the token is nowhere on disk
+    expect(captured).toBe(false);
+    expect(loadSessionState("s1", home).openErrors).toEqual([]);
+    expect(readCounters(home).redactionBlocked).toBe(1);
+    const file = join(home, "sessions", "s1.json");
+    if (existsSync(file)) expect(readFileSync(file, "utf8")).not.toContain("AbCdEfGhIjKl");
+  });
+
+  it.each([
+    [
+      "a 40-line error whose character cap lands in the request line",
+      () => {
+        const filler = Array.from({ length: 12 }, () => "e".repeat(150));
+        const jwt =
+          "eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" + "a".repeat(30) +
+          ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ" + "b".repeat(20) +
+          ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" + "c".repeat(20);
+        const request = `curl -H "Authorization: Bearer ${jwt}" https://api.example.com/items`;
+        return [...filler, request, ...Array.from({ length: 27 }, () => "e".repeat(150))].join("\n");
+      },
+    ],
+    [
+      "a single line longer than the character cap, with the token past it",
+      () =>
+        `npm ERR! 401 Unauthorized - GET https://registry.example.com/pkg ${"f".repeat(2050)} authToken=` +
+        "xox" + "b-123456789012-1234567890123-" + "AbCdEfGhIjKlMnOpQrStUvWx",
+    ],
+  ])("given %s, when the failure is captured, then the occurrence is dropped and counted", (_name, errorText) => {
+    // given a credential in the line the 2,000-character cap lands in
+    const input = bashFailure({ error: errorText() });
+    // when the failure is captured
+    const captured = captureBashFailure(input, home);
+    // then nothing is recorded and the secret veto counts it
+    expect(captured).toBe(false);
+    expect(loadSessionState("s1", home).openErrors).toEqual([]);
+    expect(readCounters(home).redactionBlocked).toBe(1);
+  });
+
   it("captures a CLEAN recurrence of a secret-tainted error and pairs it (no silent loss)", () => {
     // occurrence 1 carries an inline secret in the command → dropped
     expect(

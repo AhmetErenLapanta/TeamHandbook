@@ -48,6 +48,8 @@ export interface WorkflowTrail {
   masked: boolean;
   /** Signals already recorded for this session: each is written at most once. */
   fired: WorkflowSignal[];
+  /** Whether a write's path looked like a credential: marked instead of kept, so no line is written. */
+  secret?: boolean;
 }
 
 function parseWorkflowTrail(value: unknown): WorkflowTrail | undefined {
@@ -59,6 +61,7 @@ function parseWorkflowTrail(value: unknown): WorkflowTrail | undefined {
     green: raw.green === true,
     masked: raw.masked === true,
     fired: raw.fired.filter((s): s is WorkflowSignal => s === "S1" || s === "S2"),
+    ...(raw.secret === true ? { secret: true } : {}),
   };
 }
 

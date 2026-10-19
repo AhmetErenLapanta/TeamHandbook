@@ -55,7 +55,8 @@ function parseWorkflowTrail(value) {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
     masked: raw.masked === true,
-    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2"),
+    ...raw.secret === true ? { secret: true } : {}
   };
 }
 function emptySessionState(sessionId) {
@@ -508,6 +509,9 @@ function signalSecret(fields) {
 
 // src/lib/queue.ts
 var STATUSES = ["pending", "approved", "rejected", "archived"];
+function isSafeSlug(slug) {
+  return /^[a-z0-9][a-z0-9-]*$/.test(slug);
+}
 function candidateMetaFile(dir) {
   return join5(dir, "candidate.json");
 }
@@ -1116,7 +1120,9 @@ function sessionStartNotice(cwd, home = handbookHome(), marketplacesRootDir) {
   const watchedDirs = [join9(cwd, ".claude", "skills")];
   const teamDir = teamSkillsDir(home, marketplacesRootDir);
   if (teamDir) watchedDirs.push(teamDir);
-  const newSkills = watchedDirs.flatMap((dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name), home)).sort();
+  const newSkills = watchedDirs.flatMap(
+    (dir) => diffNewSkills(dir, listExistingSkills([dir]).map((s) => s.name).filter(isSafeSlug), home)
+  ).sort();
   return buildSessionStartSummary({
     pending: rest.length,
     pendingPreviews,
