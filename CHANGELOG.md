@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.26.0] - 2026-10-19
+
+### Added
+
+- **The requests TeamHandbook opens to your team repository can arrive with reviewers and
+  labels.** This is only about those requests: TeamHandbook opens requests to the team
+  repository and nowhere else, and a merge request or pull request you open yourself, there
+  or in any other repository, is not touched. The team's `.teamhandbook.json` can now list
+  `reviewers` and `labels`, and every request TeamHandbook opens to that repository carries
+  them, so it reaches the people who should look at it. The lists are read from the team
+  repository each time a request is opened: when the team changes them, the next request
+  has the new ones, and nobody has to join again.
+- **`/handbook:init` records the lists with `--reviewers` and `--labels`,** at setup or
+  later on a refresh with `/handbook:init --upgrade`. `--reviewers ""` records that there
+  are none. There is no new command. A refresh carries the recorded lists across as
+  written, and the README `/handbook:init` writes into a team repository says how to change
+  them.
+- **On GitLab without `glab`, the labels still travel.** When the push itself opens the
+  request, the labels go with it as push options. Reviewers cannot travel that way, so the
+  result names the people to add by hand.
+- **A name the forge refuses does not stop the request.** The request is opened without
+  its assignment, the result says what could not be applied and why, and no other request
+  is opened.
+- **Every name read from the team file is screened before it reaches the forge's command
+  line:** its shape, its length, control characters and the secret scan. A value left out
+  is reported by its reason rather than dropped in silence, and the request goes without
+  it. A list that is not a list of names is not deleted by a refresh: the refresh leaves
+  the team file out and says why.
+
+### Fixed
+
+- **When the branch already has a request open, the result now says so.** It says the
+  forge reported a request already open for the branch and that the push is on it, and
+  links to it when the forge names it, instead of offering a link to open another that the
+  forge would refuse.
+
+Reported by @maksutspahi.
+
 ## [0.25.0] - 2026-10-19
 
 ### Added
