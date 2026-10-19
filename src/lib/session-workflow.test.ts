@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   detectWorkflow,
+  diskLocator,
   finishWorkflowSession,
   loadMinedRecord,
   minedRecordFile,
@@ -335,15 +336,44 @@ describe("what is not recorded", () => {
     expect(readCounters(home).workflowSkippedHygiene).toBe(1);
   });
 
-  it("given a path carrying a token, when the session commits, then the path never reaches the session file and no line is written", () => {
+  it("given a path carrying a token, when the session would be recognized, then the path never reaches the session file, no line is written and the skip is counted", () => {
     const token = `glpat-${"x1".repeat(12)}`;
     recordWorkflowEvent(edit(join(api, `src/${token}/ConfigService.kt`)), home, deps());
+    recordWorkflowEvent(edit(join(api, "src/quinella/QuinellaService.kt")), home, deps());
     recordWorkflowEvent(edit(join(api, "src/dto/CreateRefundRequest.kt")), home, deps());
     recordWorkflowEvent(bash("npm test"), home, deps());
     recordWorkflowEvent(bash("git commit -m x"), home, deps());
 
     expect(existsSync(workflowsFile(home))).toBe(false);
+    expect(readCounters(home).workflowSkippedHygiene).toBe(1);
+    expect(loadSessionState("s1", home).workflow?.fired).toEqual(["S1"]);
     expect(readFileSync(join(home, "sessions", "s1.json"), "utf8")).not.toContain(token);
+  });
+
+  it("given a token path that detection needed, when the session commits, then no line is built and nothing is counted", () => {
+    // given two writes, one of them under a token path that is never kept in the trail
+    const token = `glpat-${"x1".repeat(12)}`;
+    recordWorkflowEvent(edit(join(api, `src/${token}/ConfigService.kt`)), home, deps());
+    recordWorkflowEvent(edit(join(api, "src/dto/CreateRefundRequest.kt")), home, deps());
+    recordWorkflowEvent(bash("npm test"), home, deps());
+    // when the session commits
+    recordWorkflowEvent(bash("git commit -m x"), home, deps());
+    // then the one file left is no workflow, so there is no line to drop or count
+    expect(existsSync(workflowsFile(home))).toBe(false);
+    expect(readCounters(home).workflowSkippedHygiene).toBe(0);
+    expect(loadSessionState("s1", home).workflow).toMatchObject({ secret: true, fired: [] });
+    expect(readFileSync(join(home, "sessions", "s1.json"), "utf8")).not.toContain(token);
+  });
+
+  it("given a branch carrying a token, when the session would be recognized, then no line is written and the skip is counted", () => {
+    const locator = { ...diskLocator, branch: () => `feature/glpat-${"x1".repeat(12)}` };
+    recordWorkflowEvent(edit(join(api, "src/quinella/QuinellaService.kt")), home, deps({ locator }));
+    recordWorkflowEvent(edit(join(api, "src/dto/CreateRefundRequest.kt")), home, deps({ locator }));
+    recordWorkflowEvent(bash("npm test"), home, deps({ locator }));
+
+    expect(finishWorkflowSession({ session_id: "s1" }, loadSessionState("s1", home), home, deps({ locator }))).toBeNull();
+    expect(existsSync(workflowsFile(home))).toBe(false);
+    expect(readCounters(home).workflowSkippedHygiene).toBe(1);
   });
 
   it("given detection switched off, when a session writes, checks and ends, then nothing is kept or counted", () => {
@@ -391,7 +421,7 @@ describe("a write whose path is shaped like a credential", () => {
   it.each([
     ["an edit", () => edit(join(api, "src", `${token}.json`))],
     ["a shell redirect", () => bash(`curl -s https://example.com/key > src/${token}.json`)],
-  ])("given %s to it, when the trail is saved, then the path is not kept and the write still counts", (_name, input) => {
+  ])("given %s to it, when the trail is saved, then the path is not kept, the session is marked and the write still counts", (_name, input) => {
     // given a session that has edited one ordinary file and then writes the secret-shaped one
     recordWorkflowEvent(edit(join(api, "src", "service", "RefundService.kt")), home, deps());
     recordWorkflowEvent(bash("npm test"), home, deps());
@@ -401,6 +431,7 @@ describe("a write whose path is shaped like a credential", () => {
     const trail = loadSessionState("s1", home).workflow!;
     expect(trail.edits.some((path) => path.endsWith("RefundService.kt"))).toBe(true);
     expect(trail.edits.join("\n")).not.toContain("ghp_");
+    expect(trail.secret).toBe(true);
     expect(trail.green).toBe(false);
     expect(readFileSync(join(home, "sessions", "s1.json"), "utf8")).not.toContain(token);
   });

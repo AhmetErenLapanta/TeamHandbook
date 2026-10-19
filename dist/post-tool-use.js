@@ -215,8 +215,8 @@ function capKeepingSecretLinesWhole(text) {
   if (text.length <= MAX_CHARS) return text;
   const start = text.lastIndexOf("\n", MAX_CHARS - 1) + 1;
   const end = text.indexOf("\n", MAX_CHARS);
-  const cutLine = text.slice(start, end === -1 ? text.length : end);
-  return detectSecret(cutLine) ? text.slice(0, start).trimEnd() : text.slice(0, MAX_CHARS);
+  const lineEnd = end === -1 ? text.length : end;
+  return detectSecret(text.slice(start, lineEnd)) ? text.slice(0, lineEnd) : text.slice(0, MAX_CHARS);
 }
 var SUBCOMMAND_RE = /^[a-z][a-z0-9:_-]*$/i;
 var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "time", "env", "command", "nice", "xargs", "npx", "bunx"]);
@@ -352,7 +352,8 @@ function parseWorkflowTrail(value) {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
     masked: raw.masked === true,
-    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2"),
+    ...raw.secret === true ? { secret: true } : {}
   };
 }
 function emptySessionState(sessionId) {
@@ -1565,8 +1566,8 @@ function recordWorkflowEvent(input, home = handbookHome(), deps = {}) {
       if (!locator.locate(step.path)) continue;
       trail.green = false;
       trail.masked = false;
-      const keep = !trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS;
-      if (keep && !detectSecret(step.path)) trail.edits.push(step.path);
+      if (detectSecret(step.path)) trail.secret = true;
+      else if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
       changed = true;
     } else if (step.kind === "check") {
       trail.green = step.green;
@@ -1598,7 +1599,7 @@ function writeLine(state, trail, signal, { files, mined, detection }, home, deps
   const work = workKey(files, locator, mined?.prefixes ?? []);
   const host = deps.host ?? hostIdentity();
   const material = [...files.map((f) => f.path), ...detection.pairs.map((p) => p.role), ...work ? [work] : []];
-  if (material.some((text) => traced(text, host))) {
+  if (trail.secret || material.some((text) => traced(text, host))) {
     bumpCounter("workflowSkippedHygiene", home);
     return "hygiene";
   }

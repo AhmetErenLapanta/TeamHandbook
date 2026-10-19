@@ -63,7 +63,8 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 
 - `sessions/` - per-session working state: the failing command and its fix, the
   transcript path, any flagged teachings, and the paths of files written inside a
-  repository. Kept until the session ends or is salvaged.
+  repository, with a mark in place of any path shaped like a credential. Kept until the
+  session ends or is salvaged.
 - `signals.jsonl` - the evidence ledger of captured error→fix pairs.
 - `pending/` - harvest jobs waiting for the background runner: one file per session
   holding its id, cwd, the **path** to its transcript, and the captured evidence.
@@ -395,7 +396,10 @@ is copied on its own, not away from someone who has your home directory.
 **Screening.** Before a line is written, the repository-relative paths, the roles and the
 branch it is built from are scanned for a trace of this machine's identity and for
 secrets, and the finished line is scanned again. A hit drops the whole line rather than
-masking part of it, and a counter in `counters.json` says how many were dropped.
+masking part of it, and a counter in `counters.json` says how many were dropped. A file
+written under a path shaped like a credential never reaches the session file: the session
+is marked instead, and a line built from its other files is dropped and counted the same
+way. When those files alone are no workflow, no line is built, so nothing is counted.
 
 **The mined record.** `/handbook:mine` keeps its last listing in `mined-workflows.json`:
 each mined repository's absolute root with the label it was mined under, the role

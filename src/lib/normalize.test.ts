@@ -59,14 +59,13 @@ describe("normalizeErrorText", () => {
     expect(result).toContain("<path>");
   });
 
-  it("given a flagged line under the character cap, when it is normalized, then no head of it is kept", () => {
+  it("given a flagged line under the character cap, when it is normalized, then the secret scan still recognizes it", () => {
     // given an error whose 2,000-character cap lands ten characters into a token line
     const error = `${"y ".repeat(995)}\ntoken ${SLACK_TOKEN}`;
     // when it is normalized
     const result = normalizeErrorText(error);
-    // then the line is gone whole rather than cut to a piece no rule recognizes
-    expect(result).not.toContain("xox");
-    expect(result.length).toBeLessThanOrEqual(2000);
+    // then the line is kept whole rather than cut to a piece no rule recognizes
+    expect(detectSecret(result)).not.toBeNull();
   });
 });
 

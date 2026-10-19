@@ -208,8 +208,8 @@ function capKeepingSecretLinesWhole(text) {
   if (text.length <= MAX_CHARS) return text;
   const start = text.lastIndexOf("\n", MAX_CHARS - 1) + 1;
   const end = text.indexOf("\n", MAX_CHARS);
-  const cutLine = text.slice(start, end === -1 ? text.length : end);
-  return detectSecret(cutLine) ? text.slice(0, start).trimEnd() : text.slice(0, MAX_CHARS);
+  const lineEnd = end === -1 ? text.length : end;
+  return detectSecret(text.slice(start, lineEnd)) ? text.slice(0, lineEnd) : text.slice(0, MAX_CHARS);
 }
 var SUBCOMMAND_RE = /^[a-z][a-z0-9:_-]*$/i;
 var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "time", "env", "command", "nice", "xargs", "npx", "bunx"]);
@@ -276,7 +276,8 @@ function parseWorkflowTrail(value) {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
     masked: raw.masked === true,
-    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2"),
+    ...raw.secret === true ? { secret: true } : {}
   };
 }
 function emptySessionState(sessionId) {

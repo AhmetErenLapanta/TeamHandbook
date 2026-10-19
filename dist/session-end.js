@@ -66,7 +66,8 @@ function parseWorkflowTrail(value) {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
     masked: raw.masked === true,
-    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2"),
+    ...raw.secret === true ? { secret: true } : {}
   };
 }
 function emptySessionState(sessionId) {
@@ -1136,7 +1137,7 @@ function writeLine(state, trail, signal, { files, mined, detection }, home, deps
   const work = workKey(files, locator, mined?.prefixes ?? []);
   const host = deps.host ?? hostIdentity();
   const material = [...files.map((f) => f.path), ...detection.pairs.map((p) => p.role), ...work ? [work] : []];
-  if (material.some((text) => traced(text, host))) {
+  if (trail.secret || material.some((text) => traced(text, host))) {
     bumpCounter("workflowSkippedHygiene", home);
     return "hygiene";
   }

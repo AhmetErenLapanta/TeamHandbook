@@ -233,7 +233,8 @@ function parseWorkflowTrail(value) {
     edits: raw.edits.filter((e) => typeof e === "string"),
     green: raw.green === true,
     masked: raw.masked === true,
-    fired: raw.fired.filter((s) => s === "S1" || s === "S2")
+    fired: raw.fired.filter((s) => s === "S1" || s === "S2"),
+    ...raw.secret === true ? { secret: true } : {}
   };
 }
 function emptySessionState(sessionId) {
