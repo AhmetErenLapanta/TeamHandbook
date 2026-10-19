@@ -157,6 +157,39 @@ describe("recordAndMatchTeachings", () => {
     expect(readTeachings(home)).toHaveLength(1);
   });
 
+  it("given a session harvested twice, when its teaching is recorded again, then it is not its own repeat", () => {
+    // given a rule one session taught, recorded by its first harvest
+    recordAndMatchTeachings(["never mock the database, use testcontainers"], home, "2026-08-01T00:00:00.000Z", true, "s1");
+    // when the same session is recorded again, the rule reworded after it resumed
+    const echoes = recordAndMatchTeachings(
+      ["don't mock the database - use testcontainers"],
+      home,
+      "2026-08-01T05:00:00.000Z",
+      true,
+      "s1",
+    );
+    // then no earlier session taught it, and the record still counts one
+    expect(echoes[0]?.priorSessions).toBe(0);
+    expect(readTeachings(home)).toMatchObject([{ count: 1, sessions: ["s1"] }]);
+  });
+
+  it("given a rule another session taught, when a second session records it twice, then only the other session is earlier", () => {
+    // given a rule taught by s1 and then by s2
+    recordAndMatchTeachings(["never mock the database, use testcontainers"], home, "2026-08-01T00:00:00.000Z", true, "s1");
+    recordAndMatchTeachings(["never mock the database, use testcontainers"], home, "2026-08-02T00:00:00.000Z", true, "s2");
+    // when s2 is recorded a second time
+    const echoes = recordAndMatchTeachings(
+      ["never mock the database, use testcontainers"],
+      home,
+      "2026-08-02T05:00:00.000Z",
+      true,
+      "s2",
+    );
+    // then s1 is the one earlier session
+    expect(echoes[0]?.priorSessions).toBe(1);
+    expect(readTeachings(home)).toMatchObject([{ count: 2, sessions: ["s1", "s2"] }]);
+  });
+
   it("given a Turkish rule taught in two sessions, when recorded, then the second is an echo", () => {
     recordAndMatchTeachings(
       ["burada db'yi asla mocklamayız, testcontainer kullan"],

@@ -784,7 +784,7 @@ export async function harvestSession(
   const taught = (job.evidence.corrections ?? []).map((c) => c.text);
   const evidence: HarvestEvidence = {
     ...job.evidence,
-    echoes: recordAndMatchTeachings(taught, home, undefined, false),
+    echoes: recordAndMatchTeachings(taught, home, undefined, false, job.sessionId),
   };
 
   const prompt = buildHarvestPrompt({
@@ -812,7 +812,7 @@ export async function harvestSession(
   if (items === null) {
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
-  recordAndMatchTeachings(taught, home);
+  recordAndMatchTeachings(taught, home, undefined, true, job.sessionId);
 
   const measured = items.map((i) => withMeasuredRecurrence(i, evidence.echoes, evidence.recurrence));
   const { kept, dropped } = sieveHarvestItems(measured, {

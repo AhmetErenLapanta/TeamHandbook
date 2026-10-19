@@ -83,13 +83,14 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   (what was produced, sieved, or errored). `pipeline.log` is rotated, never deleted.
 - `teachings.json` - what you have already said, so a rule you give twice is
   recognized as a repeat instead of scored as a guess. Holds the content words of each
-  recorded prompt, a count, and a 160-character sample of your own sentence - the same
-  text the session files already keep, behind the same secret scan, capped at the 2000
-  most recent - about three months. Since prompts are no longer pre-filtered by an
-  English phrase list, this file now holds ordinary prompts alongside rules; nothing is
-  ever read out of it except by matching against a lesson the model has already
-  proposed, so what it remembers only surfaces when it is the thing you taught. Local
-  only.
+  recorded prompt, a count, the ids of the last sessions that said it (so a session
+  harvested twice is not counted as its own repeat), and a 160-character sample of your
+  own sentence - the same text the session files already keep, behind the same secret
+  scan, capped at the 2000 most recent - about three months. Since prompts are no longer
+  pre-filtered by an English phrase list, this file now holds ordinary prompts alongside
+  rules; nothing is ever read out of it except by matching against a lesson the model
+  has already proposed, so what it remembers only surfaces when it is the thing you
+  taught. Local only.
 - `skill-usage.json` - how many times each skill has fired, and when. Claude Code
   reports a skill invocation to the same hook TeamHandbook already listens on, so this
   is a name, a running count, the time of the last call, and how many calls fell on each
@@ -240,8 +241,8 @@ These, and only these:
      the push asks GitLab to open it (push options); the request's title is the commit
      message you approved, and its description, which a push cannot carry, is printed for
      you to paste. The one push that does not ask is the first `/handbook:init`: it
-     pushes the scaffold to `<prefix>scaffold` (no prefix unless you pass
-     `--branch-prefix`), or straight to the default branch of an empty repository, after
+     pushes the scaffold to `handbook/scaffold` by default, or `<prefix>scaffold` with
+     `--branch-prefix`, or straight to the default branch of an empty repository, after
      you have confirmed the repository itself. Its message is still yours.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already

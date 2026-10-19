@@ -20,11 +20,14 @@ import { handbookHome } from "./session-state.js";
  *
  * The new number is measured against the same history: ~19 records a day, so 2000 is
  * about three months. It costs nothing to hold - matching 40 prompts against a full
- * store takes 1ms, and the file lands under 400KB.
+ * store takes 1ms, and the file lands under 550KB (a session id adds 70 bytes to a record).
  */
 export const STORE_LIMIT = 2000;
 const SAMPLE_CHARS = 160;
 const RECORD_VERSION = 2;
+// A session is harvested a second time within hours of the first, not after ten other
+// sessions have taught the same rule, so the last ten ids are enough to recognize it.
+const SESSIONS_KEPT = 10;
 
 // Words that carry no meaning for matching. Deliberately short: an aggressive list
 // would collapse unrelated teachings into each other, and a false echo is worse than
@@ -154,6 +157,8 @@ export interface TeachingRecord {
   lastAt: string;
   sample: string;
   v?: number;
+  // the sessions that taught it, so a session harvested twice is not its own repeat
+  sessions?: string[];
 }
 
 export function teachingsFile(home: string = handbookHome()): string {
@@ -213,6 +218,7 @@ export function recordAndMatchTeachings(
   home: string = handbookHome(),
   at: string = new Date().toISOString(),
   persist: boolean = true,
+  sessionId?: string,
 ): Echo[] {
   const store = readTeachings(home);
   const echoes: Echo[] = [];
@@ -225,10 +231,15 @@ export function recordAndMatchTeachings(
     if (seenThisSession.some((prior) => sameTeaching(words, prior))) continue;
     seenThisSession.push(words);
     const match = store.find((r) => sameTeaching(words, r.words));
-    if (match) {
+    if (match && sessionId && match.sessions?.includes(sessionId)) {
+      // salvage harvested this session once and SessionEnd harvests it again: the
+      // record already counts it, so only the other sessions are earlier ones
+      echoes.push({ text, priorSessions: Math.max(match.count - 1, 0), firstAt: match.firstAt });
+    } else if (match) {
       echoes.push({ text, priorSessions: match.count, firstAt: match.firstAt });
       match.count += 1;
       match.lastAt = at;
+      if (sessionId) match.sessions = [...(match.sessions ?? []), sessionId].slice(-SESSIONS_KEPT);
     } else {
       echoes.push({ text, priorSessions: 0, firstAt: at });
       store.push({
@@ -238,6 +249,7 @@ export function recordAndMatchTeachings(
         lastAt: at,
         sample: text.slice(0, SAMPLE_CHARS),
         v: RECORD_VERSION,
+        ...(sessionId ? { sessions: [sessionId] } : {}),
       });
     }
   }

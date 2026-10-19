@@ -1151,6 +1151,7 @@ import { join as join10 } from "node:path";
 var STORE_LIMIT = 2e3;
 var SAMPLE_CHARS = 160;
 var RECORD_VERSION = 2;
+var SESSIONS_KEPT = 10;
 var STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -1275,7 +1276,7 @@ function readTeachings(home = handbookHome()) {
     return [];
   }
 }
-function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString(), persist = true) {
+function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE__ */ new Date()).toISOString(), persist = true, sessionId) {
   const store = readTeachings(home);
   const echoes = [];
   const seenThisSession = [];
@@ -1285,10 +1286,13 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
     if (seenThisSession.some((prior) => sameTeaching(words, prior))) continue;
     seenThisSession.push(words);
     const match = store.find((r) => sameTeaching(words, r.words));
-    if (match) {
+    if (match && sessionId && match.sessions?.includes(sessionId)) {
+      echoes.push({ text, priorSessions: Math.max(match.count - 1, 0), firstAt: match.firstAt });
+    } else if (match) {
       echoes.push({ text, priorSessions: match.count, firstAt: match.firstAt });
       match.count += 1;
       match.lastAt = at;
+      if (sessionId) match.sessions = [...match.sessions ?? [], sessionId].slice(-SESSIONS_KEPT);
     } else {
       echoes.push({ text, priorSessions: 0, firstAt: at });
       store.push({
@@ -1297,7 +1301,8 @@ function recordAndMatchTeachings(texts, home = handbookHome(), at = (/* @__PURE_
         firstAt: at,
         lastAt: at,
         sample: text.slice(0, SAMPLE_CHARS),
-        v: RECORD_VERSION
+        v: RECORD_VERSION,
+        ...sessionId ? { sessions: [sessionId] } : {}
       });
     }
   }
@@ -1887,7 +1892,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   const taught = (job.evidence.corrections ?? []).map((c) => c.text);
   const evidence = {
     ...job.evidence,
-    echoes: recordAndMatchTeachings(taught, home, void 0, false)
+    echoes: recordAndMatchTeachings(taught, home, void 0, false, job.sessionId)
   };
   const prompt = buildHarvestPrompt({
     slice,
@@ -1911,7 +1916,7 @@ async function harvestSession(job, home = handbookHome(), deps = {}) {
   if (items === null) {
     return { outcome: "error", error: "unparseable harvest response", written: [] };
   }
-  recordAndMatchTeachings(taught, home);
+  recordAndMatchTeachings(taught, home, void 0, true, job.sessionId);
   const measured = items.map((i) => withMeasuredRecurrence(i, evidence.echoes, evidence.recurrence));
   const { kept, dropped } = sieveHarvestItems(measured, {
     existingSkillNames: new Set(existingSkills.map((s) => s.name)),
