@@ -159,6 +159,17 @@ describe("skeletonFiles", () => {
     expect(readme).toContain("--with-ci");
   });
 
+  it("given a teammate whose marketplace does not auto-update, when the README is read, then it names the two commands that bring a merge in", () => {
+    // given the scaffold for a marketplace called acme-skills
+    const readme = skeletonFiles("acme-skills", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;
+
+    // when the update section is read, then the merge is not promised to arrive on its own
+    expect(readme).toContain("only picks it up when their marketplace updates");
+    expect(readme).toContain("### Getting new skills");
+    expect(readme).toContain("/plugin marketplace update acme-skills\n/reload-plugins");
+    expect(readme).toContain("the notice appears after an update, it does not cause one");
+  });
+
   it("discloses the consumer hook's local state write in the generated README", () => {
     expect(skeletonFiles("s", "git@github.com:a/s.git", "github.com", "", true)["README.md"]).toContain(
       "~/.teamhandbook-consumer",

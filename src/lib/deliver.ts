@@ -672,14 +672,14 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     // them: a request exists, it carries the version teammates update to, and nothing
     // reaches anyone until a human merges it.
     const bump = result.version
-      ? ` It also raises the handbook to v${result.version}, which is what makes teammates' copies refresh.`
+      ? ` It also raises the handbook to v${result.version}, the version teammates' copies update to.`
       : "";
     const what = result.updatedExisting
       ? `Sent "${name}" to the team as an update to the skill they already had`
       : `Shared "${name}" with the team`;
     if (result.prUrl) {
       lines.push(`${what}: ${result.prUrl}`);
-      lines.push(`Merge that request and every teammate gets it at their next session.${bump}`);
+      lines.push(`Merge that request and each teammate gets it when their marketplace updates.${bump}`);
     } else {
       lines.push(`${what} on branch ${result.branch}.${bump}`);
       if (result.prError) {

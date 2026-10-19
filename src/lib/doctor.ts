@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
+import { compareVersions, readPluginVersion } from "./branch.js";
 import { forgeSignInProblem, forgeTool } from "./forge.js";
 import type { TeamConfig } from "./init.js";
 import { countStaleSkeleton } from "./upgrade.js";
@@ -347,9 +348,9 @@ function remoteDistributionState(
   }
 }
 
-function checkTeamRepo(home: string, run: CommandRunner): DoctorCheck {
+function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; remoteVersion?: string } {
   const team = loadTeamConfig(home);
-  if (!team) return ok("team repo", "not configured (solo mode - that's fine)");
+  if (!team) return { check: ok("team repo", "not configured (solo mode - that's fine)") };
   try {
     run("git", ["ls-remote", "--heads", "--", team.repoUrl], 20_000);
   } catch (err) {
@@ -357,26 +358,53 @@ function checkTeamRepo(home: string, run: CommandRunner): DoctorCheck {
       .split("\n")
       .slice(-2)
       .join(" | ");
-    return fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`);
+    return { check: fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`) };
   }
   const dist = remoteDistributionState(team, run);
+  const remoteVersion = dist?.version;
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
-    return warn(
+    const check = warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 - the ` +
         "version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN " +
         "variable / Actions write permission)",
     );
+    return { check, remoteVersion };
   }
   if (dist && dist.missing > 0) {
-    return warn(
+    const check = warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.missing} scaffold file(s) this version ships are not in ` +
         "it at all - run `/handbook:init --upgrade` to see what they are and pick which to add " +
         "(your skills, commands and MCP settings are never touched)",
     );
+    return { check, remoteVersion };
   }
-  return ok("team repo", `${team.repoUrl} reachable`);
+  return { check: ok("team repo", `${team.repoUrl} reachable`), remoteVersion };
+}
+
+// A merge raises the team repo's version, but the copy Claude Code installed from it moves
+// only when that marketplace updates, and with auto-update off for it that never happens on
+// its own: a teammate keeps the old skills and nothing says so. Where Claude Code keeps that
+// setting is not documented, so this compares the two versions instead of guessing at it.
+// The team's version comes from the clone checkTeamRepo already made, so this adds no
+// network call, and whenever either version cannot be read the check stays out of the report.
+// Behind is a warning, not a failure: with auto-update on, a copy is still behind between a
+// merge and the next refresh, and that is a correctly configured machine.
+function checkTeamCopy(home: string, remoteVersion: string | undefined, marketRoot: string): DoctorCheck | null {
+  const team = loadTeamConfig(home);
+  if (!team || !remoteVersion) return null;
+  const installed = readPluginVersion(join(marketRoot, team.marketplaceName));
+  if (!installed) return null;
+  const behind = compareVersions(remoteVersion, installed);
+  if (behind === null) return null;
+  if (behind <= 0) return ok("team plugin copy", `v${installed} installed, the team repo is at v${remoteVersion}`);
+  return warn(
+    "team plugin copy",
+    `v${installed} installed but the team repo is at v${remoteVersion}, so merged skills have not reached ` +
+      `this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; ` +
+      "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
+  );
 }
 
 /**
@@ -578,8 +606,11 @@ export function runDoctor(
     checkHomeWritable(home),
     checkConfig(home),
     checkHooks(home),
-    checkTeamRepo(home, run),
   ];
+  const teamRepo = checkTeamRepo(home, run);
+  checks.push(teamRepo.check);
+  const teamCopy = checkTeamCopy(home, teamRepo.remoteVersion, marketRoot);
+  if (teamCopy) checks.push(teamCopy);
   const identity = checkGitIdentity(home, run);
   if (identity) checks.push(identity);
   const forge = checkForge(home, run);

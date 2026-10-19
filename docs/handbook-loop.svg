@@ -8,9 +8,9 @@
     the one thing that does not start here is a draft TeamHandbook wrote, which waits for your
     verdict in /handbook:review. Somebody on the team reviews the request and merges it. That
     repository is a Claude Code plugin marketplace, and the same merge raises the plugin
-    version, which is Claude Code's signal that the plugin moved. Every teammate's next session
-    refreshes on that version and reports what landed, with nothing installed or configured by
-    hand.</desc>
+    version, which is Claude Code's signal that the plugin moved. Each teammate's copy picks
+    that version up when their marketplace updates and reports what landed, with nothing
+    installed or configured by hand.</desc>
 
   <!-- No <style> element and no prefers-color-scheme query here, deliberately. GitHub's page theme
        is chosen in the site's own settings, while an SVG loaded through <img> resolves
@@ -112,7 +112,7 @@
   <!-- ── the arriving side ───────────────────────────────────────────────── -->
 
   <rect x="32" y="402" width="816" height="82" rx="10" fill="#8b949e" fill-opacity=".05" stroke="#818790"/>
-  <text x="52" y="427" font-size="13.5" font-weight="600" fill="#77797d">Every teammate's next session picks it up on its own</text>
+  <text x="52" y="427" font-size="13.5" font-weight="600" fill="#77797d">Each teammate's copy picks it up when their marketplace updates</text>
   <text x="52" y="450" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">team-handbook: 2 new skill(s) and 1 new command(s) since your last session: ...</text>
   <text x="52" y="472" font-size="11.5" fill="#77797d">They subscribed once. Nothing is installed by hand, and nothing is deleted if the team drops the plugin.</text>
 </svg>

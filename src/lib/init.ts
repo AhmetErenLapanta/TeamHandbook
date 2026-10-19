@@ -356,7 +356,7 @@ function readmeFor(name: string, url: string): string {
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
 approved through TeamHandbook. This repository is a Claude Code plugin marketplace;
-every merge reaches all subscribed teammates automatically.
+every merge reaches each subscribed teammate when their marketplace updates.
 
 ## Access
 
@@ -384,7 +384,7 @@ can never stop to ask for a password.
 
 Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved: merge the request and each teammate's marketplace copy refreshes on its own.
+moved, but a teammate's copy only picks it up when their marketplace updates.
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
@@ -392,10 +392,23 @@ Nothing here needs CI, an access token, or the right to push to a protected bran
 skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
 job that bumps the version on merge instead, together with the script it runs.
 
+### Getting new skills
+
+If auto-update is off for this marketplace, a merge reaches you only after these two:
+
+\`\`\`
+/plugin marketplace update ${name}
+/reload-plugins
+\`\`\`
+
+To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
+menu. When you announce a merge to the team, include these two commands.
+
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
-It makes no network calls and needs no TeamHandbook engine.
+It makes no network calls and needs no TeamHandbook engine, so it reads only the copy
+already installed: the notice appears after an update, it does not cause one.
 `;
 }
 

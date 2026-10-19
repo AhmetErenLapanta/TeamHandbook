@@ -627,3 +627,118 @@ describe("doctor team-distribution checks", () => {
     rmSync(bare, { recursive: true, force: true });
   });
 });
+
+describe("doctor team plugin copy check", () => {
+  let marketRoot: string;
+  let bare: string;
+  beforeEach(() => {
+    marketRoot = mkdtempSync(join(tmpdir(), "handbook-doctor-market-"));
+    bare = mkdtempSync(join(tmpdir(), "handbook-teambare-"));
+  });
+  afterEach(() => {
+    rmSync(marketRoot, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  function teamRepoAt(version: string): void {
+    execFileSync("git", ["init", "--bare", "-b", "main", bare]);
+    const seed = mkdtempSync(join(tmpdir(), "handbook-teamseed-"));
+    execFileSync("git", ["init", "-b", "main", seed]);
+    mkdirSync(join(seed, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(seed, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "t", version }));
+    execFileSync("git", ["-C", seed, "add", "-A"]);
+    execFileSync("git", ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"]);
+    execFileSync("git", ["-C", seed, "push", bare, "main"]);
+    rmSync(seed, { recursive: true, force: true });
+  }
+
+  function installedCopyAt(version: string): void {
+    mkdirSync(join(marketRoot, "t", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(marketRoot, "t", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "t", version }));
+  }
+
+  /** Real git against the local bare repo, recording every git subcommand that run. */
+  function recordingRunner(gitCalls: string[]): CommandRunner {
+    return (cmd, args, timeoutMs) => {
+      if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.0";
+      if (cmd === "gh" || cmd === "glab") return "Logged in";
+      if (cmd === "git") gitCalls.push(args[0]!);
+      return execFileSync(cmd, args, { encoding: "utf8", timeout: timeoutMs }).trim();
+    };
+  }
+
+  const NETWORK_SUBCOMMANDS = new Set(["ls-remote", "clone", "fetch", "pull"]);
+
+  it("given the installed copy is behind the team repo, when diagnosed, then it warns with both versions and the two commands, reusing the team repo's clone", () => {
+    // given
+    teamRepoAt("0.4.0");
+    installedCopyAt("0.3.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    const gitCalls: string[] = [];
+
+    // when
+    const report = runDoctor(home, recordingRunner(gitCalls), marketRoot);
+
+    // then
+    const check = byName(report, "team plugin copy");
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("v0.3.0 installed");
+    expect(check.detail).toContain("v0.4.0");
+    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(check.detail).toContain("`/reload-plugins`");
+    expect(check.detail).toContain("auto-update");
+    expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
+  });
+
+  it("given the installed copy matches the team repo, when diagnosed, then it passes", () => {
+    // given
+    teamRepoAt("0.4.0");
+    installedCopyAt("0.4.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner([]), marketRoot), "team plugin copy");
+
+    // then
+    expect(check.level).toBe("ok");
+    expect(check.detail).toContain("v0.4.0 installed");
+  });
+
+  it("given solo mode, when diagnosed, then the check is absent and the doctor makes no network call", () => {
+    // given
+    installedCopyAt("0.3.0");
+    const gitCalls: string[] = [];
+
+    // when
+    const report = runDoctor(home, recordingRunner(gitCalls), marketRoot);
+
+    // then
+    expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
+    expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual([]);
+  });
+
+  it("given a team whose marketplace was never installed here, when diagnosed, then the check is absent", () => {
+    // given
+    teamRepoAt("0.4.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const report = runDoctor(home, recordingRunner([]), marketRoot);
+
+    // then
+    expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
+  });
+
+  it("given the team repo cannot be reached, when diagnosed, then the check is absent rather than guessing", () => {
+    // given
+    installedCopyAt("0.3.0");
+    saveTeamConfig({ repoUrl: join(bare, "missing.git"), marketplaceName: "t" }, home);
+
+    // when
+    const report = runDoctor(home, recordingRunner([]), marketRoot);
+
+    // then
+    expect(byName(report, "team repo").level).toBe("fail");
+    expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
+  });
+});

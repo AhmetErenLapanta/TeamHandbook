@@ -11,7 +11,7 @@ it lands in the repository, and the team has it from their next session.
 [Who approves what](#nothing-ships-until-you-say-so) ·
 [Why you might not want this](#why-you-might-not-want-this)
 
-<img src="docs/handbook-one-to-team.svg" alt="The work your repository keeps repeating, drafted as a skill, or an MCP server or a command already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to the rest of the team, and each of them has it at their next session, with nothing to install by hand." width="880">
+<img src="docs/handbook-one-to-team.svg" alt="The work your repository keeps repeating, drafted as a skill, or an MCP server or a command already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to the rest of the team, and each of them has it once their marketplace updates, with nothing to install by hand." width="880">
 
 ## The first day
 
@@ -48,8 +48,10 @@ TeamHandbook is a Claude Code plugin, and besides the drafts it writes from hist
 makes one git repository your team's shared setup: the skills, MCP servers and slash
 commands everybody should have. That repository is a Claude Code plugin marketplace, so
 Claude Code itself does the delivering. Merge a request there and each teammate's copy
-picks it up at their next session: no CI, no access token, and nobody needing push rights
-on a protected branch.
+picks it up when their marketplace updates: no CI, no access token, and nobody needing
+push rights on a protected branch. With auto-update off for that marketplace, the update
+is `/plugin marketplace update <team-plugin-name>` followed by `/reload-plugins`, and
+`/handbook:doctor` says when this machine's copy is behind the team's.
 
 | What you share | Command | Where it lands |
 |---|---|---|
@@ -182,8 +184,9 @@ you and cannot write to your `~/.claude`; what they can do is merge things into 
 repository you chose to subscribe to.
 
 That subscription is standing, not item by item. A merged skill, MCP server, or slash
-command raises the repository's plugin version, Claude Code refreshes on that, and it is
-there at your next session. The team plugin prints what landed ("2 new skill(s), 1 new
+command raises the repository's plugin version, and it is there once your copy of the
+marketplace updates: on its own if auto-update is on for it in `/plugin`, otherwise after
+`/plugin marketplace update <team-plugin-name>` and `/reload-plugins`. The team plugin prints what landed ("2 new skill(s), 1 new
 MCP server(s), and 1 new command(s) since your last session"), so a server or a command
 never arrives in silence.
 
@@ -221,7 +224,7 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ## How it works
 
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a draft TeamHandbook wrote, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal that the plugin moved. Every teammate's next session refreshes on that version and reports what landed, with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a draft TeamHandbook wrote, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal that the plugin moved. Each teammate's copy picks that version up when their marketplace updates and reports what landed, with nothing installed or configured by hand." width="880">
 
 - **One merge request for a whole selection.** Everything you pick travels together,
   skills included, because each one raises the version and two requests opened before
@@ -233,7 +236,7 @@ thing: it drops the contribution target and leaves the subscription alone.
   signed in - the wording is yours to give.
 - **The version bump is the delivery.** Nothing pushes to your teammates. The raised
   version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
-  moved, and refreshing on it is something each copy does for itself.
+  moved, and a copy refreshes on it when its marketplace updates.
 - **Nothing is installed by hand on the other end.** A merged server lands in the repo's
   `.mcp.json` and a merged command in `commands/`, both of which Claude Code reads by
   convention, so a teammate configures nothing.

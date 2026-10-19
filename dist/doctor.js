@@ -814,6 +814,25 @@ function readTeamBranchExample(repoDir) {
   const problem = branchExampleProblem(value);
   return problem ? { problem } : { example: value };
 }
+function versionParts(version) {
+  const parts = version.split(".").map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
+}
+function compareVersions(a, b) {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
+function readPluginVersion(repoDir) {
+  try {
+    const version = JSON.parse(readFileSync4(join5(repoDir, ".claude-plugin", "plugin.json"), "utf8"))?.version;
+    return typeof version === "string" ? version : void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // src/lib/init.ts
 init_session_state();
@@ -900,7 +919,7 @@ function readmeFor(name, url) {
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
 approved through TeamHandbook. This repository is a Claude Code plugin marketplace;
-every merge reaches all subscribed teammates automatically.
+every merge reaches each subscribed teammate when their marketplace updates.
 
 ## Access
 
@@ -928,7 +947,7 @@ can never stop to ask for a password.
 
 Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved: merge the request and each teammate's marketplace copy refreshes on its own.
+moved, but a teammate's copy only picks it up when their marketplace updates.
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
@@ -936,10 +955,23 @@ Nothing here needs CI, an access token, or the right to push to a protected bran
 skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
 job that bumps the version on merge instead, together with the script it runs.
 
+### Getting new skills
+
+If auto-update is off for this marketplace, a merge reaches you only after these two:
+
+\`\`\`
+/plugin marketplace update ${name}
+/reload-plugins
+\`\`\`
+
+To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
+menu. When you announce a merge to the team, include these two commands.
+
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
-It makes no network calls and needs no TeamHandbook engine.
+It makes no network calls and needs no TeamHandbook engine, so it reads only the copy
+already installed: the notice appears after an update, it does not cause one.
 `;
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
@@ -1740,27 +1772,43 @@ function remoteDistributionState(team, run) {
 }
 function checkTeamRepo(home, run) {
   const team = loadTeamConfig(home);
-  if (!team) return ok("team repo", "not configured (solo mode - that's fine)");
+  if (!team) return { check: ok("team repo", "not configured (solo mode - that's fine)") };
   try {
     run("git", ["ls-remote", "--heads", "--", team.repoUrl], 2e4);
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err).split("\n").slice(-2).join(" | ");
-    return fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`);
+    return { check: fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`) };
   }
   const dist = remoteDistributionState(team, run);
+  const remoteVersion = dist?.version;
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
-    return warn(
+    const check = warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 - the version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN variable / Actions write permission)`
     );
+    return { check, remoteVersion };
   }
   if (dist && dist.missing > 0) {
-    return warn(
+    const check = warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.missing} scaffold file(s) this version ships are not in it at all - run \`/handbook:init --upgrade\` to see what they are and pick which to add (your skills, commands and MCP settings are never touched)`
     );
+    return { check, remoteVersion };
   }
-  return ok("team repo", `${team.repoUrl} reachable`);
+  return { check: ok("team repo", `${team.repoUrl} reachable`), remoteVersion };
+}
+function checkTeamCopy(home, remoteVersion, marketRoot) {
+  const team = loadTeamConfig(home);
+  if (!team || !remoteVersion) return null;
+  const installed = readPluginVersion(join11(marketRoot, team.marketplaceName));
+  if (!installed) return null;
+  const behind = compareVersions(remoteVersion, installed);
+  if (behind === null) return null;
+  if (behind <= 0) return ok("team plugin copy", `v${installed} installed, the team repo is at v${remoteVersion}`);
+  return warn(
+    "team plugin copy",
+    `v${installed} installed but the team repo is at v${remoteVersion}, so merged skills have not reached this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
+  );
 }
 function checkForge(home, run) {
   const team = loadTeamConfig(home);
@@ -1888,9 +1936,12 @@ function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketp
     ...checkClaudeCli(run, home),
     checkHomeWritable(home),
     checkConfig(home),
-    checkHooks(home),
-    checkTeamRepo(home, run)
+    checkHooks(home)
   ];
+  const teamRepo = checkTeamRepo(home, run);
+  checks.push(teamRepo.check);
+  const teamCopy = checkTeamCopy(home, teamRepo.remoteVersion, marketRoot);
+  if (teamCopy) checks.push(teamCopy);
   const identity = checkGitIdentity(home, run);
   if (identity) checks.push(identity);
   const forge = checkForge(home, run);

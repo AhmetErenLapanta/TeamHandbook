@@ -186,7 +186,7 @@ export function pendingTeamNudge(home: string = handbookHome()): string | null {
   writeFileAtomic(teamNudgeMarkerFile(home), new Date().toISOString() + "\n");
   return (
     `handbook: ${approved} approved skills live only on this machine - one ` +
-    `/handbook:init shares them with your team (teammates get every future merge automatically).`
+    `/handbook:init shares them with your team (teammates get every future merge when their marketplace updates).`
   );
 }
 

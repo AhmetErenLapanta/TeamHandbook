@@ -1619,7 +1619,7 @@ function pendingTeamNudge(home = handbookHome()) {
   const approved = listCandidates(home, "approved").length;
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), (/* @__PURE__ */ new Date()).toISOString() + "\n");
-  return `handbook: ${approved} approved skills live only on this machine - one /handbook:init shares them with your team (teammates get every future merge automatically).`;
+  return `handbook: ${approved} approved skills live only on this machine - one /handbook:init shares them with your team (teammates get every future merge when their marketplace updates).`;
 }
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
