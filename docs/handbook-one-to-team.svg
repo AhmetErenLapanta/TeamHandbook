@@ -72,7 +72,7 @@
   <rect x="332" y="150" width="216" height="34" rx="8" fill="none" stroke="#7d8590"/>
   <text x="440" y="172" font-size="12" font-weight="700" text-anchor="middle" fill="#77797d">one repository</text>
 
-  <!-- ── everyone, next session ──────────────────────────────────────────── -->
+  <!-- ── everyone, once their marketplace updates ──────────────────────────── -->
 
   <path d="M368 184 L230 202" fill="none" stroke="#77797d" stroke-width="1.4"/>
   <path d="M404 184 L370 202" fill="none" stroke="#77797d" stroke-width="1.4"/>
@@ -91,5 +91,5 @@
   <circle cx="650" cy="208" r="6" fill="none" stroke="#77797d" stroke-width="1.4"/>
   <path d="M640.5 227 a9.5 9.5 0 0 1 19 0" fill="none" stroke="#77797d" stroke-width="1.4"/>
 
-  <text x="440" y="244" font-size="12" font-weight="700" text-anchor="middle" fill="#77797d">everyone, next session</text>
+  <text x="440" y="244" font-size="12" font-weight="700" text-anchor="middle" fill="#77797d">everyone, once their marketplace updates</text>
 </svg>

@@ -5,7 +5,8 @@
 **The work your repository keeps repeating, written down as skills your whole team has.**
 TeamHandbook reads your git history, finds the jobs that change the same files the same way
 time after time, and drafts a skill for the one you pick. One person approves it in review,
-it lands in the repository, and the team has it from their next session.
+it lands in the project or in the team's plugin marketplace, and each teammate has it once
+they pull the project or their marketplace updates.
 
 [The first day](#the-first-day) · [What a draft is](#what-a-draft-is) · [Install](#install) ·
 [Who approves what](#nothing-ships-until-you-say-so) ·

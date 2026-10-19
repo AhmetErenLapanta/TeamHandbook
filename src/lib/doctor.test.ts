@@ -652,7 +652,7 @@ describe("doctor team plugin copy check", () => {
     rmSync(seed, { recursive: true, force: true });
   }
 
-  function installedCopyAt(version: string): void {
+  function marketplaceCopyAt(version: string): void {
     mkdirSync(join(marketRoot, "t", ".claude-plugin"), { recursive: true });
     writeFileSync(join(marketRoot, "t", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "t", version }));
   }
@@ -660,19 +660,23 @@ describe("doctor team plugin copy check", () => {
   /** Real git against the local bare repo, recording every git subcommand that run. */
   function recordingRunner(gitCalls: string[]): CommandRunner {
     return (cmd, args, timeoutMs) => {
-      if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.0";
+      if (cmd === "claude") {
+        if (args[0] === "-p") return "OK";
+        return args[0] === "--help" ? CLAUDE_HELP : "2.1.225 (Claude Code)";
+      }
       if (cmd === "gh" || cmd === "glab") return "Logged in";
       if (cmd === "git") gitCalls.push(args[0]!);
+      if (cmd === "git" && args[0] === "config") return "me@example.com";
       return execFileSync(cmd, args, { encoding: "utf8", timeout: timeoutMs }).trim();
     };
   }
 
   const NETWORK_SUBCOMMANDS = new Set(["ls-remote", "clone", "fetch", "pull"]);
 
-  it("given the installed copy is behind the team repo, when diagnosed, then it warns with both versions and the two commands, reusing the team repo's clone", () => {
+  it("given this machine's marketplace copy is behind the team repo, when diagnosed, then it warns with both versions and the two commands, reusing the team repo's clone", () => {
     // given
     teamRepoAt("0.4.0");
-    installedCopyAt("0.3.0");
+    marketplaceCopyAt("0.3.0");
     saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
     const gitCalls: string[] = [];
 
@@ -682,7 +686,7 @@ describe("doctor team plugin copy check", () => {
     // then
     const check = byName(report, "team plugin copy");
     expect(check.level).toBe("warn");
-    expect(check.detail).toContain("v0.3.0 installed");
+    expect(check.detail).toContain("marketplace copy is at v0.3.0");
     expect(check.detail).toContain("v0.4.0");
     expect(check.detail).toContain("`/plugin marketplace update t`");
     expect(check.detail).toContain("`/reload-plugins`");
@@ -690,10 +694,26 @@ describe("doctor team plugin copy check", () => {
     expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
   });
 
-  it("given the installed copy matches the team repo, when diagnosed, then it passes", () => {
+  it("given a copy left behind, when diagnosed, then it is a warning and the doctor still exits 0", () => {
+    // given a machine whose auto-update may well be on and simply has not run since the merge
+    teamRepoAt("0.4.0");
+    marketplaceCopyAt("0.3.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    bumpCounter("postToolUse", home);
+
+    // when
+    const report = runDoctor(home, recordingRunner([]), marketRoot);
+
+    // then
+    expect(byName(report, "team plugin copy").level).toBe("warn");
+    expect(report.checks.filter((c) => c.level === "fail")).toEqual([]);
+    expect(doctorExitCode(report)).toBe(0);
+  });
+
+  it("given this machine's marketplace copy matches the team repo, when diagnosed, then it passes", () => {
     // given
     teamRepoAt("0.4.0");
-    installedCopyAt("0.4.0");
+    marketplaceCopyAt("0.4.0");
     saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
 
     // when
@@ -701,12 +721,12 @@ describe("doctor team plugin copy check", () => {
 
     // then
     expect(check.level).toBe("ok");
-    expect(check.detail).toContain("v0.4.0 installed");
+    expect(check.detail).toContain("marketplace copy is at v0.4.0");
   });
 
   it("given solo mode, when diagnosed, then the check is absent and the doctor makes no network call", () => {
     // given
-    installedCopyAt("0.3.0");
+    marketplaceCopyAt("0.3.0");
     const gitCalls: string[] = [];
 
     // when
@@ -731,7 +751,7 @@ describe("doctor team plugin copy check", () => {
 
   it("given the team repo cannot be reached, when diagnosed, then the check is absent rather than guessing", () => {
     // given
-    installedCopyAt("0.3.0");
+    marketplaceCopyAt("0.3.0");
     saveTeamConfig({ repoUrl: join(bare, "missing.git"), marketplaceName: "t" }, home);
 
     // when

@@ -394,14 +394,16 @@ function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; 
 function checkTeamCopy(home: string, remoteVersion: string | undefined, marketRoot: string): DoctorCheck | null {
   const team = loadTeamConfig(home);
   if (!team || !remoteVersion) return null;
-  const installed = readPluginVersion(join(marketRoot, team.marketplaceName));
-  if (!installed) return null;
-  const behind = compareVersions(remoteVersion, installed);
+  const local = readPluginVersion(join(marketRoot, team.marketplaceName));
+  if (!local) return null;
+  const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
-  if (behind <= 0) return ok("team plugin copy", `v${installed} installed, the team repo is at v${remoteVersion}`);
+  if (behind <= 0) {
+    return ok("team plugin copy", `this machine's marketplace copy is at v${local}, the team repo at v${remoteVersion}`);
+  }
   return warn(
     "team plugin copy",
-    `v${installed} installed but the team repo is at v${remoteVersion}, so merged skills have not reached ` +
+    `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached ` +
       `this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; ` +
       "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
   );

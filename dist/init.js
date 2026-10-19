@@ -1094,13 +1094,14 @@ try {
   try { name = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8")).name || name; } catch {}
   const current = readdirSync(join(root, "skills"), { withFileTypes: true })
     .filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  // A merged MCP server raises the plugin version and refreshes every copy exactly as a
-  // skill does. Counting only skills would make that arrive in silence: the teammate
-  // would have a new server connected to their machine and no notice that it happened,
-  // which is half of what this plugin promises. Both shapes seen in the field are read
-  // here - a {"mcpServers": {...}} wrapper and a bare server map - and this deliberately
-  // duplicates the reader in TeamHandbook's own mcp.ts, because this script ships inside
-  // the team's plugin and is not allowed to import anything.
+  // A merged MCP server raises the plugin version and reaches every copy, once its
+  // marketplace updates, exactly as a skill does. Counting only skills would make that
+  // arrive in silence: the teammate would have a new server connected to their machine
+  // and no notice that it happened, which is half of what this plugin promises. Both
+  // shapes seen in the field are read here - a {"mcpServers": {...}} wrapper and a bare
+  // server map - and this deliberately duplicates the reader in TeamHandbook's own
+  // mcp.ts, because this script ships inside the team's plugin and is not allowed to
+  // import anything.
   let servers = [];
   try {
     const parsed = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
@@ -1108,9 +1109,10 @@ try {
     if (map && typeof map === "object") servers = Object.keys(map).sort();
   } catch {}
   // Slash commands merge the same way a skill or server does - one MR, one version bump,
-  // every subscribed copy refreshed - so they get the same notice. Read directly from
-  // commands/ rather than importing TEAM_COMMANDS_DIR, for the same reason mcp.ts is
-  // not imported above: this script ships inside the team's plugin, with no dependencies.
+  // picked up by every subscribed copy when its marketplace updates - so they get the
+  // same notice. Read directly from commands/ rather than importing TEAM_COMMANDS_DIR,
+  // for the same reason mcp.ts is not imported above: this script ships inside the
+  // team's plugin, with no dependencies.
   // A subdirectory is a namespace segment, commands/git/sync.md being git:sync, so a
   // command shared from a subdirectory is announced like any other instead of arriving
   // in silence.
