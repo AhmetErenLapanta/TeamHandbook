@@ -107,6 +107,12 @@ export interface RequestAssignment {
   labels: string[];
 }
 
+/** The repository's address on the web, without the SSH port a remote URL may carry, or
+ * null for a remote that has none, such as a local path. */
+function webAddress(repoUrl: string): string | null {
+  return normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/") ?? null;
+}
+
 /**
  * The request a forge reports having opened on this repository, or null.
  *
@@ -119,8 +125,7 @@ export interface RequestAssignment {
  * with no web address, a local path, is held to the shape alone.
  */
 export function openedRequestUrl(output: string, repoUrl: string): string | null {
-  // The web address has no SSH port in it, which a remote URL may carry.
-  const web = normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/");
+  const web = webAddress(repoUrl);
   const at = web ? web.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\S+?";
   const kind = !web ? "(?:-\\/merge_requests|pull)" : forgeTool(repoUrl) === "gh" ? "pull" : "-\\/merge_requests";
   return output.match(new RegExp(`https?:\\/\\/${at}\\/${kind}\\/\\d+(?=[\\s?#]|$)`, "i"))?.[0] ?? null;
@@ -152,16 +157,21 @@ function outputOf(err: unknown): string {
 
 /**
  * The refusal both forges give a second open request for one source branch, read as what it
- * is: a request this run did not open. gh says "a pull request for branch ... already
- * exists" with its address, GitLab "Another open merge request already exists for this
- * source branch". Its own result rather than an opened one, so a re-run on a branch whose
- * request is already open says so whatever the team file holds.
+ * says: the branch has a request open, so the push that came before is on it. gh says "a
+ * pull request for branch ... already exists" with its address; GitLab says "Another open
+ * merge request already exists for this source branch: !12", and the address is built from
+ * that `!12` and the repository's own. Who opened it is not said, because it cannot be
+ * known here: the first attempt may have opened it without reporting it, or a run before
+ * this one did. The same result whatever the team file holds. With no address to be had,
+ * the forge's own sentence is kept, so the reader can still tell which request it means.
  */
-function existingRequest(repoUrl: string, err: unknown): { url: null; existing: true; error: string } | null {
+function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { url: string | null; existing: true; error?: string } | null {
   const output = outputOf(err);
   if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
-  const url = openedRequestUrl(output, repoUrl);
-  return { url: null, existing: true, error: `a request for this branch already exists${url ? `: ${url}` : ""}` };
+  const web = webAddress(repoUrl);
+  const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : undefined;
+  const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);
+  return url ? { url, existing: true } : { url: null, existing: true, error: `a request for this branch is already open (${forgeFailure(tool, err)})` };
 }
 
 /**
@@ -205,7 +215,7 @@ export function openPr(
     // The branch is already pushed, so this is a soft failure (fall back to a manual
     // link) - but surface WHY, so the user isn't left guessing that gh/glab just
     // needs installing or `gh auth login`.
-    const existing = existingRequest(repoUrl, err);
+    const existing = existingRequest(tool, repoUrl, err);
     if (existing) return existing;
     const reason = forgeFailure(tool, err);
     const code = (err as { code?: string })?.code;
@@ -215,7 +225,7 @@ export function openPr(
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
-      return { ...(existingRequest(repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }), unassigned: reason };
+      return { ...(existingRequest(tool, repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }), unassigned: reason };
     }
   }
 }

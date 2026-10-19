@@ -110,7 +110,7 @@ describe("an assignment the forge refuses", () => {
     expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not request reviewer: 'adaa' not found" });
   });
 
-  it("given a retry the forge answers with the request already open, when it fails, then nothing more is asked and it is not claimed as opened", () => {
+  it("given a retry the forge answers with the request already open, when it fails, then nothing more is asked and that request is the result", () => {
     // the first call may have opened it without saying so, or it was open before this run
     const { forge, calls } = scripted(
       { stderr: "pull request create failed: something went wrong\n" },
@@ -120,12 +120,7 @@ describe("an assignment the forge refuses", () => {
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(2);
-    expect(opened).toEqual({
-      url: null,
-      existing: true,
-      error: `a request for this branch already exists: ${PR}`,
-      unassigned: "pull request create failed: something went wrong",
-    });
+    expect(opened).toEqual({ url: PR, existing: true, unassigned: "pull request create failed: something went wrong" });
   });
 
   it("given a retry that fails as well, when it is over, then no request is claimed and both reasons are kept", () => {
@@ -168,34 +163,41 @@ describe("an assignment the forge refuses", () => {
 describe("a request already open for the branch", () => {
   const alreadyOpen = { stderr: `a pull request for branch "TEAM-12" into branch "main" already exists:\n${PR}\n` };
 
-  it("given an assignment, when the first call is refused as a second request, then it is asked once and the request is not claimed", () => {
+  it("given an assignment, when the first call is refused as a second request, then it is asked once and the open request is the result", () => {
     const { forge, calls } = scripted(alreadyOpen);
 
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(1);
-    expect(opened).toEqual({ url: null, existing: true, error: `a request for this branch already exists: ${PR}` });
+    expect(opened).toEqual({ url: PR, existing: true });
   });
 
   it("given no assignment, when the same refusal comes back, then the result is the same one", () => {
     const { forge } = scripted(alreadyOpen);
 
-    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge)).toEqual({
-      url: null,
-      existing: true,
-      error: `a request for this branch already exists: ${PR}`,
-    });
+    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge)).toEqual({ url: PR, existing: true });
   });
 
-  it("given GitLab's refusal, which names no address, when the request is opened, then it is still read as already open", () => {
-    const { forge, calls } = scripted({
-      stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n",
-    });
+  const gitlabConflict = { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" };
+
+  it("given GitLab's refusal, which names the request only as !12, when the request is opened, then its address is built from that and the repository", () => {
+    const { forge, calls } = scripted(gitlabConflict);
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(1);
-    expect(opened).toEqual({ url: null, existing: true, error: "a request for this branch already exists" });
+    expect(opened).toEqual({ url: MR, existing: true });
+  });
+
+  it("given that refusal on a repository with no web address, when the request is opened, then the forge's own sentence is kept with its !12", () => {
+    const { forge } = scripted(gitlabConflict);
+
+    expect(openPr("/srv/git/skills.git", "TEAM-12", "t", "b", "/repo", forge, ASSIGNED)).toEqual({
+      url: null,
+      existing: true,
+      error:
+        "a request for this branch is already open (409 Conflict {message: [Another open merge request already exists for this source branch: !12]})",
+    });
   });
 
   it("given a refusal that ends on a bare address, when its reason is read, then the reason is the sentence before it", () => {

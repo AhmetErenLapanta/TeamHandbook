@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
 import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
-import { assignmentNoteLines, assignmentNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
+import { requestNoteLines, requestNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
 import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
@@ -1041,8 +1041,9 @@ export interface InitResult {
   prUrl?: string;
   manualUrl?: string;
   prError?: string;
-  // what the request could not carry of the team's reviewers and labels, and why
-  assignmentNotes?: string[];
+  // what the reader still needs to know about the request: what it could not carry of the
+  // team's reviewers and labels and why, or that it was already open for the branch
+  requestNotes?: string[];
   // files the repository already had, left untouched
   skipped?: string[];
   withCi?: boolean;
@@ -1199,6 +1200,7 @@ export function initTeamRepo(
   let prUrl: string | null = null;
   let prError: string | undefined;
   let notes: string[] = [];
+  let alreadyOpen = false;
   if (!direct) {
     // Read back from the clone rather than taken from the flags, so a team file the
     // repository already had, and kept, is what the request is assigned by.
@@ -1214,7 +1216,8 @@ export function initTeamRepo(
     );
     prUrl = opened.url;
     prError = opened.error;
-    notes = assignmentNotes(dropped, assigned, opened);
+    alreadyOpen = opened.existing === true;
+    notes = requestNotes(dropped, assigned, opened);
   }
   saveTeamConfig(
     {
@@ -1239,8 +1242,8 @@ export function initTeamRepo(
     commitMessage: decided.subject,
     ...(prUrl ? { prUrl } : {}),
     ...(prError ? { prError } : {}),
-    ...(notes.length ? { assignmentNotes: notes } : {}),
-    ...(!direct && !prUrl ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
+    ...(notes.length ? { requestNotes: notes } : {}),
+    ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
   };
 }
 
@@ -1279,7 +1282,7 @@ export function formatInitSuccess(result: InitResult): string {
     // wording may be the user's own, and it may have gained the team's prefix on the way.
     ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     `  config:      team repo saved to ${displayPath(join(result.home ?? "", "config.json"))}`,
-    ...assignmentNoteLines(result.assignmentNotes),
+    ...requestNoteLines(result.requestNotes),
     "",
     // A handbook is normally private, and a private repo needs two separate things
     // from each teammate: access to the repo, and credentials on their machine. The

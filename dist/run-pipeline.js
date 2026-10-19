@@ -1056,9 +1056,6 @@ function writeCandidate(artifact, home = handbookHome()) {
   return dir;
 }
 
-// src/lib/branch.ts
-var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
-
 // src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
@@ -1078,7 +1075,6 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
-var TEAM_PREFIX_FILE = ".teamhandbook.json";
 function marketplacesRoot() {
   return join8(homedir4(), ".claude", "plugins", "marketplaces");
 }

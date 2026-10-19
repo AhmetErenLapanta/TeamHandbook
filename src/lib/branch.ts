@@ -336,33 +336,41 @@ function assignmentList(assignment: RequestAssignment): string | null {
   return parts.length ? parts.join("; ") : null;
 }
 
-const CORRECT_THE_LIST =
-  `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
-
 /**
- * What a result says about the assignment of its request: what the team file held that
- * could not be used, what the forge refused and why, and what a request opened by hand
- * still needs. A request that was already open for the branch is not one this run opened,
- * so nothing is said about what it carries.
+ * What a result says about its request beyond the link: that the branch already had one
+ * open, what the team file held that could not be used, what the forge refused and why,
+ * and what a request still needs by hand. A request already open is not called opened,
+ * and what it carries is not claimed either way: this run did not set it.
  */
-export function assignmentNotes(
+export function requestNotes(
   dropped: string | null,
   assignment: RequestAssignment,
   pr: { url: string | null; unassigned?: string; existing?: true },
 ): string[] {
   const list = assignmentList(assignment);
   const refused = list && pr.unassigned ? `the forge refused ${list} (${pr.unassigned})` : null;
+  // Built here, at the call, and never as a module constant: branch.ts and init.ts import
+  // each other, and the bundle evaluates this module before TEAM_PREFIX_FILE is assigned, so
+  // a constant read it as undefined in every dist/ entry while the tests, run as ES modules,
+  // saw the right name.
+  const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
+  const opened = pr.url && !pr.existing;
   return [
+    ...(pr.existing
+      ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."]
+      : []),
     ...(dropped ? [dropped] : []),
-    ...(refused && pr.url ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${CORRECT_THE_LIST}`] : []),
-    ...(refused && !pr.url ? [`The assignment did not go: ${refused}. Before it is asked for again, ${CORRECT_THE_LIST}`] : []),
+    ...(refused && opened ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${correct}`] : []),
+    ...(refused && pr.existing ? [`The assignment did not go: ${refused}. Add them on the open request if it lacks them, and ${correct}`] : []),
+    ...(refused && !pr.url && !pr.existing ? [`The assignment did not go: ${refused}. Before it is asked for again, ${correct}`] : []),
+    ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
     ...(list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []),
   ];
 }
 
 /** The lines a result prints about its reviewers and labels: what the team file held that
  * could not be used, and what the request is still missing. */
-export function assignmentNoteLines(notes: string[] | undefined): string[] {
+export function requestNoteLines(notes: string[] | undefined): string[] {
   return notes?.length ? ["", ...notes] : [];
 }
 
@@ -749,8 +757,9 @@ export interface RequestOutcome {
   /** The description the request should carry and could not, when GitLab opened it from a
    * push: the reviewer still needs it, so the caller prints it to be pasted in. */
   unattachedDescription?: string;
-  /** What the request could not carry of the team's reviewers and labels, and why. */
-  assignmentNotes?: string[];
+  /** What the reader still needs to know about the request: what it could not carry of the
+   * team's reviewers and labels and why, or that it was already open for the branch. */
+  requestNotes?: string[];
 }
 
 /** Open the merge request for a branch that has just been pushed, by whichever route this
@@ -768,11 +777,16 @@ export function openRequest(
   const manualUrl = manualPrUrl(repoUrl, branch) ?? undefined;
   const { assignment, dropped } = readTeamAssignment(repoDir);
   const withNotes = (outcome: RequestOutcome, notes: string[]): RequestOutcome =>
-    notes.length ? { ...outcome, assignmentNotes: notes } : outcome;
+    notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
     const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
-    const notes = assignmentNotes(dropped, assignment, pr);
-    return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...(pr.error ? { prError: pr.error } : {}) }, notes);
+    const notes = requestNotes(dropped, assignment, pr);
+    // A request already open is the request, and a link to open another would only send the
+    // reader to a page the forge refuses.
+    return withNotes(
+      pr.url ? { prUrl: pr.url } : { ...(pr.existing ? {} : { manualUrl }), ...(pr.error ? { prError: pr.error } : {}) },
+      notes,
+    );
   }
   const url = pushed.optionsSent ? openedRequestUrl(pushed.output, repoUrl) : null;
   if (url) {
@@ -786,7 +800,7 @@ export function openRequest(
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
   const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
-  return withNotes({ manualUrl, prError }, assignmentNotes(dropped, assignment, { url: null }));
+  return withNotes({ manualUrl, prError }, requestNotes(dropped, assignment, { url: null }));
 }
 
 /**

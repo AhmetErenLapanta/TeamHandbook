@@ -21,7 +21,7 @@ import { runGit } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { forgeNotice, forgeSignInProblem, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
-import { assignmentNoteLines, unattachedDescriptionLines } from "./branch.js";
+import { requestNoteLines, unattachedDescriptionLines } from "./branch.js";
 import { overlappingSkills } from "./skill-health.js";
 import { listExistingSkills } from "./skill-index.js";
 import { listSkillFiles } from "./skill-files.js";
@@ -997,7 +997,7 @@ export function formatShareResult(
         "    that became a duplicate, with the command that removes it",
       );
     }
-    lines.push(...assignmentNoteLines(shared.assignmentNotes));
+    lines.push(...requestNoteLines(shared.requestNotes));
     lines.push(...unattachedDescriptionLines(shared.unattachedDescription));
   }
   // Asked for once, about the whole request, because the request is what it is about.

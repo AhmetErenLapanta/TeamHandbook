@@ -834,6 +834,47 @@ describe("a branch named for one share", () => {
   });
 });
 
+describe("the assignment sentence in the shipped bundle", () => {
+  it("given a reviewer the forge refuses, when the shipped share command reports it, then the team file is named rather than undefined", () => {
+    // Measured on dist/, because the defect lived only there: branch.ts and init.ts import
+    // each other, the bundle evaluates branch.ts first, and a module constant built from
+    // TEAM_PREFIX_FILE read it as undefined while every test of the source saw the name.
+    const userHome = temp("handbook-user-");
+    writeAll(userHome, {
+      ".claude/skills/my-skill/SKILL.md": "---\nname: my-skill\ndescription: What my-skill is for.\n---\n\nBody.\n",
+      ".gitconfig": "[user]\n\tname = Dev\n\temail = dev@acme.example\n",
+    });
+    const bare = bareHandbook(teamFile({ reviewers: ["adaa"] }));
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "acme-skills", joinedAt: "2026-02-02T00:00:00Z" }, home);
+    // A glab that is signed in, refuses the request while it carries a reviewer, and opens
+    // it without one: the path the sentence is printed on.
+    const bin = temp("handbook-bin-");
+    writeFileSync(
+      join(bin, "glab"),
+      "#!/bin/sh\n" +
+        '[ "$1" = auth ] && exit 0\n' +
+        'for a in "$@"; do case "$a" in --reviewer=*) echo "failed to find user by name : adaa" >&2; exit 1;; esac; done\n' +
+        "echo https://gitlab.example/acme/skills/-/merge_requests/3\n",
+    );
+    chmodSync(join(bin, "glab"), 0o755);
+    const repoRoot = join(dirname(new URL(import.meta.url).pathname), "..", "..");
+
+    const out = execFileSync(
+      process.execPath,
+      [join(repoRoot, "dist", "share.js"), "share", "--skill", "my-skill", "--message", "add my skill", "--branch", "TEAM-12-mine"],
+      {
+        cwd: temp("handbook-project-"),
+        encoding: "utf8",
+        env: { ...process.env, HOME: userHome, TEAMHANDBOOK_HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(out).toContain("merge request: https://gitlab.example/acme/skills/-/merge_requests/3");
+    expect(out).toContain(`if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`);
+    expect(out).not.toContain("undefined");
+  });
+});
+
 describe("a forge CLI that does not answer", () => {
   it("given a check that times out, when the sign-in is asked, then it is asked once, briefly, and read as no request possible", () => {
     const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
@@ -1232,7 +1273,7 @@ describe("the reviewers and labels without the forge CLI", () => {
       branch: "TEAM-12",
     });
 
-    expect(result.assignmentNotes).toEqual(["Add labels skills to the request when you open it."]);
+    expect(result.requestNotes).toEqual(["Add labels skills to the request when you open it."]);
   });
 
   it("given GitHub and no gh, when the branch is pushed, then the link comes with the assignment to add", () => {
@@ -1252,27 +1293,50 @@ describe("the reviewers and labels without the forge CLI", () => {
 });
 
 describe("a request already open for the branch it pushes", () => {
-  const alreadyOpen: ForgeRunner = (_tool, args) => {
-    if (args[0] === "auth") return "Logged in";
-    throw Object.assign(new Error("Command failed"), {
-      stderr: 'a pull request for branch "TEAM-12" into branch "main" already exists:\nhttps://github.com/acme/skills/pull/9\n',
-    });
+  const PR9 = "https://github.com/acme/skills/pull/9";
+  const alreadyOpen = (first?: string): ForgeRunner => {
+    let creates = 0;
+    return (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      creates++;
+      const stderr =
+        first && creates === 1 ? first : `a pull request for branch "TEAM-12" into branch "main" already exists:\n${PR9}\n`;
+      throw Object.assign(new Error("Command failed"), { stderr });
+    };
   };
-
-  it.each([
-    ["records reviewers", { reviewers: ["ada"] }],
-    ["records none", {}],
-  ])("given a team file that %s, when a re-run finds the request open, then it is reported as already open and not as opened", (_name, extra) => {
-    const bare = bareHandbook(teamFile(extra));
-
-    const result = publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(GITHUB), hostedAt(GITHUB, bare), alreadyOpen, {
+  const share = (bare: string, forge: ForgeRunner) =>
+    publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(GITHUB), hostedAt(GITHUB, bare), forge, {
       commitMessage: APPROVED,
       branch: "TEAM-12",
     });
 
-    expect(result).toMatchObject({ ok: true, prError: "a request for this branch already exists: https://github.com/acme/skills/pull/9" });
-    expect(result.prUrl).toBeUndefined();
-    expect(result.assignmentNotes).toBeUndefined();
+  it.each([
+    ["records reviewers", { reviewers: ["ada"] }, ["This run did not change who reviews it: add reviewers @ada on it if it lacks them."]],
+    ["records none", {}, []],
+  ])("given a team file that %s, when a re-run finds the request open, then that request is shown and no link to open another", (_name, extra, more) => {
+    const result = share(bareHandbook(teamFile(extra)), alreadyOpen());
+
+    expect(result).toMatchObject({ ok: true, prUrl: PR9 });
+    expect(result.manualUrl).toBeUndefined();
+    expect(result.prError).toBeUndefined();
+    expect(result.requestNotes).toEqual([
+      "The forge reported a request already open for this branch, so none was opened: the push is on that one.",
+      ...more,
+    ]);
+    const text = formatShareResult({ team: result, refused: [] });
+    expect(text).toContain(`  - merge request: ${PR9}`);
+    expect(text).not.toContain("open the merge request:");
+  });
+
+  it("given a first attempt that failed without a word and a retry told the request is open, when it is shown, then the request is the result and the refusal is kept", () => {
+    const result = share(bareHandbook(teamFile({ reviewers: ["adaa"] })), alreadyOpen("could not request reviewer: 'adaa' not found\n"));
+
+    expect(result).toMatchObject({ ok: true, prUrl: PR9 });
+    expect(result.manualUrl).toBeUndefined();
+    expect(formatShareResult({ team: result, refused: [] })).toContain(
+      "The assignment did not go: the forge refused reviewers @adaa (could not request reviewer: 'adaa' not found). " +
+        "Add them on the open request if it lacks them, and if a name in .teamhandbook.json is wrong",
+    );
   });
 });
 

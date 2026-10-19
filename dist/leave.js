@@ -228,9 +228,6 @@ var CUT_SCOPE_SENTENCE = new RegExp(
   `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
 );
 
-// src/lib/branch.ts
-var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
-
 // src/lib/display-path.ts
 import { homedir as homedir2 } from "node:os";
 import { sep } from "node:path";
@@ -278,7 +275,6 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
-var TEAM_PREFIX_FILE = ".teamhandbook.json";
 function formatLeaveSuccess(team) {
   return [
     `Left the team skill base at ${team.repoUrl}. TeamHandbook is in solo mode again.`,

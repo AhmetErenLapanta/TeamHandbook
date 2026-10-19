@@ -197,8 +197,9 @@ export interface PublishOutcome {
   prError?: string;
   // the PR body, when GitLab opened the request from the push and could not attach it
   unattachedDescription?: string;
-  // what the request could not carry of the team's reviewers and labels, and why
-  assignmentNotes?: string[];
+  // what the reader still needs to know about the request: what it could not carry of the
+  // team's reviewers and labels and why, or that it was already open for the branch
+  requestNotes?: string[];
   // the subject the commit was made with, prefix included: what the user is told went
   // out, rather than what they were offered
   commitMessage?: string;
@@ -575,8 +576,9 @@ export interface TeamPublishOutcome {
   manualUrl?: string;
   // the PR body, when GitLab opened the request from the push and could not attach it
   unattachedDescription?: string;
-  // what the request could not carry of the team's reviewers and labels, and why
-  assignmentNotes?: string[];
+  // what the reader still needs to know about the request: what it could not carry of the
+  // team's reviewers and labels and why, or that it was already open for the branch
+  requestNotes?: string[];
   // variables each teammate must set before the server will start for them
   requiresEnv?: string[];
   startsProcess?: boolean;

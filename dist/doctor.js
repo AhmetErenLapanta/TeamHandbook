@@ -834,7 +834,6 @@ function readRecordedAssignment(repoDir) {
   }
   return { recorded, unreadable };
 }
-var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
 function versionParts(version) {
   const parts = version.split(".").map(Number);
   return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;

@@ -810,8 +810,11 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   }
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
+function webAddress(repoUrl) {
+  return normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/") ?? null;
+}
 function openedRequestUrl(output, repoUrl) {
-  const web = normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/");
+  const web = webAddress(repoUrl);
   const at = web ? web.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\S+?";
   const kind = !web ? "(?:-\\/merge_requests|pull)" : forgeTool(repoUrl) === "gh" ? "pull" : "-\\/merge_requests";
   return output.match(new RegExp(`https?:\\/\\/${at}\\/${kind}\\/\\d+(?=[\\s?#]|$)`, "i"))?.[0] ?? null;
@@ -834,11 +837,13 @@ function outputOf(err) {
   return `${typeof e?.stdout === "string" ? e.stdout : ""}
 ${typeof e?.stderr === "string" ? e.stderr : ""}`;
 }
-function existingRequest(repoUrl, err) {
+function existingRequest(tool, repoUrl, err) {
   const output = outputOf(err);
   if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
-  const url = openedRequestUrl(output, repoUrl);
-  return { url: null, existing: true, error: `a request for this branch already exists${url ? `: ${url}` : ""}` };
+  const web = webAddress(repoUrl);
+  const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : void 0;
+  const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);
+  return url ? { url, existing: true } : { url: null, existing: true, error: `a request for this branch is already open (${forgeFailure(tool, err)})` };
 }
 function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { reviewers: [], labels: [] }) {
   const tool = forgeTool(repoUrl);
@@ -853,7 +858,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
   try {
     return { url: create(flags) };
   } catch (err) {
-    const existing = existingRequest(repoUrl, err);
+    const existing = existingRequest(tool, repoUrl, err);
     if (existing) return existing;
     const reason = forgeFailure(tool, err);
     const code = err?.code;
@@ -863,7 +868,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
-      return { ...existingRequest(repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }, unassigned: reason };
+      return { ...existingRequest(tool, repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }, unassigned: reason };
     }
   }
 }
@@ -1013,18 +1018,22 @@ function assignmentList(assignment) {
   ];
   return parts.length ? parts.join("; ") : null;
 }
-var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
-function assignmentNotes(dropped, assignment, pr) {
+function requestNotes(dropped, assignment, pr) {
   const list = assignmentList(assignment);
   const refused = list && pr.unassigned ? `the forge refused ${list} (${pr.unassigned})` : null;
+  const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
+  const opened = pr.url && !pr.existing;
   return [
+    ...pr.existing ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."] : [],
     ...dropped ? [dropped] : [],
-    ...refused && pr.url ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${CORRECT_THE_LIST}`] : [],
-    ...refused && !pr.url ? [`The assignment did not go: ${refused}. Before it is asked for again, ${CORRECT_THE_LIST}`] : [],
+    ...refused && opened ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${correct}`] : [],
+    ...refused && pr.existing ? [`The assignment did not go: ${refused}. Add them on the open request if it lacks them, and ${correct}`] : [],
+    ...refused && !pr.url && !pr.existing ? [`The assignment did not go: ${refused}. Before it is asked for again, ${correct}`] : [],
+    ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
     ...list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []
   ];
 }
-function assignmentNoteLines(notes) {
+function requestNoteLines(notes) {
   return notes?.length ? ["", ...notes] : [];
 }
 function remoteHeads(git, repoDir) {
@@ -1214,11 +1223,14 @@ function pushBranch(git, repoDir, ref, options = []) {
 function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
   const { assignment, dropped } = readTeamAssignment(repoDir);
-  const withNotes = (outcome, notes) => notes.length ? { ...outcome, assignmentNotes: notes } : outcome;
+  const withNotes = (outcome, notes) => notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
     const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
-    const notes = assignmentNotes(dropped, assignment, pr);
-    return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} }, notes);
+    const notes = requestNotes(dropped, assignment, pr);
+    return withNotes(
+      pr.url ? { prUrl: pr.url } : { ...pr.existing ? {} : { manualUrl }, ...pr.error ? { prError: pr.error } : {} },
+      notes
+    );
   }
   const url = pushed.optionsSent ? openedRequestUrl(pushed.output, repoUrl) : null;
   if (url) {
@@ -1230,7 +1242,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
   const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
-  return withNotes({ manualUrl, prError }, assignmentNotes(dropped, assignment, { url: null }));
+  return withNotes({ manualUrl, prError }, requestNotes(dropped, assignment, { url: null }));
 }
 function pushFailure(repoUrl, branch, subject, err, rerun, commitPrefixFix) {
   const fix = [
@@ -3018,7 +3030,7 @@ function formatShareResult(result, marketplaceName, duplicates = NO_DUPLICATES) 
         "    that became a duplicate, with the command that removes it"
       );
     }
-    lines.push(...assignmentNoteLines(shared.assignmentNotes));
+    lines.push(...requestNoteLines(shared.requestNotes));
     lines.push(...unattachedDescriptionLines(shared.unattachedDescription));
   }
   if (shared && !shared.ok && shared.proposedMessage && shared.error) {

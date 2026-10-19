@@ -12,7 +12,7 @@ import type { GitRunner, TeamConfig } from "./init.js";
 import { renameSkillMd } from "./distill.js";
 import { copySkillPayload } from "./skill-files.js";
 import { conflictingOptions, mayUpdate, publishCandidate, runForge } from "./publish.js";
-import { assignmentNoteLines, unattachedDescriptionLines } from "./branch.js";
+import { requestNoteLines, unattachedDescriptionLines } from "./branch.js";
 import type { Collision, ForgeRunner, PublishOptions } from "./publish.js";
 import { handbookHome } from "./session-state.js";
 import { checkoutRoot } from "./session-workflow.js";
@@ -163,8 +163,9 @@ export interface DeliverResult {
   prError?: string;
   // the PR body, when GitLab opened the request from the push and could not attach it
   unattachedDescription?: string;
-  // what the request could not carry of the team's reviewers and labels, and why
-  assignmentNotes?: string[];
+  // what the reader still needs to know about the request: what it could not carry of the
+  // team's reviewers and labels and why, or that it was already open for the branch
+  requestNotes?: string[];
   // The name the skill was actually filed under. It is not always the one the reviewer
   // typed, and for a year it was nowhere in this type: publishCandidate picked
   // skills/foo-2, deliver dropped the field on the way through, and the CLI printed the
@@ -468,7 +469,7 @@ function deliverToTeam(
     manualUrl: published.manualUrl,
     ...(published.prError ? { prError: published.prError } : {}),
     ...(published.unattachedDescription ? { unattachedDescription: published.unattachedDescription } : {}),
-    ...(published.assignmentNotes ? { assignmentNotes: published.assignmentNotes } : {}),
+    ...(published.requestNotes ? { requestNotes: published.requestNotes } : {}),
   };
 }
 
@@ -698,7 +699,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     // What the commit says, in the reviewer's own words when they gave any: the request
     // is theirs, and the sentence on it is the one thing about it they were asked for.
     if (result.commitMessage) lines.push(`The commit says: ${result.commitMessage}`);
-    lines.push(...assignmentNoteLines(result.assignmentNotes));
+    lines.push(...requestNoteLines(result.requestNotes));
     lines.push(...unattachedDescriptionLines(result.unattachedDescription));
     return lines.join("\n");
   }

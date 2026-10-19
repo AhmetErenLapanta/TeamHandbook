@@ -17,7 +17,7 @@ import {
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion, symlinkOnPath } from "./publish.js";
 import {
-  assignmentNoteLines,
+  requestNoteLines,
   assignmentRecordProblem,
   branchAnswer,
   branchNameProblem,
@@ -419,8 +419,9 @@ export interface UpgradeResult {
   proposedBranch?: string;
   /** The request body, when GitLab opened the request from the push and could not attach it. */
   unattachedDescription?: string;
-  /** What the request could not carry of the team's reviewers and labels, and why. */
-  assignmentNotes?: string[];
+  /** What the reader still needs to know about the request: what it could not carry of the
+   * team's reviewers and labels and why, or that it was already open for the branch. */
+  requestNotes?: string[];
 }
 
 /** The name every refresh branch is proposed from. */
@@ -1007,7 +1008,7 @@ export function formatUpgradeResult(result: UpgradeResult): string {
     ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
     "",
     "Nothing reaches anyone until that is merged.",
-    ...assignmentNoteLines(result.assignmentNotes),
+    ...requestNoteLines(result.requestNotes),
     ...unattachedDescriptionLines(result.unattachedDescription),
   ].join("\n");
 }
