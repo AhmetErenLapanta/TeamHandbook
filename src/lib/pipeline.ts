@@ -13,9 +13,16 @@ import {
 import { basename, join } from "node:path";
 import { teamSkillsDir } from "./init.js";
 import { writeFileAtomic } from "./fs-atomic.js";
-import { handbookHome } from "./session-state.js";
+import {
+  handbookHome,
+  loadSessionState,
+  orphanedSessionIds,
+  saveSessionState,
+  sessionHasSubstance,
+  withSessionLock,
+} from "./session-state.js";
 import type { Signal } from "./signals.js";
-import { appendSignals, ledgerFingerprintCounts } from "./signals.js";
+import { appendSignals, flushResolvedPairs, ledgerFingerprintCounts, ledgerPairsForSession } from "./signals.js";
 import { signalSecret } from "./secrets.js";
 import { incrementRedactionBlocked, bumpCounter } from "./counters.js";
 import { runRuleSieves } from "./gate.js";
@@ -134,6 +141,89 @@ export function hasPendingHarvestJobs(home: string = handbookHome()): boolean {
       return false; // swept while we looked; the next start will see whatever is left
     }
   });
+}
+
+/**
+ * Salvage sessions that ended without SessionEnd firing (rage-quit, crash): flush
+ * their evidence and harvest them - otherwise a whole session's lessons would
+ * evaporate unprocessed. Returns whether the background runner should be started.
+ *
+ * A stale mtime cannot distinguish a crashed session from a live-but-idle one, so
+ * everything here is NON-destructive: flushResolvedPairs keeps the session file and
+ * its open errors, and the harvestedAt marker (not deletion) provides idempotency.
+ * Salvaging a live session by mistake costs at most harvesting its finished work a
+ * little early: SessionEnd harvests it again if its transcript has grown since.
+ *
+ * The flush runs whether or not the harvest is on. The switches stop the sending, not
+ * the local capture, and with the harvest off a crashed session's resolved pairs used
+ * to be deleted with its file a week later without ever reaching the ledger.
+ */
+export function salvageOrphans(currentSessionId?: string, home: string = handbookHome()): boolean {
+  const harvesting = gateAutoEnabled(home) && loadHarvestConfig(home).enabled && lessonHarvestEnabled(home);
+  let enqueued = 0;
+  for (const id of orphanedSessionIds(home)) {
+    if (id === currentSessionId) continue;
+    withSessionLock(
+      id,
+      () => {
+        const state = loadSessionState(id, home);
+        flushResolvedPairs(id, home); // evidence into the ledger, session file untouched
+        if (!harvesting || state.harvestedAt) return; // off, or already salvaged once
+        // Only stamp a session we ACTUALLY harvest. Stamping first would mark an idle
+        // orphan that has no substance yet, and SessionEnd - which skips a stamped
+        // session - would then drop that session's real work, silently and forever.
+        if (!sessionHasSubstance(state)) return;
+        const pairs = ledgerPairsForSession(id, home);
+        const counts = ledgerFingerprintCounts(home);
+        const recurrence: Record<string, number> = {};
+        for (const pair of pairs) recurrence[pair.fingerprint] = counts.get(pair.fingerprint) ?? 1;
+        enqueueHarvestJob(
+          {
+            sessionId: id,
+            cwd: pairs[0]?.cwd ?? "",
+            ...(state.transcriptPath ? { transcriptPath: state.transcriptPath } : {}),
+            evidence: {
+              pairs,
+              ...(state.activity ? { work: state.activity } : {}),
+              ...(state.corrections?.length ? { corrections: state.corrections } : {}),
+              recurrence,
+            },
+          },
+          home,
+        );
+        const fresh = loadSessionState(id, home);
+        fresh.harvestedAt = new Date().toISOString();
+        const bytes = transcriptBytes(state.transcriptPath);
+        if (bytes !== undefined) fresh.harvestedBytes = bytes;
+        saveSessionState(fresh, home);
+        enqueued += 1;
+      },
+      home,
+    );
+  }
+  // The runner is spawned for the QUEUE, not only for what this start just added to
+  // it. A harvest whose model call fails re-queues itself with attempts+1, but nothing
+  // ever drained that retry: salvage stamps each session harvestedAt once, so `enqueued`
+  // is 0 at every later start, and SessionEnd skips a stamped session too. Measured on a
+  // real home: two jobs sat at attempts 1 for 23 hours across many sessions, while the
+  // start notice kept telling the user they were "harvesting in the background". A
+  // transient failure became a permanent loss. Draining an empty queue costs one
+  // readdir and no model call, and the retry cannot run away: drainHarvestJobs spends
+  // an attempt at the CLAIM and writes it to the job before the model call, so a job
+  // whose runners keep being killed is abandoned after MAX_HARVEST_ATTEMPTS claims
+  // rather than costing one model call per session start forever. Counting attempts
+  // where the failure is reported would have capped nothing here, because a killed
+  // runner never gets to report anything.
+  return harvesting && (enqueued > 0 || hasPendingHarvestJobs(home));
+}
+
+function transcriptBytes(path: string | undefined): number | undefined {
+  if (!path) return undefined;
+  try {
+    return statSync(path).size;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ClaimedJob {
@@ -441,6 +531,28 @@ function cleanupStaleHarvestMarkers(home: string, now: number = Date.now()): voi
   }
 }
 
+const CLAIM_HEARTBEAT_MS = 60_000;
+
+/**
+ * Keeps claims fresh while their runner still holds them. A drain stamps every claim at once and
+ * the jobs then run one after another, so with four 180s calls queued the last claim passed the
+ * ten-minute horizon before its turn, and the next session start reclaimed and harvested it twice.
+ */
+export function keepClaimsFresh(files: string[], everyMs: number = CLAIM_HEARTBEAT_MS): () => void {
+  const timer = setInterval(() => {
+    const at = new Date();
+    for (const file of files) {
+      try {
+        utimesSync(file, at, at);
+      } catch {
+        // released, or already finished and gone
+      }
+    }
+  }, everyMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 /** Run one harvest job: harvest → write candidates → log; retry or abandon on error. */
 export async function runHarvestJob(
   job: HarvestJob,
@@ -474,7 +586,13 @@ export async function runHarvestJob(
   if (!gateAutoEnabled(home) || !loadHarvestConfig(home).enabled) {
     return { outcome: "skipped", reason: AUTO_HARVEST_OFF, written: [] };
   }
-  const summary = await harvestSession(job, home, deps);
+  const stopMarker = marker ? keepClaimsFresh([marker]) : () => {};
+  let summary: HarvestSummary;
+  try {
+    summary = await harvestSession(job, home, deps);
+  } finally {
+    stopMarker();
+  }
   const log: PipelineSummary = {
     received: summary.produced ?? 0,
     sievedOut: summary.dropped?.length ?? 0,

@@ -955,16 +955,17 @@ var init_fs_atomic = __esm({
 
 // src/lib/session-state.ts
 import { homedir as homedir2, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname as dirname2, join } from "node:path";
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir2(), ".teamhandbook");
 }
-var EDIT_ATTACH_WINDOW_MS, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
+var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
     "use strict";
     init_fs_atomic();
     EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+    SLEEPER = new Int32Array(new SharedArrayBuffer(4));
     SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
     SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
   }
@@ -1058,7 +1059,7 @@ var init_skill_index = __esm({
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync2, readdirSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -3666,7 +3667,7 @@ var DRAFT_TIMEOUT_MS = 3e5;
 // src/lib/session-workflow.ts
 import { appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync3, realpathSync, statSync, writeFileSync as writeFileSync3 } from "node:fs";
 init_config();
-import { basename as basename4, dirname as dirname3, join as join7, relative, resolve, sep } from "node:path";
+import { basename as basename4, dirname as dirname4, join as join7, relative, resolve, sep } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -3708,7 +3709,7 @@ function repositoryOf(dir) {
       }
     } catch {
     }
-    const up = dirname3(at);
+    const up = dirname4(at);
     if (up === at) return null;
     at = up;
   }

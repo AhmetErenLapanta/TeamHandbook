@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { writeFileAtomic } from "./fs-atomic.js";
 import type { CorrectionNote } from "./corrections.js";
 
@@ -82,6 +82,9 @@ export interface SessionState {
   // set when salvage already harvested this (possibly still-alive) session, so an
   // orphan is never harvested twice
   harvestedAt?: string;
+  // the transcript's size when salvage harvested it, so SessionEnd can tell a session
+  // that was only idle and then carried on from one that ended where salvage found it
+  harvestedBytes?: number;
   // Whether the user's own literal, unexpanded /handbook:learn slash command is
   // still an open, unconsumed ask (see capture.ts's captureLearnInvocation for the
   // set/invalidate side of the lifecycle, and learn.ts's
@@ -151,6 +154,7 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
         ? { meaningfulToolCalls: parsed.meaningfulToolCalls }
         : {}),
       ...(typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {}),
+      ...(typeof parsed.harvestedBytes === "number" ? { harvestedBytes: parsed.harvestedBytes } : {}),
       ...(Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {}),
       ...(typeof parsed.explicitLearnPending === "boolean"
         ? { explicitLearnPending: parsed.explicitLearnPending }
@@ -164,6 +168,55 @@ export function loadSessionState(sessionId: string, home: string = handbookHome(
 
 export function saveSessionState(state: SessionState, home: string = handbookHome()): void {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
+}
+
+const LOCK_WAIT_MS = 2_000;
+const LOCK_STALE_MS = 10_000;
+const LOCK_RETRY_MS = 10;
+const SLEEPER = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * Runs `fn` holding this session's lock: parallel tool calls fire hooks that load, edit and save
+ * the same file, and one of two racing saves was lost. A stale lock is broken; past the wait the
+ * capture runs unlocked rather than not at all.
+ */
+export function withSessionLock<T>(
+  sessionId: string | undefined,
+  fn: () => T,
+  home: string = handbookHome(),
+  waitMs: number = LOCK_WAIT_MS,
+): T {
+  if (!sessionId) return fn();
+  const lock = `${sessionFile(sessionId, home)}.lock`;
+  const held = acquireLock(lock, waitMs);
+  try {
+    return fn();
+  } finally {
+    if (held) rmSync(lock, { force: true });
+  }
+}
+
+function acquireLock(lock: string, waitMs: number): boolean {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      mkdirSync(dirname(lock), { recursive: true });
+      closeSync(openSync(lock, "wx"));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") return false;
+    }
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        rmSync(lock, { force: true });
+        continue;
+      }
+    } catch {
+      continue; // released between the create and the stat
+    }
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(SLEEPER, 0, 0, LOCK_RETRY_MS);
+  }
 }
 
 // A session is worth harvesting when it did real work. Deterministic and free -
@@ -204,6 +257,29 @@ export function orphanedSessionIds(
   home: string = handbookHome(),
   now: number = Date.now(),
 ): string[] {
+  return sessionIdsUntouchedFor(SESSION_ORPHAN_MS, home, now);
+}
+
+/** Session ids whose file is old enough for cleanup to delete: no session behind them is alive. */
+export function deadSessionIds(home: string = handbookHome(), now: number = Date.now()): string[] {
+  return sessionIdsUntouchedFor(SESSION_MAX_AGE_MS, home, now);
+}
+
+/**
+ * Whether a session salvage already harvested has written more of its transcript since. A
+ * session idle past the orphan horizon is salvaged as if it had crashed, and when it was only
+ * idle, everything after that point would never be harvested.
+ */
+export function resumedSinceSalvage(state: SessionState, transcriptPath: string | undefined): boolean {
+  if (!state.harvestedAt || state.harvestedBytes === undefined || !transcriptPath) return false;
+  try {
+    return statSync(transcriptPath).size > state.harvestedBytes;
+  } catch {
+    return false;
+  }
+}
+
+function sessionIdsUntouchedFor(ageMs: number, home: string, now: number): string[] {
   const dir = join(home, "sessions");
   let entries: string[];
   try {
@@ -215,7 +291,7 @@ export function orphanedSessionIds(
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
     try {
-      if (now - statSync(join(dir, entry)).mtimeMs > SESSION_ORPHAN_MS) {
+      if (now - statSync(join(dir, entry)).mtimeMs > ageMs) {
         ids.push(entry.replace(/\.json$/, ""));
       }
     } catch {

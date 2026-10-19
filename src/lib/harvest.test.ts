@@ -17,6 +17,7 @@ import { archiveCandidate, readCandidateMeta, writeCandidateMeta } from "./queue
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
 import { UNTRUSTED_OPEN } from "./prompt-safety.js";
+import { readTeachings } from "./teachings.js";
 
 let home: string;
 
@@ -663,6 +664,28 @@ describe("harvestSession (end to end with a fake runner)", () => {
     });
   });
 
+  it("given a fix that edited files inside its repository, when the candidate is written, then the paths are relative to it", async () => {
+    // given a pair recorded with absolute edit paths under the directory it ran in
+    const reply = JSON.stringify([
+      rawItem({ kind: "error-fix", name: "fix-npm-snapshot", quote: undefined, source: "pair:abcdefabcdefabcd" }),
+    ]);
+    const absolute: HarvestEvidence = {
+      ...evidence,
+      pairs: [{ ...evidence.pairs[0]!, cwd: HOME_PATH, edits: [`${HOME_PATH}/src/app.ts`] }],
+    };
+    // when the session is harvested
+    await harvestSession(job({ evidence: absolute }), home, {
+      runner: async () => reply,
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+    // then the grounded case names the file the way the repository does, and nothing is marked
+    const dir = join(candidatesDir(home), "fix-npm-snapshot");
+    expect(JSON.parse(readFileSync(join(dir, "grounded-case.json"), "utf8")).edits).toEqual(["src/app.ts"]);
+    expect(readCandidateMeta(dir)?.hygiene).toBeUndefined();
+  });
+
   it("given a session with nothing of the machine in it, when a candidate is written, then it carries no mark", async () => {
     const reply = JSON.stringify([rawItem()]);
 
@@ -829,8 +852,8 @@ describe("harvestSession (end to end with a fake runner)", () => {
   });
 
   it("given the same lesson taught in an earlier session, when harvested again, then the candidate carries the repeat count", async () => {
-    const teach = (text: string) => ({
-      ...job(),
+    const teach = (sessionId: string, text: string) => ({
+      ...job({ sessionId }),
       evidence: { ...evidence, corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text }] },
     });
     const deps = (name: string) => ({
@@ -840,11 +863,85 @@ describe("harvestSession (end to end with a fake runner)", () => {
       skillDirs: () => [],
     });
 
-    await harvestSession(teach("in this repo we never mock the database, use testcontainers"), home, deps("first-pass"));
-    await harvestSession(teach("again, we never mock the database, use testcontainers"), home, deps("second-pass"));
+    await harvestSession(teach("s1", "in this repo we never mock the database, use testcontainers"), home, deps("first-pass"));
+    await harvestSession(teach("s2", "again, we never mock the database, use testcontainers"), home, deps("second-pass"));
 
     expect(readCandidateMeta(join(candidatesDir(home), "first-pass"))?.taughtBefore).toBeUndefined();
     expect(readCandidateMeta(join(candidatesDir(home), "second-pass"))?.taughtBefore).toBe(1);
+  });
+
+  it("given a harvest whose model call failed, when the same session is retried, then its own teaching is not counted as an earlier one", async () => {
+    // given a session that taught one rule, and a first attempt whose call fails
+    const session = {
+      ...job(),
+      evidence: {
+        ...evidence,
+        corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text: "in this repo we never mock the database, use testcontainers" }],
+      },
+    };
+    const failed = await harvestSession(session, home, {
+      runner: async () => {
+        throw new Error("logged out");
+      },
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+    expect(failed.outcome).toBe("error");
+    // when the retry reaches the model
+    let retryPrompt = "";
+    await harvestSession(session, home, {
+      runner: async (prompt: string) => {
+        retryPrompt = prompt;
+        return JSON.stringify([rawItem({ name: "retried", quote: "we never mock the database, use testcontainers" })]);
+      },
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+    // then nothing claims the rule was typed before, and the candidate carries no repeat
+    expect(retryPrompt).toContain("we never mock the database");
+    expect(retryPrompt).not.toContain("also typed in");
+    expect(readCandidateMeta(join(candidatesDir(home), "retried"))?.taughtBefore).toBeUndefined();
+  });
+
+  it("given a session salvaged and then ended, when it is harvested a second time, then its own teaching is not counted as an earlier one", async () => {
+    // given one session, harvested by salvage and again by SessionEnd after it resumed
+    const salvaged = {
+      ...job(),
+      evidence: {
+        ...evidence,
+        corrections: [{ at: "2026-08-01T00:00:00Z", kind: "convention", text: "in this repo we never mock the database, use testcontainers" }],
+      },
+    };
+    const ended = {
+      ...salvaged,
+      evidence: {
+        ...salvaged.evidence,
+        corrections: [
+          ...salvaged.evidence.corrections,
+          { at: "2026-08-01T05:00:00Z", kind: "convention", text: "again: don't mock the database - use testcontainers" },
+        ],
+      },
+    };
+    const deps = (name: string, seen: { prompt: string }) => ({
+      runner: async (prompt: string) => {
+        seen.prompt = prompt;
+        return JSON.stringify([rawItem({ name, quote: "we never mock the database, use testcontainers" })]);
+      },
+      remoteUrl: () => null,
+      listSkills: () => [],
+      skillDirs: () => [],
+    });
+    await harvestSession(salvaged, home, deps("salvaged-lesson", { prompt: "" }));
+    // when SessionEnd harvests the same session again
+    const second = { prompt: "" };
+    await harvestSession(ended, home, deps("session-end-lesson", second));
+    // then the rule reads as typed once, in one session
+    expect(second.prompt).toContain("we never mock the database");
+    expect(second.prompt).not.toContain("also typed in");
+    expect(readCandidateMeta(join(candidatesDir(home), "session-end-lesson"))?.taughtBefore).toBeUndefined();
+    expect(readTeachings(home)).toMatchObject([{ count: 1, sessions: ["s1"] }]);
   });
 
   it("given a repeated teaching, when the prompt is built, then the model is told how many earlier sessions taught it", () => {

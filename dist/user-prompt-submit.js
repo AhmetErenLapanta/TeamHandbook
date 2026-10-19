@@ -204,8 +204,8 @@ function noteCorrection(notes, prompt, at = (/* @__PURE__ */ new Date()).toISOSt
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
+import { dirname as dirname2, join } from "node:path";
+import { closeSync, mkdirSync as mkdirSync2, mkdtempSync, openSync, readFileSync, readdirSync, rmSync as rmSync2, statSync } from "node:fs";
 
 // src/lib/fs-atomic.ts
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -264,6 +264,7 @@ function loadSessionState(sessionId, home = handbookHome()) {
       ...typeof parsed.transcriptPath === "string" ? { transcriptPath: parsed.transcriptPath } : {},
       ...typeof parsed.meaningfulToolCalls === "number" ? { meaningfulToolCalls: parsed.meaningfulToolCalls } : {},
       ...typeof parsed.harvestedAt === "string" ? { harvestedAt: parsed.harvestedAt } : {},
+      ...typeof parsed.harvestedBytes === "number" ? { harvestedBytes: parsed.harvestedBytes } : {},
       ...Array.isArray(parsed.corrections) ? { corrections: parsed.corrections } : {},
       ...typeof parsed.explicitLearnPending === "boolean" ? { explicitLearnPending: parsed.explicitLearnPending } : {},
       ...workflow ? { workflow } : {}
@@ -274,6 +275,42 @@ function loadSessionState(sessionId, home = handbookHome()) {
 }
 function saveSessionState(state, home = handbookHome()) {
   writeFileAtomic(sessionFile(state.sessionId, home), JSON.stringify(state, null, 2));
+}
+var LOCK_WAIT_MS = 2e3;
+var LOCK_STALE_MS = 1e4;
+var LOCK_RETRY_MS = 10;
+var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
+function withSessionLock(sessionId, fn, home = handbookHome(), waitMs = LOCK_WAIT_MS) {
+  if (!sessionId) return fn();
+  const lock = `${sessionFile(sessionId, home)}.lock`;
+  const held = acquireLock(lock, waitMs);
+  try {
+    return fn();
+  } finally {
+    if (held) rmSync2(lock, { force: true });
+  }
+}
+function acquireLock(lock, waitMs) {
+  const deadline = Date.now() + waitMs;
+  for (; ; ) {
+    try {
+      mkdirSync2(dirname2(lock), { recursive: true });
+      closeSync(openSync(lock, "wx"));
+      return true;
+    } catch (err) {
+      if (err?.code !== "EEXIST") return false;
+    }
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        rmSync2(lock, { force: true });
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(SLEEPER, 0, 0, LOCK_RETRY_MS);
+  }
 }
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
@@ -311,8 +348,10 @@ function captureLearnInvocation(input, home = handbookHome()) {
 async function main() {
   const input = parseHookInput(await readStdin());
   if (!input) return;
-  captureCorrection(input);
-  captureLearnInvocation(input);
+  withSessionLock(input.session_id, () => {
+    captureCorrection(input);
+    captureLearnInvocation(input);
+  });
 }
 main().then(
   () => process.exit(0),

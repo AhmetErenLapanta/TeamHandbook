@@ -4,37 +4,42 @@ import { enqueueHarvestJob, spawnPipelineRunner } from "../lib/pipeline.js";
 import { gateAutoEnabled } from "../lib/score.js";
 import { lessonHarvestEnabled, loadHarvestConfig } from "../lib/harvest.js";
 import { flushSessionEnd, ledgerFingerprintCounts, ledgerPairsForSession } from "../lib/signals.js";
-import { loadSessionState, sessionHasSubstance } from "../lib/session-state.js";
+import { loadSessionState, resumedSinceSalvage, sessionHasSubstance, withSessionLock } from "../lib/session-state.js";
 import { finishWorkflowSession } from "../lib/session-workflow.js";
 
 async function main(): Promise<void> {
   const input = parseHookInput(await readStdin());
   if (!input?.session_id) return;
-  // Read the state BEFORE the flush deletes it: the harvest needs the transcript
-  // path and the substance evidence.
-  const state = loadSessionState(input.session_id);
-  const substance = sessionHasSubstance(state);
-  // salvage may already have harvested this session (laptop sleep > 3h, then the
-  // original window closes) - a second harvest is a second claude call and up to
-  // 3 more candidates against a documented cap of 3
-  const alreadyHarvested = !!state.harvestedAt;
-  const transcriptPath = state.transcriptPath ?? input.transcript_path;
-  // Before the flush, which deletes the state this reads, and before the substance check, which
-  // would leave a short session out of the denominator.
-  finishWorkflowSession(input, state);
-  flushSessionEnd(input.session_id);
+  const sessionId = input.session_id;
+  const { state, substance, alreadyHarvested, transcriptPath } = withSessionLock(sessionId, () => {
+    // Read the state BEFORE the flush deletes it: the harvest needs the transcript
+    // path and the substance evidence.
+    const state = loadSessionState(sessionId);
+    const transcriptPath = state.transcriptPath ?? input.transcript_path;
+    // salvage may already have harvested this session (laptop sleep > 3h, then the
+    // original window closes) - a second harvest is a second claude call and up to
+    // 3 more candidates against a documented cap of 3. Unless the session carried on
+    // after salvage: then its later work has never been harvested.
+    const alreadyHarvested = !!state.harvestedAt && !resumedSinceSalvage(state, transcriptPath);
+    const substance = sessionHasSubstance(state);
+    // Before the flush, which deletes the state this reads, and before the substance check, which
+    // would leave a short session out of the denominator.
+    finishWorkflowSession(input, state);
+    flushSessionEnd(sessionId);
+    return { state, substance, alreadyHarvested, transcriptPath };
+  });
   if (!substance || alreadyHarvested) return; // trivial or already harvested - no claude call
   // gate.auto=false / harvest.enabled=false: capture stays local; nothing is sent
   // to claude -p unless the user explicitly runs /handbook:learn. harvest.lessons is
   // the newer switch and is off by default, so this hook ends here on a stock install -
   // the evidence above has already been flushed, which is the part Phase 2 builds on.
   if (!gateAutoEnabled() || !loadHarvestConfig().enabled || !lessonHarvestEnabled()) return;
-  const pairs = ledgerPairsForSession(input.session_id);
+  const pairs = ledgerPairsForSession(sessionId);
   const counts = ledgerFingerprintCounts();
   const recurrence: Record<string, number> = {};
   for (const pair of pairs) recurrence[pair.fingerprint] = counts.get(pair.fingerprint) ?? 1;
   enqueueHarvestJob({
-    sessionId: input.session_id,
+    sessionId,
     cwd: input.cwd ?? pairs[0]?.cwd ?? "",
     ...(transcriptPath ? { transcriptPath } : {}),
     evidence: {

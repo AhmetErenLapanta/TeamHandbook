@@ -1,5 +1,6 @@
 import { readStdin, parseHookInput } from "../lib/hook-io.js";
 import { flushResolvedPairs } from "../lib/signals.js";
+import { withSessionLock } from "../lib/session-state.js";
 
 // Stop persists evidence, nothing more: each turn's resolved pairs move into the
 // durable ledger so a later crash cannot lose them. The harvest itself runs once,
@@ -7,7 +8,8 @@ import { flushResolvedPairs } from "../lib/signals.js";
 async function main(): Promise<void> {
   const input = parseHookInput(await readStdin());
   if (!input?.session_id) return;
-  flushResolvedPairs(input.session_id);
+  const sessionId = input.session_id;
+  withSessionLock(sessionId, () => flushResolvedPairs(sessionId));
 }
 
 main().then(

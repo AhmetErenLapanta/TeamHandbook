@@ -12,8 +12,8 @@ var init_fs_atomic = __esm({
 
 // src/lib/session-state.ts
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 function handbookHome() {
   return process.env.TEAMHANDBOOK_HOME ?? join(homedir(), ".teamhandbook");
 }
@@ -26,12 +26,13 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
-var EDIT_ATTACH_WINDOW_MS, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
+var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
     "use strict";
     init_fs_atomic();
     EDIT_ATTACH_WINDOW_MS = 15 * 60 * 1e3;
+    SLEEPER = new Int32Array(new SharedArrayBuffer(4));
     SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
     SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
   }
@@ -488,7 +489,7 @@ var init_secrets = __esm({
 
 // src/lib/skill-files.ts
 import { copyFileSync, mkdirSync as mkdirSync2, readdirSync as readdirSync3, writeFileSync } from "node:fs";
-import { dirname, join as join4 } from "node:path";
+import { dirname as dirname2, join as join4 } from "node:path";
 function isQueueBookkeeping(name) {
   return name.startsWith("candidate.json");
 }
@@ -519,7 +520,7 @@ function copySkillPayload(srcDir, destDir, skillMd, files = listSkillFiles(srcDi
   for (const rel of files) {
     if (rel === "SKILL.md") continue;
     const target = join4(destDir, rel);
-    mkdirSync2(dirname(target), { recursive: true });
+    mkdirSync2(dirname2(target), { recursive: true });
     copyFileSync(join4(srcDir, rel), target);
   }
 }
@@ -711,7 +712,7 @@ import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname2, join as join7 } from "node:path";
+import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -1606,7 +1607,7 @@ init_queue();
 // src/lib/publish.ts
 init_session_state();
 import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join10, relative } from "node:path";
+import { dirname as dirname4, join as join10, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -2219,7 +2220,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       if (going.length) writeFileSync3(target, merged);
       for (const command of goingCommands) {
         const file = join10(repoDir, TEAM_COMMANDS_DIR, commandFile(command.name));
-        mkdirSync5(dirname3(file), { recursive: true });
+        mkdirSync5(dirname4(file), { recursive: true });
         writeFileSync3(file, command.content);
       }
       for (const skill of goingSkills) {

@@ -26,7 +26,12 @@ This document states exactly what it reads, what it writes, and where data goes.
 - **`SessionStart`: the same, for sessions that ended without `SessionEnd` firing**
   (crash, terminal kill, power loss). A session file untouched for 3 hours is
   salvaged at the start of a later session, so a crashed session's transcript can be
-  read and harvested after the fact. Each session is salvaged at most once.
+  read and harvested after the fact. Each session is salvaged at most once. Its
+  resolved error→fix pairs move into the local ledger then whether or not the harvest
+  is on, and a session that was only idle and carried on is harvested again at its real
+  end, but only if its transcript grew. A session file a week old is retired the way
+  `SessionEnd` would have closed it: its open errors go to the ledger, and the file is
+  deleted.
 - Your local git config and credentials - only when *you* approve a candidate and it
   opens a pull request, using your own identity.
 - **Your installed skills, read-only, and only when you run `/handbook:share`:** the
@@ -64,24 +69,29 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 - `sessions/` - per-session working state: the failing command and its fix, the
   transcript path, any flagged teachings, and the paths of files written inside a
   repository, with a mark in place of any path shaped like a credential. Kept until the
-  session ends or is salvaged.
+  session ends, or for a week when it never does. A hook writing to one holds a `.lock`
+  file beside it for that moment.
 - `signals.jsonl` - the evidence ledger of captured error→fix pairs.
 - `pending/` - harvest jobs waiting for the background runner: one file per session
   holding its id, cwd, the **path** to its transcript, and the captured evidence.
-  The runner claims a job by rename and deletes it before calling `claude`.
+  The runner claims a job by rename and deletes it once the run is over, not before
+  calling `claude`: a runner killed mid-call leaves the claim to be picked up again, and
+  a failed call puts the job back in the queue. A job is claimed at most three times
+  before it is set aside in `abandoned.jsonl`.
 - `candidates/` - the review queue: each pending lesson's `SKILL.md`, its grounded
   case, and its metadata.
 - `counters.json`, `pipeline.log` - activity counters and one line per harvest run
   (what was produced, sieved, or errored). `pipeline.log` is rotated, never deleted.
 - `teachings.json` - what you have already said, so a rule you give twice is
   recognized as a repeat instead of scored as a guess. Holds the content words of each
-  recorded prompt, a count, and a 160-character sample of your own sentence - the same
-  text the session files already keep, behind the same secret scan, capped at the 2000
-  most recent - about three months. Since prompts are no longer pre-filtered by an
-  English phrase list, this file now holds ordinary prompts alongside rules; nothing is
-  ever read out of it except by matching against a lesson the model has already
-  proposed, so what it remembers only surfaces when it is the thing you taught. Local
-  only.
+  recorded prompt, a count, the ids of the last sessions that said it (so a session
+  harvested twice is not counted as its own repeat), and a 160-character sample of your
+  own sentence - the same text the session files already keep, behind the same secret
+  scan, capped at the 2000 most recent - about three months. Since prompts are no longer
+  pre-filtered by an English phrase list, this file now holds ordinary prompts alongside
+  rules; nothing is ever read out of it except by matching against a lesson the model
+  has already proposed, so what it remembers only surfaces when it is the thing you
+  taught. Local only.
 - `skill-usage.json` - how many times each skill has fired, and when. Claude Code
   reports a skill invocation to the same hook TeamHandbook already listens on, so this
   is a name, a running count, the time of the last call, and how many calls fell on each
@@ -245,7 +255,10 @@ These, and only these:
      into `~/.teamhandbook/config.json`. On GitLab, with no `glab` to open the request,
      the push asks GitLab to open it (push options); the request's title is the commit
      message you approved, and its description, which a push cannot carry, is printed for
-     you to paste.
+     you to paste. The one push that does not ask is the first `/handbook:init`: it
+     pushes the scaffold to `handbook/scaffold` by default, or `<prefix>scaffold` with
+     `--branch-prefix`, or straight to the default branch of an empty repository, after
+     you have confirmed the repository itself. Its message is still yours.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
@@ -529,7 +542,7 @@ restricted invocation; upgrading Claude Code is the fix.
 
 ### A team repository you joined
 
-`/handbook:join` clones a repository somebody else controls. Two values are read out of
+`/handbook:join` clones a repository somebody else controls. Three values are read out of
 it, and each is screened where it is read.
 
 The marketplace name in `.claude-plugin/marketplace.json` goes on to be a directory under
@@ -551,7 +564,13 @@ and an escape sequence would rewrite what you are shown. A prefix that fails eit
 is refused with the reason and nothing is recorded, exactly as a bad marketplace name is.
 It is never used to name a file, run a command, or reach the network.
 
-Those two are what `/handbook:join` itself reads. A repository you have joined also ships
+The example branch name in the same `.teamhandbook.json` shows how branches are named
+there, so every push can propose a name in that shape. It is stored in your config and
+only ever shown as a proposal you confirm or change, and it is accepted only when it is at
+most 100 characters, carries no control character, and holds no trace of a machine and
+nothing the secret detector flags; otherwise it is left out.
+
+Those three are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what
 you already have - including into the prompt that decides whether a new candidate
 duplicates one. A name is therefore screened too, at the point it would otherwise become

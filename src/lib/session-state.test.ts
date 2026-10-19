@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildSync } from "esbuild";
 import {
   attachEditToOpenErrors,
   cleanupStaleSessionFiles,
@@ -10,8 +13,11 @@ import {
   recordFailure,
   resolveOpenErrors,
   saveSessionState,
+  resumedSinceSalvage,
   sessionHasSubstance,
+  withSessionLock,
 } from "./session-state.js";
+import type { SessionState } from "./session-state.js";
 
 let home: string;
 
@@ -202,5 +208,121 @@ describe("harvest evidence fields + substance check", () => {
     ];
 
     expect(sessionHasSubstance(chatting)).toBe(false);
+  });
+});
+
+describe("withSessionLock", () => {
+  const lockOf = (id: string) => join(home, "sessions", `${id}.json.lock`);
+
+  it("given no other holder, when it runs, then the work runs and the lock is gone afterwards", () => {
+    // given an uncontended session
+    // when work runs under its lock
+    const result = withSessionLock("s1", () => 42, home);
+    // then it returned and left nothing behind
+    expect(result).toBe(42);
+    expect(existsSync(lockOf("s1"))).toBe(false);
+  });
+
+  it("given the work throws, when it runs, then the lock is still released", () => {
+    // given work that fails
+    // when it runs under the lock, then the error surfaces and the lock is gone
+    expect(() =>
+      withSessionLock("s1", () => {
+        throw new Error("boom");
+      }, home),
+    ).toThrow("boom");
+    expect(existsSync(lockOf("s1"))).toBe(false);
+  });
+
+  it("given a lock left by a hook that died, when another hook runs, then it breaks the lock and runs", () => {
+    // given a lock file older than any live holder
+    mkdirSync(join(home, "sessions"), { recursive: true });
+    writeFileSync(lockOf("s1"), "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockOf("s1"), old, old);
+    // when work runs under the lock
+    const started = Date.now();
+    const result = withSessionLock("s1", () => "ran", home);
+    // then it did not wait out the deadline
+    expect(result).toBe("ran");
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("given a live holder that never lets go, when another hook runs, then it runs after the wait rather than not at all", () => {
+    // given a fresh lock nobody will release
+    mkdirSync(join(home, "sessions"), { recursive: true });
+    writeFileSync(lockOf("s1"), "");
+    // when work runs with a short wait
+    const result = withSessionLock("s1", () => "ran", home, 100);
+    // then the capture still happened, and the other holder's lock was left alone
+    expect(result).toBe("ran");
+    expect(existsSync(lockOf("s1"))).toBe(true);
+  });
+
+  it("given several processes updating one session at once, when each holds the lock, then no update is lost", async () => {
+    // given a script that loads the session, waits long enough to overlap, and saves one more error
+    const scratch = mkdtempSync(join(tmpdir(), "handbook-lock-"));
+    try {
+      const entry = join(scratch, "entry.ts");
+      const source = fileURLToPath(new URL("./session-state.ts", import.meta.url));
+      writeFileSync(
+        entry,
+        [
+          `import { loadSessionState, saveSessionState, withSessionLock } from ${JSON.stringify(source)};`,
+          "const [home, n] = process.argv.slice(2);",
+          "withSessionLock(\"s1\", () => {",
+          "  const state = loadSessionState(\"s1\", home);",
+          "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);",
+          "  state.openErrors.push({ fingerprint: `f${n}`, family: \"npm test\", command: \"npm test\", error: \"e\", cwd: \"/repo\", count: 1, firstSeenAt: \"\", lastSeenAt: \"\", edits: [] });",
+          "  saveSessionState(state, home);",
+          "}, home);",
+        ].join("\n"),
+      );
+      const bundle = join(scratch, "entry.mjs");
+      buildSync({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile: bundle, logLevel: "silent" });
+      // when eight of them run at the same time
+      const runs = Array.from({ length: 8 }, (_, n) =>
+        new Promise<number>((done) => spawn(process.execPath, [bundle, home, String(n)]).on("exit", (code) => done(code ?? 1))),
+      );
+      const codes = await Promise.all(runs);
+      // then every one of the eight errors is in the session file
+      expect(codes.every((code) => code === 0)).toBe(true);
+      expect(loadSessionState("s1", home).openErrors.map((e) => e.fingerprint).sort()).toEqual(
+        Array.from({ length: 8 }, (_, n) => `f${n}`).sort(),
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+describe("resumedSinceSalvage", () => {
+  function salvaged(bytes: number | undefined): SessionState {
+    return { ...emptySessionState("s1"), harvestedAt: "2026-08-08T00:00:00Z", ...(bytes === undefined ? {} : { harvestedBytes: bytes }) };
+  }
+
+  it("given a transcript that grew after salvage, when the session ends, then it counts as resumed", () => {
+    // given a session salvaged at 10 bytes whose transcript is now longer
+    const transcript = join(home, "t.jsonl");
+    writeFileSync(transcript, "x".repeat(25));
+    // when it is checked, then the later work is recognized
+    expect(resumedSinceSalvage(salvaged(10), transcript)).toBe(true);
+  });
+
+  it("given a transcript the size salvage saw, when the session ends, then it is not harvested again", () => {
+    // given a session that never carried on
+    const transcript = join(home, "t.jsonl");
+    writeFileSync(transcript, "x".repeat(25));
+    // when it is checked, then it is not resumed
+    expect(resumedSinceSalvage(salvaged(25), transcript)).toBe(false);
+  });
+
+  it("given a salvage recorded before sizes were kept, when the session ends, then it keeps the old answer", () => {
+    // given a stamped session with no recorded size
+    const transcript = join(home, "t.jsonl");
+    writeFileSync(transcript, "x".repeat(25));
+    // when it is checked, then it is treated as already harvested
+    expect(resumedSinceSalvage(salvaged(undefined), transcript)).toBe(false);
+    expect(resumedSinceSalvage({ ...emptySessionState("s1") }, transcript)).toBe(false);
   });
 });

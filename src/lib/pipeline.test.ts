@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -9,10 +9,12 @@ import {
   releaseHarvestJob,
   enqueueHarvestJob,
   hasPendingHarvestJobs,
+  keepClaimsFresh,
   pendingDir,
   pipelineLogFile,
   runHarvestJob,
   runManualSignal,
+  salvageOrphans,
   spawnPipelineRunner,
 } from "./pipeline.js";
 import { readCounters } from "./counters.js";
@@ -158,6 +160,47 @@ describe("harvest job hand-off", () => {
 
   it("drains an empty home without error", () => {
     expect(drainHarvestJobs(home)).toEqual([]);
+  });
+
+  it("given a runner still holding claims past the horizon, when another runner drains, then it takes none of them", () => {
+    // given a runner that drained two jobs and is still working through them ten minutes on
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      enqueueHarvestJob(job(home), home);
+      enqueueHarvestJob(job(home, { sessionId: "s2" }), home);
+      const held = drainHarvestJobs(home);
+      const stop = keepClaimsFresh(held.map((c) => c.claimedFile), 1_000);
+      const old = new Date(Date.now() - 11 * 60 * 1000);
+      for (const c of held) utimesSync(c.claimedFile, old, old);
+      vi.advanceTimersByTime(1_000);
+      // when a second runner drains the queue
+      const second = drainHarvestJobs(home);
+      stop();
+      // then both claims are still the first runner's
+      expect(second).toEqual([]);
+      expect(held.every((c) => existsSync(c.claimedFile))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("given claims that were kept fresh, when the runner stops, then they are no longer touched", () => {
+    // given a heartbeat that has been stopped
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      enqueueHarvestJob(job(home), home);
+      const held = drainHarvestJobs(home);
+      const stop = keepClaimsFresh(held.map((c) => c.claimedFile), 1_000);
+      stop();
+      const old = new Date(Date.now() - 11 * 60 * 1000);
+      utimesSync(held[0]!.claimedFile, old, old);
+      // when time passes
+      vi.advanceTimersByTime(5_000);
+      // then the claim ages normally and can be reclaimed
+      expect(drainHarvestJobs(home)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -306,6 +349,28 @@ describe("harvest once per transcript state", () => {
       .split("\n")
       .map((l) => JSON.parse(l));
   }
+
+  it("given a model call that outlasts the claim horizon, when it is still running, then its marker is kept fresh", async () => {
+    // given a runner whose call takes long enough for the marker to age past ten minutes
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let ageDuringCall = Number.POSITIVE_INFINITY;
+      const slowRunner: ClaudeRunner = async () => {
+        const marker = join(harvestedDir(home), readdirSync(harvestedDir(home))[0]!);
+        const old = new Date(Date.now() - 11 * 60 * 1000);
+        utimesSync(marker, old, old);
+        vi.advanceTimersByTime(60_000);
+        ageDuringCall = Date.now() - statSync(marker).mtimeMs;
+        return harvestReply;
+      };
+      // when the job runs
+      await runHarvestJob(job(home), home, { ...deps, runner: slowRunner });
+      // then the heartbeat touched the marker while the call was in flight
+      expect(ageDuringCall).toBeLessThan(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("given a completed run for a session, when the same job is claimed again, then no model call, no candidate, and a logged reason", async () => {
     const calls = { n: 0 };
@@ -952,5 +1017,71 @@ describe("spawnPipelineRunner", () => {
       [process.execPath, ["/plugin/dist/run-pipeline.js"], { detached: true, stdio: "ignore" }],
     ]);
     expect(unrefd).toBe(true);
+  });
+});
+
+describe("salvageOrphans", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const pair = {
+    fingerprint: "abcdefabcdefabcd",
+    family: "npm test",
+    command: "npm test",
+    error: "1 test failed",
+    cwd: "/repo",
+    count: 1,
+    firstSeenAt: "2026-08-08T00:00:00Z",
+    lastSeenAt: "2026-08-08T00:00:00Z",
+    edits: ["src/app.ts"],
+    resolvedAt: "2026-08-08T00:01:00Z",
+    resolvedCommand: "npm test",
+  };
+
+  function crashedSession(id: string): string {
+    const transcript = join(home, `${id}.jsonl`);
+    writeFileSync(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "fix the failing test" } }) + "\n");
+    saveSessionState({ ...emptySessionState(id), resolvedPairs: [pair], transcriptPath: transcript }, home);
+    const old = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    utimesSync(join(home, "sessions", `${id}.json`), old, old);
+    return transcript;
+  }
+
+  function ledger(): string {
+    return existsSync(join(home, "signals.jsonl")) ? readFileSync(join(home, "signals.jsonl"), "utf8") : "";
+  }
+
+  it("given the harvest is off, when a crashed session is salvaged, then its pairs reach the ledger and nothing is queued", () => {
+    // given a stock install and a session that died with a resolved pair
+    crashedSession("crashed");
+    // when the next session starts
+    const spawnRunner = salvageOrphans("current", home);
+    // then the evidence is kept locally and no harvest is started
+    expect(ledger()).toContain("abcdefabcdefabcd");
+    expect(loadSessionState("crashed", home).resolvedPairs).toEqual([]);
+    expect(loadSessionState("crashed", home).harvestedAt).toBeUndefined();
+    expect(spawnRunner).toBe(false);
+    expect(hasPendingHarvestJobs(home)).toBe(false);
+  });
+
+  it("given the harvest is on, when a crashed session is salvaged, then it is queued and stamped with its transcript size", () => {
+    // given the harvest switched on and a session that died with real work
+    enableLessons(home);
+    const transcript = crashedSession("crashed");
+    // when the next session starts
+    const spawnRunner = salvageOrphans("current", home);
+    // then it is queued once, and the size it was harvested at is recorded
+    const state = loadSessionState("crashed", home);
+    expect(spawnRunner).toBe(true);
+    expect(hasPendingHarvestJobs(home)).toBe(true);
+    expect(state.harvestedAt).toBeDefined();
+    expect(state.harvestedBytes).toBe(statSync(transcript).size);
   });
 });
