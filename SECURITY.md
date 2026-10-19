@@ -68,8 +68,9 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
 
 - `sessions/` - per-session working state: the failing command and its fix, the
   transcript path, any flagged teachings, and the paths of files written inside a
-  repository. Kept until the session ends, or for a week when it never does. A hook
-  writing to one holds a `.lock` file beside it for that moment.
+  repository, with a mark in place of any path shaped like a credential. Kept until the
+  session ends, or for a week when it never does. A hook writing to one holds a `.lock`
+  file beside it for that moment.
 - `signals.jsonl` - the evidence ledger of captured error→fix pairs.
 - `pending/` - harvest jobs waiting for the background runner: one file per session
   holding its id, cwd, the **path** to its transcript, and the captured evidence.
@@ -131,7 +132,9 @@ Nothing deletes the directory for you.
 - **A secret in a format the detector recognizes is redacted before anything is
   written - the session files included.** A captured command, error, or edit that
   matches a secret pattern is dropped entirely and reduced to a content-free
-  fingerprint (only a redaction counter is kept). For transcript slices the mechanism
+  fingerprint (only a redaction counter is kept). An error is checked with its token lines
+  as they were printed: masking its numbers for the fingerprint never touches a line the
+  detector flags, and the length cap never keeps only the head of one. For transcript slices the mechanism
   differs by necessity: a matching line is replaced in place with `[redacted:<type>]`
   rather than dropping the whole slice, and above that sits a coarser rule - a message
   carrying key material is dropped whole, because a per-line pass cannot follow a key
@@ -143,10 +146,14 @@ Nothing deletes the directory for you.
   image format's first bytes. Without those exemptions one lockfile line cost the whole
   message, and a lockfile is nothing but those lines. A per-line pass also needs each line
   to arrive whole, and the slice cuts an over-long developer turn down to its head and its
-  tail: neither cut splits a line the detector would flag. Most credential rules are
+  tail, and an over-long assistant turn down to its head: no cut splits a line the detector
+  would flag. Most credential rules are
   anchored to a keyword beside the value, so a cut through `password: ...` would leave the
   value on a line with no keyword left on it, where no rule can see it; such a line is
-  taken whole or not at all. The number of redacted lines is recorded in `pipeline.log`.
+  taken whole or not at all. Two rules read across lines - a `.netrc` entry written one
+  field per line, and an access key id with its secret a few lines below - so a second pass
+  reads every run of up to four lines and redacts the whole run when it holds a secret that
+  none of its lines holds alone. The number of redacted lines is recorded in `pipeline.log`.
   Either way the raw secret text reaches neither disk nor the model. Detection is
   best-effort pattern matching (see `src/lib/secrets.ts`); a secret in an unrecognized
   format can slip through, so review a candidate before approving it. What
@@ -173,7 +180,10 @@ These, and only these:
    `{"harvest": {"lessons": true}}` in `~/.teamhandbook/config.json`, so on a stock
    install no session is read and nothing is sent. `{"harvest": {"enabled": false}}` and
    `{"gate": {"auto": false}}` remain as the older switches, and all three are checked
-   before a session is queued. Capture itself keeps running either way: the hooks that
+   before a session is queued and again before a queued session is sent, so turning one
+   off also stops the jobs already waiting. The prompt reaches `claude` on its standard
+   input, never in its command line, where any local user could read it in a process
+   listing. Capture itself keeps running either way: the hooks that
    record errors and activity write to your machine only. `/handbook:learn` follows the
    same switch and sends only what you asked it to capture.
    - Precisely: those switches stop the SENDING, not the local capture. The
@@ -212,6 +222,11 @@ These, and only these:
      Anything one is found in is refused rather than sent, and the refusal names the class
      and where it sits without printing the trace itself; the rest of your selection still
      goes.
+   - The team repository is cloned and written to, and a repository can commit a
+     symbolic link. A share, an approval to the team or a version bump that would write
+     through one - `.mcp.json`, a command, a skill directory or `.claude-plugin/plugin.json`
+     linked somewhere on your machine - is refused before its first write, so it can never
+     edit or delete a file outside the clone.
    - `/handbook:review` screens a candidate the same way and prints what it finds before
      you choose where it goes. Approving it to the team, or into a project - where it is
      committed with the repository - is refused on those grounds. Keeping it for yourself
@@ -394,7 +409,10 @@ is copied on its own, not away from someone who has your home directory.
 **Screening.** Before a line is written, the repository-relative paths, the roles and the
 branch it is built from are scanned for a trace of this machine's identity and for
 secrets, and the finished line is scanned again. A hit drops the whole line rather than
-masking part of it, and a counter in `counters.json` says how many were dropped.
+masking part of it, and a counter in `counters.json` says how many were dropped. A file
+written under a path shaped like a credential never reaches the session file: the session
+is marked instead, and a line built from its other files is dropped and counted the same
+way. When those files alone are no workflow, no line is built, so nothing is counted.
 
 **The mined record.** `/handbook:mine` keeps its last listing in `mined-workflows.json`:
 each mined repository's absolute root with the label it was mined under, the role
@@ -556,7 +574,9 @@ Those three are what `/handbook:join` itself reads. A repository you have joined
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what
 you already have - including into the prompt that decides whether a new candidate
 duplicates one. A name is therefore screened too, at the point it would otherwise become
-part of that prompt's structure rather than part of its data.
+part of that prompt's structure rather than part of its data. The session-start notice that
+announces a newly arrived skill prints its name only when it is a plain slug (lowercase
+letters, digits and dashes), because that notice lands in a session that can run tools.
 Skills, servers and commands merged into that repository arrive on this machine through
 Claude Code's own marketplace subscription. TeamHandbook does not screen them: nothing
 here reads them, and nothing here approves them - `/handbook:review` and

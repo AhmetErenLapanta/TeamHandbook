@@ -1132,12 +1132,13 @@ function childEnv(source = process.env) {
   return env;
 }
 function childInvocation(input) {
-  const args = ["-p", input.prompt];
+  const args = ["-p"];
   if (input.model) args.push("--model", input.model);
   args.push(...childIsolationArgsFor(input.helpText));
   const cwd = mkdtempSync2(join6(tmpdir2(), "teamhandbook-child-"));
   return {
     args,
+    input: input.prompt,
     env: childEnv(),
     cwd,
     done: () => rmSync3(cwd, { recursive: true, force: true })
@@ -1261,7 +1262,7 @@ var init_score = __esm({
       if (stdin) {
         stdin.on("error", () => {
         });
-        stdin.end();
+        stdin.end(invocation.input);
       }
       try {
         const { stdout } = await call;
@@ -1331,7 +1332,7 @@ import { join as join15 } from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync8, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename4, dirname as dirname7, join as join11, relative as relative2 } from "node:path";
+import { basename as basename4, dirname as dirname7, join as join11, relative as relative3 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
@@ -2007,8 +2008,8 @@ init_skill_files();
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync4, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname5, join as join9 } from "node:path";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname5, join as join9, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -2095,8 +2096,32 @@ function conflictingOptions(options) {
   if (options.as === void 0 || !options.update) return null;
   return "--as and --update answer the same refusal in different ways: --as sends this under a free name, --update replaces the skill it collided with. Pick one.";
 }
+function symlinkOnPath(repoDir, path) {
+  let current = repoDir;
+  for (const part of path.split("/")) {
+    current = join9(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (stat.isSymbolicLink()) return relative(repoDir, current);
+  }
+  return null;
+}
+function linkedPathRefusal(repoDir, paths) {
+  for (const path of paths) {
+    const link = symlinkOnPath(repoDir, path);
+    if (link) {
+      return `"${path}" cannot be written: the team repository carries a symbolic link at "${link}", and following it would write outside the repository. Nothing was changed.`;
+    }
+  }
+  return null;
+}
 function bumpPluginVersion(repoDir, past = []) {
   const file = join9(repoDir, ".claude-plugin", "plugin.json");
+  if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync6(file, "utf8"));
     const current = String(plugin.version ?? "0.1.0");
@@ -2189,6 +2214,8 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
     const skillDir = `${TEAM_SKILLS_DIR}/${skillSlug}`;
+    const linked = linkedPathRefusal(repoDir, [skillDir]);
+    if (linked) return { ok: false, error: linked };
     const occupied = existsSync4(join9(repoDir, skillDir));
     if (occupied && !mayUpdate(options, skillSlug)) {
       return {
@@ -2257,7 +2284,7 @@ init_session_state();
 // src/lib/session-workflow.ts
 import { appendFileSync, mkdirSync as mkdirSync7, readFileSync as readFileSync7, realpathSync, statSync as statSync2, writeFileSync as writeFileSync5 } from "node:fs";
 init_config();
-import { basename as basename3, dirname as dirname6, join as join10, relative, resolve, sep as sep2 } from "node:path";
+import { basename as basename3, dirname as dirname6, join as join10, relative as relative2, resolve, sep as sep2 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -2607,7 +2634,7 @@ function projectCommitProposal(slug) {
   return `add the ${slug} skill, drafted from this repository's history`;
 }
 function commitProjectSkill(git, repoDir, target, subject) {
-  const path = relative2(repoDir, target);
+  const path = relative3(repoDir, target);
   try {
     git(["add", "--", path], repoDir);
     git(["commit", "--only", "-m", subject, "--", path], repoDir);

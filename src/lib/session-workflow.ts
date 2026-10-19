@@ -429,7 +429,9 @@ export function recordWorkflowEvent(
       if (!locator.locate(step.path)) continue;
       trail.green = false;
       trail.masked = false;
-      if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
+      // A secret-shaped path stays out of the session file; the mark drops any line built later.
+      if (detectSecret(step.path)) trail.secret = true;
+      else if (!trail.edits.includes(step.path) && trail.edits.length < MAX_TRAIL_EDITS) trail.edits.push(step.path);
       changed = true;
     } else if (step.kind === "check") {
       trail.green = step.green;
@@ -543,7 +545,7 @@ function writeLine(
   // still a reason not to keep the record.
   const host = deps.host ?? hostIdentity();
   const material = [...files.map((f) => f.path), ...detection.pairs.map((p) => p.role), ...(work ? [work] : [])];
-  if (material.some((text) => traced(text, host))) {
+  if (trail.secret || material.some((text) => traced(text, host))) {
     bumpCounter("workflowSkippedHygiene", home);
     return "hygiene";
   }

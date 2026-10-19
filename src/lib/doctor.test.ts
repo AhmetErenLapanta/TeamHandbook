@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { doctorExitCode, formatDoctor, runDoctor } from "./doctor.js";
+import { doctorExitCode, formatDoctor, runCommand, runDoctor } from "./doctor.js";
 import type { CommandRunner } from "./doctor.js";
 import { bumpCounter } from "./counters.js";
 import { saveTeamConfig, skeletonFiles } from "./init.js";
@@ -391,6 +391,28 @@ describe("doctor team MCP server checks", () => {
     } finally {
       chmodSync(mcpFile, 0o644);
     }
+  });
+});
+
+describe("runCommand with input", () => {
+  // Closing stdin before the write makes the closed pipe certain here as on any runner,
+  // instead of depending on which side of the race the platform lands on.
+  const CLOSES_STDIN = "exec 0<&-; sleep 0.3;";
+
+  it("given a child that exits 0 without reading its input, when it is run, then its output is returned", () => {
+    // given a child that never reads the prompt it is handed
+    const script = `${CLOSES_STDIN} printf OK`;
+    // when it is run with input
+    const out = runCommand("sh", ["-c", script], 5_000, { input: "x".repeat(200_000) });
+    // then the closed pipe does not turn a clean exit into a failure
+    expect(out).toBe("OK");
+  });
+
+  it("given a child that exits non-zero without reading its input, when it is run, then it still throws", () => {
+    // given a child that fails and never reads the prompt
+    const script = `${CLOSES_STDIN} exit 3`;
+    // when it is run with input, then the failure is reported
+    expect(() => runCommand("sh", ["-c", script], 5_000, { input: "x".repeat(200_000) })).toThrow();
   });
 });
 

@@ -1579,14 +1579,29 @@ function formatInitSuccess(result) {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname5, join as join6, relative } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname5, join as join6 } from "node:path";
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname4, join as join5 } from "node:path";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname4, join as join5, relative } from "node:path";
+function symlinkOnPath(repoDir, path) {
+  let current = repoDir;
+  for (const part of path.split("/")) {
+    current = join5(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (stat.isSymbolicLink()) return relative(repoDir, current);
+  }
+  return null;
+}
 function bumpPluginVersion(repoDir, past = []) {
   const file = join5(repoDir, ".claude-plugin", "plugin.json");
+  if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync5(file, "utf8"));
     const current = String(plugin.version ?? "0.1.0");
@@ -1616,20 +1631,6 @@ function readIfPresent(file) {
   } catch {
     return null;
   }
-}
-function symlinkOnPath(repoDir, path) {
-  let current = repoDir;
-  for (const part of path.split("/")) {
-    current = join6(current, part);
-    let stat;
-    try {
-      stat = lstatSync(current);
-    } catch {
-      return null;
-    }
-    if (stat.isSymbolicLink()) return relative(repoDir, current);
-  }
-  return null;
 }
 function parseObject(text) {
   try {

@@ -93,6 +93,11 @@ export const LESSON_HARVEST_OFF =
   'lesson harvest is off; enable it with {"harvest": {"lessons": true}} in your TeamHandbook config.json. ' +
   "Mining a repository's history with /handbook:mine is unaffected.";
 
+/** Why a queued job was dropped when one of the older privacy switches turned it off. */
+export const AUTO_HARVEST_OFF =
+  'automatic harvest is off ({"gate": {"auto": false}} or {"harvest": {"enabled": false}} in config.json); ' +
+  "the queued session was not sent.";
+
 export function loadHarvestConfig(home: string = handbookHome()): HarvestConfig {
   const harvest = readConfigFile(home).harvest as Record<string, unknown> | undefined;
   const num = (v: unknown, fallback: number) => (typeof v === "number" && v > 0 ? v : fallback);

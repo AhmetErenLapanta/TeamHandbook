@@ -1606,8 +1606,8 @@ init_queue();
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname4, join as join10 } from "node:path";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname4, join as join10, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -1702,8 +1702,32 @@ function commandRefusalMessage(name, audit) {
 function mayUpdate(options, name) {
   return options.update === true || Array.isArray(options.update) && options.update.includes(name);
 }
+function symlinkOnPath(repoDir, path) {
+  let current = repoDir;
+  for (const part of path.split("/")) {
+    current = join10(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (stat.isSymbolicLink()) return relative(repoDir, current);
+  }
+  return null;
+}
+function linkedPathRefusal(repoDir, paths) {
+  for (const path of paths) {
+    const link = symlinkOnPath(repoDir, path);
+    if (link) {
+      return `"${path}" cannot be written: the team repository carries a symbolic link at "${link}", and following it would write outside the repository. Nothing was changed.`;
+    }
+  }
+  return null;
+}
 function bumpPluginVersion(repoDir, past = []) {
   const file = join10(repoDir, ".claude-plugin", "plugin.json");
+  if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync9(file, "utf8"));
     const current = String(plugin.version ?? "0.1.0");
@@ -2096,6 +2120,12 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const pushTeam = commitPrefixForPush(team, repoDir);
     const commitPrefix = pushTeam.prefix;
     const target = join10(repoDir, TEAM_MCP_FILE);
+    const linked = linkedPathRefusal(repoDir, [
+      ...subjects.length ? [TEAM_MCP_FILE] : [],
+      ...commands.map((command) => `${TEAM_COMMANDS_DIR}/${commandFile(command.name)}`),
+      ...skills.map((skill) => `${TEAM_SKILLS_DIR}/${skill.name}`)
+    ]);
+    if (linked) return { ok: false, ...single, refused, error: linked };
     let merged = "";
     let collided = [];
     let replacedServers = [];

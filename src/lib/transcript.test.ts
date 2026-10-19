@@ -240,6 +240,79 @@ describe("redactSlice", () => {
     expect(clean).toContain("[redacted:");
     expect(clean).toContain("Assistant: done");
   });
+
+  it("given the output of creating an access key, when the slice is redacted, then the secret below the key id goes too", () => {
+    // given the JSON `aws iam create-access-key` prints, where no line holding the secret names it
+    const secret = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY";
+    const slice = [
+      "Assistant: {",
+      '    "AccessKey": {',
+      '        "UserName": "deploybot",',
+      '        "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",',
+      '        "Status": "Active",',
+      `        "SecretAccessKey": "${secret}",`,
+      "    }",
+      "}",
+    ].join("\n");
+    expect(detectSecret(slice.split("\n")[5]!)).toBeNull();
+    // when it is redacted
+    const { clean, redacted } = redactSlice(slice);
+    // then neither half survives, and the lines around them do
+    expect(clean).not.toContain(secret.slice(0, 13));
+    expect(clean).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(clean).toContain('"UserName": "deploybot"');
+    expect(redacted).toBe(3);
+  });
+
+  it("given a netrc entry with one field per line, when the slice is redacted, then the password does not survive", () => {
+    // given a .netrc pasted the way the file is usually laid out
+    const slice = [
+      "Assistant: the file reads",
+      "machine api.acme.org",
+      "  login deploybot",
+      "  password Tr0ub4dor-and-more",
+      "and the next request authenticated",
+    ].join("\n");
+    // when it is redacted
+    const { clean } = redactSlice(slice);
+    // then the entry is gone and the prose on either side of it stays
+    expect(clean).not.toContain("Tr0ub4dor");
+    expect(clean).toContain("Assistant: the file reads");
+    expect(clean).toContain("and the next request authenticated");
+  });
+
+  it("given a flagged line beside harmless ones, when the slice is redacted, then only that line goes", () => {
+    // given an inline token with prose above and below
+    const slice = ["User: first", "export API_KEY=sk-proj-abcdef1234567890ABCDEFGH", "Assistant: second"].join("\n");
+    // when it is redacted
+    const { clean, redacted } = redactSlice(slice);
+    // then the neighbours are untouched
+    expect(redacted).toBe(1);
+    expect(clean).toContain("User: first");
+    expect(clean).toContain("Assistant: second");
+  });
+});
+
+describe("an over-cap assistant turn", () => {
+  it("given a token straddling the cut, when the turn is sliced, then no fragment of it is kept", () => {
+    // given a turn whose 1,500-character cut lands ten characters into a token
+    const text = `${"word ".repeat(200)}\n${"more ".repeat(98)}sk-proj-abcdef1234567890ABCDEFGH and the rest`;
+    // when it is sliced
+    const slice = sliceTranscript([{ role: "assistant", text }], 40_000);
+    // then the token is dropped whole rather than cut to a piece no rule recognizes
+    expect(slice).not.toContain("sk-proj-");
+    expect(slice).toContain("word word");
+  });
+
+  it("given a credential line straddling the cut, when the turn is sliced, then the line is dropped whole", () => {
+    // given a turn whose cut lands inside `password: …`, after the keyword
+    const text = `${"word ".repeat(296)}\nthe db password: hunter2hunter2\nmore after it`;
+    // when it is sliced
+    const slice = sliceTranscript([{ role: "assistant", text }], 40_000);
+    // then neither the keyword nor the value is left behind
+    expect(slice).not.toContain("hunt");
+    expect(slice).not.toContain("password");
+  });
 });
 
 describe("buildTranscriptSlice", () => {
