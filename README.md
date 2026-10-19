@@ -50,8 +50,9 @@ commands everybody should have. That repository is a Claude Code plugin marketpl
 Claude Code itself does the delivering. Merge a request there and each teammate's copy
 picks it up when their marketplace updates: no CI, no access token, and nobody needing
 push rights on a protected branch. With auto-update off for that marketplace, the update
-is `/plugin marketplace update <team-plugin-name>` followed by `/reload-plugins`, and
-`/handbook:doctor` says when this machine's copy is behind the team's.
+is `/plugin marketplace update <team-plugin-name>` followed by `/reload-plugins`; on a
+machine that joined the team with `/handbook:join`, `/handbook:doctor` says when this
+copy is behind the team's.
 
 | What you share | Command | Where it lands |
 |---|---|---|
