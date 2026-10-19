@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.25.0] - 2026-10-19
+
+### Added
+
+- **`/handbook:doctor` says when this machine's copy of the team plugin is behind the team
+  repository.** It compares the version of the installed marketplace copy with the team
+  repository's, and when the copy is behind it warns and gives the commands that bring the
+  merged skills in. It adds no network call and does not read Claude Code's settings:
+  it compares the versions and nothing else. The check appears only where a team
+  repository is configured and its marketplace is installed on this machine.
+- **The README that `/handbook:init` writes into a team repository has a "Getting new
+  skills" section.** With auto-update off for the marketplace, a merge reaches a teammate
+  only after `/plugin marketplace update <name>` and `/reload-plugins`. The section gives
+  the commands, says that turning auto-update on from `/plugin` ends doing it by hand, and
+  asks whoever announces a merge to include them. `/handbook:init --upgrade` offers it to
+  an existing team repository.
+
+### Fixed
+
+- **A merge is no longer promised to reach every teammate at their next session on its
+  own.** A teammate's copy picks it up when their marketplace updates, which with
+  auto-update off means running the commands above. The README's opening and its
+  account of team delivery, the diagrams in both what they show and their alt text, the
+  line printed after a skill is shared with the team, the reminder that suggests
+  `/handbook:init`, and the README written into a team repository now say so.
+- **The team repository's README no longer leaves the new-skills notice looking like what
+  brings skills in.** The notice reads only the copy already installed, so it appears after
+  an update and does not cause one.
+
+Reported by @maksutspahi.
+
 ## [0.24.0] - 2026-10-19
 
 ### Added
