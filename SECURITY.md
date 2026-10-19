@@ -575,16 +575,19 @@ nothing the secret detector flags; otherwise it is left out.
 
 The reviewer and label lists in the same file are not read by `/handbook:join`; they are
 read from the clone each time a request to that repository is opened, and go to `gh` or
-`glab` as that request's `--reviewer` and `--label`. That is a command line, so an entry
-travels only when it is at most 100 characters, carries no control character, no trace
-of a machine and nothing the secret detector flags, and has the shape of a username
-(letters, digits, `.`, `-`, `_`, one optional leading `@`) or of a label (no comma, which
-would split it); a list of more than 20 is not used at all. Each value travels as part of
-one `--flag=value` argument, so none can be read as an option of its own. Whatever is left
-out is counted, by reason and never quoted, in the result; the request is opened without
-it rather than refused. If the forge refuses the assignment itself, the request is asked
-for once more without it, and only when the failed call did not already report the request
-it opened.
+`glab` as that request's `--reviewer` and `--label`; on GitLab without `glab`, the labels
+go as `merge_request.label` push options instead and the reviewers are printed for you to
+add. That is a command line, so an entry travels only when it is at most 100 characters,
+carries no control character and nothing the secret detector flags, and has the shape of a
+username (letters, digits, `.`, `-`, `_`, one optional leading `@`) or of a label (no comma,
+which would split it, and no trace of a machine); a list of more than 20 is not used at all.
+A reviewer is not screened for traces of this machine: it is a public forge name, and the
+username shape already refuses a path or an address. Each value travels as part of one
+`--flag=value` argument, so none can be read as an option of its own. Whatever is left out
+is counted, by reason and never quoted, in the result; the request is opened without it
+rather than refused. If the forge refuses the assignment itself, the request is asked for
+once more without it - unless the failed call already reported a request it opened, or
+the forge answered that a request for the branch already exists.
 
 The name, the prefix and the example are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what

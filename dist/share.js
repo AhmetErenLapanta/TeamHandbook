@@ -810,8 +810,11 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   }
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
-function openedRequestUrl(output) {
-  return output.match(/https?:\/\/\S+?\/(?:-\/merge_requests|pull)\/\d+(?=\s|$)/)?.[0] ?? null;
+function openedRequestUrl(output, repoUrl) {
+  const web = normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/");
+  const at = web ? web.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\S+?";
+  const kind = !web ? "(?:-\\/merge_requests|pull)" : forgeTool(repoUrl) === "gh" ? "pull" : "-\\/merge_requests";
+  return output.match(new RegExp(`https?:\\/\\/${at}\\/${kind}\\/\\d+(?=[\\s?#]|$)`, "i"))?.[0] ?? null;
 }
 function assignmentFlags(assignment) {
   return [
@@ -822,13 +825,20 @@ function assignmentFlags(assignment) {
 function forgeFailure(tool, err) {
   const e = err;
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
-  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-  return (stderr ? stderr.split("\n").at(-1) : String(e?.message ?? err)).slice(0, 160);
+  const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
+  return (said ?? String(e?.message ?? err)).slice(0, 160);
 }
-function requestUrlIn(err) {
+function outputOf(err) {
   const e = err;
-  return openedRequestUrl(`${typeof e?.stdout === "string" ? e.stdout : ""}
-${typeof e?.stderr === "string" ? e.stderr : ""}`);
+  return `${typeof e?.stdout === "string" ? e.stdout : ""}
+${typeof e?.stderr === "string" ? e.stderr : ""}`;
+}
+function existingRequest(repoUrl, err) {
+  const output = outputOf(err);
+  if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
+  const url = openedRequestUrl(output, repoUrl);
+  return { url: null, existing: true, error: `a request for this branch already exists${url ? `: ${url}` : ""}` };
 }
 function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { reviewers: [], labels: [] }) {
   const tool = forgeTool(repoUrl);
@@ -843,16 +853,17 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
   try {
     return { url: create(flags) };
   } catch (err) {
+    const existing = existingRequest(repoUrl, err);
+    if (existing) return existing;
     const reason = forgeFailure(tool, err);
     const code = err?.code;
     if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
-    const opened = requestUrlIn(err);
+    const opened = openedRequestUrl(outputOf(err), repoUrl);
     if (opened) return { url: opened, unassigned: reason };
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
-      const existing = requestUrlIn(retryErr);
-      return existing ? { url: existing, unassigned: reason } : { url: null, error: forgeFailure(tool, retryErr) };
+      return { ...existingRequest(repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }, unassigned: reason };
     }
   }
 }
@@ -951,7 +962,7 @@ function assignmentEntryProblem(kind, value) {
   const entry = value.trim();
   if (entry.length > ASSIGNMENT_ENTRY_MAX) return `longer than ${ASSIGNMENT_ENTRY_MAX} characters`;
   if (/\p{C}/u.test(entry)) return "carrying a control character";
-  const identity = detectIdentity(entry);
+  const identity = kind === "labels" ? detectIdentity(entry) : null;
   if (identity) return `carrying a trace of a machine (${identity})`;
   const secret = detectSecret(entry);
   if (secret) return `carrying what looks like a ${secret}`;
@@ -1002,14 +1013,15 @@ function assignmentList(assignment) {
   ];
   return parts.length ? parts.join("; ") : null;
 }
+var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
 function assignmentNotes(dropped, assignment, pr) {
   const list = assignmentList(assignment);
+  const refused = list && pr.unassigned ? `the forge refused ${list} (${pr.unassigned})` : null;
   return [
     ...dropped ? [dropped] : [],
-    ...list && pr.url && pr.unassigned ? [
-      `The request was opened without ${list}: the forge refused them (${pr.unassigned}). Add them on the request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`
-    ] : [],
-    ...list && !pr.url ? [`Add ${list} to the request when you open it.`] : []
+    ...refused && pr.url ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${CORRECT_THE_LIST}`] : [],
+    ...refused && !pr.url ? [`The assignment did not go: ${refused}. Before it is asked for again, ${CORRECT_THE_LIST}`] : [],
+    ...list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []
   ];
 }
 function assignmentNoteLines(notes) {
@@ -1177,9 +1189,17 @@ function decidePush(input) {
     proposalHash: proposalFingerprint(proposedMessage)
   };
 }
-function requestPushOptions(repoUrl, forgeProblem, title) {
+function requestPushOptions(repoUrl, forgeProblem, title, labels = []) {
   if (!forgeProblem || forgeTool(repoUrl) !== "glab" || !hostFromUrl(repoUrl)) return [];
-  return ["-o", "merge_request.create", "-o", `merge_request.title=${title}`, "-o", "merge_request.remove_source_branch"];
+  return [
+    "-o",
+    "merge_request.create",
+    "-o",
+    `merge_request.title=${title}`,
+    "-o",
+    "merge_request.remove_source_branch",
+    ...labels.flatMap((label) => ["-o", `merge_request.label=${label}`])
+  ];
 }
 function pushBranch(git, repoDir, ref, options = []) {
   const push = (extra) => String(git(["push", ...extra, "origin", ref], repoDir) ?? "");
@@ -1200,12 +1220,12 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const notes = assignmentNotes(dropped, assignment, pr);
     return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...pr.error ? { prError: pr.error } : {} }, notes);
   }
-  const url = pushed.optionsSent ? openedRequestUrl(pushed.output) : null;
+  const url = pushed.optionsSent ? openedRequestUrl(pushed.output, repoUrl) : null;
   if (url) {
-    const list = assignmentList(assignment);
+    const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      ...list ? [`GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: add ${list} on it by hand.`] : []
+      ...reviewers ? [`GitLab opened the request from the push, which cannot set reviewers: add ${reviewers} on it by hand.`] : []
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
@@ -2334,7 +2354,12 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       version = bumpPluginVersion(repoDir, decided.claims);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", decided.subject], repoDir);
-      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
+      pushed = pushBranch(
+        git,
+        repoDir,
+        branch,
+        requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject, readTeamAssignment(repoDir).assignment.labels)
+      );
     } catch (err) {
       return {
         ok: false,

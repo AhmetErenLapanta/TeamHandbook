@@ -53,6 +53,10 @@ exactly what the rule is.
 8. Add `--with-ci` only if the user says skills will also be committed to this repository by
    hand. The version bump normally travels inside each skill's own merge request, so the
    scaffold needs no CI, no access token, and no right to push to a protected branch.
+9. **If the user says who should review the team's requests, or how they are labelled**, add
+   `--reviewers <a,b>` and `--labels <a,b>` to the run. They are recorded in
+   `.teamhandbook.json`, and the scaffold's request and every later one carry them. Do not
+   ask for them otherwise, and never take the names from the git history or the member list.
 
 Never create or push to a repository the user has not explicitly confirmed.
 

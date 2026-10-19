@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { openPr } from "./forge.js";
+import { openedRequestUrl, openPr } from "./forge.js";
 import type { ForgeRunner, RequestAssignment } from "./forge.js";
 
 const GITLAB = "git@gitlab.com:acme/skills.git";
@@ -110,8 +110,8 @@ describe("an assignment the forge refuses", () => {
     expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not request reviewer: 'adaa' not found" });
   });
 
-  it("given a retry the forge answers with the request that already exists, when it fails, then that request is the result", () => {
-    // the first call opened the request without saying so
+  it("given a retry the forge answers with the request already open, when it fails, then nothing more is asked and it is not claimed as opened", () => {
+    // the first call may have opened it without saying so, or it was open before this run
     const { forge, calls } = scripted(
       { stderr: "pull request create failed: something went wrong\n" },
       { stderr: `a pull request for branch "TEAM-12" into branch "main" already exists:\n${PR}\n` },
@@ -120,16 +120,21 @@ describe("an assignment the forge refuses", () => {
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(2);
-    expect(opened).toEqual({ url: PR, unassigned: "pull request create failed: something went wrong" });
+    expect(opened).toEqual({
+      url: null,
+      existing: true,
+      error: `a request for this branch already exists: ${PR}`,
+      unassigned: "pull request create failed: something went wrong",
+    });
   });
 
-  it("given a retry that fails as well, when it is over, then no request is claimed and the retry's reason is given", () => {
+  it("given a retry that fails as well, when it is over, then no request is claimed and both reasons are kept", () => {
     const { forge, calls } = scripted({ stderr: "label not found\n" }, { stderr: "HTTP 401: Bad credentials\n" });
 
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(2);
-    expect(opened).toEqual({ url: null, error: "HTTP 401: Bad credentials" });
+    expect(opened).toEqual({ url: null, error: "HTTP 401: Bad credentials", unassigned: "label not found" });
   });
 
   it("given no assignment, when the forge refuses, then it is asked once and only once", () => {
@@ -157,5 +162,67 @@ describe("an assignment the forge refuses", () => {
 
     expect(calls).toHaveLength(1);
     expect(opened).toEqual({ url: null, error: "the glab CLI is not installed" });
+  });
+});
+
+describe("a request already open for the branch", () => {
+  const alreadyOpen = { stderr: `a pull request for branch "TEAM-12" into branch "main" already exists:\n${PR}\n` };
+
+  it("given an assignment, when the first call is refused as a second request, then it is asked once and the request is not claimed", () => {
+    const { forge, calls } = scripted(alreadyOpen);
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(1);
+    expect(opened).toEqual({ url: null, existing: true, error: `a request for this branch already exists: ${PR}` });
+  });
+
+  it("given no assignment, when the same refusal comes back, then the result is the same one", () => {
+    const { forge } = scripted(alreadyOpen);
+
+    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge)).toEqual({
+      url: null,
+      existing: true,
+      error: `a request for this branch already exists: ${PR}`,
+    });
+  });
+
+  it("given GitLab's refusal, which names no address, when the request is opened, then it is still read as already open", () => {
+    const { forge, calls } = scripted({
+      stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n",
+    });
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(1);
+    expect(opened).toEqual({ url: null, existing: true, error: "a request for this branch already exists" });
+  });
+
+  it("given a refusal that ends on a bare address, when its reason is read, then the reason is the sentence before it", () => {
+    const { forge } = scripted({ stderr: "could not create the request\nhttps://github.com/acme/skills/pull/3\n" });
+
+    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge).error).toBe("could not create the request");
+  });
+});
+
+describe("which address is the opened request", () => {
+  it("given the repository's own request, when it is read, then it is found whatever the case or query", () => {
+    expect(openedRequestUrl(`${MR}\n`, GITLAB)).toBe(MR);
+    expect(openedRequestUrl("https://github.com/Acme/Skills/pull/12?notification=1", GITHUB)).toBe(
+      "https://github.com/Acme/Skills/pull/12",
+    );
+    expect(openedRequestUrl(`${MR}\n`, "ssh://git@gitlab.com:2222/acme/skills.git")).toBe(MR);
+  });
+
+  it("given an address on another host or a compare link, when it is read, then neither is taken for the request", () => {
+    expect(openedRequestUrl("error: could not resolve host https://example.com/acme/skills/pull/42\n", GITHUB)).toBeNull();
+    expect(openedRequestUrl("https://github.com/acme/skills/pull/new/pull/7\n", GITHUB)).toBeNull();
+    expect(openedRequestUrl(`${PR}\n`, GITLAB)).toBeNull();
+    expect(openedRequestUrl("https://gitlab.com/acme/other/-/merge_requests/12\n", GITLAB)).toBeNull();
+  });
+
+  it("given a repository with no web address, when it is read, then the shape alone decides", () => {
+    expect(openedRequestUrl(`${PR}\n`, "/srv/git/skills.git")).toBe(PR);
+    expect(openedRequestUrl("https://github.com/acme/skills/pull/new/handbook-42\n", "/srv/git/skills.git")).toBeNull();
   });
 });

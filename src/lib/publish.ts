@@ -20,7 +20,15 @@ import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, noRequestPossible, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
-import { decidePush, openRequest, pushBranch, pushFailure, requestPushOptions, versionPast } from "./branch.js";
+import {
+  decidePush,
+  openRequest,
+  pushBranch,
+  pushFailure,
+  readTeamAssignment,
+  requestPushOptions,
+  versionPast,
+} from "./branch.js";
 import type { PushChoice, Pushed, VersionClaim } from "./branch.js";
 import { auditSkillDir, identityInSkillDir, isSafeSlug, skillRefusalMessage } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
@@ -483,7 +491,12 @@ export function publishCandidate(
       version = bumpPluginVersion(repoDir, decided.claims);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", decided.subject], repoDir);
-      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
+      pushed = pushBranch(
+        git,
+        repoDir,
+        branch,
+        requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject, readTeamAssignment(repoDir).assignment.labels),
+      );
     } catch (err) {
       return {
         ok: false,
@@ -1289,7 +1302,12 @@ export function publishTeamSelection(
       version = bumpPluginVersion(repoDir, decided.claims);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", decided.subject], repoDir);
-      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
+      pushed = pushBranch(
+        git,
+        repoDir,
+        branch,
+        requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject, readTeamAssignment(repoDir).assignment.labels),
+      );
     } catch (err) {
       return {
         ok: false,

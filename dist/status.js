@@ -714,6 +714,7 @@ var CUT_SCOPE_SENTENCE = new RegExp(
 // src/lib/branch.ts
 init_identity();
 init_secrets();
+var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
 
 // src/lib/init.ts
 init_session_state();
@@ -751,6 +752,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
 function nonInteractiveEnv(base = process.env) {
   return {
     ...base,

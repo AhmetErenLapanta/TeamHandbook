@@ -846,6 +846,9 @@ var CUT_SCOPE_SENTENCE = new RegExp(
   `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
 );
 
+// src/lib/branch.ts
+var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
+
 // src/lib/init.ts
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
@@ -858,6 +861,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
 
 // src/lib/session-workflow.ts
 import { createHash as createHash2, randomBytes } from "node:crypto";

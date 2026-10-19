@@ -108,15 +108,22 @@ export interface RequestAssignment {
 }
 
 /**
- * The request a forge reports having opened, or null.
+ * The request a forge reports having opened on this repository, or null.
  *
  * Only a request with a number counts. GitLab prints a "create a merge request" link on
  * every push of a new branch, and GitHub a `pull/new/<branch>` one, with or without a
  * request behind them; reading either as an opened request would tell the user something
- * exists that does not.
+ * exists that does not. The URL is held to the repository's own host and path, so a URL
+ * that merely has the shape - one quoted in an error about some other host, or a compare
+ * link whose branch name ends in a number - is not taken for the request. A repository
+ * with no web address, a local path, is held to the shape alone.
  */
-export function openedRequestUrl(output: string): string | null {
-  return output.match(/https?:\/\/\S+?\/(?:-\/merge_requests|pull)\/\d+(?=\s|$)/)?.[0] ?? null;
+export function openedRequestUrl(output: string, repoUrl: string): string | null {
+  // The web address has no SSH port in it, which a remote URL may carry.
+  const web = normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/");
+  const at = web ? web.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\S+?";
+  const kind = !web ? "(?:-\\/merge_requests|pull)" : forgeTool(repoUrl) === "gh" ? "pull" : "-\\/merge_requests";
+  return output.match(new RegExp(`https?:\\/\\/${at}\\/${kind}\\/\\d+(?=[\\s?#]|$)`, "i"))?.[0] ?? null;
 }
 
 // The equals form, so a value can never be read as a flag of its own, and one comma-joined
@@ -128,16 +135,33 @@ function assignmentFlags(assignment: RequestAssignment): string[] {
   ];
 }
 
+// The last line a failing CLI wrote, except one that is only a URL: gh ends its refusal of a
+// second request with the address of the first, and that address is not a reason.
 function forgeFailure(tool: "gh" | "glab", err: unknown): string {
   const e = err as { code?: string; stderr?: string; message?: string };
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
-  const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-  return (stderr ? stderr.split("\n").at(-1)! : String(e?.message ?? err)).slice(0, 160);
+  const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
+  return (said ?? String(e?.message ?? err)).slice(0, 160);
 }
 
-function requestUrlIn(err: unknown): string | null {
+function outputOf(err: unknown): string {
   const e = err as { stdout?: unknown; stderr?: unknown };
-  return openedRequestUrl(`${typeof e?.stdout === "string" ? e.stdout : ""}\n${typeof e?.stderr === "string" ? e.stderr : ""}`);
+  return `${typeof e?.stdout === "string" ? e.stdout : ""}\n${typeof e?.stderr === "string" ? e.stderr : ""}`;
+}
+
+/**
+ * The refusal both forges give a second open request for one source branch, read as what it
+ * is: a request this run did not open. gh says "a pull request for branch ... already
+ * exists" with its address, GitLab "Another open merge request already exists for this
+ * source branch". Its own result rather than an opened one, so a re-run on a branch whose
+ * request is already open says so whatever the team file holds.
+ */
+function existingRequest(repoUrl: string, err: unknown): { url: null; existing: true; error: string } | null {
+  const output = outputOf(err);
+  if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
+  const url = openedRequestUrl(output, repoUrl);
+  return { url: null, existing: true, error: `a request for this branch already exists${url ? `: ${url}` : ""}` };
 }
 
 /**
@@ -148,9 +172,11 @@ function requestUrlIn(err: unknown): string | null {
  * why the assignment did not go. The second ask is the dangerous one: gh creates the pull
  * request first and requests reviewers after, printing the URL and failing when a login
  * is unknown, so a blind retry would open a second request. The failed call's own output
- * is read for an opened request before anything is retried, and a retry the forge answers
- * with the request that already exists is that request too. A timeout is never retried:
- * whether the request exists is exactly what it leaves unknown.
+ * is read for an opened request before anything is retried, and a forge that answers either
+ * call with the request already open for the branch is not asked again. A timeout is never
+ * retried: whether the request exists is exactly what it leaves unknown. When the retry
+ * fails too, `unassigned` still carries why the assignment was refused, because that is the
+ * one reason the team file may need correcting.
  */
 export function openPr(
   repoUrl: string,
@@ -160,7 +186,7 @@ export function openPr(
   repoDir: string,
   forge: ForgeRunner,
   assignment: RequestAssignment = { reviewers: [], labels: [] },
-): { url: string | null; error?: string; unassigned?: string } {
+): { url: string | null; error?: string; unassigned?: string; existing?: true } {
   const tool = forgeTool(repoUrl);
   const create = (extra: string[]) =>
     extractUrl(
@@ -179,16 +205,17 @@ export function openPr(
     // The branch is already pushed, so this is a soft failure (fall back to a manual
     // link) - but surface WHY, so the user isn't left guessing that gh/glab just
     // needs installing or `gh auth login`.
+    const existing = existingRequest(repoUrl, err);
+    if (existing) return existing;
     const reason = forgeFailure(tool, err);
     const code = (err as { code?: string })?.code;
     if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
-    const opened = requestUrlIn(err);
+    const opened = openedRequestUrl(outputOf(err), repoUrl);
     if (opened) return { url: opened, unassigned: reason };
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
-      const existing = requestUrlIn(retryErr);
-      return existing ? { url: existing, unassigned: reason } : { url: null, error: forgeFailure(tool, retryErr) };
+      return { ...(existingRequest(repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }), unassigned: reason };
     }
   }
 }

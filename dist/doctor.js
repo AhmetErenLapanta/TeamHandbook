@@ -825,12 +825,16 @@ function readTeamFile(repoDir) {
 function readRecordedAssignment(repoDir) {
   const raw = readTeamFile(repoDir);
   const recorded = {};
+  const unreadable = [];
   for (const kind of ["reviewers", "labels"]) {
     const value = raw[kind];
+    if (value === void 0) continue;
     if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) recorded[kind] = value;
+    else unreadable.push(kind);
   }
-  return recorded;
+  return { recorded, unreadable };
 }
+var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
 function versionParts(version) {
   const parts = version.split(".").map(Number);
   return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
@@ -1300,7 +1304,9 @@ function prefixDependentPaths(team, withCi) {
 function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
   const withCi = existsSync4(join8(repoDir, CI_MARKER));
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
-  const assigned = { ...readRecordedAssignment(repoDir), ...assignment };
+  const { recorded: lists, unreadable } = readRecordedAssignment(repoDir);
+  const assigned = { ...lists, ...assignment };
+  const uncarried = unreadable.filter((kind) => assignment[kind] === void 0);
   const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
   const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(
@@ -1324,6 +1330,13 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
       linked.push({
         path,
         reason: `the repository carries a symbolic link at "${link}". Nothing in the scaffold is a link, so this is not a file a refresh can write, and following it would write outside the repository.`
+      });
+      continue;
+    }
+    if (path === TEAM_PREFIX_FILE && uncarried.length) {
+      withheld.push({
+        path,
+        reason: `it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names, so regenerating it would delete what the team recorded there. Correct it in the repository by hand, or record a new list on the same run with ${uncarried.map((kind) => `--${kind}`).join(" and ")}.`
       });
       continue;
     }

@@ -29,6 +29,7 @@ import {
   pushFailure,
   pushQuestion,
   readRecordedAssignment,
+  readTeamAssignment,
   readTeamBranchExample,
   requestPushOptions,
   unattachedDescriptionLines,
@@ -243,7 +244,10 @@ export function upgradeCandidates(
   const example = branchExample ?? readTeamBranchExample(repoDir).example;
   // The reviewers and labels likewise, each list on its own and exactly as written: a new
   // reviewer list leaves the labels alone, and a refresh is not the place to edit either.
-  const assigned = { ...readRecordedAssignment(repoDir), ...assignment };
+  // A list this cannot carry withholds the file instead, unless a new one replaces it.
+  const { recorded: lists, unreadable } = readRecordedAssignment(repoDir);
+  const assigned = { ...lists, ...assignment };
+  const uncarried = unreadable.filter((kind) => assignment[kind] === undefined);
   // The repository is asked before this machine is written off as not knowing. A teammate
   // who joined before the handbook recorded its prefix has nothing in their config, but the
   // repository they are refreshing may have been given the record since - and regenerating
@@ -275,6 +279,16 @@ export function upgradeCandidates(
         reason:
           `the repository carries a symbolic link at "${link}". Nothing in the scaffold is a link, so ` +
           "this is not a file a refresh can write, and following it would write outside the repository.",
+      });
+      continue;
+    }
+    if (path === TEAM_PREFIX_FILE && uncarried.length) {
+      withheld.push({
+        path,
+        reason:
+          `it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names, ` +
+          "so regenerating it would delete what the team recorded there. Correct it in the repository by hand, " +
+          `or record a new list on the same run with ${uncarried.map((kind) => `--${kind}`).join(" and ")}.`,
       });
       continue;
     }
@@ -802,7 +816,12 @@ export function applyUpgrade(
       // carries none of it rather than reporting a file it quietly dropped.
       if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
       git([...identity, "commit", "-m", decided.subject], repoDir);
-      pushed = pushBranch(git, repoDir, branch, requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject));
+      pushed = pushBranch(
+        git,
+        repoDir,
+        branch,
+        requestPushOptions(team.repoUrl, decided.forgeProblem, decided.subject, readTeamAssignment(repoDir).assignment.labels),
+      );
     } catch (err) {
       return {
         ok: false,

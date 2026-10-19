@@ -426,6 +426,7 @@ function readTeamBranchExample(repoDir) {
   const problem = branchExampleProblem(value);
   return problem ? { problem } : { example: value };
 }
+var CORRECT_THE_LIST = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
 
 // src/lib/git-errors.ts
 import { execFileSync as execFileSync2 } from "node:child_process";

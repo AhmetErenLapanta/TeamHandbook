@@ -42,7 +42,11 @@ function assignmentFrom(args: string[]): RecordedAssignment {
     if (at === -1) return undefined;
     const value = args[at + 1];
     if (value === undefined || value.startsWith("--")) usage();
-    return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+    const entries = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+    // Only the empty string means nobody: a stray space or comma would otherwise wipe the
+    // team's list while looking like a typo.
+    if (!entries.length && value !== "") usage();
+    return entries;
   };
   const reviewers = listOf("--reviewers");
   const labels = listOf("--labels");

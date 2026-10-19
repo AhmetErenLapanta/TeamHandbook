@@ -218,14 +218,23 @@ const ASSIGNMENT_ENTRY_MAX = 100;
 const USERNAME = /^@?[A-Za-z0-9._-]+$/;
 const LABEL = /^[\p{L}\p{N}._:/ -]+$/u;
 
-/** Why one entry cannot be a reviewer or a label, or null. Said by class, never by
- * quoting the entry, for the reason branchTrace gives. */
+/**
+ * Why one entry cannot be a reviewer or a label, or null. Said by class, never by quoting
+ * the entry, for the reason branchTrace gives.
+ *
+ * A reviewer is not screened for traces of this machine. It is a forge username, a public
+ * name, and the username shape already refuses the two traces that could hide in one - a
+ * path needs a slash, an address an `@` past the first character. Measured: every value
+ * that passed the shape and still matched a trace matched as this machine's account name,
+ * which is the reviewer's own name on a machine whose account is called the way their
+ * forge login is. Screening it dropped people from their own team's list.
+ */
 function assignmentEntryProblem(kind: AssignmentKind, value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return "not a name";
   const entry = value.trim();
   if (entry.length > ASSIGNMENT_ENTRY_MAX) return `longer than ${ASSIGNMENT_ENTRY_MAX} characters`;
   if (/\p{C}/u.test(entry)) return "carrying a control character";
-  const identity = detectIdentity(entry);
+  const identity = kind === "labels" ? detectIdentity(entry) : null;
   if (identity) return `carrying a trace of a machine (${identity})`;
   const secret = detectSecret(entry);
   if (secret) return `carrying what looks like a ${secret}`;
@@ -260,16 +269,23 @@ function readTeamFile(repoDir: string): Record<string, unknown> {
   }
 }
 
-/** The lists a cloned team repository records, as written there, for a refresh to carry
- * across. Anything that is not a list of strings is not a record this can keep. */
-export function readRecordedAssignment(repoDir: string): RecordedAssignment {
+/**
+ * The lists a cloned team repository records, as written there, for a refresh to carry
+ * across, and the keys it holds something under that is not a list of strings. Those are
+ * named rather than left out: a refresh that regenerated the file without them would
+ * delete what the team wrote, for everyone, once it was merged.
+ */
+export function readRecordedAssignment(repoDir: string): { recorded: RecordedAssignment; unreadable: AssignmentKind[] } {
   const raw = readTeamFile(repoDir);
   const recorded: RecordedAssignment = {};
+  const unreadable: AssignmentKind[] = [];
   for (const kind of ["reviewers", "labels"] as const) {
     const value = raw[kind];
+    if (value === undefined) continue;
     if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) recorded[kind] = value;
+    else unreadable.push(kind);
   }
-  return recorded;
+  return { recorded, unreadable };
 }
 
 /**
@@ -320,27 +336,27 @@ function assignmentList(assignment: RequestAssignment): string | null {
   return parts.length ? parts.join("; ") : null;
 }
 
+const CORRECT_THE_LIST =
+  `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
+
 /**
  * What a result says about the assignment of its request: what the team file held that
- * could not be used, and what the request still lacks - all of it when no request was
- * opened from here, and what the forge refused when one was opened without it.
+ * could not be used, what the forge refused and why, and what a request opened by hand
+ * still needs. A request that was already open for the branch is not one this run opened,
+ * so nothing is said about what it carries.
  */
 export function assignmentNotes(
   dropped: string | null,
   assignment: RequestAssignment,
-  pr: { url: string | null; unassigned?: string },
+  pr: { url: string | null; unassigned?: string; existing?: true },
 ): string[] {
   const list = assignmentList(assignment);
+  const refused = list && pr.unassigned ? `the forge refused ${list} (${pr.unassigned})` : null;
   return [
     ...(dropped ? [dropped] : []),
-    ...(list && pr.url && pr.unassigned
-      ? [
-          `The request was opened without ${list}: the forge refused them (${pr.unassigned}). Add them on the ` +
-            `request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with ` +
-            "/handbook:init --upgrade --reviewers or --labels.",
-        ]
-      : []),
-    ...(list && !pr.url ? [`Add ${list} to the request when you open it.`] : []),
+    ...(refused && pr.url ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${CORRECT_THE_LIST}`] : []),
+    ...(refused && !pr.url ? [`The assignment did not go: ${refused}. Before it is asked for again, ${CORRECT_THE_LIST}`] : []),
+    ...(list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []),
   ];
 }
 
@@ -681,11 +697,21 @@ export function decidePush(input: PushQuestionInput): ({ ok: true } & PushPlan) 
  * Only when glab cannot open it from here and the remote is a real host: GitLab honours
  * these on the push it receives, so a machine without the CLI still gets a request rather
  * than a link. A push option cannot carry a line break, so the title travels and the
- * description cannot.
+ * description cannot. The team's labels travel too, one option each as GitLab documents
+ * `merge_request.label`, already screened by readTeamAssignment; reviewers cannot, because
+ * no push option sets one.
  */
-export function requestPushOptions(repoUrl: string, forgeProblem: string | null, title: string): string[] {
+export function requestPushOptions(repoUrl: string, forgeProblem: string | null, title: string, labels: string[] = []): string[] {
   if (!forgeProblem || forgeTool(repoUrl) !== "glab" || !hostFromUrl(repoUrl)) return [];
-  return ["-o", "merge_request.create", "-o", `merge_request.title=${title}`, "-o", "merge_request.remove_source_branch"];
+  return [
+    "-o",
+    "merge_request.create",
+    "-o",
+    `merge_request.title=${title}`,
+    "-o",
+    "merge_request.remove_source_branch",
+    ...labels.flatMap((label) => ["-o", `merge_request.label=${label}`]),
+  ];
 }
 
 export interface Pushed {
@@ -748,16 +774,14 @@ export function openRequest(
     const notes = assignmentNotes(dropped, assignment, pr);
     return withNotes(pr.url ? { prUrl: pr.url } : { manualUrl, ...(pr.error ? { prError: pr.error } : {}) }, notes);
   }
-  const url = pushed.optionsSent ? openedRequestUrl(pushed.output) : null;
+  const url = pushed.optionsSent ? openedRequestUrl(pushed.output, repoUrl) : null;
   if (url) {
-    const list = assignmentList(assignment);
-    // The same honest fall as the description beside it: a push carries neither, so what
-    // the request should have been assigned is printed for a person to add.
+    const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
+    // The same honest fall as the description beside it: the labels rode on the push, and
+    // reviewers, which no push option sets, are printed for a person to add.
     const notes = [
       ...(dropped ? [dropped] : []),
-      ...(list
-        ? [`GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: add ${list} on it by hand.`]
-        : []),
+      ...(reviewers ? [`GitLab opened the request from the push, which cannot set reviewers: add ${reviewers} on it by hand.`] : []),
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }

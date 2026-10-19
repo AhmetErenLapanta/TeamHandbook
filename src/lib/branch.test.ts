@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import {
   assignmentRecordProblem,
@@ -484,8 +484,15 @@ describe("opening the request without the forge CLI", () => {
     expect(requestPushOptions(GITLAB, null, "t")).toEqual([]);
     expect(requestPushOptions(GITHUB, "the gh CLI is not installed", "t")).toEqual([]);
     expect(requestPushOptions("/srv/git/skills.git", "the glab CLI is not installed", "t")).toEqual([]);
-    expect(openedRequestUrl(OPENED)).toBe("https://gitlab.com/acme/skills/-/merge_requests/12");
-    expect(openedRequestUrl(CREATE_LINK)).toBeNull();
+    expect(requestPushOptions(GITLAB, "the glab CLI is not installed", "t", ["skills", "type::docs"]).slice(-4)).toEqual([
+      "-o",
+      "merge_request.label=skills",
+      "-o",
+      "merge_request.label=type::docs",
+    ]);
+    expect(requestPushOptions(GITHUB, "the gh CLI is not installed", "t", ["skills"])).toEqual([]);
+    expect(openedRequestUrl(OPENED, GITLAB)).toBe("https://gitlab.com/acme/skills/-/merge_requests/12");
+    expect(openedRequestUrl(CREATE_LINK, GITLAB)).toBeNull();
   });
 
   it("given a server that replies to a push, when git pushes for real, then the reply reaches the caller", () => {
@@ -501,7 +508,7 @@ describe("opening the request without the forge CLI", () => {
 
     const output = runGit(["push", "origin", "HEAD:TEAM-12"], join(work, "repo"));
 
-    expect(openedRequestUrl(output)).toBe("https://gitlab.com/acme/skills/-/merge_requests/12");
+    expect(openedRequestUrl(output, GITLAB)).toBe("https://gitlab.com/acme/skills/-/merge_requests/12");
   });
 });
 
@@ -958,17 +965,24 @@ describe("the reviewers and labels a team file holds", () => {
     const read = readTeamAssignment(
       teamFileIn({
         reviewers: ["ada", "a".repeat(101), "ada\u001b[2J", token, "/home/alice/notes", "ada lovelace", 7],
-        labels: ["skills", "backend,commons"],
+        labels: ["skills", "backend,commons", "/home/alice/x"],
       }),
     );
 
     expect(read.assignment).toEqual({ reviewers: ["ada"], labels: ["skills"] });
     expect(read.dropped).toBe(
       `${TEAM_PREFIX_FILE} holds values this request left out (reviewers: 1 longer than 100 characters, ` +
-        "1 carrying a control character, 1 carrying what looks like a gitlab-token, " +
-        "1 carrying a trace of a machine (home-path), 1 not a username, 1 not a name; labels: 1 not a label name).",
+        "1 carrying a control character, 1 carrying what looks like a gitlab-token, 2 not a username, 1 not a name; " +
+        "labels: 1 not a label name, 1 carrying a trace of a machine (home-path)).",
     );
     for (const value of [token, "alice", "lovelace", "commons"]) expect(read.dropped).not.toContain(value);
+  });
+
+  it("given this machine's own account name as a reviewer, when the request reads it, then it is kept", () => {
+    // the forge login of whoever sits here is often their account name too
+    const self = userInfo().username;
+
+    expect(readTeamAssignment(teamFileIn({ reviewers: [self] })).assignment.reviewers).toEqual([self]);
   });
 
   it("given two entries failing the same way, when the request reads them, then the reason is counted once with both", () => {
@@ -1106,9 +1120,25 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(creates).toHaveLength(2);
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(
-      "The request was opened without reviewers @adaa: the forge refused them (failed to find user by name : adaa). " +
-        `Add them on the request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with ` +
-        "/handbook:init --upgrade --reviewers or --labels.",
+      "The request was opened without its assignment: the forge refused reviewers @adaa " +
+        `(failed to find user by name : adaa). Add them on it by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, ` +
+        "correct it with /handbook:init --upgrade --reviewers or --labels.",
+    );
+  });
+
+  it("given a reviewer refused and then a retry that fails too, when a share is shown, then both reasons reach the reader", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["adaa"] }));
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      const stderr = assignmentFlagsOf(args).length ? "failed to find user by name : adaa\n" : "connection reset by peer\n";
+      throw Object.assign(new Error("Command failed"), { stderr });
+    };
+
+    const result = shareOn(teamFor(bare), forge, "TEAM-12");
+
+    expect(result).toMatchObject({ ok: true, prError: "connection reset by peer" });
+    expect(formatShareResult({ team: result, refused: [] })).toContain(
+      "The assignment did not go: the forge refused reviewers @adaa (failed to find user by name : adaa).",
     );
   });
 
@@ -1147,7 +1177,9 @@ describe("a request carries what the team file says when it is opened", () => {
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/4" });
     expect(creates).toHaveLength(1);
-    expect(formatUpgradeResult(result)).toContain("The request was opened without reviewers @adaa");
+    expect(formatUpgradeResult(result)).toContain(
+      "The request was opened without its assignment: the forge refused reviewers @adaa (pull request update failed:",
+    );
   });
 
   it("given a scaffold request with no CLI to open it, when init is shown, then the reviewers to add are printed", () => {
@@ -1163,24 +1195,44 @@ describe("a request carries what the team file says when it is opened", () => {
 });
 
 describe("the reviewers and labels without the forge CLI", () => {
-  it("given GitLab and no glab, when GitLab opens the request from the push, then the assignment is printed beside the description", () => {
-    const bare = bareHandbook(teamFile({ reviewers: ["ada", "grace"], labels: ["skills"] }));
+  it("given GitLab and no glab, when GitLab opens the request from the push, then the labels ride on it and only the reviewers are printed", () => {
+    const bare = bareHandbook(teamFile({ reviewers: ["ada", "grace"], labels: ["skills", "needs review"] }));
+    const pushes: string[][] = [];
 
     const result = publishTeamSelection(
       { skills: [{ name: "my-skill", dir: localSkill("my-skill") }] },
       teamFor(GITLAB),
-      hostedAt(GITLAB, bare, () => OPENED),
+      hostedAt(GITLAB, bare, (args) => {
+        pushes.push(args);
+        return OPENED;
+      }),
       noForge,
       { commitMessage: APPROVED, branch: "TEAM-12" },
     );
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
-    const text = formatShareResult({ team: result, refused: [] });
-    expect(text).toContain(
-      "GitLab opened the request from the push, and a push cannot carry its reviewers or labels either: " +
-        "add reviewers @ada, @grace; labels skills on it by hand.",
+    expect(pushes[0]).toEqual(
+      expect.arrayContaining(["-o", "merge_request.label=skills", "merge_request.label=needs review"]),
     );
+    const text = formatShareResult({ team: result, refused: [] });
+    expect(text).toContain("GitLab opened the request from the push, which cannot set reviewers: add reviewers @ada, @grace on it by hand.");
+    expect(text).not.toContain("labels skills");
     expect(text).toContain("Paste this into it:");
+  });
+
+  it("given a server that refuses push options, when the push goes plain, then the labels are among what to add by hand", () => {
+    const bare = bareHandbook(teamFile({ labels: ["skills"] }));
+    const git: GitRunner = (args, cwd) => {
+      if (args[0] === "push" && args.includes("-o")) throw new Error("git push failed: fatal: the receiving end does not support push options");
+      return gitAs(args.map((a) => (a === GITLAB ? bare : a)), cwd);
+    };
+
+    const result = publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(GITLAB), git, noForge, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+
+    expect(result.assignmentNotes).toEqual(["Add labels skills to the request when you open it."]);
   });
 
   it("given GitHub and no gh, when the branch is pushed, then the link comes with the assignment to add", () => {
@@ -1195,6 +1247,67 @@ describe("the reviewers and labels without the forge CLI", () => {
     );
 
     expect(result).toMatchObject({ ok: true, manualUrl: "https://github.com/acme/skills/pull/new/TEAM-12" });
-    expect(result.assignmentNotes).toEqual(["Add reviewers @ada to the request when you open it."]);
+    expect(formatShareResult({ team: result, refused: [] })).toContain("Add reviewers @ada to the request when you open it.");
+  });
+});
+
+describe("a request already open for the branch it pushes", () => {
+  const alreadyOpen: ForgeRunner = (_tool, args) => {
+    if (args[0] === "auth") return "Logged in";
+    throw Object.assign(new Error("Command failed"), {
+      stderr: 'a pull request for branch "TEAM-12" into branch "main" already exists:\nhttps://github.com/acme/skills/pull/9\n',
+    });
+  };
+
+  it.each([
+    ["records reviewers", { reviewers: ["ada"] }],
+    ["records none", {}],
+  ])("given a team file that %s, when a re-run finds the request open, then it is reported as already open and not as opened", (_name, extra) => {
+    const bare = bareHandbook(teamFile(extra));
+
+    const result = publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(GITHUB), hostedAt(GITHUB, bare), alreadyOpen, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+
+    expect(result).toMatchObject({ ok: true, prError: "a request for this branch already exists: https://github.com/acme/skills/pull/9" });
+    expect(result.prUrl).toBeUndefined();
+    expect(result.assignmentNotes).toBeUndefined();
+  });
+});
+
+describe("a refresh and a team file whose lists it cannot carry", () => {
+  const broken = () => bareHandbook(teamFile({ reviewers: ["ada", 5], labels: ["skills"] }));
+
+  it("given a reviewer list with something other than a name in it, when a refresh is planned, then the team file is not offered and the reason is given", () => {
+    const work = temp("handbook-clone-");
+    execFileSync("git", ["clone", broken(), join(work, "repo")], { stdio: "ignore" });
+
+    const candidates = upgradeCandidates(join(work, "repo"), teamFor(GITLAB));
+
+    expect(candidates.files[TEAM_PREFIX_FILE]).toBeUndefined();
+    expect(candidates.withheld.find((file) => file.path === TEAM_PREFIX_FILE)?.reason).toContain(
+      'it holds "reviewers" as something other than a list of names, so regenerating it would delete what the team recorded there.',
+    );
+  });
+
+  it("given that file, when something else asks to rewrite it, then nothing is pushed", () => {
+    const bare = broken();
+
+    const result = applyUpgrade(teamFor(bare), [], gitAs, noForge, APPROVED, { branch: "TEAM-12-x", branchExample: "TEAM-123-short" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain(`"${TEAM_PREFIX_FILE}" is not offered here`);
+    expect(execFileSync("git", ["-C", bare, "branch", "--list"], { encoding: "utf8" })).not.toContain("TEAM-12");
+  });
+
+  it("given that file, when a new reviewer list replaces it, then the new list is recorded and the labels are kept", () => {
+    const bare = broken();
+
+    const result = applyUpgrade(teamFor(bare), [], gitAs, noForge, APPROVED, { branch: "TEAM-12-x", reviewers: ["grace"] });
+
+    expect(result).toMatchObject({ ok: true, refreshed: [TEAM_PREFIX_FILE] });
+    const recorded = JSON.parse(execFileSync("git", ["-C", bare, "show", `TEAM-12-x:${TEAM_PREFIX_FILE}`], { encoding: "utf8" }));
+    expect(recorded).toMatchObject({ reviewers: ["grace"], labels: ["skills"] });
   });
 });
