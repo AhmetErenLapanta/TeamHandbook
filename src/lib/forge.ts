@@ -101,7 +101,15 @@ export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: Forg
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
 
-/** Who a request is assigned to and how it is labelled, as the team repository records it. */
+/**
+ * Who a request is assigned to: whoever opens it, which is what a template's `/assign me`
+ * says and what a request opened with `--description` no longer gets from the template.
+ * The literal, never a name read off this machine: gh documents `@me` as self-assign and
+ * glab resolves it to the account it is signed in with, so the forge decides who "me" is.
+ */
+export const SELF_ASSIGNEE = "@me";
+
+/** Who reviews a request and how it is labelled, as the team repository records it. */
 export interface RequestAssignment {
   reviewers: string[];
   labels: string[];
@@ -175,18 +183,20 @@ function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { 
 }
 
 /**
- * Open the request, carrying the team's reviewers and labels when it records any.
+ * Open the request assigned to the person opening it, carrying the team's reviewers and
+ * labels when it records any. An empty assignee adds no flag.
  *
- * One wrong name in the team file must not stop every share, so a request the forge
- * refuses with its assignment is asked for once more without it, and `unassigned` says
- * why the assignment did not go. The second ask is the dangerous one: gh creates the pull
+ * One wrong name in the team file, or a forge that will not resolve the assignee, must not
+ * stop every share, so a request the forge refuses with its assignment is asked for once
+ * more without it, and `unassigned` says why the assignment did not go. The second ask is the dangerous one: gh creates the pull
  * request first and requests reviewers after, printing the URL and failing when a login
  * is unknown, so a blind retry would open a second request. The failed call's own output
  * is read for an opened request before anything is retried, and a forge that answers either
  * call with the request already open for the branch is not asked again. A timeout is never
  * retried: whether the request exists is exactly what it leaves unknown. When the retry
  * fails too, `unassigned` still carries why the assignment was refused, because that is the
- * one reason the team file may need correcting.
+ * one reason the team file may need correcting - unless it failed for the same reason, which
+ * says the assignment was not what the forge refused.
  */
 export function openPr(
   repoUrl: string,
@@ -196,6 +206,7 @@ export function openPr(
   repoDir: string,
   forge: ForgeRunner,
   assignment: RequestAssignment = { reviewers: [], labels: [] },
+  assignee: string = SELF_ASSIGNEE,
 ): { url: string | null; error?: string; unassigned?: string; existing?: true } {
   const tool = forgeTool(repoUrl);
   const create = (extra: string[]) =>
@@ -208,7 +219,7 @@ export function openPr(
             repoDir,
           ),
     );
-  const flags = assignmentFlags(assignment);
+  const flags = [...(assignee.trim() ? [`--assignee=${assignee.trim()}`] : []), ...assignmentFlags(assignment)];
   try {
     return { url: create(flags) };
   } catch (err) {
@@ -225,7 +236,10 @@ export function openPr(
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
-      return { ...(existingRequest(tool, repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }), unassigned: reason };
+      const existing = existingRequest(tool, repoUrl, retryErr);
+      if (existing) return { ...existing, unassigned: reason };
+      const error = forgeFailure(tool, retryErr);
+      return error === reason ? { url: null, error } : { url: null, error, unassigned: reason };
     }
   }
 }

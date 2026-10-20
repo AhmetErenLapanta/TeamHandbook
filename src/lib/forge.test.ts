@@ -39,6 +39,7 @@ describe("the assignment on the command line", () => {
         "t",
         "--description",
         "b",
+        "--assignee=@me",
         "--reviewer=ada,grace",
         "--label=skills,type::docs",
         "--yes",
@@ -60,19 +61,20 @@ describe("the assignment on the command line", () => {
       "t",
       "--body",
       "b",
+      "--assignee=@me",
       "--reviewer=ada,grace",
       "--label=skills,type::docs",
     ]);
   });
 
-  it("given empty lists, when the request is opened, then no assignment flag is added at all", () => {
+  it("given empty lists, when the request is opened, then no reviewer or label flag is added at all", () => {
     const { forge, calls } = scripted(`${MR}\n`, `${PR}\n`);
 
     openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] });
     openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge);
 
-    expect(calls[0]).toEqual(["mr", "create", "--source-branch", "TEAM-12", "--title", "t", "--description", "b", "--yes"]);
-    expect(calls[1]).toEqual(["pr", "create", "--head", "TEAM-12", "--title", "t", "--body", "b"]);
+    expect(calls[0]).toEqual(["mr", "create", "--source-branch", "TEAM-12", "--title", "t", "--description", "b", "--assignee=@me", "--yes"]);
+    expect(calls[1]).toEqual(["pr", "create", "--head", "TEAM-12", "--title", "t", "--body", "b", "--assignee=@me"]);
   });
 
   it("given only labels, when the request is opened, then no reviewer flag is added", () => {
@@ -82,6 +84,76 @@ describe("the assignment on the command line", () => {
 
     expect(calls[0]).toContain("--label=skills");
     expect(calls[0]!.some((arg) => arg.startsWith("--reviewer"))).toBe(false);
+  });
+});
+
+describe("the request is assigned to whoever opens it", () => {
+  const NONE: RequestAssignment = { reviewers: [], labels: [] };
+  const assigneeFlags = (args: string[] | undefined) => (args ?? []).filter((arg) => arg.startsWith("--assignee"));
+
+  it.each([
+    ["GitLab", GITLAB, MR],
+    ["GitHub", GITHUB, PR],
+  ])("given %s and a team file that records nobody, when the request is opened, then it asks for the signed-in account as assignee", (_forge, repo, url) => {
+    const { forge, calls } = scripted(`${url}\n`);
+
+    expect(openPr(repo, "TEAM-12", "t", "b", "/repo", forge, NONE)).toEqual({ url });
+    expect(assigneeFlags(calls[0])).toEqual(["--assignee=@me"]);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["blank", "  "],
+  ])("given an %s assignee, when the request is opened, then no assignee flag is added", (_name, assignee) => {
+    const { forge, calls } = scripted(`${MR}\n`, `${PR}\n`);
+
+    openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED, assignee);
+    openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, NONE, assignee);
+
+    expect(calls.map(assigneeFlags)).toEqual([[], []]);
+  });
+
+  it("given glab refusing the assignee before it creates anything, when the request is opened, then it is asked once more without it", () => {
+    const { forge, calls } = scripted({ stderr: "error resolving assignee usernames: 401 Unauthorized\n" }, `${MR}\n`);
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, NONE);
+
+    expect(opened).toEqual({ url: MR, unassigned: "error resolving assignee usernames: 401 Unauthorized" });
+    expect(calls).toHaveLength(2);
+    expect(assigneeFlags(calls[1])).toEqual([]);
+  });
+
+  it("given gh opening the request before the assignee is refused, when it fails, then nothing is retried and that request is the result", () => {
+    const { forge, calls } = scripted({
+      stdout: `${PR}\n`,
+      stderr: "pull request update failed: could not assign user: 'me' not found\n",
+    });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, NONE);
+
+    expect(calls).toHaveLength(1);
+    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not assign user: 'me' not found" });
+  });
+
+  it("given a retry the forge answers with the request already open, when it fails, then no third request is asked for", () => {
+    const { forge, calls } = scripted(
+      { stderr: "could not assign user\n" },
+      { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" },
+    );
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, NONE);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: MR, existing: true, unassigned: "could not assign user" });
+  });
+
+  it("given a retry refused for the same reason, when it is over, then the assignment is not blamed for it", () => {
+    const { forge, calls } = scripted({ stderr: "connection reset by peer\n" }, { stderr: "connection reset by peer\n" });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, NONE);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: null, error: "connection reset by peer" });
   });
 });
 
@@ -135,7 +207,7 @@ describe("an assignment the forge refuses", () => {
   it("given no assignment, when the forge refuses, then it is asked once and only once", () => {
     const { forge, calls } = scripted({ stderr: "HTTP 401: Bad credentials\n" });
 
-    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] });
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
 
     expect(calls).toHaveLength(1);
     expect(opened).toEqual({ url: null, error: "HTTP 401: Bad credentials" });
@@ -203,7 +275,7 @@ describe("a request already open for the branch", () => {
   it("given a refusal that ends on a bare address, when its reason is read, then the reason is the sentence before it", () => {
     const { forge } = scripted({ stderr: "could not create the request\nhttps://github.com/acme/skills/pull/3\n" });
 
-    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge).error).toBe("could not create the request");
+    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "").error).toBe("could not create the request");
   });
 });
 

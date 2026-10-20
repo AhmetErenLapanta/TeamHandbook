@@ -477,6 +477,7 @@ function forgeSignInProblem(repoUrl, repoDir, forge) {
   }
   return `${tool} could not confirm you are signed in${last ? `: ${last}` : ""}`;
 }
+var SELF_ASSIGNEE = "@me";
 function webAddress(repoUrl) {
   return normalizeRemoteUrl(repoUrl)?.replace(/^([^/:]+):\d+\//, "$1/") ?? null;
 }
@@ -512,7 +513,7 @@ function existingRequest(tool, repoUrl, err) {
   const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);
   return url ? { url, existing: true } : { url: null, existing: true, error: `a request for this branch is already open (${forgeFailure(tool, err)})` };
 }
-function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { reviewers: [], labels: [] }) {
+function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { reviewers: [], labels: [] }, assignee = SELF_ASSIGNEE) {
   const tool = forgeTool(repoUrl);
   const create = (extra) => extractUrl(
     tool === "gh" ? forge("gh", ["pr", "create", "--head", branch, "--title", title, "--body", body, ...extra], repoDir) : forge(
@@ -521,7 +522,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
       repoDir
     )
   );
-  const flags = assignmentFlags(assignment);
+  const flags = [...assignee.trim() ? [`--assignee=${assignee.trim()}`] : [], ...assignmentFlags(assignment)];
   try {
     return { url: create(flags) };
   } catch (err) {
@@ -535,7 +536,10 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
-      return { ...existingRequest(tool, repoUrl, retryErr) ?? { url: null, error: forgeFailure(tool, retryErr) }, unassigned: reason };
+      const existing2 = existingRequest(tool, repoUrl, retryErr);
+      if (existing2) return { ...existing2, unassigned: reason };
+      const error = forgeFailure(tool, retryErr);
+      return error === reason ? { url: null, error } : { url: null, error, unassigned: reason };
     }
   }
 }
@@ -711,15 +715,17 @@ function assignmentList(assignment) {
 }
 function requestNotes(dropped, assignment, pr) {
   const list = assignmentList(assignment);
-  const refused = list && pr.unassigned ? `the forge refused ${list} (${pr.unassigned})` : null;
+  const refused = pr.unassigned ? `the forge refused you as assignee${list ? `; ${list}` : ""} (${pr.unassigned})` : null;
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
+  const alsoAdd = list ? ` and add ${list}` : "";
+  const fix = list ? `, and ${correct}` : ".";
   return [
     ...pr.existing ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."] : [],
     ...dropped ? [dropped] : [],
-    ...refused && opened ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${correct}`] : [],
-    ...refused && pr.existing ? [`The assignment did not go: ${refused}. Add them on the open request if it lacks them, and ${correct}`] : [],
-    ...refused && !pr.url && !pr.existing ? [`The assignment did not go: ${refused}. Before it is asked for again, ${correct}`] : [],
+    ...refused && opened ? [`The request was opened without its assignment: ${refused}. Assign yourself${alsoAdd} on it by hand${fix}`] : [],
+    ...refused && pr.existing ? [`The assignment did not go: ${refused}. On the open request, assign yourself${alsoAdd} if it lacks ${list ? "them" : "an assignee"}${fix}`] : [],
+    ...refused && !pr.url && !pr.existing ? [`The assignment did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
     ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
     ...list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []
   ];
@@ -928,7 +934,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      ...reviewers ? [`GitLab opened the request from the push, which cannot set reviewers: add ${reviewers} on it by hand.`] : []
+      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
