@@ -135,16 +135,16 @@ describe("the request is assigned to whoever opens it", () => {
     expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not assign user: 'me' not found" });
   });
 
-  it("given a retry the forge answers with the request already open, when it fails, then no third request is asked for", () => {
+  it("given no lists, a first attempt lost to the network and a retry told the request is open, when it is over, then no third request is asked for and nothing is said to be refused", () => {
     const { forge, calls } = scripted(
-      { stderr: "could not assign user\n" },
+      { stderr: "read tcp [::1]:58906->[::1]:443: read: connection reset by peer.\n" },
       { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" },
     );
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, NONE);
 
     expect(calls).toHaveLength(2);
-    expect(opened).toEqual({ url: MR, existing: true, unassigned: "could not assign user" });
+    expect(opened).toEqual({ url: MR, existing: true });
   });
 
   it("given no lists and a network error on both attempts, when it is over, then nothing is said to be refused", () => {
@@ -208,6 +208,15 @@ describe("an assignment the forge refuses", () => {
 
     expect(calls).toHaveLength(2);
     expect(opened).toEqual({ url: PR, existing: true, unassigned: "pull request create failed: something went wrong" });
+  });
+
+  it("given lists and a retry that fails exactly as the first did, when it is over, then the team file is not blamed for it", () => {
+    const { forge, calls } = scripted({ stderr: "HTTP 401: Bad credentials\n" }, { stderr: "HTTP 401: Bad credentials\n" });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: null, error: "HTTP 401: Bad credentials" });
   });
 
   it("given lists and a retry that fails as well, when it is over, then no request is claimed and both reasons are kept", () => {

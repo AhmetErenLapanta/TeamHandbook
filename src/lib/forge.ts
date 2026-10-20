@@ -196,10 +196,11 @@ function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { 
  * opened request before anything is retried, and a forge that answers either call with the
  * request already open for the branch is not asked again. A timeout is never retried:
  * whether the request exists is exactly what it leaves unknown. When the retry fails too,
- * no request exists to be assigned, so `unassigned` is kept only when the team's lists
- * went: a name there is the one thing to correct before asking again. Nothing else on
- * that path is said to have been refused, because a second failure says nothing about
- * what the first one refused - a network error even differs in its local port each time.
+ * or finds the request already open, `unassigned` is kept only when the team's lists went:
+ * a name there is the one thing to correct before asking again. Without them the first
+ * failure is not said to be a refusal, because a second call says nothing about what the
+ * first one refused - a network error even differs in its local port each time. And a
+ * retry that fails exactly as the first did shows the assignment was not what was refused.
  */
 export function openPr(
   repoUrl: string,
@@ -241,8 +242,9 @@ export function openPr(
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
       const existing = existingRequest(tool, repoUrl, retryErr);
-      if (existing) return { ...existing, unassigned: reason };
-      return { url: null, error: forgeFailure(tool, retryErr), ...(listed.length ? { unassigned: reason } : {}) };
+      if (existing) return { ...existing, ...(listed.length ? { unassigned: reason } : {}) };
+      const error = forgeFailure(tool, retryErr);
+      return { url: null, error, ...(listed.length && error !== reason ? { unassigned: reason } : {}) };
     }
   }
 }

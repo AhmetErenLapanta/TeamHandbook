@@ -1496,8 +1496,9 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
       const existing2 = existingRequest(tool, repoUrl, retryErr);
-      if (existing2) return { ...existing2, unassigned: reason };
-      return { url: null, error: forgeFailure(tool, retryErr), ...listed.length ? { unassigned: reason } : {} };
+      if (existing2) return { ...existing2, ...listed.length ? { unassigned: reason } : {} };
+      const error = forgeFailure(tool, retryErr);
+      return { url: null, error, ...listed.length && error !== reason ? { unassigned: reason } : {} };
     }
   }
 }

@@ -597,8 +597,9 @@ once more without it - unless the failed call already reported a request it open
 the forge answered that a request for the branch already exists. The assignee, `@me`, rides
 on every request, so every failed open is asked for that second time, never a third; both
 forges refuse a second open request for a branch, in the sentence read above. When the
-second attempt fails too, the assignment is named only if the team's lists went with it:
-a name there is the one thing to correct, and nothing was opened to assign.
+second attempt fails too or finds the request already open, the assignment is named only
+if the team's lists went with it, a name there being the one thing to correct, and not
+when the second attempt failed exactly as the first did.
 
 The name, the prefix and the example are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what

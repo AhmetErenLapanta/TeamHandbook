@@ -1284,6 +1284,18 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(result.requestNotes).toBeUndefined();
   });
 
+  it("given reviewers and a token the forge refuses on both attempts, when a share is opened, then the team file is not blamed for it", () => {
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      throw Object.assign(new Error("Command failed"), { stderr: "HTTP 401: Bad credentials\n" });
+    };
+
+    const result = shareOn(teamFor(bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] }))), forge, "TEAM-12");
+
+    expect(result).toMatchObject({ ok: true, prError: "HTTP 401: Bad credentials" });
+    expect(result.requestNotes).toEqual(["Add reviewers @ada; labels skills to the request when you open it."]);
+  });
+
   it("given reviewers and labels both refused, when the request is opened without them, then the list reads whole and apart from the assignee", () => {
     const forge: ForgeRunner = (_tool, args) => {
       if (args[0] === "auth") return "Logged in";
@@ -1415,6 +1427,15 @@ describe("a request already open for the branch it pushes", () => {
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(`  - merge request: ${PR9}`);
     expect(text).not.toContain("open the merge request:");
+  });
+
+  it("given a team file that records none and a first attempt lost to the network, when a retry finds the request open, then nothing is said to be refused", () => {
+    const result = share(bareHandbook(teamFile({})), alreadyOpen("read tcp [::1]:58906->[::1]:443: read: connection reset by peer.\n"));
+
+    expect(result).toMatchObject({ ok: true, prUrl: PR9 });
+    expect(result.requestNotes).toEqual([
+      "The forge reported a request already open for this branch, so none was opened: the push is on that one.",
+    ]);
   });
 
   it("given a first attempt that failed without a word and a retry told the request is open, when it is shown, then the request is the result and the refusal is kept", () => {
