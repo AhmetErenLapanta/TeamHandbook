@@ -278,6 +278,42 @@ These, and only these:
    say whether a newer version exists. It sends no content, makes no model call, and is
    skipped silently when it cannot be made.
 
+The list holds because of one more thing. To open a request, and to check that one can be
+opened, TeamHandbook runs `gh` or `glab`, and git runs them too when one of them is its
+credential helper. Each is a separate program with network traffic of its own besides the
+request it is asked to make. Left to themselves:
+
+- glab 1.123.0 sends a usage event for each command it was measured on - `auth status`,
+  `api` and `mr list` - though not for `auth git-credential`: `POST
+  /api/v4/usage_data/track_event`, carrying the command, the project path when the command
+  names one, its version, the OS, the architecture and the name of the coding agent it runs
+  under. It goes to glab's default host - the one `GITLAB_HOST` or its config names,
+  gitlab.com when neither does - and not necessarily to the GitLab the command is about:
+  `glab auth status --hostname` with a self-managed host sent it to gitlab.com. glab also
+  asks gitlab.com for its latest release, `auth git-credential` included, once a day by its
+  own documentation.
+- gh 2.100.0 sends a usage event to GitHub (`cafe.github.com`) carrying the command, a
+  device id, its version, the OS, the architecture and the coding agent, for a sampled
+  share of runs (1 of 30 runs of `gh api` at its default sampling). It sent none for the
+  commands this product and git run without opening a request - `auth status` and `auth
+  git-credential`, 0 of 5 each with sampling forced to every run - but it still wrote the
+  device id file it keeps for the purpose.
+
+Every call this product makes to either CLI, and every git call it makes that reaches a
+remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in
+its environment, and that is all it changes: TeamHandbook neither reads nor writes your gh
+and glab configuration, so the same CLI run from your own terminal keeps your setting.
+Measured against a local recording server with every other connection refused, five runs
+per case: glab's usage event and its release check each went from 5 of 5 to 0, including
+with `telemetry: true` and `check_update: true` in its config file; with gh's sampling
+forced to every run, its event went from 5 of 5 to 0 for `gh api` and `gh pr list`,
+including with `telemetry: enabled` in its config file, and the device id file was not
+written. The shipped `/handbook:share` screen, checking sign-in against a self-managed
+GitLab, made 10 connections to gitlab.com over five runs before this and none after. What
+this does not cover: `gh pr create` and `glab mr create` themselves were not run against
+the recorder, and a CLI version that renames or ignores these variables is not switched
+off by them.
+
 ## What `/handbook:mine` reads and sends
 
 `/handbook:mine` with no arguments reads git history and nothing else. It walks the

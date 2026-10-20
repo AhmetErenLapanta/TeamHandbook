@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
-import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
+import { hostFromUrl, loadTeamConfig, marketplacesRoot, nonInteractiveEnv } from "./init.js";
 import { compareVersions, readPluginVersion } from "./branch.js";
 import { forgeSignInProblem, forgeTool } from "./forge.js";
 import type { TeamConfig } from "./init.js";
@@ -59,8 +59,7 @@ export const runCommand: CommandRunner = (cmd, args, timeoutMs, options) => {
       ...(options?.cwd ? { cwd: options.cwd } : {}),
       // never let git/ssh block on an interactive prompt; stdin is closed anyway
       env: options?.env ?? {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
+        ...nonInteractiveEnv(),
         GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
       },
     }).trim();

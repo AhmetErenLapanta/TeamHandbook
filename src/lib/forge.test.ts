@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { openedRequestUrl, openPr } from "./forge.js";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { openedRequestUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner, RequestAssignment } from "./forge.js";
 
 const GITLAB = "git@gitlab.com:acme/skills.git";
@@ -226,5 +229,53 @@ describe("which address is the opened request", () => {
   it("given a repository with no web address, when it is read, then the shape alone decides", () => {
     expect(openedRequestUrl(`${PR}\n`, "/srv/git/skills.git")).toBe(PR);
     expect(openedRequestUrl("https://github.com/acme/skills/pull/new/handbook-42\n", "/srv/git/skills.git")).toBeNull();
+  });
+});
+
+describe("the forge CLI's own reporting", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function tree(root: string): Record<string, string> {
+    const files: Record<string, string> = {};
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else files[relative(root, path)] = readFileSync(path, "utf8");
+      }
+    };
+    walk(root);
+    return files;
+  }
+
+  it("given a user whose gh and glab report usage, when the product runs either CLI, then the call carries the reporting switched off and their config is untouched", () => {
+    const userHome = mkdtempSync(join(tmpdir(), "handbook-user-"));
+    mkdirSync(join(userHome, ".config", "gh"), { recursive: true });
+    mkdirSync(join(userHome, ".config", "glab-cli"), { recursive: true });
+    writeFileSync(join(userHome, ".config", "gh", "config.yml"), "telemetry: enabled\n");
+    writeFileSync(join(userHome, ".config", "glab-cli", "config.yml"), "telemetry: true\ncheck_update: true\n");
+    const seen = mkdtempSync(join(tmpdir(), "handbook-forge-env-"));
+    const bin = mkdtempSync(join(tmpdir(), "handbook-bin-"));
+    for (const tool of ["gh", "glab"]) {
+      writeFileSync(join(bin, tool), `#!/bin/sh\nenv > "$FORGE_ENV_SEEN/${tool}"\n`);
+      chmodSync(join(bin, tool), 0o755);
+    }
+    vi.stubEnv("HOME", userHome);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("FORGE_ENV_SEEN", seen);
+    vi.stubEnv("GLAB_SEND_TELEMETRY", "1");
+    vi.stubEnv("GH_TELEMETRY", "enabled");
+    const before = tree(userHome);
+
+    runForge("gh", ["auth", "status"], userHome);
+    runForge("glab", ["auth", "status"], userHome);
+
+    const gh = readFileSync(join(seen, "gh"), "utf8").split("\n");
+    const glab = readFileSync(join(seen, "glab"), "utf8").split("\n");
+    expect(gh).toContain("GH_TELEMETRY=0");
+    expect(glab).toEqual(expect.arrayContaining(["GLAB_SEND_TELEMETRY=0", "GLAB_CHECK_UPDATE=false"]));
+    expect(tree(userHome)).toEqual(before);
   });
 });

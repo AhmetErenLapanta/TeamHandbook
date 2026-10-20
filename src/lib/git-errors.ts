@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { nonInteractiveEnv } from "./init.js";
 
 // Why a git clone failed, in words the person who is stuck can act on. Shared by join
 // and init because both of them reach a forge before anything else can happen, and both
@@ -13,7 +14,7 @@ export interface CredentialState {
 
 export function probeCredentials(): CredentialState {
   const run = (cmd: string, args: string[]) =>
-    execFileSync(cmd, args, { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync(cmd, args, { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"], env: nonInteractiveEnv() });
   try {
     run("gh", ["--version"]);
   } catch {

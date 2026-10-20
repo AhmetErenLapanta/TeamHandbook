@@ -430,7 +430,7 @@ function readTeamBranchExample(repoDir) {
 // src/lib/git-errors.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
 function probeCredentials() {
-  const run = (cmd, args) => execFileSync2(cmd, args, { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] });
+  const run = (cmd, args) => execFileSync2(cmd, args, { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"], env: nonInteractiveEnv() });
   try {
     run("gh", ["--version"]);
   } catch {
@@ -550,7 +550,10 @@ function nonInteractiveEnv(base = process.env) {
     GIT_TERMINAL_PROMPT: "0",
     GLAB_NO_PROMPT: "1",
     GH_PROMPT_DISABLED: "1",
-    NO_COLOR: "1"
+    NO_COLOR: "1",
+    GLAB_SEND_TELEMETRY: "0",
+    GLAB_CHECK_UPDATE: "false",
+    GH_TELEMETRY: "0"
   };
 }
 var GIT_TIMEOUT_MS = 12e4;

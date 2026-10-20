@@ -1189,7 +1189,10 @@ function nonInteractiveEnv(base = process.env) {
     GIT_TERMINAL_PROMPT: "0",
     GLAB_NO_PROMPT: "1",
     GH_PROMPT_DISABLED: "1",
-    NO_COLOR: "1"
+    NO_COLOR: "1",
+    GLAB_SEND_TELEMETRY: "0",
+    GLAB_CHECK_UPDATE: "false",
+    GH_TELEMETRY: "0"
   };
 }
 function marketplacesRoot() {
@@ -1611,8 +1614,7 @@ var runCommand = (cmd, args, timeoutMs, options) => {
       ...options?.cwd ? { cwd: options.cwd } : {},
       // never let git/ssh block on an interactive prompt; stdin is closed anyway
       env: options?.env ?? {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
+        ...nonInteractiveEnv(),
         GIT_SSH_COMMAND: "ssh -oBatchMode=yes"
       }
     }).trim();

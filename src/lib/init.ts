@@ -721,6 +721,15 @@ export type GitRunner = (args: string[], cwd: string) => string | void;
  *
  * NO_COLOR is not cosmetic here: the PR URL is recovered from the tool's stdout with
  * a regex, and an ANSI escape wrapped around it would be captured as part of the URL.
+ *
+ * gh and glab are separate programs with network traffic of their own: glab reports its
+ * commands to its default GitLab, gitlab.com unless configured otherwise, and asks
+ * gitlab.com for its latest release; gh reports commands to GitHub. SECURITY.md lists
+ * everything that leaves the machine because of this product, so its own calls switch
+ * both off. Only the environment of the call carries
+ * the switch; the user's CLI configuration is neither read nor written, and the same CLI
+ * run from their own terminal keeps their setting. git reaches the same CLIs when one of
+ * them is its credential helper, which is why git gets these too.
  */
 export function nonInteractiveEnv(
   base: Record<string, string | undefined> = process.env,
@@ -731,6 +740,9 @@ export function nonInteractiveEnv(
     GLAB_NO_PROMPT: "1",
     GH_PROMPT_DISABLED: "1",
     NO_COLOR: "1",
+    GLAB_SEND_TELEMETRY: "0",
+    GLAB_CHECK_UPDATE: "false",
+    GH_TELEMETRY: "0",
   };
 }
 

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { doctorExitCode, formatDoctor, runCommand, runDoctor } from "./doctor.js";
@@ -531,6 +531,24 @@ describe("doctor team-distribution checks", () => {
     expect(missing.level).toBe("warn");
     expect(missing.detail).toContain("not installed");
     expect(byName(runDoctor(home, forgeRunner("unauth")), "forge CLI").detail).toContain("auth login");
+  });
+
+  it("given no environment of its own, when the doctor runs a forge CLI or git, then the call carries the CLIs' reporting switched off", () => {
+    const seen = mkdtempSync(join(tmpdir(), "handbook-doctor-env-"));
+    const bin = mkdtempSync(join(tmpdir(), "handbook-bin-"));
+    writeFileSync(join(bin, "glab"), `#!/bin/sh\nenv > "$FORGE_ENV_SEEN/glab"\n`);
+    chmodSync(join(bin, "glab"), 0o755);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("FORGE_ENV_SEEN", seen);
+    try {
+      runCommand("glab", ["auth", "status"], 5_000);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const env = readFileSync(join(seen, "glab"), "utf8").split("\n");
+    expect(env).toEqual(expect.arrayContaining(["GLAB_SEND_TELEMETRY=0", "GLAB_CHECK_UPDATE=false", "GH_TELEMETRY=0"]));
+    expect(env).toContain("GIT_SSH_COMMAND=ssh -oBatchMode=yes");
   });
 
   it("warns when merged skills sit at plugin version 0.1.0 (the bump CI never ran)", () => {
