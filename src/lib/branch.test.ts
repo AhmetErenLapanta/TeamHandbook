@@ -1161,7 +1161,7 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(creates).toHaveLength(2);
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(
-      "The request was opened without its assignment: the forge refused you as assignee; reviewers @adaa " +
+      "The request was opened without its assignment: the forge refused reviewers @adaa or you as assignee " +
         "(failed to find user by name : adaa). Assign yourself and add reviewers @adaa on it by hand, and if a name in " +
         `${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`,
     );
@@ -1179,7 +1179,7 @@ describe("a request carries what the team file says when it is opened", () => {
 
     expect(result).toMatchObject({ ok: true, prError: "connection reset by peer" });
     expect(formatShareResult({ team: result, refused: [] })).toContain(
-      "The assignment did not go: the forge refused you as assignee; reviewers @adaa (failed to find user by name : adaa).",
+      "The assignment did not go: the forge refused reviewers @adaa or you as assignee (failed to find user by name : adaa).",
     );
   });
 
@@ -1219,7 +1219,7 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/4" });
     expect(creates).toHaveLength(1);
     expect(formatUpgradeResult(result)).toContain(
-      "The request was opened without its assignment: the forge refused you as assignee; reviewers @adaa (pull request update failed:",
+      "The request was opened without its assignment: the forge refused reviewers @adaa or you as assignee (pull request update failed:",
     );
   });
 
@@ -1390,7 +1390,7 @@ describe("a request already open for the branch it pushes", () => {
     expect(result).toMatchObject({ ok: true, prUrl: PR9 });
     expect(result.manualUrl).toBeUndefined();
     expect(formatShareResult({ team: result, refused: [] })).toContain(
-      "The assignment did not go: the forge refused you as assignee; reviewers @adaa (could not request reviewer: 'adaa' not found). " +
+      "The assignment did not go: the forge refused reviewers @adaa or you as assignee (could not request reviewer: 'adaa' not found). " +
         "On the open request, assign yourself and add reviewers @adaa if it lacks them, and if a name in .teamhandbook.json is wrong",
     );
   });

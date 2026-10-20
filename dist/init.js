@@ -715,7 +715,7 @@ function assignmentList(assignment) {
 }
 function requestNotes(dropped, assignment, pr) {
   const list = assignmentList(assignment);
-  const refused = pr.unassigned ? `the forge refused you as assignee${list ? `; ${list}` : ""} (${pr.unassigned})` : null;
+  const refused = pr.unassigned ? `the forge refused ${list ? `${list} or you as assignee` : "you as assignee"} (${pr.unassigned})` : null;
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
   const alsoAdd = list ? ` and add ${list}` : "";

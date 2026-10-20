@@ -340,9 +340,9 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * What a result says about its request beyond the link: that the branch already had one
  * open, what the team file held that could not be used, what the forge refused and why,
  * and what a request still needs by hand. A request already open is not called opened,
- * and what it carries is not claimed either way: this run did not set it. A refusal names
- * the assignee as well as the lists, because openPr asks for every request to be assigned
- * to the person opening it; only a name from the lists is one to correct in the team file.
+ * and what it carries is not claimed either way: this run did not set it. A refusal counts
+ * the assignee with the lists, because openPr asks for every request to be assigned to the
+ * person opening it; only a name from the lists is one to correct in the team file.
  */
 export function requestNotes(
   dropped: string | null,
@@ -350,7 +350,8 @@ export function requestNotes(
   pr: { url: string | null; unassigned?: string; existing?: true },
 ): string[] {
   const list = assignmentList(assignment);
-  const refused = pr.unassigned ? `the forge refused you as assignee${list ? `; ${list}` : ""} (${pr.unassigned})` : null;
+  // Which of them was refused is not known: one refusal answers the whole assignment.
+  const refused = pr.unassigned ? `the forge refused ${list ? `${list} or you as assignee` : "you as assignee"} (${pr.unassigned})` : null;
   // Built here, at the call, and never as a module constant: branch.ts and init.ts import
   // each other, and the bundle evaluates this module before TEAM_PREFIX_FILE is assigned, so
   // a constant read it as undefined in every dist/ entry while the tests, run as ES modules,
