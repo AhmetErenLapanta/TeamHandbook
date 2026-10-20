@@ -1161,9 +1161,9 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(creates).toHaveLength(2);
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(
-      "The request was opened without its assignment: the forge refused reviewers @adaa or you as assignee " +
-        "(failed to find user by name : adaa). Assign yourself and add reviewers @adaa on it by hand, and if a name in " +
-        `${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`,
+      "The request was opened without its assignment (reviewers @adaa; assignee you): the forge refused it " +
+        `(failed to find user by name : adaa). Set it on the request by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, ` +
+        "correct it with /handbook:init --upgrade --reviewers or --labels.",
     );
   });
 
@@ -1179,7 +1179,7 @@ describe("a request carries what the team file says when it is opened", () => {
 
     expect(result).toMatchObject({ ok: true, prError: "connection reset by peer" });
     expect(formatShareResult({ team: result, refused: [] })).toContain(
-      "The assignment did not go: the forge refused reviewers @adaa or you as assignee (failed to find user by name : adaa).",
+      "The assignment (reviewers @adaa; assignee you) did not go: the forge refused it (failed to find user by name : adaa).",
     );
   });
 
@@ -1219,7 +1219,7 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/4" });
     expect(creates).toHaveLength(1);
     expect(formatUpgradeResult(result)).toContain(
-      "The request was opened without its assignment: the forge refused reviewers @adaa or you as assignee (pull request update failed:",
+      "The request was opened without its assignment (reviewers @adaa; assignee you): the forge refused it (pull request update failed:",
     );
   });
 
@@ -1260,9 +1260,42 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(creates).toHaveLength(2);
     expect(creates[1]).not.toContain("--assignee=@me");
     expect(result.requestNotes).toEqual([
-      "The request was opened without its assignment: the forge refused you as assignee " +
-        "(error resolving assignee usernames: 403 Forbidden). Assign yourself on it by hand.",
+      "The request was opened without its assignment (assignee you): the forge refused it " +
+        "(error resolving assignee usernames: 403 Forbidden). Set it on the request by hand.",
     ]);
+  });
+
+  it("given no lists and a forge that fails every open differently, when a share is opened, then it is asked twice at most and nothing is said to be refused", () => {
+    const creates: string[][] = [];
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      creates.push(args);
+      // a network error carries the local port, so no two attempts read the same
+      throw Object.assign(new Error("Command failed"), {
+        stderr: `read tcp [::1]:5890${creates.length}->[::1]:443: read: connection reset by peer\n`,
+      });
+    };
+
+    const result = shareOn(teamFor(bareHandbook(teamFile({}))), forge, "TEAM-12");
+
+    expect(creates).toHaveLength(2);
+    expect(creates[0]).toContain("--assignee=@me");
+    expect(result).toMatchObject({ ok: true, prError: "read tcp [::1]:58902->[::1]:443: read: connection reset by peer" });
+    expect(result.requestNotes).toBeUndefined();
+  });
+
+  it("given reviewers and labels both refused, when the request is opened without them, then the list reads whole and apart from the assignee", () => {
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      if (args.some((arg) => arg.startsWith("--reviewer"))) throw Object.assign(new Error("Command failed"), { stderr: "failed to find user by name : adaa\n" });
+      return "https://gitlab.com/acme/skills/-/merge_requests/3\n";
+    };
+
+    const result = shareOn(teamFor(bareHandbook(teamFile({ reviewers: ["adaa"], labels: ["skills"] }))), forge, "TEAM-12");
+
+    expect(result.requestNotes?.[0]).toMatch(
+      /^The request was opened without its assignment \(reviewers @adaa; labels skills; assignee you\): the forge refused it \(/,
+    );
   });
 });
 
@@ -1390,8 +1423,8 @@ describe("a request already open for the branch it pushes", () => {
     expect(result).toMatchObject({ ok: true, prUrl: PR9 });
     expect(result.manualUrl).toBeUndefined();
     expect(formatShareResult({ team: result, refused: [] })).toContain(
-      "The assignment did not go: the forge refused reviewers @adaa or you as assignee (could not request reviewer: 'adaa' not found). " +
-        "On the open request, assign yourself and add reviewers @adaa if it lacks them, and if a name in .teamhandbook.json is wrong",
+      "The assignment (reviewers @adaa; assignee you) did not go: the forge refused it (could not request reviewer: 'adaa' not found). " +
+        "Set it on the open request if it lacks it, and if a name in .teamhandbook.json is wrong",
     );
   });
 });

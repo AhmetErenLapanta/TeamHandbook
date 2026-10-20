@@ -188,15 +188,18 @@ function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { 
  *
  * One wrong name in the team file, or a forge that will not resolve the assignee, must not
  * stop every share, so a request the forge refuses with its assignment is asked for once
- * more without it, and `unassigned` says why the assignment did not go. The second ask is the dangerous one: gh creates the pull
- * request first and requests reviewers after, printing the URL and failing when a login
- * is unknown, so a blind retry would open a second request. The failed call's own output
- * is read for an opened request before anything is retried, and a forge that answers either
- * call with the request already open for the branch is not asked again. A timeout is never
- * retried: whether the request exists is exactly what it leaves unknown. When the retry
- * fails too, `unassigned` still carries why the assignment was refused, because that is the
- * one reason the team file may need correcting - unless it failed for the same reason, which
- * says the assignment was not what the forge refused.
+ * more without it, and `unassigned` says why the assignment did not go. With the assignee
+ * on every request, that second ask follows every failed open, not only a team's that
+ * records lists. The second ask is the dangerous one: gh creates the pull request first and
+ * requests reviewers after, printing the URL and failing when a login is unknown, so a
+ * blind retry would open a second request. The failed call's own output is read for an
+ * opened request before anything is retried, and a forge that answers either call with the
+ * request already open for the branch is not asked again. A timeout is never retried:
+ * whether the request exists is exactly what it leaves unknown. When the retry fails too,
+ * no request exists to be assigned, so `unassigned` is kept only when the team's lists
+ * went: a name there is the one thing to correct before asking again. Nothing else on
+ * that path is said to have been refused, because a second failure says nothing about
+ * what the first one refused - a network error even differs in its local port each time.
  */
 export function openPr(
   repoUrl: string,
@@ -219,7 +222,8 @@ export function openPr(
             repoDir,
           ),
     );
-  const flags = [...(assignee.trim() ? [`--assignee=${assignee.trim()}`] : []), ...assignmentFlags(assignment)];
+  const listed = assignmentFlags(assignment);
+  const flags = [...(assignee.trim() ? [`--assignee=${assignee.trim()}`] : []), ...listed];
   try {
     return { url: create(flags) };
   } catch (err) {
@@ -238,8 +242,7 @@ export function openPr(
     } catch (retryErr) {
       const existing = existingRequest(tool, repoUrl, retryErr);
       if (existing) return { ...existing, unassigned: reason };
-      const error = forgeFailure(tool, retryErr);
-      return error === reason ? { url: null, error } : { url: null, error, unassigned: reason };
+      return { url: null, error: forgeFailure(tool, retryErr), ...(listed.length ? { unassigned: reason } : {}) };
     }
   }
 }

@@ -1480,7 +1480,8 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
       repoDir
     )
   );
-  const flags = [...assignee.trim() ? [`--assignee=${assignee.trim()}`] : [], ...assignmentFlags(assignment)];
+  const listed = assignmentFlags(assignment);
+  const flags = [...assignee.trim() ? [`--assignee=${assignee.trim()}`] : [], ...listed];
   try {
     return { url: create(flags) };
   } catch (err) {
@@ -1496,8 +1497,7 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
     } catch (retryErr) {
       const existing2 = existingRequest(tool, repoUrl, retryErr);
       if (existing2) return { ...existing2, unassigned: reason };
-      const error = forgeFailure(tool, retryErr);
-      return error === reason ? { url: null, error } : { url: null, error, unassigned: reason };
+      return { url: null, error: forgeFailure(tool, retryErr), ...listed.length ? { unassigned: reason } : {} };
     }
   }
 }
@@ -1649,17 +1649,17 @@ function assignmentList(assignment) {
 }
 function requestNotes(dropped, assignment, pr) {
   const list = assignmentList(assignment);
-  const refused = pr.unassigned ? `the forge refused ${list ? `${list} or you as assignee` : "you as assignee"} (${pr.unassigned})` : null;
+  const asked = [...list ? [list] : [], "assignee you"].join("; ");
+  const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
-  const alsoAdd = list ? ` and add ${list}` : "";
   const fix = list ? `, and ${correct}` : ".";
   return [
     ...pr.existing ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."] : [],
     ...dropped ? [dropped] : [],
-    ...refused && opened ? [`The request was opened without its assignment: ${refused}. Assign yourself${alsoAdd} on it by hand${fix}`] : [],
-    ...refused && pr.existing ? [`The assignment did not go: ${refused}. On the open request, assign yourself${alsoAdd} if it lacks ${list ? "them" : "an assignee"}${fix}`] : [],
-    ...refused && !pr.url && !pr.existing ? [`The assignment did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
+    ...refused && opened ? [`The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`] : [],
+    ...refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : [],
+    ...refused && !pr.url && !pr.existing ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
     ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
     ...list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []
   ];

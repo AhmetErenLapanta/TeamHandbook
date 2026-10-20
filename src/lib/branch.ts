@@ -350,27 +350,26 @@ export function requestNotes(
   pr: { url: string | null; unassigned?: string; existing?: true },
 ): string[] {
   const list = assignmentList(assignment);
-  // Which of them was refused is not known: one refusal answers the whole assignment.
-  const refused = pr.unassigned ? `the forge refused ${list ? `${list} or you as assignee` : "you as assignee"} (${pr.unassigned})` : null;
+  // One refusal answers the whole assignment, so it is named whole, in parentheses where a
+  // semicolon cannot be read as joining the last list to the assignee.
+  const asked = [...(list ? [list] : []), "assignee you"].join("; ");
+  const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   // Built here, at the call, and never as a module constant: branch.ts and init.ts import
   // each other, and the bundle evaluates this module before TEAM_PREFIX_FILE is assigned, so
   // a constant read it as undefined in every dist/ entry while the tests, run as ES modules,
   // saw the right name.
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
-  const alsoAdd = list ? ` and add ${list}` : "";
   const fix = list ? `, and ${correct}` : ".";
   return [
     ...(pr.existing
       ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."]
       : []),
     ...(dropped ? [dropped] : []),
-    ...(refused && opened ? [`The request was opened without its assignment: ${refused}. Assign yourself${alsoAdd} on it by hand${fix}`] : []),
-    ...(refused && pr.existing
-      ? [`The assignment did not go: ${refused}. On the open request, assign yourself${alsoAdd} if it lacks ${list ? "them" : "an assignee"}${fix}`]
-      : []),
+    ...(refused && opened ? [`The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`] : []),
+    ...(refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : []),
     ...(refused && !pr.url && !pr.existing
-      ? [`The assignment did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
+      ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
       : []),
     ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
     ...(list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []),

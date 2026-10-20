@@ -147,13 +147,28 @@ describe("the request is assigned to whoever opens it", () => {
     expect(opened).toEqual({ url: MR, existing: true, unassigned: "could not assign user" });
   });
 
-  it("given a retry refused for the same reason, when it is over, then the assignment is not blamed for it", () => {
-    const { forge, calls } = scripted({ stderr: "connection reset by peer\n" }, { stderr: "connection reset by peer\n" });
+  it("given no lists and a network error on both attempts, when it is over, then nothing is said to be refused", () => {
+    // measured with glab: the local port in the message differs between two attempts
+    const { forge, calls } = scripted(
+      { stderr: "read tcp [::1]:58906->[::1]:443: read: connection reset by peer.\n" },
+      { stderr: "read tcp [::1]:58910->[::1]:443: read: connection reset by peer.\n" },
+    );
 
-    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, NONE);
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, NONE);
 
     expect(calls).toHaveLength(2);
-    expect(opened).toEqual({ url: null, error: "connection reset by peer" });
+    expect(opened).toEqual({ url: null, error: "read tcp [::1]:58910->[::1]:443: read: connection reset by peer." });
+  });
+
+  it("given no lists and a refusal on the default path, when the request is opened, then it is asked twice and never a third time", () => {
+    const { forge, calls } = scripted({ stderr: "HTTP 401: Bad credentials\n" }, { stderr: "HTTP 401: Bad credentials\n" });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain("--assignee=@me");
+    expect(calls[1]!.some((arg) => arg.startsWith("--assignee"))).toBe(false);
+    expect(opened).toEqual({ url: null, error: "HTTP 401: Bad credentials" });
   });
 });
 
@@ -195,7 +210,7 @@ describe("an assignment the forge refuses", () => {
     expect(opened).toEqual({ url: PR, existing: true, unassigned: "pull request create failed: something went wrong" });
   });
 
-  it("given a retry that fails as well, when it is over, then no request is claimed and both reasons are kept", () => {
+  it("given lists and a retry that fails as well, when it is over, then no request is claimed and both reasons are kept", () => {
     const { forge, calls } = scripted({ stderr: "label not found\n" }, { stderr: "HTTP 401: Bad credentials\n" });
 
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
@@ -204,7 +219,7 @@ describe("an assignment the forge refuses", () => {
     expect(opened).toEqual({ url: null, error: "HTTP 401: Bad credentials", unassigned: "label not found" });
   });
 
-  it("given no assignment, when the forge refuses, then it is asked once and only once", () => {
+  it("given an empty assignee and no lists, which no caller passes, when the forge refuses, then nothing is dropped and it is asked once", () => {
     const { forge, calls } = scripted({ stderr: "HTTP 401: Bad credentials\n" });
 
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
@@ -273,9 +288,10 @@ describe("a request already open for the branch", () => {
   });
 
   it("given a refusal that ends on a bare address, when its reason is read, then the reason is the sentence before it", () => {
-    const { forge } = scripted({ stderr: "could not create the request\nhttps://github.com/acme/skills/pull/3\n" });
+    const refusal = { stderr: "could not create the request\nhttps://github.com/acme/skills/compare/main...TEAM-12\n" };
+    const { forge } = scripted(refusal, refusal);
 
-    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "").error).toBe("could not create the request");
+    expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge).error).toBe("could not create the request");
   });
 });
 
