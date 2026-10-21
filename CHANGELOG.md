@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.29.0] - 2026-10-21
+
+### Added
+
+- **`/handbook:init --upgrade --commit-prefix "<prefix>"`.** The team file embeds the
+  commit-message prefix the team's forge requires, so until now only a machine that already
+  knew the prefix could add it to a repository that had none. Any teammate can now give the
+  prefix on the run. It is used for that run only and saved nowhere on this machine, so the
+  plan's `--file` line carries it for the run that sends. A prefix carrying a quote, a
+  backtick, a dollar sign or a backslash is refused. When the forge refuses a refresh's push
+  over its commit prefix, the message now offers this flag too.
+- **The team file records which TeamHandbook release wrote the scaffold, as
+  `scaffoldVersion`.** A copy older than the recorded release, or one that cannot read it,
+  refuses to refresh the scaffold, says nothing was changed, and asks you to update the copy
+  with `/plugin marketplace update teamhandbook` and `/reload-plugins`. A copy as new or
+  newer refreshes as before, and a repository without the key gets it on the next refresh
+  that sends the team file. This is TeamHandbook's own version, not the team plugin's.
+
+### Changed
+
+- **`/handbook:init`'s instructions explain the new refusal, the new flag, and why a file
+  is not offered,** and say never to edit `scaffoldVersion` to get past a refusal.
+
+### Fixed
+
+- **A refresh no longer replaces the prefix recorded in the team repository with this
+  machine's own.** The team file keeps the repository's record unless `--commit-prefix`
+  gives another; the refresh commit's own title still prefers this machine's prefix, as a
+  share does.
+- **A refresh no longer drops keys it does not know from `.teamhandbook.json`:** a key the
+  team added, or one a newer release wrote, is carried across as it stands.
+- **A recorded `branchExample` or `commitPrefix` that fails today's checks is no longer
+  dropped or overwritten in silence.** The refresh leaves the team file out and says why,
+  the same rule the reviewer and label lists follow.
+
 ## [0.28.0] - 2026-10-21
 
 ### Changed
