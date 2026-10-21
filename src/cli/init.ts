@@ -11,7 +11,7 @@ function usage(): never {
       "[--with-ci] [--message <commit message>] [--delegate-message <fingerprint>] [--reviewers <a,b>] [--labels <a,b>]\n" +
       "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] " +
       "[--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>] " +
-      "[--reviewers <a,b>] [--labels <a,b>]",
+      "[--reviewers <a,b>] [--labels <a,b>] [--commit-prefix <prefix>]",
   );
   process.exit(2);
 }
@@ -80,12 +80,15 @@ function upgrade(args: string[]): void {
   // The branch the refresh goes out on, asked beside the message and used exactly as
   // given; the hint and the example only shape what is proposed. None of them is written
   // into this machine's config: the example goes to the team repository, in the request.
+  // The commit prefix is the same kind of answer: given for this run, saved nowhere.
   const branch = valueOf(args, "--branch");
   const hint = valueOf(args, "--branch-hint");
   const branchExample = valueOf(args, "--branch-example");
+  const commitPrefix = valueOf(args, "--commit-prefix");
   const assignment = assignmentFrom(args);
   const choice = {
     ...(branch !== undefined ? { branch } : {}),
+    ...(commitPrefix !== undefined ? { commitPrefix } : {}),
     ...(branchExample !== undefined ? { branchExample } : {}),
     ...assignment,
     ...(args.includes("--version-after-open") ? { versionAfterOpen: true } : {}),
@@ -95,7 +98,16 @@ function upgrade(args: string[]): void {
     if (args[i] === "--upgrade" || args[i] === "--version-after-open") continue;
     // Each takes a value, which is read above: stepping over it here is what keeps the
     // fingerprint or a branch name from being read as a --file path.
-    const valued = ["--message", "--delegate-message", "--branch", "--branch-hint", "--branch-example", "--reviewers", "--labels"];
+    const valued = [
+      "--message",
+      "--delegate-message",
+      "--branch",
+      "--branch-hint",
+      "--branch-example",
+      "--reviewers",
+      "--labels",
+      "--commit-prefix",
+    ];
     if (valued.includes(args[i]!)) {
       i++;
       continue;

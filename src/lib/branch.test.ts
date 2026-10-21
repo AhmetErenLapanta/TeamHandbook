@@ -17,6 +17,7 @@ import { approveAndDeliver, formatApproveResult } from "./deliver.js";
 import { forgeNotice, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import { formatInitSuccess, initTeamRepo, loadTeamConfig, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
+import { productVersion } from "./plugin-root.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { formatJoinSuccess, joinTeamRepo } from "./join.js";
 import { publishTeamSelection } from "./publish.js";
@@ -1071,6 +1072,16 @@ describe("recording the reviewers and labels", () => {
     expect(recorded).toMatchObject({ reviewers: ["@ada"], labels: [] });
     expect(assignmentFlagsOf(creates[0])).toEqual(["--reviewer=ada"]);
     expect(readFileSync(join(home, "config.json"), "utf8")).not.toContain("reviewers");
+  });
+
+  it("given a scaffold at setup, when it is pushed, then the team file records the release that wrote it", () => {
+    const bare = plainProject();
+
+    const result = initTeamRepo(bare, "acme-skills", home, gitAs, undefined, noForge, undefined, "", false, APPROVED);
+
+    expect(result.ok).toBe(true);
+    const recorded = JSON.parse(execFileSync("git", ["-C", bare, "show", `handbook/scaffold:${TEAM_PREFIX_FILE}`], { encoding: "utf8" }));
+    expect(recorded.scaffoldVersion).toBe(productVersion());
   });
 
   it("given a list that cannot be recorded at setup, when init runs, then nothing reaches the repository", () => {

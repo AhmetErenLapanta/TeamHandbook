@@ -15,6 +15,7 @@ import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { displayPath } from "./display-path.js";
 import { detectSecret } from "./secrets.js";
+import { productVersion } from "./plugin-root.js";
 
 // git's remote-helper syntax (`ext::sh -c ...`, `fd::`, generally `<transport>::`)
 // runs arbitrary commands on clone, and a URL starting with `-` is parsed as an
@@ -594,6 +595,7 @@ export function skeletonFiles(
   withCi = false,
   branchExample?: string,
   assignment: RecordedAssignment = {},
+  scaffoldVersion?: string,
 ): Record<string, string> {
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
@@ -641,6 +643,9 @@ export function skeletonFiles(
           // key left out is a team that has not said.
           ...(assignment.reviewers !== undefined ? { reviewers: assignment.reviewers } : {}),
           ...(assignment.labels !== undefined ? { labels: assignment.labels } : {}),
+          // Which TeamHandbook release wrote the scaffold, so an older copy refuses to refresh
+          // it back rather than undoing what a newer one wrote (upgrade.ts).
+          ...(scaffoldVersion ? { scaffoldVersion } : {}),
           comment:
             "Written by TeamHandbook. commitPrefix is what this project's forge requires at the " +
             "front of a commit message; /handbook:join reads it, so a teammate's first share " +
@@ -1175,7 +1180,7 @@ export function initTeamRepo(
   if ("error" in decided) return stopped(decided.error);
   const { skipped } = writeSkeletonPreserving(
     repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment),
+    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment, productVersion() ?? undefined),
   );
   // An empty repository has no default branch to open a merge request against, so the
   // first commit has to go straight to it. Everywhere else the scaffold arrives the way

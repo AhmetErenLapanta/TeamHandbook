@@ -627,9 +627,8 @@ var init_skill_format = __esm({
 // src/lib/status.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { readFileSync as readFileSync9 } from "node:fs";
-import { basename as basename6, dirname as dirname5, join as join13, resolve as resolve2 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync as readFileSync10 } from "node:fs";
+import { basename as basename6, dirname as dirname6, join as join14, resolve as resolve2 } from "node:path";
 
 // src/lib/signals.ts
 init_session_state();
@@ -690,12 +689,12 @@ function signalsFile(home = handbookHome()) {
 
 // src/lib/usage.ts
 init_fs_atomic();
-import { readFileSync as readFileSync6 } from "node:fs";
-import { basename as basename3, join as join9 } from "node:path";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { basename as basename3, join as join10 } from "node:path";
 
 // src/lib/init.ts
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname2, join as join7 } from "node:path";
+import { dirname as dirname3, join as join8 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -733,6 +732,34 @@ function displayPath(path, userHome = homedir2()) {
 
 // src/lib/init.ts
 init_secrets();
+
+// src/lib/plugin-root.ts
+import { readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname2, join as join7 } from "node:path";
+import { fileURLToPath } from "node:url";
+function pluginVersion() {
+  const root = pluginRoot();
+  if (!root) return "unknown";
+  try {
+    const parsed = JSON.parse(readFileSync5(join7(root, ".claude-plugin", "plugin.json"), "utf8"));
+    if (typeof parsed?.version === "string") return parsed.version;
+  } catch {
+  }
+  return "unknown";
+}
+function pluginRoot() {
+  const here = dirname2(fileURLToPath(import.meta.url));
+  for (const up of ["..", "../.."]) {
+    try {
+      const parsed = JSON.parse(readFileSync5(join7(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join7(here, up);
+    } catch {
+    }
+  }
+  return null;
+}
+
+// src/lib/init.ts
 function loadTeamConfig(home = handbookHome()) {
   const team = readConfigFile(home).team;
   if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
@@ -761,11 +788,11 @@ function nonInteractiveEnv(base = process.env) {
   };
 }
 function marketplacesRoot() {
-  return join7(homedir3(), ".claude", "plugins", "marketplaces");
+  return join8(homedir3(), ".claude", "plugins", "marketplaces");
 }
 function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
   const team = loadTeamConfig(home);
-  return team ? join7(root, team.marketplaceName, "skills") : null;
+  return team ? join8(root, team.marketplaceName, "skills") : null;
 }
 
 // src/lib/usage.ts
@@ -773,9 +800,9 @@ init_queue();
 init_session_state();
 
 // src/lib/session-workflow.ts
-import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync6, realpathSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 init_config();
-import { basename as basename2, dirname as dirname3, join as join8, relative, resolve, sep as sep2 } from "node:path";
+import { basename as basename2, dirname as dirname4, join as join9, relative, resolve, sep as sep2 } from "node:path";
 init_identity();
 init_secrets();
 init_fs_atomic();
@@ -1251,10 +1278,10 @@ var MERGE_WALK_LIMIT = 200;
 
 // src/lib/session-workflow.ts
 function workflowsFile(home = handbookHome()) {
-  return join8(home, "workflows.jsonl");
+  return join9(home, "workflows.jsonl");
 }
 function minedRecordFile(home = handbookHome()) {
-  return join8(home, "mined-workflows.json");
+  return join9(home, "mined-workflows.json");
 }
 function sessionDetectEnabled(home = handbookHome()) {
   const sessions = readConfigFile(home).sessions;
@@ -1263,12 +1290,12 @@ function sessionDetectEnabled(home = handbookHome()) {
 function repositoryOf(dir) {
   let at = resolve(dir);
   for (; ; ) {
-    const dotgit = join8(at, ".git");
+    const dotgit = join9(at, ".git");
     try {
       const stat = statSync(dotgit);
       if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
       if (stat.isFile()) {
-        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync5(dotgit, "utf8"));
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync6(dotgit, "utf8"));
         if (pointer) {
           const gitdir = resolve(at, pointer[1].trim());
           const marker = `${sep2}.git${sep2}worktrees${sep2}`;
@@ -1278,14 +1305,14 @@ function repositoryOf(dir) {
       }
     } catch {
     }
-    const up = dirname3(at);
+    const up = dirname4(at);
     if (up === at) return null;
     at = up;
   }
 }
 function loadMinedRecord(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync5(minedRecordFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync6(minedRecordFile(home), "utf8"));
     if (parsed?.version !== 1 || !Array.isArray(parsed.repos) || !Array.isArray(parsed.shapes)) return null;
     return parsed;
   } catch {
@@ -1296,7 +1323,7 @@ var COUNTED_MATCHES = /* @__PURE__ */ new Set(["shape"]);
 function recentWorkflowSessions(home = handbookHome(), now = Date.now(), days = 30) {
   let raw;
   try {
-    raw = readFileSync5(workflowsFile(home), "utf8");
+    raw = readFileSync6(workflowsFile(home), "utf8");
   } catch {
     return { recognized: 0, matched: 0 };
   }
@@ -1321,7 +1348,7 @@ function recentWorkflowSessions(home = handbookHome(), now = Date.now(), days = 
 function sessionsByShape(home = handbookHome(), now = Date.now(), days = 30) {
   let raw;
   try {
-    raw = readFileSync5(workflowsFile(home), "utf8");
+    raw = readFileSync6(workflowsFile(home), "utf8");
   } catch {
     return /* @__PURE__ */ new Map();
   }
@@ -1349,11 +1376,11 @@ init_skill_index();
 var USAGE_DAYS = 30;
 var DAY = /^\d{4}-\d{2}-\d{2}$/;
 function usageFile(home = handbookHome()) {
-  return join9(home, "skill-usage.json");
+  return join10(home, "skill-usage.json");
 }
 function readSkillUsage(home = handbookHome()) {
   try {
-    const parsed = JSON.parse(readFileSync6(usageFile(home), "utf8"));
+    const parsed = JSON.parse(readFileSync7(usageFile(home), "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     const usage = {};
     for (const [slug, value] of Object.entries(parsed)) {
@@ -1409,8 +1436,8 @@ init_queue();
 init_fs_atomic();
 init_session_state();
 init_config();
-import { existsSync as existsSync3, readFileSync as readFileSync7, readdirSync as readdirSync4 } from "node:fs";
-import { join as join10 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync8, readdirSync as readdirSync4 } from "node:fs";
+import { join as join11 } from "node:path";
 init_queue();
 
 // src/lib/harvest.ts
@@ -1492,7 +1519,7 @@ var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
   try {
-    entries = readdirSync4(join10(home, "pending"));
+    entries = readdirSync4(join11(home, "pending"));
   } catch {
     return 0;
   }
@@ -1500,7 +1527,7 @@ function pendingHarvestCount(home = handbookHome()) {
   for (const entry of entries) {
     if (!entry.includes(".json")) continue;
     try {
-      const parsed = JSON.parse(readFileSync7(join10(home, "pending", entry), "utf8"));
+      const parsed = JSON.parse(readFileSync8(join11(home, "pending", entry), "utf8"));
       if (parsed && typeof parsed === "object" && typeof parsed.sessionId === "string") total += 1;
     } catch {
     }
@@ -1512,7 +1539,7 @@ function pendingHarvestCount(home = handbookHome()) {
 init_score();
 
 // src/lib/pipeline.ts
-import { basename as basename4, join as join11 } from "node:path";
+import { basename as basename4, join as join12 } from "node:path";
 init_fs_atomic();
 init_session_state();
 init_secrets();
@@ -1527,16 +1554,16 @@ init_skill_index();
 init_queue();
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join11(home, "pipeline.log");
+  return join12(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
 // src/lib/skill-health.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readFileSync as readFileSync8, realpathSync as realpathSync2 } from "node:fs";
+import { readFileSync as readFileSync9, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename5, dirname as dirname4, join as join12, relative as relative2, sep as sep3 } from "node:path";
+import { basename as basename5, dirname as dirname5, join as join13, relative as relative2, sep as sep3 } from "node:path";
 
 // src/lib/draft.ts
 init_identity();
@@ -1699,7 +1726,7 @@ function pathMatcher(pattern, repo) {
   const role = anyDepth || wildcard ? segment : null;
   const slash = body.lastIndexOf("/");
   const areaForm = wildcard && slash > 0 && body.slice(slash + 1).includes("*") ? matcherFor(`${body.slice(0, slash)}/*${body.slice(slash)}`) : null;
-  const areas = areaForm ? new Set(repo.tree.files.filter((f) => !VENDORED.test(f) && areaForm.test(f)).map((f) => dirname4(f))) : null;
+  const areas = areaForm ? new Set(repo.tree.files.filter((f) => !VENDORED.test(f) && areaForm.test(f)).map((f) => dirname5(f))) : null;
   const area = areas && areas.size >= MIN_AREAS ? areaForm : null;
   return (path) => !VENDORED.test(path) && (rooted(path) || (role?.test(path) ?? false) || (area?.test(path) ?? false));
 }
@@ -1795,7 +1822,7 @@ function overlappingSkills(named, others, threshold = OVERLAP_THRESHOLD) {
 }
 function readSkill(dir) {
   try {
-    return readFileSync8(join12(dir, "SKILL.md"), "utf8");
+    return readFileSync9(join13(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -1816,19 +1843,19 @@ function deliveredSkills(home) {
   if (teamDir) {
     for (const skill of listExistingSkills([teamDir])) {
       if (out.has(skill.name)) continue;
-      const text = readSkill(join12(teamDir, skill.name));
+      const text = readSkill(join13(teamDir, skill.name));
       if (text !== null) out.set(skill.name, { name: skill.name, text, repo: null, base: "", shape: null });
     }
   }
   return [...out.values()];
 }
 function projectBase(checkout, skillDir) {
-  const rel = relative2(checkout, dirname4(dirname4(dirname4(skillDir)))).split(sep3).join("/");
+  const rel = relative2(checkout, dirname5(dirname5(dirname5(skillDir)))).split(sep3).join("/");
   return rel.startsWith("..") ? "" : rel;
 }
 function installedSkills(home = handbookHome(), userHome = homedir4(), cwd = process.cwd()) {
   const teamDir = teamSkillsDir(home);
-  return listExistingSkills([join12(cwd, ".claude", "skills"), join12(userHome, ".claude", "skills"), ...teamDir ? [teamDir] : []]);
+  return listExistingSkills([join13(cwd, ".claude", "skills"), join13(userHome, ".claude", "skills"), ...teamDir ? [teamDir] : []]);
 }
 function realRoot(root) {
   try {
@@ -1913,27 +1940,6 @@ function formatSkillHealth(health) {
 }
 
 // src/lib/status.ts
-function pluginVersion() {
-  const root = pluginRoot();
-  if (!root) return "unknown";
-  try {
-    const parsed = JSON.parse(readFileSync9(join13(root, ".claude-plugin", "plugin.json"), "utf8"));
-    if (typeof parsed?.version === "string") return parsed.version;
-  } catch {
-  }
-  return "unknown";
-}
-function pluginRoot() {
-  const here = dirname5(fileURLToPath(import.meta.url));
-  for (const up of ["..", "../.."]) {
-    try {
-      const parsed = JSON.parse(readFileSync9(join13(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join13(here, up);
-    } catch {
-    }
-  }
-  return null;
-}
 var RELEASE_CHECK_TIMEOUT_MS = 5e3;
 var lookupRelease = (args, cwd) => execFileSync3("git", args, {
   cwd,
@@ -1945,11 +1951,11 @@ var lookupRelease = (args, cwd) => execFileSync3("git", args, {
 function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
   if (!root || !versionNumbers(installed)) return null;
   const versionDir = resolve2(root);
-  if (basename6(dirname5(dirname5(dirname5(versionDir)))) !== "cache") return null;
-  const marketplace = basename6(dirname5(dirname5(versionDir)));
+  if (basename6(dirname6(dirname6(dirname6(versionDir)))) !== "cache") return null;
+  const marketplace = basename6(dirname6(dirname6(versionDir)));
   let out;
   try {
-    out = String(git(["ls-remote", "--tags", "origin"], join13(marketRoot, marketplace)) ?? "");
+    out = String(git(["ls-remote", "--tags", "origin"], join14(marketRoot, marketplace)) ?? "");
   } catch {
     return null;
   }
@@ -1977,7 +1983,7 @@ function ledgerStats(home = handbookHome()) {
   const stats = { total: 0, candidates: 0, weak: 0, distinctFingerprints: 0 };
   let raw;
   try {
-    raw = readFileSync9(signalsFile(home), "utf8");
+    raw = readFileSync10(signalsFile(home), "utf8");
   } catch {
     return stats;
   }
@@ -2001,7 +2007,7 @@ function ledgerStats(home = handbookHome()) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync9(pipelineLogFile(home), "utf8");
+    raw = readFileSync10(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -2019,7 +2025,7 @@ function pipelineAggregate(home = handbookHome()) {
   const agg = { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 };
   let raw;
   try {
-    raw = readFileSync9(pipelineLogFile(home), "utf8");
+    raw = readFileSync10(pipelineLogFile(home), "utf8");
   } catch {
     return agg;
   }

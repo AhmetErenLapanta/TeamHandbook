@@ -71,6 +71,12 @@ re-init. That loses the repository. Refresh it in place instead:
    the user named a branch earlier in this conversation, so the proposal reuses its
    ticket). It reads the repository in a throwaway clone and changes nothing, there or on
    this machine: it prints which scaffold files are missing or differ, and the diff.
+   **If it refuses because the repository's scaffold was last written by a newer
+   TeamHandbook**, the copy on this machine is behind, not the repository. Relay the
+   refusal and tell the user to update the copy - `/plugin marketplace update teamhandbook`
+   and then `/reload-plugins` - and run the plan again. Never suggest editing
+   `scaffoldVersion` in `.teamhandbook.json` to get past it: that number is what stops an
+   older copy from undoing a newer refresh.
 2. **Relay the plan's first line before anything else.** It says who the refresh reaches
    and whether sharing waits on it; usually it does not, and the user may stop right there.
    Then relay the plan and the diff, and ask which files to refresh. A `DIFFERS` file may
@@ -106,9 +112,17 @@ re-init. That loses the repository. Refresh it in place instead:
    pick it up - but a repository whose version is not a three-part `MAJOR.MINOR.PATCH`
    number cannot be raised, and the plan says so with a `WARNING`. When it does, the fix is
    to set a three-part version by hand first; a refresh merged without one reaches nobody.
-5. A `NOT OFFERED` line is not a file to argue with. It means either the repository carries
-   a symbolic link on that path, or the file embeds the team's commit-message prefix and
-   only the machine that ran `/handbook:init` recorded it. Naming it anyway is refused.
+5. A `NOT OFFERED` line is not a file to argue with, and naming it anyway is refused. Its
+   reason says which case it is. A symbolic link on that path, or a value in
+   `.teamhandbook.json` that cannot be carried across, is fixed in the repository or
+   replaced on the same run with the flag the reason names. A file that embeds the team's
+   commit-message prefix is withheld because neither this machine nor the repository
+   records the prefix: ask the user what their forge requires at the front of a commit
+   message, and if they know it, run the plan again with `--commit-prefix "<prefix>"`. Put
+   the same `--commit-prefix` on the run that sends - the plan's `--file` line carries it -
+   because it is used for that run only and is not saved anywhere on this machine. The
+   repository's recent commit messages usually show it, but it goes on the run only once
+   the user has confirmed it.
 6. If the push is refused for the branch NAME, nothing reached the repository and nothing
    was retried: the error quotes the forge's own sentence and asks the same one question
    with the refused name in it. Relay the sentence, ask again with that name as the starting

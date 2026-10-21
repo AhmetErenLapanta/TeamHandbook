@@ -4,6 +4,8 @@ import { forgeNotice, hostFromUrl, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 import {
   assertSafeGitUrl,
+  commitMessagePrefix,
+  commitPrefixProblem,
   commitSubject,
   proposalFingerprint,
   gitIdentityArgs,
@@ -11,7 +13,6 @@ import {
   teamCommitPrefixFix,
   runGit,
   skeletonFiles,
-  teamCommitPrefix,
   TEAM_PREFIX_FILE,
 } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
@@ -38,6 +39,7 @@ import {
 } from "./branch.js";
 import type { BranchProposal, PushChoice, Pushed, RecordedAssignment, VersionClaim } from "./branch.js";
 import { handbookWorkdir } from "./session-state.js";
+import { productVersion } from "./plugin-root.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
 //
@@ -47,10 +49,14 @@ import { handbookWorkdir } from "./session-state.js";
 // second init, which means a second repository. Every adopter reaches that wall on
 // their first plugin upgrade.
 //
-// Nothing here tries to work out which version wrote the repository. The version in the
-// team's plugin.json is the TEAM plugin's version, not TeamHandbook's, so it answers a
-// different question; and it does not need answering, because today's skeleton is
-// regenerated and compared byte-for-byte against what is there.
+// The version in the team's plugin.json is the TEAM plugin's version, not TeamHandbook's:
+// every share raises it, so it says nothing about who wrote the scaffold. Which TeamHandbook
+// release last refreshed the scaffold is recorded on its own, as `scaffoldVersion` in the
+// team file, and it decides one thing only: a copy older than that refuses to refresh.
+// Its skeleton is the past, and a byte comparison against the past offers to undo the
+// present - measured, a 0.25 copy offered a 0.26 repository a refresh that deleted the
+// reviewers and labels it recorded. Everything else is still decided by regenerating
+// today's skeleton and comparing it byte-for-byte against what is there.
 
 export const PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
 export const MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json";
@@ -168,6 +174,135 @@ export function mergeMarketplaceManifest(existing: string | null, fresh: string)
   return JSON.stringify(merged, null, 2) + "\n";
 }
 
+/**
+ * The team file to write: today's keys over the repository's own, in the order the
+ * repository already has them.
+ *
+ * The same rule as the plugin manifest, for the same reason: a key the team added there,
+ * or one a later TeamHandbook writes that this copy has never heard of, is not the
+ * refresh's to delete. Regenerating the file from a fixed set of keys did delete them.
+ * Spreading over the existing object keeps each key where it already stands, so a
+ * refresh shows the lines that changed rather than a file reshuffled.
+ *
+ * The release stamp is carried across here, never raised: raising it belongs to the
+ * write (see `stampScaffoldVersion`), and doing it in the comparison would make the team
+ * file read as behind on every repository after every release.
+ *
+ * Null on a file that cannot be parsed, so nothing is offered rather than something guessed.
+ */
+export function mergeTeamFile(existing: string | null, fresh: string): string | null {
+  if (existing === null) return fresh;
+  const current = parseObject(existing);
+  if (!current) return null;
+  return JSON.stringify({ ...current, ...(JSON.parse(fresh) as Record<string, unknown>) }, null, 2) + "\n";
+}
+
+function readTeamFileObject(repoDir: string): Record<string, unknown> | null {
+  const text = readIfPresent(join(repoDir, TEAM_PREFIX_FILE));
+  return text === null ? null : parseObject(text);
+}
+
+const SCAFFOLD_VERSION_KEY = "scaffoldVersion";
+
+// The two commands doctor gives for the team's marketplace, pointed at TeamHandbook's own:
+// this copy is a marketplace plugin and is brought forward the same way.
+const UPDATE_THIS_COPY =
+  "Update this copy of TeamHandbook first - run `/plugin marketplace update teamhandbook` and then " +
+  "`/reload-plugins` - and run the refresh again.";
+
+function releaseParts(version: string): number[] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+/**
+ * Why a copy at `running` must not refresh a scaffold recorded as written by `recorded`,
+ * or null when it may.
+ *
+ * Only backwards is refused. A newer copy against an older repository is what a refresh is
+ * for, and a repository with no record - every one written before the record existed - is
+ * refreshed as it always was and receives one. A record this copy cannot read is refused
+ * like a newer one, because a newer release is the likeliest thing to have written a
+ * format this one does not know. Every refusal sends the reader to update the copy: the
+ * repository is right, the copy is behind.
+ */
+export function scaffoldVersionProblem(recorded: unknown, running: string | null): string | null {
+  const own = running === null ? null : releaseParts(running);
+  if (!own) {
+    return (
+      "This copy of TeamHandbook cannot read its own version, so it cannot tell whether the scaffold in this " +
+      `repository is newer than it. Nothing was changed. ${UPDATE_THIS_COPY}`
+    );
+  }
+  if (recorded === undefined) return null;
+  const theirs = typeof recorded === "string" ? releaseParts(recorded) : null;
+  if (!theirs) {
+    return (
+      `${TEAM_PREFIX_FILE} records the scaffold as written by a version this copy cannot read, which is what a ` +
+      `newer TeamHandbook would leave. Nothing was changed. ${UPDATE_THIS_COPY}`
+    );
+  }
+  for (const [at, part] of theirs.entries()) {
+    if (part < own[at]!) return null;
+    if (part > own[at]!) {
+      return (
+        `The scaffold in this repository was last written by TeamHandbook ${recorded}, and this copy is ${running}, ` +
+        `so refreshing it from here would undo what ${recorded} changed. Nothing was changed. ${UPDATE_THIS_COPY}`
+      );
+    }
+  }
+  return null;
+}
+
+/** The release this copy is, or why it must not refresh this repository at all. */
+function refreshingRelease(repoDir: string): { release: string } | { error: string } {
+  const running = productVersion();
+  const problem = scaffoldVersionProblem(readTeamFileObject(repoDir)?.[SCAFFOLD_VERSION_KEY], running);
+  return problem ? { error: problem } : { release: running! };
+}
+
+/** What a refresh will record about the release that wrote it, decided before anything is written. */
+export interface ScaffoldStamp {
+  release: string;
+  /** Recorded only if the team file is among the files sent: the repository has none yet. */
+  ifSent?: boolean;
+  /** Why nothing can record it, when nothing can. */
+  blocked?: string;
+}
+
+/** The sentence for a refresh that cannot record its release, plan and result alike. */
+function stampMissing(stamp: ScaffoldStamp): string {
+  const why = stamp.blocked ?? `${TEAM_PREFIX_FILE} is not among the files sent, and the repository has none yet`;
+  return (
+    `nothing records that TeamHandbook ${stamp.release} wrote this scaffold - ${why} - so an older copy ` +
+    "is not stopped from undoing it."
+  );
+}
+
+function scaffoldStamp(repoDir: string, candidates: CandidateSet, release: string): ScaffoldStamp {
+  if (!(TEAM_PREFIX_FILE in candidates.files)) {
+    return { release, blocked: `${TEAM_PREFIX_FILE} is not offered here (see above)` };
+  }
+  return existsSync(join(repoDir, TEAM_PREFIX_FILE)) ? { release } : { release, ifSent: true };
+}
+
+/**
+ * Record the release in the team file on whatever a refresh writes, named or not, and say
+ * whether the file changed.
+ *
+ * Every write, not only one that names the team file: a newer copy that refreshed nothing
+ * but the README would otherwise leave the old release recorded, and a copy of that old
+ * release would pass the check and offer to put the old README back. The plugin version
+ * is raised on the same terms and for the same kind of reason.
+ */
+function stampScaffoldVersion(repoDir: string, release: string): boolean {
+  const current = readTeamFileObject(repoDir);
+  if (!current || current[SCAFFOLD_VERSION_KEY] === release) return false;
+  const stamped = { ...current, [SCAFFOLD_VERSION_KEY]: release };
+  writeFileSync(join(repoDir, TEAM_PREFIX_FILE), JSON.stringify(stamped, null, 2) + "\n");
+  return true;
+}
+
 const PREFIX_PROBE = "ZZTEAMHANDBOOKPREFIXPROBEZZ";
 
 /**
@@ -230,32 +365,45 @@ export interface CandidateSet {
  * this comparison cannot drift apart the way they did while each glued the prefix on
  * itself. A repository scaffolded before that formatting was fixed does report its CI
  * file as stale, which is what the file being out of date means.
+ *
+ * `commitPrefix` is one given on this run, which is how a teammate whose machine was never
+ * told the prefix can still offer the files that embed it.
  */
 export function upgradeCandidates(
   repoDir: string,
   team: TeamConfig,
   branchExample?: string,
   assignment: RecordedAssignment = {},
+  commitPrefix?: string,
 ): CandidateSet {
   const withCi = existsSync(join(repoDir, CI_MARKER));
   // The example the repository already records is carried across unless a new one was
   // given. A machine that never heard of it would otherwise regenerate the team file
   // without it and offer, as a refresh, to delete what an administrator wrote there.
-  const example = branchExample ?? readTeamBranchExample(repoDir).example;
+  // One that fails today's checks cannot be carried, and withholds the file the way a list
+  // below does: it used to vanish from the regenerated file with nothing withheld or said.
+  const recordedExample = readTeamBranchExample(repoDir);
+  const example = branchExample ?? recordedExample.example;
+  const rawExample = readTeamFileObject(repoDir)?.branchExample;
+  const exampleProblem =
+    branchExample !== undefined || rawExample === undefined
+      ? null
+      : (recordedExample.problem ?? (typeof rawExample === "string" ? null : "not a branch name"));
   // The reviewers and labels likewise, each list on its own and exactly as written: a new
   // reviewer list leaves the labels alone, and a refresh is not the place to edit either.
   // A list this cannot carry withholds the file instead, unless a new one replaces it.
   const { recorded: lists, unreadable } = readRecordedAssignment(repoDir);
   const assigned = { ...lists, ...assignment };
   const uncarried = unreadable.filter((kind) => assignment[kind] === undefined);
-  // The repository is asked before this machine is written off as not knowing. A teammate
-  // who joined before the handbook recorded its prefix has nothing in their config, but the
-  // repository they are refreshing may have been given the record since - and regenerating
-  // a file FROM that record cannot drop the prefix, which is the only thing withholding
-  // protects against. Without this the very file carrying the answer would be withheld for
-  // not knowing the answer.
-  const recorded = commitPrefixIsKnown(team) ? undefined : readTeamCommitPrefix(repoDir).prefix;
-  const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
+  // A prefix given on this run comes first, then the repository's record, and only then
+  // this machine's config. The record is read even on a machine that "knows" a prefix:
+  // that machine's answer is one person's copy of the team's, and regenerating the file
+  // from it overwrote a different prefix the repository recorded. A teammate who joined
+  // before the record existed has nothing in their config, and the repository may have
+  // been given the record since; regenerating a file FROM that record cannot drop the
+  // prefix, which is the only thing withholding protects against.
+  const recorded = readTeamCommitPrefix(repoDir).prefix;
+  const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(
     team.marketplaceName,
     team.repoUrl,
@@ -265,7 +413,7 @@ export function upgradeCandidates(
     example,
     assigned,
   );
-  const known = commitPrefixIsKnown(team) || recorded !== undefined;
+  const known = commitPrefix !== undefined || recorded !== undefined || commitPrefixIsKnown(team);
   const unknownPrefix = known ? new Set<string>() : prefixDependentPaths(team, withCi);
   const files: Record<string, string> = {};
   const linked: WithheldFile[] = [];
@@ -282,13 +430,20 @@ export function upgradeCandidates(
       });
       continue;
     }
-    if (path === TEAM_PREFIX_FILE && uncarried.length) {
+    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem)) {
+      const held = [
+        ...(uncarried.length
+          ? [`it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names`]
+          : []),
+        // Described, never quoted, for the reason branchTrace gives.
+        ...(exampleProblem ? [`its "branchExample" is ${exampleProblem}`] : []),
+      ];
+      const flags = [...uncarried.map((kind) => `--${kind}`), ...(exampleProblem ? ["--branch-example"] : [])];
       withheld.push({
         path,
         reason:
-          `it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names, ` +
-          "so regenerating it would delete what the team recorded there. Correct it in the repository by hand, " +
-          `or record a new list on the same run with ${uncarried.map((kind) => `--${kind}`).join(" and ")}.`,
+          `${held.join(", and ")}, so regenerating it would delete what the team recorded there. Correct it in the ` +
+          `repository by hand, or record a new one on the same run with ${flags.join(" and ")}.`,
       });
       continue;
     }
@@ -299,7 +454,8 @@ export function upgradeCandidates(
           "it embeds the team's commit-message prefix, and neither this machine nor the repository " +
           "records what it is - only the machine that ran /handbook:init was ever told. Regenerating " +
           "it here would write the file with no prefix at all, which is a different answer from the " +
-          "team's, so it is not offered on this machine.",
+          "team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge " +
+          'requires can give it with --commit-prefix "<prefix>" on the plan and again on the run that sends it.',
       });
       continue;
     }
@@ -308,7 +464,9 @@ export function upgradeCandidates(
         ? mergePluginManifest(readIfPresent(join(repoDir, path)), content)
         : path === MARKETPLACE_MANIFEST
           ? mergeMarketplaceManifest(readIfPresent(join(repoDir, path)), content)
-          : content;
+          : path === TEAM_PREFIX_FILE
+            ? mergeTeamFile(readIfPresent(join(repoDir, path)), content)
+            : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
@@ -317,8 +475,9 @@ export function upgradeCandidates(
 /**
  * `absent` is a file this version ships that the repository has never had; `differs` is
  * one whose bytes do not match. Nothing distinguishes an upgrade from an edit the team
- * made by hand, because nothing can: the version that wrote the file is not recorded
- * anywhere, and `writeSkeletonPreserving` deliberately skips a file the repository
+ * made by hand, because nothing can: the release that last refreshed the scaffold is
+ * recorded, but not which files it wrote or what was edited since, and
+ * `writeSkeletonPreserving` deliberately skips a file the repository
  * already had, so a README the team wrote at init has read as `differs` since the day it
  * was created. The diff is the only evidence, which is why the diff is what gets shown.
  */
@@ -352,7 +511,7 @@ export interface UpgradePlan {
   stat?: string;
   withCi?: boolean;
   version?: VersionPlan;
-  /** Manifests that could not be parsed, so what the team put in them could not be read. */
+  /** JSON files that could not be parsed, so what the team put in them could not be read. */
   unreadable?: string[];
   linked?: WithheldFile[];
   withheld?: WithheldFile[];
@@ -373,6 +532,10 @@ export interface UpgradePlan {
   versionClaim?: string;
   /** Set when the repository records no example branch name, so the plan can ask once. */
   asksBranchExample?: boolean;
+  /** The commit-message prefix given on this run, which the run that sends has to repeat. */
+  commitPrefix?: string;
+  /** What the refresh records about the release that wrote it. */
+  stamp?: ScaffoldStamp;
 }
 
 /** What a refresh needs decided beyond its files and its message. */
@@ -383,6 +546,8 @@ export interface UpgradeChoice extends PushChoice {
   reviewers?: string[];
   /** The labels every request to this repository is opened with, to record in the team file. */
   labels?: string[];
+  /** The team's commit-message prefix, for this run only: never saved on this machine. */
+  commitPrefix?: string;
 }
 
 /** What a refresh was asked to record in the team file beyond its scaffold files. */
@@ -406,6 +571,8 @@ export interface UpgradeResult {
   version?: string;
   /** Set when the merge request could not raise the plugin version, with the reason. */
   versionNotRaised?: string;
+  /** Set when nothing could record which release wrote the scaffold, with the reason. */
+  scaffoldNotRecorded?: string;
   prUrl?: string;
   manualUrl?: string;
   prError?: string;
@@ -439,13 +606,13 @@ export function refreshable(files: SkeletonFileState[]): string[] {
   return files.filter((file) => file.state !== "current").map((file) => file.path);
 }
 
-/** A manifest that is in the repository but not among the candidates BECAUSE the merge
- * could not parse it. A manifest already withheld for another reason is excluded rather
+/** A merged JSON file that is in the repository but not among the candidates BECAUSE the
+ * merge could not parse it. One already withheld for another reason is excluded rather
  * than reported twice under a reason that is not the one that applies - and a symlinked
  * one would read as parseable here, because `readIfPresent` follows the link. */
 function unreadableManifests(repoDir: string, candidates: CandidateSet): string[] {
   const explained = new Set([...candidates.linked, ...candidates.withheld].map((file) => file.path));
-  return [PLUGIN_MANIFEST, MARKETPLACE_MANIFEST].filter(
+  return [PLUGIN_MANIFEST, MARKETPLACE_MANIFEST, TEAM_PREFIX_FILE].filter(
     (path) =>
       !(path in candidates.files) && !explained.has(path) && readIfPresent(join(repoDir, path)) !== null,
   );
@@ -621,15 +788,25 @@ export function planUpgrade(
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) };
   }
+  const prefixError = commitPrefixFlagError(choice.commitPrefix);
+  if (prefixError) return { ok: false, error: prefixError };
   const workdir = handbookWorkdir("handbook-upgrade-");
   const repoDir = join(workdir, "repo");
   const scratch = join(workdir, "candidate");
   try {
     const cloneError = cloneForUpgrade(git, team, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
+    const running = refreshingRelease(repoDir);
+    if ("error" in running) return { ok: false, error: running.error };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
-    const candidates = upgradeCandidates(repoDir, team, choice.branchExample, assignmentAsked(choice));
+    const candidates = upgradeCandidates(
+      repoDir,
+      team,
+      choice.branchExample,
+      assignmentAsked(choice),
+      choice.commitPrefix,
+    );
     const files = classify(repoDir, candidates.files);
     const paths = refreshable(files);
     const unreadable = unreadableManifests(repoDir, candidates);
@@ -648,8 +825,10 @@ export function planUpgrade(
       files,
       withCi: existsSync(join(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
-      proposedMessage: commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE),
-      proposalHash: proposalFingerprint(commitSubject(teamCommitPrefix(team), REFRESH_COMMIT_TITLE)),
+      proposedMessage: commitSubject(refreshMessagePrefix(team, choice, repoDir), REFRESH_COMMIT_TITLE),
+      proposalHash: proposalFingerprint(commitSubject(refreshMessagePrefix(team, choice, repoDir), REFRESH_COMMIT_TITLE)),
+      stamp: scaffoldStamp(repoDir, candidates, running.release),
+      ...(choice.commitPrefix !== undefined ? { commitPrefix: choice.commitPrefix.trim() } : {}),
       ...(branch ? { branch } : {}),
       ...(branchProblem ? { branchProblem } : {}),
       ...(preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {}),
@@ -686,6 +865,25 @@ export function planUpgrade(
   } finally {
     rmSync(workdir, { recursive: true, force: true });
   }
+}
+
+/** The prefix the refresh commit carries, in the order the files take theirs: the one
+ * given on this run, the repository's record, this machine's. A teammate gives one because
+ * the forge refuses commits without it, so the commit that carries the refresh has to
+ * satisfy the same rule as the files it refreshes. */
+function refreshMessagePrefix(team: TeamConfig, choice: UpgradeChoice, repoDir: string): string {
+  return commitMessagePrefix(choice.commitPrefix ?? readTeamCommitPrefix(repoDir).prefix ?? team.commitPrefix);
+}
+
+/** Why the commit-message prefix given on this run cannot be used, or null. Held to the
+ * same checks as the one join reads out of the repository, since it is written there. */
+function commitPrefixFlagError(prefix: string | undefined): string | null {
+  if (prefix === undefined) return null;
+  if (!prefix.trim()) {
+    return "--commit-prefix needs the prefix the team's forge requires; an empty one is not something this records. Nothing was changed.";
+  }
+  const problem = commitPrefixProblem(prefix.trim());
+  return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 
 /** Why the example given for the team file cannot be recorded, or null. It is a branch
@@ -725,6 +923,8 @@ export function applyUpgrade(
   }
   const assignmentProblem = assignmentRecordProblem(assignmentAsked(choice));
   if (assignmentProblem) return { ok: false, error: assignmentProblem };
+  const prefixError = commitPrefixFlagError(choice.commitPrefix);
+  if (prefixError) return { ok: false, error: prefixError };
   try {
     assertSafeGitUrl(team.repoUrl);
   } catch (err) {
@@ -745,9 +945,19 @@ export function applyUpgrade(
   try {
     const cloneError = cloneForUpgrade(git, team, repoDir, workdir);
     if (cloneError) return { ok: false, error: cloneError };
+    // Before anything is decided, so a copy behind the repository is stopped on every run,
+    // a record-only one included: that rewrites the team file as surely as a named file does.
+    const running = refreshingRelease(repoDir);
+    if ("error" in running) return { ok: false, error: running.error };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
-    const candidates = upgradeCandidates(repoDir, team, choice.branchExample, assignmentAsked(choice));
+    const candidates = upgradeCandidates(
+      repoDir,
+      team,
+      choice.branchExample,
+      assignmentAsked(choice),
+      choice.commitPrefix,
+    );
     const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
     // Giving the example, the reviewers or the labels is the approval of the one file they
     // are written into, so that file joins the request without being named twice - unless
@@ -781,11 +991,13 @@ export function applyUpgrade(
     // Read before anything is written, so the commit raises the version exactly when the
     // plan said it would and stays silent when the plan said it could not.
     const version = versionPlan(repoDir);
+    const stamp = scaffoldStamp(repoDir, candidates, running.release);
+    const stamps = !stamp.blocked && (!stamp.ifSent || paths.includes(TEAM_PREFIX_FILE));
     const title = REFRESH_COMMIT_TITLE;
     // After the paths are checked, so a run stopped for naming a file this cannot refresh
     // says that rather than asking for wording the user would then have to give twice, and
     // before the checkout, so a run with no decision leaves nothing behind.
-    const messagePrefix = teamCommitPrefix(team);
+    const messagePrefix = refreshMessagePrefix(team, choice, repoDir);
     const decided = decidePush({
       git,
       forge,
@@ -802,17 +1014,21 @@ export function applyUpgrade(
     const { branch } = decided;
     let pushed: Pushed;
     let raised: string | null = null;
+    let written = paths;
     try {
       git(["checkout", "-b", branch], repoDir);
       const writeError = writeCandidates(repoDir, candidates.files, paths);
       if (writeError) return { ok: false, error: writeError };
+      if (stamps && stampScaffoldVersion(repoDir, running.release) && !paths.includes(TEAM_PREFIX_FILE)) {
+        written = [...paths, TEAM_PREFIX_FILE];
+      }
       // The refresh has to reach the teammates it is for, and a marketplace whose version
       // did not move is one Claude Code keeps serving from cache. This raises the number
       // the team already has rather than the one the skeleton ships, so the signal they
       // have been building on is preserved and advanced, never reset - and when it cannot
       // be raised, nothing is invented and the result says so instead.
       if (version.next) raised = bumpPluginVersion(repoDir, decided.claims);
-      const { missing } = stage(git, repoDir, paths);
+      const { missing } = stage(git, repoDir, written);
       // Before the commit, so a refresh that cannot carry everything it was asked for
       // carries none of it rather than reporting a file it quietly dropped.
       if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
@@ -840,7 +1056,7 @@ export function applyUpgrade(
         "version is raised rather than reset, so teammates' copies pick this up.",
         "",
         "Files in this request:",
-        ...paths.map((path) => `- \`${path}\``),
+        ...written.map((path) => `- \`${path}\``),
         "",
         "Opened by TeamHandbook.",
       ].join("\n"),
@@ -852,11 +1068,12 @@ export function applyUpgrade(
     return {
       ok: true,
       url: team.repoUrl,
-      refreshed: paths,
+      refreshed: written,
       branch,
       commitMessage: decided.subject,
       ...(raised ? { version: raised } : {}),
       ...(raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {}),
+      ...(stamps ? {} : { scaffoldNotRecorded: stampMissing(stamp) }),
       ...request,
     };
   } finally {
@@ -942,6 +1159,24 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
   } else if (version.blocked) {
     lines.push("", `WARNING: ${version.blocked}`);
   }
+  // Said beside the version for the same reason: the record lands in the team file whether
+  // or not that file is chosen, and a reader who declined it should not find it changed.
+  const stamp = plan.stamp;
+  if (stamp?.blocked) {
+    lines.push("", `WARNING: ${stampMissing(stamp)}`);
+  } else if (stamp?.ifSent) {
+    lines.push(
+      "",
+      `Sending ${TEAM_PREFIX_FILE} also records there that TeamHandbook ${stamp.release} wrote this scaffold, so an`,
+      "older copy refuses to refresh it back. Without that file nothing records it.",
+    );
+  } else if (stamp) {
+    lines.push(
+      "",
+      `It also records in ${TEAM_PREFIX_FILE} that TeamHandbook ${stamp.release} wrote this scaffold, so an older`,
+      "copy refuses to refresh it back.",
+    );
+  }
   if (plan.ignored?.length) {
     lines.push("", `WARNING: ${ignoredPathsMessage(plan.ignored)}`, "The diff below does not show it.");
   }
@@ -952,7 +1187,13 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "Nothing has been changed, in this repository or on this machine. To send a refresh, name",
     "each file you want:",
     "",
-    `  ${paths.map((path) => `--file ${path}`).join(" ")}`,
+    `  ${paths.map((path) => `--file ${path}`).join(" ")}` +
+      (plan.commitPrefix !== undefined ? ` --commit-prefix "${plan.commitPrefix}"` : ""),
+    // Given once, used once: nothing on this machine remembers it, so the run that sends
+    // has to carry it again or the files it unlocked are withheld again.
+    ...(plan.commitPrefix !== undefined
+      ? ["", "--commit-prefix is used for this run only and saved nowhere, so it goes on that run too."]
+      : []),
   );
   // The branch and the message are part of what is being asked for, not details of how it
   // is sent: the refresh refuses to push until both have been seen, so the screen that asks
@@ -1002,6 +1243,7 @@ export function formatUpgradeResult(result: UpgradeResult): string {
     ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     ...(result.version ? [`  version:     raised to ${result.version}`] : []),
     ...(result.versionNotRaised ? [`  version:     NOT raised. ${result.versionNotRaised}`] : []),
+    ...(result.scaffoldNotRecorded ? [`  scaffold:    ${result.scaffoldNotRecorded}`] : []),
     result.prUrl
       ? `  request:     ${result.prUrl}`
       : `  request:     open it here - ${result.manualUrl ?? `push ${result.branch} and open a request against the default branch`}`,

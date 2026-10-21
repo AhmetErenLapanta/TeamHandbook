@@ -656,8 +656,8 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync9, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join11 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join12 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -707,9 +707,9 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname2, join as join6 } from "node:path";
+import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/lib/distill.ts
 init_session_state();
@@ -872,6 +872,34 @@ function displayPath(path, userHome = homedir3()) {
 
 // src/lib/init.ts
 init_secrets();
+
+// src/lib/plugin-root.ts
+import { readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname2, join as join6 } from "node:path";
+import { fileURLToPath } from "node:url";
+function pluginVersion() {
+  const root = pluginRoot();
+  if (!root) return "unknown";
+  try {
+    const parsed = JSON.parse(readFileSync5(join6(root, ".claude-plugin", "plugin.json"), "utf8"));
+    if (typeof parsed?.version === "string") return parsed.version;
+  } catch {
+  }
+  return "unknown";
+}
+function pluginRoot() {
+  const here = dirname2(fileURLToPath(import.meta.url));
+  for (const up of ["..", "../.."]) {
+    try {
+      const parsed = JSON.parse(readFileSync5(join6(here, up, ".claude-plugin", "plugin.json"), "utf8"));
+      if (typeof parsed?.version === "string") return join6(here, up);
+    } catch {
+    }
+  }
+  return null;
+}
+
+// src/lib/init.ts
 function commitMessagePrefix(prefix) {
   return prefix?.trim() ? `${prefix.trim()} ` : "";
 }
@@ -1114,7 +1142,7 @@ function commitPrefixProblem(value) {
 function readTeamCommitPrefix(repoDir) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync5(join6(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
+    raw = JSON.parse(readFileSync6(join7(repoDir, TEAM_PREFIX_FILE), "utf8"))?.commitPrefix;
   } catch {
     return {};
   }
@@ -1123,7 +1151,7 @@ function readTeamCommitPrefix(repoDir) {
   const problem = commitPrefixProblem(value);
   return problem ? { problem } : { prefix: value };
 }
-function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}) {
+function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}, scaffoldVersion) {
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -1166,6 +1194,9 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
         // key left out is a team that has not said.
         ...assignment.reviewers !== void 0 ? { reviewers: assignment.reviewers } : {},
         ...assignment.labels !== void 0 ? { labels: assignment.labels } : {},
+        // Which TeamHandbook release wrote the scaffold, so an older copy refuses to refresh
+        // it back rather than undoing what a newer one wrote (upgrade.ts).
+        ...scaffoldVersion ? { scaffoldVersion } : {},
         comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. reviewers and labels, when present, are added to every request TeamHandbook opens here; an empty list adds none."
       },
       null,
@@ -1193,17 +1224,17 @@ function nonInteractiveEnv(base = process.env) {
   };
 }
 function marketplacesRoot() {
-  return join6(homedir4(), ".claude", "plugins", "marketplaces");
+  return join7(homedir4(), ".claude", "plugins", "marketplaces");
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname4, join as join8 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname5, join as join9 } from "node:path";
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join7, relative } from "node:path";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname4, join as join8, relative } from "node:path";
 init_skill_files();
 init_queue();
 
@@ -1220,7 +1251,7 @@ init_identity();
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
   for (const part of path.split("/")) {
-    current = join7(current, part);
+    current = join8(current, part);
     let stat;
     try {
       stat = lstatSync(current);
@@ -1244,7 +1275,7 @@ function isTeamOwned(path) {
 }
 function readIfPresent(file) {
   try {
-    return readFileSync7(file, "utf8");
+    return readFileSync8(file, "utf8");
   } catch {
     return null;
   }
@@ -1289,6 +1320,16 @@ function mergeMarketplaceManifest(existing, fresh) {
   }
   return JSON.stringify(merged, null, 2) + "\n";
 }
+function mergeTeamFile(existing, fresh) {
+  if (existing === null) return fresh;
+  const current = parseObject(existing);
+  if (!current) return null;
+  return JSON.stringify({ ...current, ...JSON.parse(fresh) }, null, 2) + "\n";
+}
+function readTeamFileObject(repoDir) {
+  const text = readIfPresent(join9(repoDir, TEAM_PREFIX_FILE));
+  return text === null ? null : parseObject(text);
+}
 var PREFIX_PROBE = "ZZTEAMHANDBOOKPREFIXPROBEZZ";
 function commitPrefixIsKnown(team) {
   if (typeof team.commitPrefix === "string") return true;
@@ -1300,14 +1341,17 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
-function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
-  const withCi = existsSync4(join8(repoDir, CI_MARKER));
-  const example = branchExample ?? readTeamBranchExample(repoDir).example;
+function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commitPrefix) {
+  const withCi = existsSync4(join9(repoDir, CI_MARKER));
+  const recordedExample = readTeamBranchExample(repoDir);
+  const example = branchExample ?? recordedExample.example;
+  const rawExample = readTeamFileObject(repoDir)?.branchExample;
+  const exampleProblem = branchExample !== void 0 || rawExample === void 0 ? null : recordedExample.problem ?? (typeof rawExample === "string" ? null : "not a branch name");
   const { recorded: lists, unreadable } = readRecordedAssignment(repoDir);
   const assigned = { ...lists, ...assignment };
   const uncarried = unreadable.filter((kind) => assignment[kind] === void 0);
-  const recorded = commitPrefixIsKnown(team) ? void 0 : readTeamCommitPrefix(repoDir).prefix;
-  const prefix = recorded ?? team.commitPrefix?.trim() ?? "";
+  const recorded = readTeamCommitPrefix(repoDir).prefix;
+  const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(
     team.marketplaceName,
     team.repoUrl,
@@ -1317,7 +1361,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
     example,
     assigned
   );
-  const known = commitPrefixIsKnown(team) || recorded !== void 0;
+  const known = commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team);
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
   const linked = [];
@@ -1332,28 +1376,34 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}) {
       });
       continue;
     }
-    if (path === TEAM_PREFIX_FILE && uncarried.length) {
+    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem)) {
+      const held = [
+        ...uncarried.length ? [`it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names`] : [],
+        // Described, never quoted, for the reason branchTrace gives.
+        ...exampleProblem ? [`its "branchExample" is ${exampleProblem}`] : []
+      ];
+      const flags = [...uncarried.map((kind) => `--${kind}`), ...exampleProblem ? ["--branch-example"] : []];
       withheld.push({
         path,
-        reason: `it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names, so regenerating it would delete what the team recorded there. Correct it in the repository by hand, or record a new list on the same run with ${uncarried.map((kind) => `--${kind}`).join(" and ")}.`
+        reason: `${held.join(", and ")}, so regenerating it would delete what the team recorded there. Correct it in the repository by hand, or record a new one on the same run with ${flags.join(" and ")}.`
       });
       continue;
     }
     if (unknownPrefix.has(path)) {
       withheld.push({
         path,
-        reason: "it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine."
+        reason: `it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge requires can give it with --commit-prefix "<prefix>" on the plan and again on the run that sends it.`
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join8(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join8(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join9(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join9(repoDir, path)), content) : path === TEAM_PREFIX_FILE ? mergeTeamFile(readIfPresent(join9(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
 }
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {
-    const existing = readIfPresent(join8(repoDir, path));
+    const existing = readIfPresent(join9(repoDir, path));
     if (existing === null) return { path, state: "absent" };
     return { path, state: existing === content ? "current" : "differs" };
   });
@@ -1434,9 +1484,8 @@ function loadHarvestConfig(home = handbookHome()) {
 // src/lib/status.ts
 init_session_state();
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readFileSync as readFileSync8 } from "node:fs";
-import { basename as basename3, dirname as dirname5, join as join10, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync as readFileSync9 } from "node:fs";
+import { basename as basename3, dirname as dirname6, join as join11, resolve } from "node:path";
 
 // src/lib/signals.ts
 init_session_state();
@@ -1485,7 +1534,7 @@ var DIGEST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 init_score();
 
 // src/lib/pipeline.ts
-import { basename as basename2, join as join9 } from "node:path";
+import { basename as basename2, join as join10 } from "node:path";
 init_fs_atomic();
 init_session_state();
 init_secrets();
@@ -1500,7 +1549,7 @@ init_skill_index();
 init_queue();
 var STALE_CLAIM_MS = 10 * 60 * 1e3;
 function pipelineLogFile(home = handbookHome()) {
-  return join9(home, "pipeline.log");
+  return join10(home, "pipeline.log");
 }
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -1522,27 +1571,6 @@ var FILLER = new Set(
 );
 
 // src/lib/status.ts
-function pluginVersion() {
-  const root = pluginRoot();
-  if (!root) return "unknown";
-  try {
-    const parsed = JSON.parse(readFileSync8(join10(root, ".claude-plugin", "plugin.json"), "utf8"));
-    if (typeof parsed?.version === "string") return parsed.version;
-  } catch {
-  }
-  return "unknown";
-}
-function pluginRoot() {
-  const here = dirname5(fileURLToPath(import.meta.url));
-  for (const up of ["..", "../.."]) {
-    try {
-      const parsed = JSON.parse(readFileSync8(join10(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join10(here, up);
-    } catch {
-    }
-  }
-  return null;
-}
 var RELEASE_CHECK_TIMEOUT_MS = 5e3;
 var lookupRelease = (args, cwd) => execFileSync2("git", args, {
   cwd,
@@ -1554,11 +1582,11 @@ var lookupRelease = (args, cwd) => execFileSync2("git", args, {
 function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
   if (!root || !versionNumbers(installed)) return null;
   const versionDir = resolve(root);
-  if (basename3(dirname5(dirname5(dirname5(versionDir)))) !== "cache") return null;
-  const marketplace = basename3(dirname5(dirname5(versionDir)));
+  if (basename3(dirname6(dirname6(dirname6(versionDir)))) !== "cache") return null;
+  const marketplace = basename3(dirname6(dirname6(versionDir)));
   let out;
   try {
-    out = String(git(["ls-remote", "--tags", "origin"], join10(marketRoot, marketplace)) ?? "");
+    out = String(git(["ls-remote", "--tags", "origin"], join11(marketRoot, marketplace)) ?? "");
   } catch {
     return null;
   }
@@ -1585,7 +1613,7 @@ function newerReleaseLine(installed, newer) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync8(pipelineLogFile(home), "utf8");
+    raw = readFileSync9(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -1760,7 +1788,7 @@ function checkGitIdentity(home, run) {
   );
 }
 function checkHomeWritable(home) {
-  const probe = join11(home, `.doctor-probe-${process.pid}`);
+  const probe = join12(home, `.doctor-probe-${process.pid}`);
   try {
     mkdirSync6(home, { recursive: true });
     writeFileSync5(probe, "ok");
@@ -1771,10 +1799,10 @@ function checkHomeWritable(home) {
   }
 }
 function checkConfig(home) {
-  const file = join11(home, "config.json");
+  const file = join12(home, "config.json");
   if (!existsSync5(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync9(file, "utf8"));
+    const parsed = JSON.parse(readFileSync10(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -1806,10 +1834,10 @@ function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync9(join11(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync10(join12(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     let skillCount = 0;
     try {
-      skillCount = readdirSync4(join11(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync4(join12(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
@@ -1850,7 +1878,7 @@ function checkTeamRepo(home, run) {
 function checkTeamCopy(home, remoteVersion, marketRoot) {
   const team = loadTeamConfig(home);
   if (!team || !remoteVersion) return null;
-  const local = readPluginVersion(join11(marketRoot, team.marketplaceName));
+  const local = readPluginVersion(join12(marketRoot, team.marketplaceName));
   if (!local) return null;
   const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
@@ -1881,7 +1909,7 @@ function isPlainObject(value) {
 function declaredMcpServerNames(mcpFile) {
   let raw;
   try {
-    raw = readFileSync9(mcpFile, "utf8");
+    raw = readFileSync10(mcpFile, "utf8");
   } catch {
     return { error: "unreadable" };
   }
@@ -1912,7 +1940,7 @@ function parseMcpListing(output) {
 function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const mcpFile = join11(marketRoot, team.marketplaceName, ".mcp.json");
+  const mcpFile = join12(marketRoot, team.marketplaceName, ".mcp.json");
   if (!existsSync5(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
@@ -1962,7 +1990,7 @@ function checkLastRun(home) {
     const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join11(home, "pipeline.log"))})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join12(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -1972,7 +2000,7 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join11(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join12(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function checkRelease(version, run, marketRoot, root) {

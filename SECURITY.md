@@ -278,7 +278,16 @@ These, and only these:
    join afterwards to read. Reviewer and label names given with `--reviewers` and
    `--labels`, at setup or on a refresh, are written there the same way, and every request
    TeamHandbook opens to that repository reads them back from its clone and sends them to
-   the forge as the request's reviewers and labels.
+   the forge as the request's reviewers and labels. A key in that file this version does
+   not write is carried across as it stands. Setup, and every refresh that can write that
+   file, records there as `scaffoldVersion` the TeamHandbook release that wrote the
+   scaffold - a version number and nothing else - and a copy older than the release
+   recorded refuses to refresh at all. When a refresh cannot write the file (the repository
+   has none and it was not sent, or it is not offered), the plan and the result say that
+   nothing recorded the release. A
+   commit-message prefix given to `--upgrade` with `--commit-prefix` goes into the files
+   that embed it and the refresh commit's title, in that request only; it is not saved on
+   this machine.
 4. **A release check, carrying nothing of yours:** `/handbook:status` and
    `/handbook:doctor` ask the repository this plugin was installed from for its release
    tags - one `git ls-remote --tags`, run in the marketplace clone Claude Code keeps - to
@@ -578,7 +587,15 @@ The example branch name in the same `.teamhandbook.json` shows how branches are 
 there, so every push can propose a name in that shape. It is stored in your config and
 only ever shown as a proposal you confirm or change, and it is accepted only when it is at
 most 100 characters, carries no control character, and holds no trace of a machine and
-nothing the secret detector flags; otherwise it is left out.
+nothing the secret detector flags; otherwise it is left out. A refresh that finds a recorded
+example failing those checks does not offer the file at all, rather than regenerate it
+without the example.
+
+The release recorded in the same file as `scaffoldVersion` is read only by
+`/handbook:init --upgrade`, and only to compare it with this copy's own version. It is used
+only when it is three dot-separated numbers, so nothing else in it ever reaches your
+terminal; anything else is treated as a release this copy cannot read, and the refresh is
+refused in the same words as for a newer one.
 
 The reviewer and label lists in the same file are not read by `/handbook:join`; they are
 read from the clone each time a request to that repository is opened, and go to `gh` or

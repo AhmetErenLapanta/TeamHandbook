@@ -3,12 +3,15 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runGit, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
+import { runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
+import { productVersion } from "./plugin-root.js";
 import {
   PLUGIN_MANIFEST,
   formatUpgradeResult,
   mergeMarketplaceManifest,
+  mergeTeamFile,
+  scaffoldVersionProblem,
   applyUpgrade as applyUpgradeDeciding,
   countStaleSkeleton,
   formatUpgradePlan,
@@ -933,5 +936,327 @@ describe("the refreshed scaffold", () => {
     const second = planUpgrade(team);
     expect(refreshable(second.files!)).toEqual([]);
     expect(second.version?.current).toBe("0.3.5");
+  });
+});
+
+describe("a commit prefix given on the refresh", () => {
+  /** A handbook scaffolded with the version-bump CI and the prefix TEAM-1, before the team
+   * file existed: the prefix is in the CI job and nowhere a teammate can read it. The job
+   * still glues the prefix on without a space, the way scaffolds of that age did, so it is
+   * behind today's and has something to be offered for. */
+  function preRecordRepo(): string {
+    return handbookRepo((remote) => {
+      const files: Record<string, string> = { ...skeletonFiles("acme-skills", remote, null, "TEAM-1", true), ...TEAM_CONTENT };
+      delete files[TEAM_PREFIX_FILE];
+      files[".gitlab-ci.yml"] = files[".gitlab-ci.yml"]!.replace("TEAM-1 ci:", "TEAM-1ci:");
+      return files;
+    });
+  }
+
+  it("given a teammate and a repository that records nothing, when the prefix is given, then the team file and the CI file are offered carrying it", () => {
+    const remote = preRecordRepo();
+
+    const plan = planUpgrade(joinerFor(remote), gitWithIdentity, noForge, { commitPrefix: "TEAM-1" });
+
+    expect(plan.withheld).toBeUndefined();
+    expect(refreshable(plan.files!)).toEqual([TEAM_PREFIX_FILE, ".gitlab-ci.yml"]);
+    expect(plan.diff).toContain('+  "commitPrefix": "TEAM-1"');
+    expect(plan.diff).toMatch(/^\+.*TEAM-1 ci: bump plugin version/m);
+    const text = formatUpgradePlan(plan);
+    expect(text).toContain(`--file ${TEAM_PREFIX_FILE} --file .gitlab-ci.yml --commit-prefix "TEAM-1"`);
+    expect(text).toContain('commits as "TEAM-1 chore: refresh the team handbook scaffold"');
+  });
+
+  it("given the same teammate, when the run that sends carries the prefix, then the record and the commit carry it", () => {
+    const remote = preRecordRepo();
+
+    const result = applyUpgrade(joinerFor(remote), [TEAM_PREFIX_FILE], gitWithIdentity, noForge, APPROVED, {
+      commitPrefix: "TEAM-1",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(show(remote, result.branch!, TEAM_PREFIX_FILE)).commitPrefix).toBe("TEAM-1");
+    expect(result.commitMessage).toBe("TEAM-1 chore: the case under test");
+  });
+
+  it("given a teammate with no prefix and a repository that records one, when a refresh is sent, then the commit carries the repository's", () => {
+    const remote = handbookRepo((remote) => ({
+      ...currentScaffold(teamFor(remote, { commitPrefix: "TEAM-1" })),
+      "README.md": "# older\n",
+    }));
+
+    const result = applyUpgrade(joinerFor(remote), ["README.md"], gitWithIdentity, noForge);
+
+    expect(result.commitMessage).toBe("TEAM-1 chore: the case under test");
+  });
+
+  it("given a repository recording TEAM-1 and a machine that says OTHER-9, when no prefix is given, then the repository's is kept", () => {
+    const repoDir = temp("handbook-repo-");
+    const founder = teamFor("git@gitlab.acme.com:team/skills.git", { commitPrefix: "TEAM-1" });
+    writeAll(repoDir, currentScaffold(founder));
+    const other = { ...joinerFor("git@gitlab.acme.com:team/skills.git"), commitPrefix: "OTHER-9" };
+
+    const candidates = upgradeCandidates(repoDir, other);
+
+    expect(JSON.parse(candidates.files[TEAM_PREFIX_FILE]!).commitPrefix).toBe("TEAM-1");
+    expect(candidates.files[TEAM_PREFIX_FILE]).toBe(readFileSync(join(repoDir, TEAM_PREFIX_FILE), "utf8"));
+  });
+
+  it("given a repository recording TEAM-1, when another prefix is given, then the given one is what the file would say", () => {
+    const repoDir = temp("handbook-repo-");
+    writeAll(repoDir, currentScaffold(teamFor("git@gitlab.acme.com:team/skills.git", { commitPrefix: "TEAM-1" })));
+
+    const candidates = upgradeCandidates(repoDir, joinerFor("git@gitlab.acme.com:team/skills.git"), undefined, {}, "NEW-2");
+
+    expect(JSON.parse(candidates.files[TEAM_PREFIX_FILE]!).commitPrefix).toBe("NEW-2");
+  });
+
+  it("given a prefix of nothing but spaces, when a refresh is planned or sent, then it is refused before anything is cloned", () => {
+    const cloned: string[][] = [];
+    const watching: GitRunner = (args, cwd) => {
+      if (args[0] === "clone") cloned.push(args);
+      return gitWithIdentity(args, cwd);
+    };
+
+    const plan = planUpgrade(joinerFor(currentHandbookRepo()), watching, noForge, { commitPrefix: "  " });
+    const sent = applyUpgrade(joinerFor(currentHandbookRepo()), [TEAM_PREFIX_FILE], watching, noForge, APPROVED, {
+      commitPrefix: "  ",
+    });
+
+    expect(plan).toMatchObject({ ok: false });
+    expect(plan.error).toContain("--commit-prefix needs the prefix");
+    expect(sent).toMatchObject({ ok: false });
+    expect(cloned).toEqual([]);
+  });
+
+  it("given the shipped command run with --commit-prefix, when it plans and then sends, then the config file is byte-identical", () => {
+    const remote = preRecordRepo();
+    const home = temp("handbook-home-");
+    saveTeamConfig(joinerFor(remote), home);
+    const before = readFileSync(join(home, "config.json"));
+    const userHome = temp("handbook-user-");
+    writeAll(userHome, { ".gitconfig": "[user]\n\tname = Dev\n\temail = dev@acme.example\n" });
+    const bin = temp("handbook-bin-");
+    for (const tool of ["gh", "glab"]) {
+      writeFileSync(join(bin, tool), "#!/bin/sh\necho 'not logged in' >&2\nexit 1\n");
+      execFileSync("chmod", ["755", join(bin, tool)]);
+    }
+    const init = join(dirname(new URL(import.meta.url).pathname), "..", "..", "dist", "init.js");
+    const run = (args: string[]) =>
+      execFileSync(process.execPath, [init, "--upgrade", ...args], {
+        cwd: temp("handbook-project-"),
+        encoding: "utf8",
+        env: { ...process.env, HOME: userHome, TEAMHANDBOOK_HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      });
+
+    const planned = run(["--commit-prefix", "TEAM-1"]);
+    const sent = run(["--file", TEAM_PREFIX_FILE, "--commit-prefix", "TEAM-1", "--branch", "TEAM-1-refresh", "--message", "chore: refresh"]);
+
+    expect(planned).toContain(`NOT IN THE REPO  ${TEAM_PREFIX_FILE}`);
+    expect(sent).toContain("commit:      TEAM-1 chore: refresh");
+    expect(readFileSync(join(home, "config.json")).equals(before)).toBe(true);
+  });
+});
+
+describe("a recorded example the refresh cannot carry", () => {
+  function repoWithExample(branchExample: unknown): string {
+    const repoDir = temp("handbook-repo-");
+    const team = teamFor("git@gitlab.acme.com:team/skills.git", { commitPrefix: "TEAM-1" });
+    const files = currentScaffold(team);
+    const recorded = { ...JSON.parse(files[TEAM_PREFIX_FILE]!), branchExample };
+    writeAll(repoDir, { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(recorded, null, 2) + "\n" });
+    return repoDir;
+  }
+
+  it("given an example longer than today's limit, when the refresh is built, then the team file is withheld with the reason", () => {
+    const repoDir = repoWithExample(`TEAM-1-${"x".repeat(120)}`);
+
+    const candidates = upgradeCandidates(repoDir, teamFor("git@gitlab.acme.com:team/skills.git"));
+
+    expect(candidates.files[TEAM_PREFIX_FILE]).toBeUndefined();
+    const reason = candidates.withheld.find((file) => file.path === TEAM_PREFIX_FILE)?.reason;
+    expect(reason).toContain('its "branchExample" is longer than 100 characters');
+    expect(reason).toContain("--branch-example");
+    expect(reason).not.toContain("xxxxxxxx");
+  });
+
+  it("given an example that is not a string, when the refresh is built, then the team file is withheld rather than regenerated without it", () => {
+    const repoDir = repoWithExample(42);
+
+    const candidates = upgradeCandidates(repoDir, teamFor("git@gitlab.acme.com:team/skills.git"));
+
+    expect(candidates.files[TEAM_PREFIX_FILE]).toBeUndefined();
+    expect(candidates.withheld.find((file) => file.path === TEAM_PREFIX_FILE)?.reason).toContain(
+      'its "branchExample" is not a branch name',
+    );
+  });
+
+  it("given that example, when a new one is given on the same run, then the file is offered carrying the new one", () => {
+    const repoDir = repoWithExample(`TEAM-1-${"x".repeat(120)}`);
+
+    const candidates = upgradeCandidates(repoDir, teamFor("git@gitlab.acme.com:team/skills.git"), "TEAM-7-short");
+
+    expect(candidates.withheld).toEqual([]);
+    expect(JSON.parse(candidates.files[TEAM_PREFIX_FILE]!).branchExample).toBe("TEAM-7-short");
+  });
+});
+
+describe("keys in the team file this copy does not write", () => {
+  const fresh = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", null, "TEAM-1")[TEAM_PREFIX_FILE]!;
+  const comment = JSON.parse(fresh).comment as string;
+
+  it("given a key the team added at the end, when the refresh is built, then the file is byte-identical", () => {
+    const existing = JSON.stringify({ ...JSON.parse(fresh), owner: "platform-team" }, null, 2) + "\n";
+
+    expect(mergeTeamFile(existing, fresh)).toBe(existing);
+  });
+
+  it("given a key in the middle and an older comment, when the refresh is built, then only the comment moves and the order holds", () => {
+    const existing = '{\n  "commitPrefix": "TEAM-1",\n  "owner": "platform-team",\n  "comment": "an older sentence"\n}\n';
+
+    const merged = mergeTeamFile(existing, fresh);
+
+    expect(merged).toBe(
+      `{\n  "commitPrefix": "TEAM-1",\n  "owner": "platform-team",\n  "comment": ${JSON.stringify(comment)}\n}\n`,
+    );
+  });
+
+  it("given a release stamp a newer copy wrote, when the refresh is built, then it is carried rather than dropped", () => {
+    const existing = JSON.stringify({ ...JSON.parse(fresh), scaffoldVersion: "0.1.0" }, null, 2) + "\n";
+
+    expect(mergeTeamFile(existing, fresh)).toBe(existing);
+  });
+
+  it("given a team file that is not valid JSON, when it is planned, then it is reported skipped, not rewritten", () => {
+    const remote = handbookRepo((remote) => ({
+      ...currentScaffold(teamFor(remote)),
+      [TEAM_PREFIX_FILE]: '{ "commitPrefix": "TEAM-1", }\n',
+    }));
+
+    const plan = planUpgrade(teamFor(remote), gitWithIdentity, noForge);
+
+    expect(plan.unreadable).toEqual([TEAM_PREFIX_FILE]);
+    expect(plan.files!.map((file) => file.path)).not.toContain(TEAM_PREFIX_FILE);
+  });
+});
+
+describe("scaffoldVersionProblem", () => {
+  it("given a record newer than this copy, when it is checked, then the copy is told to update and the repository is not blamed", () => {
+    const problem = scaffoldVersionProblem("9.9.9", "0.27.0");
+
+    expect(problem).toContain("last written by TeamHandbook 9.9.9, and this copy is 0.27.0");
+    expect(problem).toContain("`/plugin marketplace update teamhandbook` and then `/reload-plugins`");
+    expect(problem).not.toContain("by hand");
+  });
+
+  it("given records at or behind this copy, when they are checked, then every one may be refreshed", () => {
+    for (const recorded of [undefined, "0.27.0", "0.26.9", "0.1.0"]) {
+      expect(scaffoldVersionProblem(recorded, "0.27.0"), String(recorded)).toBeNull();
+    }
+  });
+
+  it("given records ahead by a minor or a major, when they are checked, then both are refused", () => {
+    expect(scaffoldVersionProblem("0.28.0", "0.27.5")).not.toBeNull();
+    expect(scaffoldVersionProblem("1.0.0", "0.99.99")).not.toBeNull();
+  });
+
+  it("given a record this copy cannot read, when it is checked, then it is refused like a newer one", () => {
+    for (const recorded of ["banana", "1.0.0-beta", 7, null]) {
+      expect(scaffoldVersionProblem(recorded, "0.27.0"), String(recorded)).toContain("/reload-plugins");
+    }
+  });
+
+  it("given a copy that cannot read its own version, when anything is checked, then it is refused", () => {
+    expect(scaffoldVersionProblem(undefined, null)).toContain("cannot read its own version");
+  });
+});
+
+describe("the release that wrote the scaffold", () => {
+  const release = productVersion()!;
+
+  function stampedRepo(scaffoldVersion: string | undefined, extra: Record<string, string> = {}): string {
+    return handbookRepo((remote) => {
+      const files = currentScaffold(teamFor(remote, { commitPrefix: "TEAM-1" }));
+      const recorded = { ...JSON.parse(files[TEAM_PREFIX_FILE]!), reviewers: ["alice"], labels: ["handbook"] };
+      if (scaffoldVersion !== undefined) recorded.scaffoldVersion = scaffoldVersion;
+      return { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(recorded, null, 2) + "\n", ...TEAM_CONTENT, ...extra };
+    });
+  }
+
+  it("given a repository a newer release wrote, when this copy plans, then it refuses and names the update", () => {
+    const remote = stampedRepo("9.9.9", { "README.md": "# older\n" });
+
+    const plan = planUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), gitWithIdentity, noForge);
+
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toContain("/plugin marketplace update teamhandbook");
+    expect(plan.files).toBeUndefined();
+  });
+
+  it("given that repository, when this copy sends a file or only records a list, then nothing is pushed", () => {
+    const remote = stampedRepo("9.9.9", { "README.md": "# older\n" });
+    const before = heads(remote);
+    const team = teamFor(remote, { commitPrefix: "TEAM-1" });
+
+    const named = applyUpgrade(team, ["README.md"], gitWithIdentity, noForge);
+    const recorded = applyUpgrade(team, [], gitWithIdentity, noForge, APPROVED, { reviewers: ["bob"] });
+
+    expect(named.error).toContain("last written by TeamHandbook 9.9.9");
+    expect(recorded.error).toContain("last written by TeamHandbook 9.9.9");
+    expect(heads(remote)).toBe(before);
+  });
+
+  it("given a repository an older release wrote, when only the README is sent, then the record moves to this release and nothing else in it does", () => {
+    const remote = stampedRepo("0.1.0", { "README.md": "# older\n" });
+    const recordedBefore = JSON.parse(show(remote, "main", TEAM_PREFIX_FILE));
+
+    const result = applyUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), ["README.md"], gitWithIdentity, noForge);
+
+    expect(result.ok).toBe(true);
+    expect(result.refreshed).toEqual(["README.md", TEAM_PREFIX_FILE]);
+    expect(result.scaffoldNotRecorded).toBeUndefined();
+    expect(JSON.parse(show(remote, result.branch!, TEAM_PREFIX_FILE))).toEqual({ ...recordedBefore, scaffoldVersion: release });
+  });
+
+  it("given a repository written before the record existed, when a refresh is sent, then the record is added after every key it had", () => {
+    const remote = stampedRepo(undefined, { "README.md": "# older\n" });
+    const before = show(remote, "main", TEAM_PREFIX_FILE);
+
+    const result = applyUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), ["README.md"], gitWithIdentity, noForge);
+
+    expect(show(remote, result.branch!, TEAM_PREFIX_FILE)).toBe(
+      JSON.stringify({ ...JSON.parse(before), scaffoldVersion: release }, null, 2) + "\n",
+    );
+  });
+
+  it("given a repository an older release wrote and nothing else behind, when it is planned, then there is nothing to refresh", () => {
+    const remote = stampedRepo("0.1.0");
+
+    const plan = planUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), gitWithIdentity, noForge);
+
+    expect(refreshable(plan.files!)).toEqual([]);
+  });
+
+  it("given files to refresh, when the plan is printed, then it says the record moves with them", () => {
+    const remote = stampedRepo("0.1.0", { "README.md": "# older\n" });
+
+    const text = formatUpgradePlan(planUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), gitWithIdentity, noForge));
+
+    expect(text).toContain(`It also records in ${TEAM_PREFIX_FILE} that TeamHandbook ${release} wrote this scaffold`);
+  });
+
+  it("given a teammate and a repository with no team file, when the plan is printed, then it warns that nothing records the release", () => {
+    const remote = handbookRepo((remote) => {
+      const files: Record<string, string> = { ...currentScaffold(teamFor(remote)), "README.md": "# older\n" };
+      delete files[TEAM_PREFIX_FILE];
+      return files;
+    });
+
+    const plan = planUpgrade(joinerFor(remote), gitWithIdentity, noForge);
+    const result = applyUpgrade(joinerFor(remote), ["README.md"], gitWithIdentity, noForge);
+
+    expect(formatUpgradePlan(plan)).toContain(`WARNING: nothing records that TeamHandbook ${release} wrote this scaffold`);
+    expect(result.scaffoldNotRecorded).toContain(`${TEAM_PREFIX_FILE} is not offered here`);
+    expect(tree(remote, result.branch!)).not.toContain(TEAM_PREFIX_FILE);
   });
 });

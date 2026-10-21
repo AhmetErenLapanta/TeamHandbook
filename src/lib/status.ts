@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
 import { readCounters } from "./counters.js";
@@ -19,37 +18,9 @@ import { marketplacesRoot, nonInteractiveEnv } from "./init.js";
 import { recentWorkflowSessions, sessionDetectEnabled } from "./session-workflow.js";
 import { formatSkillHealth, gatherSkillHealth } from "./skill-health.js";
 import type { SkillHealth } from "./skill-health.js";
+import { pluginRoot, pluginVersion } from "./plugin-root.js";
 
-/**
- * The installed plugin's version, for support/bug reports. The bundle runs from
- * <plugin-root>/dist and the source tests from <root>/src/lib, so walk up a
- * couple of levels looking for .claude-plugin/plugin.json.
- */
-export function pluginVersion(): string {
-  const root = pluginRoot();
-  if (!root) return "unknown";
-  try {
-    const parsed = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8"));
-    if (typeof parsed?.version === "string") return parsed.version;
-  } catch {
-    // unreadable after all
-  }
-  return "unknown";
-}
-
-/** The directory the running plugin was installed into: the one holding its manifest. */
-export function pluginRoot(): string | null {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const up of ["..", "../.."]) {
-    try {
-      const parsed = JSON.parse(readFileSync(join(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join(here, up);
-    } catch {
-      // keep walking
-    }
-  }
-  return null;
-}
+export { pluginRoot, pluginVersion };
 
 /** A git call short enough to sit inside a status screen: a release check that stalls the
  * screen it decorates is worse than no release check. */
