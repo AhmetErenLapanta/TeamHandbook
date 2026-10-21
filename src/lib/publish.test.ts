@@ -195,6 +195,67 @@ describe("bumpPluginVersion", () => {
       rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  it("given a plugin.json with no version, when bumping, then the file is left byte for byte as it was", () => {
+    // given a repository versioned by commit
+    const manifest = JSON.stringify({ name: "acme", description: "d" }, null, 2) + "\n";
+    writeFileSync(join(dir, ".claude-plugin", "plugin.json"), manifest);
+
+    // when the version is bumped
+    const version = bumpPluginVersion(dir);
+
+    // then nothing is invented: the old shape wrote 0.1.1 here
+    expect(version).toBeNull();
+    expect(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")).toBe(manifest);
+  });
+});
+
+describe("a team repository versioned by commit", () => {
+  const gitlab: McpServerEntry = {
+    name: "gitlab",
+    scope: "user",
+    config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+  };
+  const versionless = JSON.stringify({ name: "acme", description: "d" }, null, 2) + "\n";
+
+  it("given no version in plugin.json, when a server is shared, then the manifest is untouched and the result says why", () => {
+    // given
+    remote = teamRepo([], { ".claude-plugin/plugin.json": versionless });
+
+    // when
+    const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/3");
+
+    // then
+    expect(result).toMatchObject({ ok: true, versionedByCommit: true });
+    expect(result.version).toBeUndefined();
+    expect(gitIn(remote, ["show", `${result.branch}:.claude-plugin/plugin.json`])).toBe(versionless);
+    expect(gitIn(remote, ["show", "--name-only", "--format=", result.branch!])).not.toContain("plugin.json");
+  });
+
+  it("given no version in plugin.json, when a skill is approved to the team, then the manifest is untouched and the result says why", () => {
+    // given
+    remote = teamRepo([], { ".claude-plugin/plugin.json": versionless });
+
+    // when
+    const result = publishCandidate(candidateDir, meta(), { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/4");
+
+    // then
+    expect(result).toMatchObject({ ok: true, versionedByCommit: true });
+    expect(result.version).toBeUndefined();
+    expect(gitIn(remote, ["show", `${result.branch}:.claude-plugin/plugin.json`])).toBe(versionless);
+  });
+
+  it("given a version in plugin.json, when a server is shared, then it is raised as before and nothing claims commit versioning", () => {
+    // given
+    remote = teamRepo([], { ".claude-plugin/plugin.json": JSON.stringify({ name: "acme", version: "0.1.5" }, null, 2) + "\n" });
+
+    // when
+    const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: remote, marketplaceName: "acme" }, undefined, () => "https://example.com/mr/5");
+
+    // then
+    expect(result).toMatchObject({ ok: true, version: "0.1.6" });
+    expect(result.versionedByCommit).toBeUndefined();
+  });
 });
 
 describe("a team repository that commits a symbolic link", () => {

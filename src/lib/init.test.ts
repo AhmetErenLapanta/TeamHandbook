@@ -161,12 +161,32 @@ describe("skeletonFiles", () => {
     expect(gitlab[".gitlab-ci.yml"]).toContain("$TEAMHANDBOOK_CI_TOKEN");
   });
 
+  it("given a new scaffold, when it is generated, then neither manifest carries a version", () => {
+    // when
+    const files = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", "gitlab.acme.com");
+
+    // then Claude Code versions the plugin by commit, so every merge reaches teammates
+    expect(JSON.parse(files[".claude-plugin/plugin.json"]!)).not.toHaveProperty("version");
+    expect(JSON.parse(files[".claude-plugin/marketplace.json"]!).plugins[0]).not.toHaveProperty("version");
+  });
+
   it("tells the reader how updates reach them, without depending on CI to make it true", () => {
     const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;
 
-    expect(readme).toContain("raises the version in");
+    expect(readme).toContain("carries no version, so Claude Code versions the plugin");
     expect(readme).toContain("Nothing here needs CI, an access token");
-    expect(readme).toContain("--with-ci");
+    expect(readme).not.toContain("raises the version in");
+  });
+
+  it("given a repository that raises a version, when its README is generated, then it says so and names the way out", () => {
+    // when
+    const files = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", false, undefined, {}, undefined, "0.1.5");
+
+    // then
+    expect(JSON.parse(files[".claude-plugin/plugin.json"]!).version).toBe("0.1.5");
+    expect(files["README.md"]).toContain("raises the version in");
+    expect(files["README.md"]).toContain("/handbook:init --upgrade --commit-versioning");
+    expect(files["README.md"]).not.toContain("--with-ci");
   });
 
   it("given a teammate whose marketplace does not auto-update, when the README is read, then it names the two commands that bring a merge in", () => {
@@ -174,7 +194,7 @@ describe("skeletonFiles", () => {
     const readme = skeletonFiles("acme-skills", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;
 
     // when the update section is read, then the merge is not promised to arrive on its own
-    expect(readme).toContain("only picks it up when their marketplace updates");
+    expect(readme).toContain("reaches a teammate's copy when their marketplace updates");
     expect(readme).toContain("### Getting new skills");
     expect(readme).toContain("/plugin marketplace update acme-skills\n/reload-plugins");
     expect(readme).toContain("the notice appears after an update, it does not cause one");
@@ -833,6 +853,43 @@ describe("initTeamRepo", () => {
         marketplaceName: "acme-skills",
         initializedAt: "2026-08-08T02:00:00Z",
       });
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given a plain setup and one with the version-bump job, when each is scaffolded, then only the job's starts at a version", () => {
+    // given
+    const plain = bareRepo();
+    const withCi = bareRepo();
+    const otherHome = mkdtempSync(join(tmpdir(), "handbook-home-"));
+    try {
+      // when
+      initTeamRepo(plain, "acme-skills", home, undefined, "2026-08-08T02:00:00Z");
+      initTeamRepo(withCi, "acme-skills", otherHome, undefined, "2026-08-08T02:00:00Z", undefined, undefined, "", true);
+
+      // then the job raises plugin.json's version on every merge and cannot run without one
+      const manifest = (remote: string) =>
+        JSON.parse(execFileSync("git", ["-C", remote, "show", "main:.claude-plugin/plugin.json"], { encoding: "utf8" }));
+      expect(manifest(plain)).not.toHaveProperty("version");
+      expect(manifest(withCi).version).toBe("0.1.0");
+    } finally {
+      for (const dir of [plain, withCi, otherHome]) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("given a commit prefix carrying a control character, when a repository is scaffolded, then it is refused before anything is written", () => {
+    // given
+    const remote = bareRepo();
+    try {
+      // when
+      const result = initTeamRepo(remote, "acme-skills", home, undefined, undefined, undefined, undefined, "TE\u001b[2KAM");
+
+      // then an escape sequence would rewrite the lines the reader is shown
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe("that commit-message prefix cannot be used: it is carrying a control character. Nothing was changed.");
+      expect(loadTeamConfig(home)).toBeNull();
+      expect(execFileSync("git", ["-C", remote, "branch", "--list"], { encoding: "utf8" })).toBe("");
     } finally {
       rmSync(remote, { recursive: true, force: true });
     }

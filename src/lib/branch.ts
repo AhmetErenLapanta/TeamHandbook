@@ -428,6 +428,24 @@ export function readPluginVersion(repoDir: string): string | undefined {
 }
 
 /**
+ * Whether the team's plugin.json parses and carries no version at all.
+ *
+ * With no version in plugin.json or in the marketplace entry, Claude Code versions a
+ * git-sourced plugin by the commit it installs: measured on 2.1.306, a merge that raised
+ * nothing still reached the installed copy, and the commit that took the line out moved a
+ * copy at 0.1.5 onto that commit. So a missing version is how the repository is versioned,
+ * not a gap to fill in. A manifest that is absent or unreadable says nothing either way.
+ */
+export function versionedByCommit(repoDir: string): boolean {
+  try {
+    const plugin = JSON.parse(readFileSync(join(repoDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof plugin === "object" && plugin !== null && !Array.isArray(plugin) && plugin.version === undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Every branch in the team repository that is not merged and already claims a plugin
  * version above the default branch's.
  *

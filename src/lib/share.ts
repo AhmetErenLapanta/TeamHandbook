@@ -966,6 +966,8 @@ export function formatShareResult(
     if (shared.prError) lines.push(`    (the forge CLI could not open it: ${shared.prError})`);
     if (shared.version) {
       lines.push(`  - plugin version raised to ${shared.version}, which is what makes teammates fetch it`);
+    } else if (shared.versionedByCommit) {
+      lines.push("  - no version to raise: the repository is versioned by commit, so the merge is what teammates fetch");
     }
     if (shared.requiresEnv?.length) {
       lines.push(

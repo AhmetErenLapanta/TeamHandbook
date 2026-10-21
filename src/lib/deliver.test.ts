@@ -1529,3 +1529,31 @@ describe("a mined draft delivered into the project it came from", () => {
     expect(log()).toContain("seed");
   });
 });
+
+describe("formatApproveResult on the version teammates update to", () => {
+  const shared = {
+    ok: true,
+    mode: "team" as const,
+    deliveredTo: "https://example.com/mr/9",
+    prUrl: "https://example.com/mr/9",
+    branch: "fix-npm-test",
+  };
+
+  it("given a repository versioned by commit, when the approval is printed, then it says the merge is what copies update to", () => {
+    // when
+    const printed = formatApproveResult("fix-npm-test", { ...shared, versionedByCommit: true });
+
+    // then
+    expect(printed).toContain("versioned by commit, so the merge itself is what teammates' copies update to");
+    expect(printed).not.toContain("raises the handbook");
+  });
+
+  it("given a raised version, when the approval is printed, then it names that version as before", () => {
+    // when
+    const printed = formatApproveResult("fix-npm-test", { ...shared, version: "0.1.6" });
+
+    // then
+    expect(printed).toContain("raises the handbook to v0.1.6");
+    expect(printed).not.toContain("versioned by commit");
+  });
+});

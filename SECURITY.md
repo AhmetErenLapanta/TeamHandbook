@@ -272,7 +272,9 @@ These, and only these:
    the scaffold itself generates, and only the ones you name one by one with `--file`:
    without a `--file` it prints the diff and makes no change at all. It never writes
    `skills/`, `commands/`, `agents/` or `.mcp.json`, and inside the two `.claude-plugin`
-   manifests it carries the team's own entries across rather than replacing them. An
+   manifests it carries the team's own entries across rather than replacing them - the
+   plugin version included, or its absence. Only `--commit-versioning`, given on that run,
+   takes the version line out of `plugin.json`, and nothing saves that choice. An
    example branch name you give it with `--branch-example` is screened like a branch and
    written into the team's `.teamhandbook.json` in that same request, for teammates who
    join afterwards to read. Reviewer and label names given with `--reviewers` and

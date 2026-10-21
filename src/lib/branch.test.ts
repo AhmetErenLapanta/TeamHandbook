@@ -558,8 +558,8 @@ describe("what the first screen says about the request", () => {
 describe("a version an unmerged branch already claims", () => {
   /** The case that was missed by a hair: an abandoned branch already carrying the raise a
    * second, unrelated request was about to make. */
-  function withOpenRaise(version: string, branch = "TEAM-9-old"): string {
-    const bare = bareHandbook();
+  function withOpenRaise(version: string, branch = "TEAM-9-old", main: Record<string, string> = {}): string {
+    const bare = bareHandbook(main);
     const work = temp("handbook-open-");
     execFileSync("git", ["clone", bare, join(work, "repo")], { stdio: "ignore" });
     const repo = join(work, "repo");
@@ -616,6 +616,26 @@ describe("a version an unmerged branch already claims", () => {
     const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge));
 
     expect(text).toContain('WARNING: the team repository has a branch that is not merged and already raises the plugin past 0.1.0: "TEAM-9-old" (0.1.1)');
+  });
+
+  it("given a default branch versioned by commit and an open branch still carrying a version, when a share and a refresh plan run, then neither claims a version or warns", () => {
+    // given a request opened before the switch, still raising the line the switch took out
+    const versionless = { ".claude-plugin/plugin.json": JSON.stringify({ name: "acme-skills" }, null, 2) + "\n" };
+    const bare = withOpenRaise("0.1.1", "TEAM-9-old", versionless);
+
+    // when
+    const result = share(bare);
+    const past = share(withOpenRaise("0.1.1", "TEAM-9-old", versionless), true);
+    const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge));
+
+    // then
+    expect(result).toMatchObject({ ok: true, versionedByCommit: true });
+    expect(result.version).toBeUndefined();
+    expect(past).toMatchObject({ ok: true, versionedByCommit: true });
+    const manifest = execFileSync("git", ["-C", bare, "show", "TEAM-12:.claude-plugin/plugin.json"], { encoding: "utf8" });
+    expect(manifest).toBe(versionless[".claude-plugin/plugin.json"]);
+    expect(text).not.toContain("WARNING");
+    expect(text).not.toContain("TEAM-9-old");
   });
 });
 

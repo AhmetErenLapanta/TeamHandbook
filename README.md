@@ -62,15 +62,16 @@ copy is behind the team's.
 | An MCP server already configured on this machine | `/handbook:share` | an entry in the team repository's `.mcp.json` |
 | A slash command already installed on this machine | `/handbook:share` | the team repository's `commands/<name>.md`, or `commands/<dir>/<name>.md` for one in a subdirectory |
 
-Everything that goes to the team repository travels as a merge request that raises its
-plugin version. That version is Claude Code's signal that the plugin moved, which is what
-makes every teammate's copy refresh. A draft added to its own project travels the way the
-code does: commit, push, pull.
+Everything that goes to the team repository travels as a merge request, and the merge is
+what makes every teammate's copy refresh: the repository's `.claude-plugin/plugin.json`
+carries no version, so Claude Code versions the plugin by the commit it installs. A team
+repository set up by an earlier TeamHandbook still carries one and raises it in every
+request instead, until `/handbook:init --upgrade --commit-versioning` takes the line out. A draft added to its own
+project travels the way the code does: commit, push, pull.
 
 Nothing else is automated, and the repository is an ordinary plugin repo: agents and
-hooks can be committed to it by hand and reach everyone the same way, as long as the
-version is raised in the same commit. `/handbook:init --with-ci` scaffolds a job that
-does that on merge, for teams who work that way.
+hooks can be committed to it by hand and reach everyone the same way. In a repository that
+still carries a version, that holds only when the same commit raises it.
 
 If your team drops TeamHandbook tomorrow, the repository and its distribution keep
 working: there is no lock-in.
@@ -186,8 +187,7 @@ you and cannot write to your `~/.claude`; what they can do is merge things into 
 repository you chose to subscribe to.
 
 That subscription is standing, not item by item. A merged skill, MCP server, or slash
-command raises the repository's plugin version, and it is there once your copy of the
-marketplace updates: on its own if auto-update is on for it in `/plugin`, otherwise after
+command is there once your copy of the marketplace updates: on its own if auto-update is on for it in `/plugin`, otherwise after
 `/plugin marketplace update <team-plugin-name>` and `/reload-plugins`. The team plugin prints what landed ("2 new skill(s), 1 new
 MCP server(s), and 1 new command(s) since your last session"), so a server or a command
 never arrives in silence.
@@ -226,19 +226,22 @@ thing: it drops the contribution target and leaves the subscription alone.
 
 ## How it works
 
-<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a draft TeamHandbook wrote, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace, and the same merge raises the plugin version, which is Claude Code's signal that the plugin moved. Each teammate's copy picks that version up when their marketplace updates and reports what landed, with nothing installed or configured by hand." width="880">
+<img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a draft TeamHandbook wrote, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace whose plugin.json carries no version, so Claude Code versions the plugin by commit and the merge itself is its signal that the plugin moved. Each teammate's copy picks the merge up when their marketplace updates and reports what landed, with nothing installed or configured by hand." width="880">
 
 - **One merge request for a whole selection.** Everything you pick travels together,
-  skills included, because each one raises the version and two requests opened before
-  either is merged claim the same number. One clone, one bump, one request.
+  skills included, so the team reviews it once; in a repository that still carries a
+  version, it also keeps two requests opened before either is merged from claiming the
+  same number. One clone, one commit, one request.
 - **The commit says what you said.** TeamHandbook never commits with a message you have not
   seen; you can delegate the wording only at the moment the merge request is opened, and
   only for the exact sentence you were shown. Where no request can be opened - an empty
   repository, a draft committed into its own project, or a machine with no `gh`/`glab`
   signed in - the wording is yours to give.
-- **The version bump is the delivery.** Nothing pushes to your teammates. The raised
-  version in `.claude-plugin/plugin.json` is Claude Code's only signal that the plugin
-  moved, and a copy refreshes on it when its marketplace updates.
+- **The merge is the delivery.** Nothing pushes to your teammates. With no version in
+  `.claude-plugin/plugin.json`, Claude Code takes the plugin's version from the commit, and
+  a copy refreshes onto the merge when its marketplace updates. A repository that still
+  carries a version refreshes copies only when a request raises it, which every request
+  TeamHandbook opens there does.
 - **Nothing is installed by hand on the other end.** A merged server lands in the repo's
   `.mcp.json` and a merged command in `commands/`, both of which Claude Code reads by
   convention, so a teammate configures nothing.

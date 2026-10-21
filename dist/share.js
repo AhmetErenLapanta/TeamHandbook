@@ -1074,6 +1074,14 @@ function readPluginVersion(repoDir) {
     return void 0;
   }
 }
+function versionedByCommit(repoDir) {
+  try {
+    const plugin = JSON.parse(readFileSync5(join6(repoDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof plugin === "object" && plugin !== null && !Array.isArray(plugin) && plugin.version === void 0;
+  } catch {
+    return false;
+  }
+}
 function openVersionClaims(git, repoDir, heads, current) {
   if (!current || !versionParts(current)) return [];
   try {
@@ -1466,15 +1474,21 @@ function teamSkillsDir(home = handbookHome(), root = marketplacesRoot()) {
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
-function teamCommitPrefixFix(team, retry) {
+function teamCommitPrefixFix(team, retry, source = "config") {
   const known = team.commitPrefix?.trim();
   if (known === "") {
     return `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit had none, and the rule now says otherwise. Correct "commitPrefix" in that file in the repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it for everyone. To unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
   }
+  if (known && source === "repository") {
+    return `The prefix the team repository records in ${TEAM_PREFIX_FILE}, "${known}", does not satisfy that rule; this machine has none of its own and used that one. Correct the record with \`/handbook:init --upgrade --commit-prefix "<the prefix the rule requires>"\`, which fixes it for everyone who shares after; to unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
+  }
+  if (known && source === "flag") {
+    return `The prefix given with --commit-prefix, "${known}", does not satisfy that rule. It is used for this run only, so nothing on this machine or in the repository needs correcting.`;
+  }
   if (known) {
     return `The prefix this machine uses, "${known}", does not satisfy that rule. Correct "commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran /handbook:init record the right one in the repository with \`/handbook:init --upgrade\` so no teammate hits this, then ${retry}.`;
   }
-  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
+  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no "commitPrefix" in ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
 }
 var IDENTITY_RULES = [
   /(author|committer)'s email/i,
@@ -1875,7 +1889,8 @@ function bumpPluginVersion(repoDir, past = []) {
   if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync9(file, "utf8"));
-    const current = String(plugin.version ?? "0.1.0");
+    if (plugin.version === void 0) return null;
+    const current = String(plugin.version);
     const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
@@ -1919,10 +1934,14 @@ function skillCollisionMessage(name, chosen) {
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
 }
 function commitPrefixForPush(team, repoDir) {
-  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team), source: "config" };
   const recorded = readTeamCommitPrefix(repoDir);
-  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
-  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
+  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team), source: "config" };
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    source: "repository"
+  };
 }
 var TEAM_MCP_FILE = ".mcp.json";
 var TEAM_COMMANDS_DIR = "commands";
@@ -2343,6 +2362,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
     const first = slugifySkillName(all[0]);
     const slug = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     let version = null;
+    let byCommit = false;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     const proposal = commitSubject(commitPrefix, title);
     const decided = decidePush({
@@ -2374,6 +2394,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
         copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
       version = bumpPluginVersion(repoDir, decided.claims);
+      byCommit = versionedByCommit(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", decided.subject], repoDir);
       pushed = pushBranch(
@@ -2387,7 +2408,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
         ok: false,
         ...single,
         refused,
-        ...pushFailure(team.repoUrl, branch, decided.subject, err, "share them again", teamCommitPrefixFix(pushTeam.team, "run this again"))
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "share them again", teamCommitPrefixFix(pushTeam.team, "run this again", pushTeam.source))
       };
     }
     const requiresEnv = [];
@@ -2417,6 +2438,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...version ? { version } : {},
+      ...byCommit ? { versionedByCommit: true } : {},
       ...request
     };
   } finally {
@@ -3013,6 +3035,8 @@ function formatShareResult(result, marketplaceName, duplicates = NO_DUPLICATES) 
     if (shared.prError) lines.push(`    (the forge CLI could not open it: ${shared.prError})`);
     if (shared.version) {
       lines.push(`  - plugin version raised to ${shared.version}, which is what makes teammates fetch it`);
+    } else if (shared.versionedByCommit) {
+      lines.push("  - no version to raise: the repository is versioned by commit, so the merge is what teammates fetch");
     }
     if (shared.requiresEnv?.length) {
       lines.push(

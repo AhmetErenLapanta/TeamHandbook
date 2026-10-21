@@ -353,7 +353,18 @@ version-bump:
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
 
-function readmeFor(name: string, url: string): string {
+const UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
+by the commit it installs: everything merged here - a skill, a server, a command, an
+edit to this README - reaches a teammate's copy when their marketplace updates.`;
+
+const UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
+\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
+moved, but a teammate's copy only picks it up when their marketplace updates, so
+anything committed here by hand reaches nobody unless it raises the version too.
+\`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
+which every merge reaches teammates without raising anything.`;
+
+function readmeFor(name: string, url: string, byCommit: boolean): string {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -384,15 +395,11 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-Every skill arrives as a merge request that also raises the version in
-\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates.
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
-Nothing here needs CI, an access token, or the right to push to a protected branch. If
-skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
-job that bumps the version on merge instead, together with the script it runs.
+Nothing here needs CI, an access token, or the right to push to a protected branch.
 
 ### Getting new skills
 
@@ -596,7 +603,11 @@ export function skeletonFiles(
   branchExample?: string,
   assignment: RecordedAssignment = {},
   scaffoldVersion?: string,
+  version?: string,
 ): Record<string, string> {
+  // The version-bump job raises plugin.json's version on every merge and throws without
+  // one, so a repository that runs it starts at a number.
+  const pluginVersion = version ?? (withCi ? "0.1.0" : undefined);
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -621,12 +632,15 @@ export function skeletonFiles(
         {
           name,
           description: "Skills, MCP servers, and slash commands your team has approved through TeamHandbook.",
-          version: "0.1.0",
+          // Only for a repository that raises a number on every merge. Without one, Claude
+          // Code versions the plugin by commit and every merge reaches teammates, with no
+          // version line for two requests to conflict on and none for a merge to forget.
+          ...(pluginVersion !== undefined ? { version: pluginVersion } : {}),
         },
         null,
         2,
       ) + "\n",
-    "README.md": readmeFor(name, url),
+    "README.md": readmeFor(name, url, pluginVersion === undefined),
     "skills/README.md":
       "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
@@ -877,7 +891,10 @@ const INIT_COMMIT_PREFIX_FIX =
  * fixes one machine, and it is a file a sandboxed session may not be allowed to touch at
  * all, while recording the prefix in the repository fixes it for everyone who joins after.
  */
-export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
+/** Where the prefix a push carried came from, which decides what correcting it means. */
+export type CommitPrefixSource = "config" | "repository" | "flag";
+
+export function teamCommitPrefixFix(team: TeamConfig, retry: string, source: CommitPrefixSource = "config"): string {
   const known = team.commitPrefix?.trim();
   // Recorded, and recorded as nothing. Falling through to the "nobody knows" branch below
   // told this user their repository carries no record when it carries one, and sent them to
@@ -894,6 +911,23 @@ export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
       `~/.teamhandbook/config.json, then ${retry}.`
     );
   }
+  // Taken from the repository because this machine has none: there is no config key here
+  // to correct, and calling it this machine's prefix sent the reader to one.
+  if (known && source === "repository") {
+    return (
+      `The prefix the team repository records in ${TEAM_PREFIX_FILE}, "${known}", does not satisfy that ` +
+      "rule; this machine has none of its own and used that one. Correct the record with " +
+      '`/handbook:init --upgrade --commit-prefix "<the prefix the rule requires>"`, which fixes it for ' +
+      'everyone who shares after; to unblock only this machine, set "commitPrefix" under "team" in ' +
+      `~/.teamhandbook/config.json, then ${retry}.`
+    );
+  }
+  if (known && source === "flag") {
+    return (
+      `The prefix given with --commit-prefix, "${known}", does not satisfy that rule. It is used for this ` +
+      "run only, so nothing on this machine or in the repository needs correcting."
+    );
+  }
   if (known) {
     return (
       `The prefix this machine uses, "${known}", does not satisfy that rule. Correct ` +
@@ -904,7 +938,7 @@ export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
   }
   return (
     "This machine does not know the team's commit-message prefix: /handbook:join reads it " +
-    `from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran ` +
+    `from the repository, and this one does not record it (no "commitPrefix" in ${TEAM_PREFIX_FILE}). Whoever ran ` +
     "/handbook:init can add it there once with `/handbook:init --upgrade`, and every share after " +
     'that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a ' +
     `prefix that satisfies the rule, then ${retry}.`
@@ -1089,6 +1123,12 @@ export function initTeamRepo(
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   const assignmentProblem = assignmentRecordProblem(assignment);
   if (assignmentProblem) return { ok: false, error: assignmentProblem };
+  // The same checks a prefix read back out of the repository has to pass, since this one is
+  // written there, into the config and into the first commit's title.
+  const prefixProblem = commitPrefixProblem(commitPrefix.trim());
+  if (prefixProblem) {
+    return { ok: false, error: `that commit-message prefix cannot be used: it is ${prefixProblem}. Nothing was changed.` };
+  }
   try {
     assertSafeGitUrl(url);
   } catch (err) {

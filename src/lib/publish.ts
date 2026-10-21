@@ -19,7 +19,7 @@ import { runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
 export { manualPrUrl, noRequestPossible, runForge } from "./forge.js";
 export type { ForgeRunner } from "./forge.js";
-import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
+import type { CommitMessageChoice, CommitPrefixSource, GitRunner, TeamConfig } from "./init.js";
 import {
   decidePush,
   openRequest,
@@ -27,6 +27,7 @@ import {
   pushFailure,
   readTeamAssignment,
   requestPushOptions,
+  versionedByCommit,
   versionPast,
 } from "./branch.js";
 import type { PushChoice, Pushed, VersionClaim } from "./branch.js";
@@ -190,6 +191,8 @@ export interface PublishOutcome {
   collision?: Collision;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
+  // set instead when the repository is versioned by commit: the merge itself is what they fetch
+  versionedByCommit?: boolean;
   prUrl?: string;
   manualUrl?: string;
   error?: string;
@@ -259,8 +262,9 @@ function linkedPathRefusal(repoDir: string, paths: string[]): string | null {
 /**
  * Raise the plugin version in the same request as the skill.
  *
- * The version string is Claude Code's only signal that a plugin moved: without a new
- * one, a merged skill sits in the repository and no teammate's copy ever fetches it.
+ * Where plugin.json carries a version, that string is Claude Code's only signal that the
+ * plugin moved: without a new one, a merged skill sits in the repository and no
+ * teammate's copy ever fetches it.
  * That used to be CI's job, which meant a token with write access, permission to push
  * to a protected default branch, and a commit made on the server under whatever rules
  * the organisation enforces - three things to get right before anyone receives
@@ -269,13 +273,18 @@ function linkedPathRefusal(repoDir: string, paths: string[]): string | null {
  *
  * Best-effort by design: a repository whose scaffold has not been merged yet has no
  * plugin.json, and a skill is still worth publishing. A linked plugin.json counts as absent.
+ *
+ * A plugin.json with no version is left exactly as it is: that repository is versioned by
+ * commit (see versionedByCommit), and inventing "0.1.0" here put a number back into it on
+ * the first share, measured, after which every merge that raised nothing reached nobody.
  */
 export function bumpPluginVersion(repoDir: string, past: VersionClaim[] = []): string | null {
   const file = join(repoDir, ".claude-plugin", "plugin.json");
   if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync(file, "utf8"));
-    const current = String(plugin.version ?? "0.1.0");
+    if (plugin.version === undefined) return null;
+    const current = String(plugin.version);
     const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
@@ -374,13 +383,20 @@ function skillCollisionMessage(name: string, chosen: boolean): string {
  * which costs nothing because the clone is already there, and a push that quietly rewrote
  * the user's settings is what this product stopped doing.
  */
-export function commitPrefixForPush(team: TeamConfig, repoDir: string): { team: TeamConfig; prefix: string } {
-  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+export function commitPrefixForPush(
+  team: TeamConfig,
+  repoDir: string,
+): { team: TeamConfig; prefix: string; source: CommitPrefixSource } {
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team), source: "config" };
   const recorded = readTeamCommitPrefix(repoDir);
-  if (recorded.prefix === undefined) return { team, prefix: teamCommitPrefix(team) };
+  if (recorded.prefix === undefined) return { team, prefix: teamCommitPrefix(team), source: "config" };
   // The whole config, not just the message: the branch proposal takes a ticket key from
   // commitPrefix, so a joiner who reads the prefix here gets a proposal shaped like it too.
-  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    source: "repository",
+  };
 }
 
 export function publishCandidate(
@@ -453,6 +469,7 @@ export function publishCandidate(
       };
     }
     let version: string | null = null;
+    let byCommit = false;
     const title = buildPrTitle(skillSlug, occupied);
     // After the clone, because the proposal has to carry the prefix this push will really
     // use - which for a machine that joined before the repository recorded one is read out
@@ -490,6 +507,7 @@ export function publishCandidate(
         skillSlug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, skillSlug),
       );
       version = bumpPluginVersion(repoDir, decided.claims);
+      byCommit = versionedByCommit(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", decided.subject], repoDir);
       pushed = pushBranch(
@@ -501,7 +519,7 @@ export function publishCandidate(
     } catch (err) {
       return {
         ok: false,
-        ...pushFailure(team.repoUrl, branch, decided.subject, err, "approve it again", teamCommitPrefixFix(pushTeam.team, "approve again")),
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "approve it again", teamCommitPrefixFix(pushTeam.team, "approve again", pushTeam.source)),
       };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
@@ -514,6 +532,7 @@ export function publishCandidate(
       commitMessage: decided.subject,
       ...(occupied ? { updatedExisting: true } : {}),
       ...(version ? { version } : {}),
+      ...(byCommit ? { versionedByCommit: true } : {}),
       ...request,
     };
   } finally {
@@ -572,6 +591,8 @@ export interface TeamPublishOutcome {
   branch?: string;
   // the version this request raises the plugin to, which is what makes teammates fetch
   version?: string;
+  // set instead when the repository is versioned by commit: the merge itself is what they fetch
+  versionedByCommit?: boolean;
   prUrl?: string;
   manualUrl?: string;
   // the PR body, when GitLab opened the request from the push and could not attach it
@@ -1263,6 +1284,7 @@ export function publishTeamSelection(
     const first = slugifySkillName(all[0]!);
     const slug = all.length === 1 ? `${label}-${first}` : `${label}-${first}-and-${all.length - 1}-more`;
     let version: string | null = null;
+    let byCommit = false;
     const title = buildSelectionPrTitle(names, commandNames, updated, skillNames);
     // Last of the refusals, and deliberately so: the run that asks for a decision is also
     // the run that reports what was screened out and what collided, so the user reads the
@@ -1302,6 +1324,7 @@ export function publishTeamSelection(
         copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
       version = bumpPluginVersion(repoDir, decided.claims);
+      byCommit = versionedByCommit(repoDir);
       git(["add", "-A"], repoDir);
       git([...identity.args, "commit", "-m", decided.subject], repoDir);
       pushed = pushBranch(
@@ -1315,7 +1338,7 @@ export function publishTeamSelection(
         ok: false,
         ...single,
         refused,
-        ...pushFailure(team.repoUrl, branch, decided.subject, err, "share them again", teamCommitPrefixFix(pushTeam.team, "run this again")),
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "share them again", teamCommitPrefixFix(pushTeam.team, "run this again", pushTeam.source)),
       };
     }
     const requiresEnv: string[] = [];
@@ -1345,6 +1368,7 @@ export function publishTeamSelection(
       requiresEnv,
       startsProcess: going.some((s) => s.audit.startsProcess),
       ...(version ? { version } : {}),
+      ...(byCommit ? { versionedByCommit: true } : {}),
       ...request,
     };
   } finally {

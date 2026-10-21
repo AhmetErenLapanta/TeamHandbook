@@ -7,10 +7,10 @@
     a single merge request. Picking it is the approval, so there is no second verdict to give;
     the one thing that does not start here is a draft TeamHandbook wrote, which waits for your
     verdict in /handbook:review. Somebody on the team reviews the request and merges it. That
-    repository is a Claude Code plugin marketplace, and the same merge raises the plugin
-    version, which is Claude Code's signal that the plugin moved. Each teammate's copy picks
-    that version up when their marketplace updates and reports what landed, with nothing
-    installed or configured by hand.</desc>
+    repository is a Claude Code plugin marketplace whose plugin.json carries no version, so
+    Claude Code versions the plugin by commit and the merge itself is its signal that the
+    plugin moved. Each teammate's copy picks the merge up when their marketplace updates and
+    reports what landed, with nothing installed or configured by hand.</desc>
 
   <!-- No <style> element and no prefers-color-scheme query here, deliberately. GitHub's page theme
        is chosen in the site's own settings, while an SVG loaded through <img> resolves
@@ -73,8 +73,8 @@
        set up on your machine") does not describe.
 
        ONE request carrying the whole selection, rather than one per item, is the measured part.
-       Each item raises the plugin version, bumpPluginVersion reads that version from a fresh
-       clone, and two requests opened before either is merged both claim the same number: git
+       In a repository that still carries a version, each item raises it, bumpPluginVersion reads
+       that version from a fresh clone, and two requests opened before either is merged both claim the same number: git
        merges the identical line without a conflict, so the second one lands with no version of
        its own and refreshes nobody's copy. Picking five skills is that case five times over,
        which is why a skill travels inside the batch rather than beside it. -->
@@ -102,11 +102,11 @@
 
   <rect x="52" y="312" width="776" height="26" rx="8" fill="none" stroke="#2f81f7" stroke-dasharray="5 4"/>
   <text x="68" y="329" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#77797d">.claude-plugin/plugin.json</text>
-  <text x="276" y="329" font-size="12" font-weight="600" fill="#77797d">the same merge raises the version</text>
+  <text x="276" y="329" font-size="12" font-weight="600" fill="#77797d">no version line: the merge itself is the version</text>
 
-  <!-- the version bump is the whole delivery mechanism -->
+  <!-- the merge itself is the whole delivery mechanism -->
   <path d="M440 352 V396" fill="none" stroke="#818790" stroke-width="1.5" marker-end="url(#ar)"/>
-  <text x="462" y="372" font-size="12.5" font-weight="600" fill="#77797d">That version is Claude Code's signal to refresh.</text>
+  <text x="462" y="372" font-size="12.5" font-weight="600" fill="#77797d">That merge is Claude Code's signal to refresh.</text>
   <text x="462" y="388" font-size="11.5" fill="#77797d">No CI, no access token, nobody needing push rights.</text>
 
   <!-- ── the arriving side ───────────────────────────────────────────────── -->
