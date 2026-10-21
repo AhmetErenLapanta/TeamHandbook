@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.28.0] - 2026-10-21
+
+### Changed
+
+- **The `gh` and `glab` calls TeamHandbook makes no longer send those CLIs' own usage
+  telemetry.** TeamHandbook now starts them with `GH_TELEMETRY=0`,
+  `GLAB_SEND_TELEMETRY=0` and `GLAB_CHECK_UPDATE=false`. Left to itself, glab sends usage
+  events for its commands to its default GitLab, which is gitlab.com unless configured
+  otherwise, even when the team's GitLab is self-managed, and asks gitlab.com for its
+  latest release; gh sends a usage event with a device id to GitHub for a sampled share of
+  its runs. Only TeamHandbook's own calls change: your gh and glab configuration is neither
+  read nor written, and the same CLI run from your own terminal keeps your setting. Because
+  git can start gh or glab as its credential helper, the git that `/handbook:mine` runs and
+  the git, gh and glab that `/handbook:doctor` runs get the same switches.
+- **SECURITY.md's account of what leaves your machine now covers the forge CLIs:** that
+  `gh` and `glab` are separate programs with traffic of their own, what that traffic
+  carries as recorded, that TeamHandbook's own calls switch it off, and which commands this
+  was measured on and which it was not.
+
+### Fixed
+
+- **SECURITY.md no longer says `/handbook:mine` never opens a network connection.** In a
+  partial clone, such as one made with `--filter=blob:none`, reading the history makes git
+  fetch the file contents the clone left on its remote and write them into `.git`. In a
+  full clone it still opens no connection and writes nothing into the repository.
+
 ## [0.27.0] - 2026-10-21
 
 ### Added
