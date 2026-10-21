@@ -262,13 +262,14 @@ These, and only these:
      the result says so. A request `glab` opens carries TeamHandbook's description and never
      the project's own merge request template, which GitLab applies only on its web page
      and to a push, so nothing that template's quick actions set reaches it; when
-     `.teamhandbook.json` records no reviewers, the result says so and how to record them.
+     `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
      A request GitLab opens from a push is assigned to nobody by TeamHandbook, because
      `merge_request.assign` takes a username and, without `glab`, nothing here knows
-     yours; the result asks you to assign yourself if the project's template did not. The one push that does not ask is the first `/handbook:init`: it
-     pushes the scaffold to `handbook/scaffold` by default, or `<prefix>scaffold` with
-     `--branch-prefix`, or straight to the default branch of an empty repository, after
-     you have confirmed the repository itself. Its message is still yours.
+     yours; the result asks you to assign yourself if the project's template did not.
+     The one push that does not ask is the first `/handbook:init`: it pushes the scaffold
+     to `handbook/scaffold` by default, or `<prefix>scaffold` with `--branch-prefix`, or
+     straight to the default branch of an empty repository, after you have confirmed the
+     repository itself. Its message is still yours.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files

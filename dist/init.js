@@ -1270,7 +1270,7 @@ The requests TeamHandbook opens here carry the reviewers and labels listed in
 \`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. On GitLab, a request
 \`glab\` opens does not get the project's merge request template, which GitLab applies
 only on its web page and to a push, so reviewers or labels that template sets reach
-these requests only once they are listed here.
+the requests \`glab\` opens only once they are listed here.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
