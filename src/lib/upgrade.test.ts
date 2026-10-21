@@ -992,6 +992,7 @@ describe("switching a repository to versioning by commit", () => {
     expect(text).toContain(`--file ${PLUGIN_MANIFEST}`);
     expect(text).toContain("--commit-versioning");
     expect(text).not.toContain("raises the plugin version");
+    expect(text.split("\n")[0]).toContain("how every merge reaches teammates' copies");
   });
 
   it("given the flag, when the refresh is sent naming only the README, then the manifest joins it without a version and nothing is saved", () => {

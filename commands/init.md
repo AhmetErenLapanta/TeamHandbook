@@ -123,8 +123,8 @@ re-init. That loses the repository. Refresh it in place instead:
    it stands - requests already open that raise the version conflict with it and are merged
    or closed first, teammates run the two commands it prints once it is merged, and
    everyone who shares to the repository updates TeamHandbook first - and put the same
-   `--commit-versioning` on the run that sends, which it also carries
-   `.claude-plugin/plugin.json` on. It is used for that run only and saved nowhere. It is
+   `--commit-versioning` on the run that sends; that run sends `.claude-plugin/plugin.json`
+   whether or not it is named. It is used for that run only and saved nowhere. It is
    refused on a repository that runs the version-bump job, and on one already versioned by
    commit.
 5. A `NOT OFFERED` line is not a file to argue with, and naming it anyway is refused. Its

@@ -637,6 +637,26 @@ describe("a version an unmerged branch already claims", () => {
     expect(text).not.toContain("WARNING");
     expect(text).not.toContain("TEAM-9-old");
   });
+
+  it("given an open branch raising the version, when the repository is switched to versioning by commit, then the switch names it instead of offering a number", () => {
+    // given the field's case: a request opened at 0.1.0 that raises to 0.1.1, still open
+    const bare = withOpenRaise("0.1.1");
+
+    // when
+    const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge, { commitVersioning: true }));
+    const result = applyUpgrade(teamFor(bare), ["README.md"], gitAs, noForge, APPROVED, {
+      commitVersioning: true,
+      branch: "TEAM-12-refresh",
+    });
+
+    // then no version is raised by the switch, so no number can collide and none is offered
+    expect(text).not.toContain("--version-after-open");
+    expect(text).not.toContain("send this one as");
+    expect(text).toContain('Open now: "TEAM-9-old" (0.1.1)');
+    expect(result).toMatchObject({ ok: true, versionLineRemoved: true });
+    const manifest = execFileSync("git", ["-C", bare, "show", "TEAM-12-refresh:.claude-plugin/plugin.json"], { encoding: "utf8" });
+    expect(JSON.parse(manifest)).not.toHaveProperty("version");
+  });
 });
 
 describe("the scaffold refresh says who it is for", () => {

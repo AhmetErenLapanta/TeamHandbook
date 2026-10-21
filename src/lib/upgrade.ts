@@ -559,6 +559,8 @@ export interface UpgradePlan {
   forgeProblem?: string;
   /** Unmerged branches already claiming the version this refresh would raise to. */
   versionClaim?: string;
+  /** Unmerged branches raising the version, named on a switch that deletes the line they change. */
+  openRaises?: string[];
   /** Set when the repository records no example branch name, so the plan can ask once. */
   asksBranchExample?: boolean;
   /** The commit-message prefix given on this run, which the run that sends has to repeat. */
@@ -865,7 +867,10 @@ export function planUpgrade(
     const pushPrefix = refreshPushPrefix(team, choice, repoDir);
     const proposedMessage = commitSubject(pushPrefix.prefix, REFRESH_COMMIT_TITLE);
     const preview = previewPush(git, forge, repoDir, pushPrefix.team, REFRESH_SLUG, choice.hints);
-    const versionClaim = versionClaimProblem(preview, "run the refresh again");
+    // A switch raises no version, so no number of its own can collide with theirs: the
+    // branches are named in the switch paragraph instead, which is what they conflict with.
+    const versionClaim = choice.commitVersioning ? null : versionClaimProblem(preview, "run the refresh again");
+    const openRaises = choice.commitVersioning ? preview.claims.map((claim) => `"${claim.branch}" (${claim.version})`) : [];
     // The same sieve the refresh run applies, so a given name carrying a trace is not
     // printed back on the plan either; a name that can go out is shown as given.
     const answer = branchAnswer(choice, preview, git, repoDir, "run the refresh again");
@@ -886,6 +891,7 @@ export function planUpgrade(
       ...(branchProblem ? { branchProblem } : {}),
       ...(preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {}),
       ...(versionClaim ? { versionClaim } : {}),
+      ...(openRaises.length ? { openRaises } : {}),
       ...(!choice.branchExample && !readTeamBranchExample(repoDir).example ? { asksBranchExample: true } : {}),
       ...(candidates.linked.length ? { linked: candidates.linked } : {}),
       ...(candidates.withheld.length ? { withheld: candidates.withheld } : {}),
@@ -1115,7 +1121,8 @@ export function applyUpgrade(
       repoDir,
       team: pushPrefix.team,
       slug: REFRESH_SLUG,
-      choice,
+      // The switch raises nothing, so an open branch's number is not one it can collide with.
+      choice: choice.commitVersioning ? { ...choice, versionAfterOpen: true } : choice,
       message: commitMessage,
       proposedMessage: commitSubject(messagePrefix, title),
       messagePrefix,
@@ -1248,6 +1255,7 @@ export function refreshAudience(plan: UpgradePlan): string {
     ...(paths.includes(TEAM_PREFIX_FILE) ? ["teammates who join after you"] : []),
     ...(paths.some((path) => path.startsWith("hooks/")) ? ["the notice teammates see when new skills arrive"] : []),
     ...(paths.includes("README.md") ? ["people reading the repository's README"] : []),
+    ...(plan.commitVersioning ? ["how every merge reaches teammates' copies"] : []),
     ...(paths.some((path) => path.startsWith(".claude-plugin/")) ? ["how the plugin is described in teammates' plugin list"] : []),
     ...(paths.some((path) => path === CI_MARKER || path.endsWith(".yml")) ? ["the repository's version-bump job"] : []),
   ];
@@ -1292,7 +1300,7 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
   // merge that reaches the team and one that reaches nobody.
   const version = plan.version ?? {};
   if (plan.commitVersioning && version.current !== undefined) {
-    lines.push("", ...commitVersioningSwitch(version.current, plan.marketplaceName ?? "<marketplace>"));
+    lines.push("", ...commitVersioningSwitch(version.current, plan.marketplaceName ?? "<marketplace>", plan.openRaises ?? []));
   } else if (version.byCommit) {
     lines.push(
       "",
@@ -1378,13 +1386,14 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
  * a TeamHandbook older than this one still raises a version on every share - measured, a
  * share into a manifest with no version wrote "0.1.1" - which puts the line back.
  */
-function commitVersioningSwitch(current: string, marketplace: string): string[] {
+function commitVersioningSwitch(current: string, marketplace: string, open: string[]): string[] {
   return [
     `This request switches the repository to versioning by commit: it takes "version": "${current}" out of`,
     `${PLUGIN_MANIFEST}, nothing raises a version after it, and every merge reaches teammates' copies when`,
     "their marketplace updates.",
     "Open requests that raise the version conflict with this commit - they change the line it deletes - so",
     "merge or close them first.",
+    ...(open.length ? [`Open now: ${open.join(", ")}.`] : []),
     "Once this is merged, each teammate moves to the new scheme with:",
     `  /plugin marketplace update ${marketplace}`,
     "  /reload-plugins",
