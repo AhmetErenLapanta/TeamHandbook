@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { productVersion } from "./plugin-root.js";
+import { createGitLabRepo } from "./gitlab-fixture.js";
 import {
   PLUGIN_MANIFEST,
   formatUpgradeResult,
@@ -1258,5 +1259,121 @@ describe("the release that wrote the scaffold", () => {
     expect(formatUpgradePlan(plan)).toContain(`WARNING: nothing records that TeamHandbook ${release} wrote this scaffold`);
     expect(result.scaffoldNotRecorded).toContain(`${TEAM_PREFIX_FILE} is not offered here`);
     expect(tree(remote, result.branch!)).not.toContain(TEAM_PREFIX_FILE);
+  });
+});
+
+describe("the refresh commit's prefix and the record's", () => {
+  /** A team file recording TEAM-1 and a README behind today's, so there is a file to send. */
+  function repoRecording(prefix: string, rules = {}) {
+    const team = teamFor("unused", { commitPrefix: prefix });
+    return createGitLabRepo({
+      defaultBranch: "main",
+      rules,
+      seed: { ...currentScaffold(team), "README.md": "# older\n", ...TEAM_CONTENT },
+    });
+  }
+
+  it("given a repository recording TEAM-1 and a machine that says OTHER-9, when a refresh is sent, then the commit carries OTHER-9 and the record keeps TEAM-1", () => {
+    const repo = repoRecording("TEAM-1");
+    const other = { ...joinerFor(repo.url), commitPrefix: "OTHER-9" };
+
+    const plan = planUpgrade(other, gitWithIdentity, noForge);
+    const result = applyUpgrade(other, ["README.md"], gitWithIdentity, noForge);
+
+    expect(plan.proposedMessage).toBe("OTHER-9 chore: refresh the team handbook scaffold");
+    expect(result.commitMessage).toBe("OTHER-9 chore: the case under test");
+    expect(JSON.parse(repo.fileOn(result.branch!, TEAM_PREFIX_FILE)).commitPrefix).toBe("TEAM-1");
+  });
+
+  it("given a forge whose rule the commit's prefix does not satisfy, when the push is refused, then the reader is given --commit-prefix", () => {
+    const repo = repoRecording("TEAM-1", { commitMessage: "^TEAM-1 " });
+    const other = { ...joinerFor(repo.url), commitPrefix: "OTHER-9" };
+
+    const result = applyUpgrade(other, ["README.md"], gitWithIdentity, noForge, APPROVED, { branch: "TEAM-1-refresh" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('The prefix this machine uses, "OTHER-9", does not satisfy that rule.');
+    expect(result.error).toContain('run the refresh again with --commit-prefix "<the prefix the rule requires>"');
+    expect(repo.branches()).toEqual(["main"]);
+  });
+
+  it("given that refusal, when the refresh is run again with the prefix the rule requires, then it goes through", () => {
+    const repo = repoRecording("TEAM-1", { commitMessage: "^TEAM-1 " });
+    const other = { ...joinerFor(repo.url), commitPrefix: "OTHER-9" };
+
+    const result = applyUpgrade(other, ["README.md"], gitWithIdentity, noForge, APPROVED, {
+      branch: "TEAM-1-refresh",
+      commitPrefix: "TEAM-1",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(repo.subjectOn("TEAM-1-refresh")).toBe("TEAM-1 chore: the case under test");
+  });
+
+  it("given a prefix a shell would act on inside double quotes, when it is given, then it is refused before anything is cloned", () => {
+    const cloned: string[][] = [];
+    const watching: GitRunner = (args, cwd) => {
+      if (args[0] === "clone") cloned.push(args);
+      return gitWithIdentity(args, cwd);
+    };
+
+    for (const prefix of ["TE`whoami`AM", 'TE"AM', "TE$(id)AM", "TE\\AM"]) {
+      const plan = planUpgrade(joinerFor(currentHandbookRepo()), watching, noForge, { commitPrefix: prefix });
+      expect(plan.error, prefix).toBe(
+        "that commit-message prefix cannot be used: it is carrying a quote, a backtick, a dollar sign or a backslash. Nothing was changed.",
+      );
+    }
+    expect(cloned).toEqual([]);
+  });
+
+  it("given a recorded prefix that fails today's checks, when the refresh is built, then the team file is withheld rather than rewritten with this machine's", () => {
+    const repoDir = temp("handbook-repo-");
+    const files = currentScaffold(teamFor("git@gitlab.acme.com:team/skills.git"));
+    const recorded = { ...JSON.parse(files[TEAM_PREFIX_FILE]!), commitPrefix: "P".repeat(70) };
+    writeAll(repoDir, { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(recorded, null, 2) + "\n" });
+
+    const candidates = upgradeCandidates(repoDir, teamFor("git@gitlab.acme.com:team/skills.git", { commitPrefix: "TEAM-1" }));
+
+    expect(candidates.files[TEAM_PREFIX_FILE]).toBeUndefined();
+    const reason = candidates.withheld.find((file) => file.path === TEAM_PREFIX_FILE)?.reason;
+    expect(reason).toContain('its "commitPrefix" is longer than 64 characters');
+    expect(reason).toContain("--commit-prefix");
+    expect(reason).not.toContain("PPPP");
+  });
+
+  it("given that record, when a prefix is given on the same run, then the file is offered carrying the given one", () => {
+    const repoDir = temp("handbook-repo-");
+    const files = currentScaffold(teamFor("git@gitlab.acme.com:team/skills.git"));
+    const recorded = { ...JSON.parse(files[TEAM_PREFIX_FILE]!), commitPrefix: "P".repeat(70) };
+    writeAll(repoDir, { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(recorded, null, 2) + "\n" });
+
+    const candidates = upgradeCandidates(repoDir, teamFor("git@gitlab.acme.com:team/skills.git"), undefined, {}, "TEAM-1");
+
+    expect(candidates.withheld).toEqual([]);
+    expect(JSON.parse(candidates.files[TEAM_PREFIX_FILE]!).commitPrefix).toBe("TEAM-1");
+  });
+});
+
+describe("the copy's own root", () => {
+  it("given a copy whose own plugin.json carries no version, when it plans a refresh, then it reads its release from package.json and runs", () => {
+    const repoRoot = join(dirname(new URL(import.meta.url).pathname), "..", "..");
+    const copy = temp("handbook-copy-");
+    writeAll(copy, {
+      "dist/init.js": readFileSync(join(repoRoot, "dist", "init.js"), "utf8"),
+      ".claude-plugin/plugin.json": JSON.stringify({ name: "handbook", description: "no version line" }, null, 2) + "\n",
+      "package.json": JSON.stringify({ name: "teamhandbook", version: "9.9.9", type: "module" }, null, 2) + "\n",
+    });
+    const remote = handbookRepo((remote) => ({ ...currentScaffold(teamFor(remote)), "README.md": "# older\n" }));
+    const home = temp("handbook-home-");
+    saveTeamConfig(teamFor(remote), home);
+
+    const out = execFileSync(process.execPath, [join(copy, "dist", "init.js"), "--upgrade"], {
+      cwd: temp("handbook-project-"),
+      encoding: "utf8",
+      env: { ...process.env, TEAMHANDBOOK_HOME: home },
+    });
+
+    expect(out).toContain("DIFFERS          README.md");
+    expect(out).toContain("that TeamHandbook 9.9.9 wrote this scaffold");
   });
 });

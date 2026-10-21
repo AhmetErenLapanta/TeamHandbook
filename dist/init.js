@@ -1028,7 +1028,7 @@ function pluginRoot() {
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(readFileSync4(join4(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join4(here, up);
+      if (parsed && typeof parsed === "object") return join4(here, up);
     } catch {
     }
   }
@@ -1056,6 +1056,9 @@ var DEFAULT_BRANCH_PREFIX = "handbook/";
 var SCAFFOLD_COMMIT_TITLE = "chore: scaffold team skill base";
 function commitMessagePrefix(prefix) {
   return prefix?.trim() ? `${prefix.trim()} ` : "";
+}
+function teamCommitPrefix(config) {
+  return commitMessagePrefix(config?.commitPrefix);
 }
 function proposalFingerprint(proposal) {
   return createHash("sha256").update(proposal).digest("hex").slice(0, 8);
@@ -1843,6 +1846,12 @@ function bumpPluginVersion(repoDir, past = []) {
     return null;
   }
 }
+function commitPrefixForPush(team, repoDir) {
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  const recorded = readTeamCommitPrefix(repoDir);
+  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
+  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
+}
 
 // src/lib/upgrade.ts
 var PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
@@ -1976,7 +1985,10 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
   const { recorded: lists, unreadable } = readRecordedAssignment(repoDir);
   const assigned = { ...lists, ...assignment };
   const uncarried = unreadable.filter((kind) => assignment[kind] === void 0);
-  const recorded = readTeamCommitPrefix(repoDir).prefix;
+  const recordedPrefix = readTeamCommitPrefix(repoDir);
+  const recorded = recordedPrefix.prefix;
+  const rawPrefix = readTeamFileObject(repoDir)?.commitPrefix;
+  const prefixProblem = commitPrefix !== void 0 || rawPrefix === void 0 ? null : recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix");
   const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(
     team.marketplaceName,
@@ -2002,13 +2014,18 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
       });
       continue;
     }
-    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem)) {
+    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem || prefixProblem)) {
       const held = [
+        ...prefixProblem ? [`its "commitPrefix" is ${prefixProblem}`] : [],
         ...uncarried.length ? [`it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names`] : [],
         // Described, never quoted, for the reason branchTrace gives.
         ...exampleProblem ? [`its "branchExample" is ${exampleProblem}`] : []
       ];
-      const flags = [...uncarried.map((kind) => `--${kind}`), ...exampleProblem ? ["--branch-example"] : []];
+      const flags = [
+        ...prefixProblem ? ["--commit-prefix"] : [],
+        ...uncarried.map((kind) => `--${kind}`),
+        ...exampleProblem ? ["--branch-example"] : []
+      ];
       withheld.push({
         path,
         reason: `${held.join(", and ")}, so regenerating it would delete what the team recorded there. Correct it in the repository by hand, or record a new one on the same run with ${flags.join(" and ")}.`
@@ -2164,8 +2181,8 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
       files,
       withCi: existsSync4(join7(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
-      proposedMessage: commitSubject(refreshMessagePrefix(team, choice, repoDir), REFRESH_COMMIT_TITLE),
-      proposalHash: proposalFingerprint(commitSubject(refreshMessagePrefix(team, choice, repoDir), REFRESH_COMMIT_TITLE)),
+      proposedMessage: commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE),
+      proposalHash: proposalFingerprint(commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE)),
       stamp: scaffoldStamp(repoDir, candidates, running.release),
       ...choice.commitPrefix !== void 0 ? { commitPrefix: choice.commitPrefix.trim() } : {},
       ...branch ? { branch } : {},
@@ -2200,15 +2217,18 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     rmSync4(workdir, { recursive: true, force: true });
   }
 }
-function refreshMessagePrefix(team, choice, repoDir) {
-  return commitMessagePrefix(choice.commitPrefix ?? readTeamCommitPrefix(repoDir).prefix ?? team.commitPrefix);
+function refreshPushPrefix(team, choice, repoDir) {
+  if (choice.commitPrefix === void 0) return commitPrefixForPush(team, repoDir);
+  const given = choice.commitPrefix.trim();
+  return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given) };
 }
+var SHELL_ACTIVE = /["`$\\]/;
 function commitPrefixFlagError(prefix) {
   if (prefix === void 0) return null;
   if (!prefix.trim()) {
     return "--commit-prefix needs the prefix the team's forge requires; an empty one is not something this records. Nothing was changed.";
   }
-  const problem = commitPrefixProblem(prefix.trim());
+  const problem = commitPrefixProblem(prefix.trim()) ?? (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign or a backslash" : null);
   return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 function branchExampleError(example, git, repoDir) {
@@ -2278,7 +2298,8 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
     const stamp = scaffoldStamp(repoDir, candidates, running.release);
     const stamps = !stamp.blocked && (!stamp.ifSent || paths.includes(TEAM_PREFIX_FILE));
     const title = REFRESH_COMMIT_TITLE;
-    const messagePrefix = refreshMessagePrefix(team, choice, repoDir);
+    const pushPrefix = refreshPushPrefix(team, choice, repoDir);
+    const messagePrefix = pushPrefix.prefix;
     const decided = decidePush({
       git,
       forge,
@@ -2316,7 +2337,16 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
     } catch (err) {
       return {
         ok: false,
-        ...pushFailure(team.repoUrl, branch, decided.subject, err, "run the refresh again", teamCommitPrefixFix(team, "run this again"))
+        ...pushFailure(
+          team.repoUrl,
+          branch,
+          decided.subject,
+          err,
+          "run the refresh again",
+          // The one route that works on this run whoever recorded what: a refresh takes the
+          // prefix the forge requires as a flag, and the files it writes record it.
+          `${teamCommitPrefixFix(pushPrefix.team, "run this again")} Or run the refresh again with --commit-prefix "<the prefix the rule requires>", which this commit and the files it refreshes carry.`
+        )
       };
     }
     const request = openRequest(

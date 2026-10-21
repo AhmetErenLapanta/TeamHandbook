@@ -752,7 +752,7 @@ function pluginRoot() {
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(readFileSync5(join7(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join7(here, up);
+      if (parsed && typeof parsed === "object") return join7(here, up);
     } catch {
     }
   }

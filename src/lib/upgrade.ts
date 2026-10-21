@@ -16,7 +16,7 @@ import {
   TEAM_PREFIX_FILE,
 } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
-import { bumpPluginVersion, symlinkOnPath } from "./publish.js";
+import { bumpPluginVersion, commitPrefixForPush, symlinkOnPath } from "./publish.js";
 import {
   requestNoteLines,
   assignmentRecordProblem,
@@ -402,7 +402,15 @@ export function upgradeCandidates(
   // before the record existed has nothing in their config, and the repository may have
   // been given the record since; regenerating a file FROM that record cannot drop the
   // prefix, which is the only thing withholding protects against.
-  const recorded = readTeamCommitPrefix(repoDir).prefix;
+  // A record that fails today's checks is not replaced by this machine's answer: it
+  // withholds the file below, as an example or a list that cannot be carried does.
+  const recordedPrefix = readTeamCommitPrefix(repoDir);
+  const recorded = recordedPrefix.prefix;
+  const rawPrefix = readTeamFileObject(repoDir)?.commitPrefix;
+  const prefixProblem =
+    commitPrefix !== undefined || rawPrefix === undefined
+      ? null
+      : (recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix"));
   const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(
     team.marketplaceName,
@@ -430,15 +438,20 @@ export function upgradeCandidates(
       });
       continue;
     }
-    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem)) {
+    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem || prefixProblem)) {
       const held = [
+        ...(prefixProblem ? [`its "commitPrefix" is ${prefixProblem}`] : []),
         ...(uncarried.length
           ? [`it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names`]
           : []),
         // Described, never quoted, for the reason branchTrace gives.
         ...(exampleProblem ? [`its "branchExample" is ${exampleProblem}`] : []),
       ];
-      const flags = [...uncarried.map((kind) => `--${kind}`), ...(exampleProblem ? ["--branch-example"] : [])];
+      const flags = [
+        ...(prefixProblem ? ["--commit-prefix"] : []),
+        ...uncarried.map((kind) => `--${kind}`),
+        ...(exampleProblem ? ["--branch-example"] : []),
+      ];
       withheld.push({
         path,
         reason:
@@ -825,8 +838,8 @@ export function planUpgrade(
       files,
       withCi: existsSync(join(repoDir, CI_MARKER)),
       version: versionPlan(repoDir),
-      proposedMessage: commitSubject(refreshMessagePrefix(team, choice, repoDir), REFRESH_COMMIT_TITLE),
-      proposalHash: proposalFingerprint(commitSubject(refreshMessagePrefix(team, choice, repoDir), REFRESH_COMMIT_TITLE)),
+      proposedMessage: commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE),
+      proposalHash: proposalFingerprint(commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE)),
       stamp: scaffoldStamp(repoDir, candidates, running.release),
       ...(choice.commitPrefix !== undefined ? { commitPrefix: choice.commitPrefix.trim() } : {}),
       ...(branch ? { branch } : {}),
@@ -867,13 +880,25 @@ export function planUpgrade(
   }
 }
 
-/** The prefix the refresh commit carries, in the order the files take theirs: the one
- * given on this run, the repository's record, this machine's. A teammate gives one because
- * the forge refuses commits without it, so the commit that carries the refresh has to
- * satisfy the same rule as the files it refreshes. */
-function refreshMessagePrefix(team: TeamConfig, choice: UpgradeChoice, repoDir: string): string {
-  return commitMessagePrefix(choice.commitPrefix ?? readTeamCommitPrefix(repoDir).prefix ?? team.commitPrefix);
+/**
+ * The prefix the refresh commit carries, and the config its push refusal is explained
+ * against: the one given on this run, else exactly what a share to this repository uses.
+ *
+ * Not the order the files take theirs. The file records the TEAM's answer, so the
+ * repository wins there; a commit is this machine's push, and a prefix corrected by hand
+ * in the config after a rejection is what the next push has to carry. Taking the
+ * repository's here had the refresh and the share commit to one repository under two
+ * prefixes, and the refusal then sent the reader to a config the commit had not used.
+ */
+function refreshPushPrefix(team: TeamConfig, choice: UpgradeChoice, repoDir: string): { team: TeamConfig; prefix: string } {
+  if (choice.commitPrefix === undefined) return commitPrefixForPush(team, repoDir);
+  const given = choice.commitPrefix.trim();
+  return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given) };
 }
+
+// Every character a double-quoted shell word still acts on. The plan prints the prefix
+// inside one, on a line the reader - or an agent - copies whole into a terminal.
+const SHELL_ACTIVE = /["`$\\]/;
 
 /** Why the commit-message prefix given on this run cannot be used, or null. Held to the
  * same checks as the one join reads out of the repository, since it is written there. */
@@ -882,7 +907,9 @@ function commitPrefixFlagError(prefix: string | undefined): string | null {
   if (!prefix.trim()) {
     return "--commit-prefix needs the prefix the team's forge requires; an empty one is not something this records. Nothing was changed.";
   }
-  const problem = commitPrefixProblem(prefix.trim());
+  const problem =
+    commitPrefixProblem(prefix.trim()) ??
+    (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign or a backslash" : null);
   return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 
@@ -997,7 +1024,8 @@ export function applyUpgrade(
     // After the paths are checked, so a run stopped for naming a file this cannot refresh
     // says that rather than asking for wording the user would then have to give twice, and
     // before the checkout, so a run with no decision leaves nothing behind.
-    const messagePrefix = refreshMessagePrefix(team, choice, repoDir);
+    const pushPrefix = refreshPushPrefix(team, choice, repoDir);
+    const messagePrefix = pushPrefix.prefix;
     const decided = decidePush({
       git,
       forge,
@@ -1042,7 +1070,17 @@ export function applyUpgrade(
     } catch (err) {
       return {
         ok: false,
-        ...pushFailure(team.repoUrl, branch, decided.subject, err, "run the refresh again", teamCommitPrefixFix(team, "run this again")),
+        ...pushFailure(
+          team.repoUrl,
+          branch,
+          decided.subject,
+          err,
+          "run the refresh again",
+          // The one route that works on this run whoever recorded what: a refresh takes the
+          // prefix the forge requires as a flag, and the files it writes record it.
+          `${teamCommitPrefixFix(pushPrefix.team, "run this again")} Or run the refresh again with ` +
+            '--commit-prefix "<the prefix the rule requires>", which this commit and the files it refreshes carry.',
+        ),
       };
     }
     const request = openRequest(

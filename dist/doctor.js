@@ -892,7 +892,7 @@ function pluginRoot() {
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(readFileSync5(join6(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join6(here, up);
+      if (parsed && typeof parsed === "object") return join6(here, up);
     } catch {
     }
   }
@@ -1350,7 +1350,10 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
   const { recorded: lists, unreadable } = readRecordedAssignment(repoDir);
   const assigned = { ...lists, ...assignment };
   const uncarried = unreadable.filter((kind) => assignment[kind] === void 0);
-  const recorded = readTeamCommitPrefix(repoDir).prefix;
+  const recordedPrefix = readTeamCommitPrefix(repoDir);
+  const recorded = recordedPrefix.prefix;
+  const rawPrefix = readTeamFileObject(repoDir)?.commitPrefix;
+  const prefixProblem = commitPrefix !== void 0 || rawPrefix === void 0 ? null : recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix");
   const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
   const generated = skeletonFiles(
     team.marketplaceName,
@@ -1376,13 +1379,18 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
       });
       continue;
     }
-    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem)) {
+    if (path === TEAM_PREFIX_FILE && (uncarried.length || exampleProblem || prefixProblem)) {
       const held = [
+        ...prefixProblem ? [`its "commitPrefix" is ${prefixProblem}`] : [],
         ...uncarried.length ? [`it holds ${uncarried.map((kind) => `"${kind}"`).join(" and ")} as something other than a list of names`] : [],
         // Described, never quoted, for the reason branchTrace gives.
         ...exampleProblem ? [`its "branchExample" is ${exampleProblem}`] : []
       ];
-      const flags = [...uncarried.map((kind) => `--${kind}`), ...exampleProblem ? ["--branch-example"] : []];
+      const flags = [
+        ...prefixProblem ? ["--commit-prefix"] : [],
+        ...uncarried.map((kind) => `--${kind}`),
+        ...exampleProblem ? ["--branch-example"] : []
+      ];
       withheld.push({
         path,
         reason: `${held.join(", and ")}, so regenerating it would delete what the team recorded there. Correct it in the repository by hand, or record a new one on the same run with ${flags.join(" and ")}.`

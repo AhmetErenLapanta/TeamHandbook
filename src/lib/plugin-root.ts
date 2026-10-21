@@ -19,13 +19,16 @@ export function pluginVersion(): string {
   return "unknown";
 }
 
-/** The directory the running plugin was installed into: the one holding its manifest. */
+/** The directory the running plugin was installed into: the one holding its manifest.
+ * Any manifest that parses marks it, a version or not: the refresh reads its release from
+ * package.json beside it, and a root that vanished with the manifest's version line took
+ * every refresh down with it. */
 export function pluginRoot(): string | null {
   const here = dirname(fileURLToPath(import.meta.url));
   for (const up of ["..", "../.."]) {
     try {
       const parsed = JSON.parse(readFileSync(join(here, up, ".claude-plugin", "plugin.json"), "utf8"));
-      if (typeof parsed?.version === "string") return join(here, up);
+      if (parsed && typeof parsed === "object") return join(here, up);
     } catch {
       // keep walking
     }

@@ -374,7 +374,7 @@ function skillCollisionMessage(name: string, chosen: boolean): string {
  * which costs nothing because the clone is already there, and a push that quietly rewrote
  * the user's settings is what this product stopped doing.
  */
-function commitPrefixForPush(team: TeamConfig, repoDir: string): { team: TeamConfig; prefix: string } {
+export function commitPrefixForPush(team: TeamConfig, repoDir: string): { team: TeamConfig; prefix: string } {
   if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
   const recorded = readTeamCommitPrefix(repoDir);
   if (recorded.prefix === undefined) return { team, prefix: teamCommitPrefix(team) };
