@@ -340,7 +340,9 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * What a result says about its request beyond the link: that the branch already had one
  * open, what the team file held that could not be used, what the forge refused and why,
  * and what a request still needs by hand. A request already open is not called opened,
- * and what it carries is not claimed either way: this run did not set it.
+ * and what it carries is not claimed either way: this run did not set it. A refusal counts
+ * the assignee with the lists, because openPr asks for every request to be assigned to the
+ * person opening it; only a name from the lists is one to correct in the team file.
  */
 export function requestNotes(
   dropped: string | null,
@@ -348,21 +350,27 @@ export function requestNotes(
   pr: { url: string | null; unassigned?: string; existing?: true },
 ): string[] {
   const list = assignmentList(assignment);
-  const refused = list && pr.unassigned ? `the forge refused ${list} (${pr.unassigned})` : null;
+  // One refusal answers the whole assignment, so it is named whole, in parentheses where a
+  // semicolon cannot be read as joining the last list to the assignee.
+  const asked = [...(list ? [list] : []), "assignee you"].join("; ");
+  const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   // Built here, at the call, and never as a module constant: branch.ts and init.ts import
   // each other, and the bundle evaluates this module before TEAM_PREFIX_FILE is assigned, so
   // a constant read it as undefined in every dist/ entry while the tests, run as ES modules,
   // saw the right name.
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
+  const fix = list ? `, and ${correct}` : ".";
   return [
     ...(pr.existing
       ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."]
       : []),
     ...(dropped ? [dropped] : []),
-    ...(refused && opened ? [`The request was opened without its assignment: ${refused}. Add them on it by hand, and ${correct}`] : []),
-    ...(refused && pr.existing ? [`The assignment did not go: ${refused}. Add them on the open request if it lacks them, and ${correct}`] : []),
-    ...(refused && !pr.url && !pr.existing ? [`The assignment did not go: ${refused}. Before it is asked for again, ${correct}`] : []),
+    ...(refused && opened ? [`The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`] : []),
+    ...(refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : []),
+    ...(refused && !pr.url && !pr.existing
+      ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
+      : []),
     ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
     ...(list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []),
   ];
@@ -792,10 +800,15 @@ export function openRequest(
   if (url) {
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     // The same honest fall as the description beside it: the labels rode on the push, and
-    // reviewers, which no push option sets, are printed for a person to add.
+    // reviewers, which no push option sets, are printed for a person to add. No assignee
+    // rides either: `merge_request.assign` takes a username or an ID, and without glab
+    // nothing here knows the forge's name for this person - the git identity is not it, and
+    // a guess could assign someone else. The template GitLab applies to a request opened
+    // without a description may assign it, so the note asks only for what it did not.
     const notes = [
       ...(dropped ? [dropped] : []),
-      ...(reviewers ? [`GitLab opened the request from the push, which cannot set reviewers: add ${reviewers} on it by hand.`] : []),
+      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: ` +
+        `assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`,
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }

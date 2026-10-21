@@ -255,7 +255,14 @@ These, and only these:
      into `~/.teamhandbook/config.json`. On GitLab, with no `glab` to open the request,
      the push asks GitLab to open it (push options); the request's title is the commit
      message you approved, and its description, which a push cannot carry, is printed for
-     you to paste. The one push that does not ask is the first `/handbook:init`: it
+     you to paste. Every request `gh` or `glab` opens asks to be assigned to you: the
+     command carries the literal `--assignee=@me`, which the CLI resolves against the
+     account it is already signed in with, so no name from this machine - its account, its
+     git identity - is sent. If the forge refuses it, the request is opened without it and
+     the result says so. A request GitLab opens from a push is assigned to nobody by
+     TeamHandbook, because `merge_request.assign` takes a username and, without `glab`,
+     nothing here knows yours; the result asks you to assign yourself if the project's
+     template did not. The one push that does not ask is the first `/handbook:init`: it
      pushes the scaffold to `handbook/scaffold` by default, or `<prefix>scaffold` with
      `--branch-prefix`, or straight to the default branch of an empty repository, after
      you have confirmed the repository itself. Its message is still yours.
@@ -644,7 +651,12 @@ username shape already refuses a path or an address. Each value travels as part 
 is counted, by reason and never quoted, in the result; the request is opened without it
 rather than refused. If the forge refuses the assignment itself, the request is asked for
 once more without it - unless the failed call already reported a request it opened, or
-the forge answered that a request for the branch already exists.
+the forge answered that a request for the branch already exists. The assignee, `@me`, rides
+on every request, so every failed open is asked for that second time, never a third; both
+forges refuse a second open request for a branch, in the sentence read above. When the
+second attempt fails too or finds the request already open, the assignment is named only
+if the team's lists went with it, a name there being the one thing to correct, and not
+when the second attempt failed exactly as the first did.
 
 The name, the prefix and the example are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what

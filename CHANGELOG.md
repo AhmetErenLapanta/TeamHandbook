@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.27.0] - 2026-10-21
+
+### Added
+
+- **A request TeamHandbook opens with `gh` or `glab` arrives assigned to whoever opened
+  it.** This is only about the requests TeamHandbook opens to your team repository: it
+  opens requests there and nowhere else, and a merge request or pull request you open
+  yourself, there or in any other repository, is not touched. Until now such a request
+  arrived assigned to nobody. It is now opened with `--assignee=@me`, which the forge's own
+  CLI resolves to the account it is signed in with, so no name from this machine is sent
+  and nobody else can be assigned by mistake. There is nothing to record in the team file.
+- **A request GitLab opens from the push, without `glab`, is not assigned, and the result
+  says so:** it asks you to assign yourself on it if the project's template did not.
+  Nothing on this machine knows the name the forge has for you, and a guess could assign
+  someone else.
+- **The routing suite has a new false-positive probe:** a plain git-history question in
+  Turkish that no command should answer, graded so that `/handbook:mine` answering it
+  counts against it too. Nothing that reaches an installed copy changed.
+  Contributed by @ozers.
+
+### Changed
+
+- **A request that fails to open is now asked for again without its assignment for every
+  team, not only for one that records reviewers or labels.**
+- **When the forge refuses an assignment, the result no longer names the reviewers and
+  labels as what it refused.** A refusal does not say whether it was about a reviewer, a
+  label or the assignee, so the result names what was asked and gives the forge's own
+  reason.
+- **A request whose retry fails exactly as the attempt before it did, such as with an
+  expired token, is no longer reported as a refused assignment,** and a team that records
+  reviewers or labels is no longer sent to correct the names in its team file.
+
 ## [0.26.0] - 2026-10-19
 
 ### Added

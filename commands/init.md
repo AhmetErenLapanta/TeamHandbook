@@ -98,6 +98,9 @@ re-init. That loses the repository. Refresh it in place instead:
    records that there are none). They are written into `.teamhandbook.json` in that
    request, and every request TeamHandbook opens to the repository afterwards carries them.
    The names are the user's: never take them from the git history or the member list.
+   There is no assignee to record: each request TeamHandbook opens with `gh` or `glab` asks
+   to be assigned to whoever opens it, and the result says when that did not happen.
+   Someone asking for requests "assigned to me" needs nothing from this run.
 4. **Read the plan's version line back to the user rather than promising a refresh.** The
    merge request normally raises the plugin version, which is what makes teammates' copies
    pick it up - but a repository whose version is not a three-part `MAJOR.MINOR.PATCH`
