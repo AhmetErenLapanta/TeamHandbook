@@ -1613,7 +1613,8 @@ var runCommand = (cmd, args, timeoutMs, options) => {
       ...options?.input === void 0 ? {} : { input: options.input },
       ...options?.cwd ? { cwd: options.cwd } : {},
       // never let git/ssh block on an interactive prompt; stdin is closed anyway
-      // every child, claude included, gets the product's call environment so no forge CLI reports usage;
+      // every child that brings no environment of its own gets the product's call environment, so no
+      // forge CLI reports usage (the model probe brings the harvest's);
       // NO_COLOR keeps the ✔/✘ glyphs the MCP check parses, and an unmatched line reads as unknown
       env: options?.env ?? {
         ...nonInteractiveEnv(),

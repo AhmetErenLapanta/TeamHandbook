@@ -304,7 +304,8 @@ make. Left to themselves:
   its color, spinner and accessibility settings. It sent none for the commands this
   product and git run without opening a request - `auth status` and `auth git-credential`,
   0 of 5 each with sampling forced to every run - but it still wrote the device id file it
-  keeps for the purpose.
+  keeps for the purpose. `auth status` was measured with a failed sign-in; the signed-in
+  path was not measured. `auth git-credential` was measured returning a credential.
 
 Every call this product makes to either CLI, and every git call it makes that reaches a
 remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in
@@ -330,9 +331,16 @@ variables is not switched off by them.
 ## What `/handbook:mine` reads and sends
 
 `/handbook:mine` with no arguments reads git history and nothing else. It walks the
-repository you are in, plus any you name with `--repo` or list under `mine.repos`, all
-read-only, and prints what repeats. It makes no model call and opens no network
-connection, so listing costs nothing and discloses nothing.
+repository you are in, plus any you name with `--repo` or list under `mine.repos`, and
+prints what repeats. It makes no model call. In a full clone it opens no network
+connection and writes nothing into the repository, so listing costs nothing and discloses
+nothing. A partial clone is the exception: in a repository cloned with `--filter` (such as
+`--filter=blob:none`), the history read (`git log --numstat`) needs file contents the
+clone left on its remote, and git fetches each one it lacks from that remote and writes it
+into the repository's `.git`. Measured on a local clone missing 6 blobs: 3 fetches and 0
+blobs missing afterwards, against no fetch on a full clone of the same history. Those
+fetches run in the environment of this product's other remote calls, measured carrying
+`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`.
 
 Asking for a draft is what sends anything. Picking a workflow sends the screened
 evidence for that one workflow to `claude -p`, exactly as any other Claude Code prompt
