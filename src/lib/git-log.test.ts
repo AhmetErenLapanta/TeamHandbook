@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gitFailure, parseLog, readCommits, renamedTo, resolveRef } from "./git-log.js";
 import { createFixture, type Fixture } from "./mine-fixture.js";
 
@@ -131,5 +134,26 @@ describe("readCommits", () => {
 
     // then the first ref that exists wins
     expect(ref).toBe("master");
+  });
+
+  it("reads history in the environment of the product's remote calls, since a partial clone fetches what --numstat lacks", () => {
+    // given a git that records the environment it was started in
+    const seen = mkdtempSync(join(tmpdir(), "handbook-git-env-"));
+    const bin = mkdtempSync(join(tmpdir(), "handbook-bin-"));
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nenv > "${join(seen, "git")}"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+
+    // when a history is read
+    try {
+      readCommits(seen);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    // then git, and any fetch or credential helper it starts, gets the forge CLIs' reporting switched off
+    expect(readFileSync(join(seen, "git"), "utf8").split("\n")).toEqual(
+      expect.arrayContaining(["GIT_TERMINAL_PROMPT=0", "GLAB_SEND_TELEMETRY=0", "GLAB_CHECK_UPDATE=false", "GH_TELEMETRY=0"]),
+    );
   });
 });

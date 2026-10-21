@@ -1408,7 +1408,10 @@ function nonInteractiveEnv(base = process.env) {
     GIT_TERMINAL_PROMPT: "0",
     GLAB_NO_PROMPT: "1",
     GH_PROMPT_DISABLED: "1",
-    NO_COLOR: "1"
+    NO_COLOR: "1",
+    GLAB_SEND_TELEMETRY: "0",
+    GLAB_CHECK_UPDATE: "false",
+    GH_TELEMETRY: "0"
   };
 }
 var GIT_TIMEOUT_MS = 12e4;

@@ -784,7 +784,10 @@ function nonInteractiveEnv(base = process.env) {
     GIT_TERMINAL_PROMPT: "0",
     GLAB_NO_PROMPT: "1",
     GH_PROMPT_DISABLED: "1",
-    NO_COLOR: "1"
+    NO_COLOR: "1",
+    GLAB_SEND_TELEMETRY: "0",
+    GLAB_CHECK_UPDATE: "false",
+    GH_TELEMETRY: "0"
   };
 }
 function marketplacesRoot() {
@@ -818,7 +821,8 @@ var defaultRunner = (args, cwd) => execFileSync("git", args, {
   cwd,
   encoding: "utf8",
   maxBuffer: MAX_OUTPUT_BYTES,
-  stdio: ["ignore", "pipe", "pipe"]
+  stdio: ["ignore", "pipe", "pipe"],
+  env: nonInteractiveEnv()
 });
 var RECORD = "";
 var FIELD = "";

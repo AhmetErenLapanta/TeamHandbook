@@ -1220,7 +1220,10 @@ function nonInteractiveEnv(base = process.env) {
     GIT_TERMINAL_PROMPT: "0",
     GLAB_NO_PROMPT: "1",
     GH_PROMPT_DISABLED: "1",
-    NO_COLOR: "1"
+    NO_COLOR: "1",
+    GLAB_SEND_TELEMETRY: "0",
+    GLAB_CHECK_UPDATE: "false",
+    GH_TELEMETRY: "0"
   };
 }
 function marketplacesRoot() {
@@ -1646,9 +1649,11 @@ var runCommand = (cmd, args, timeoutMs, options) => {
       ...options?.input === void 0 ? {} : { input: options.input },
       ...options?.cwd ? { cwd: options.cwd } : {},
       // never let git/ssh block on an interactive prompt; stdin is closed anyway
+      // every child that brings no environment of its own gets the product's call environment, so no
+      // forge CLI reports usage (the model probe brings the harvest's);
+      // NO_COLOR keeps the ✔/✘ glyphs the MCP check parses, and an unmatched line reads as unknown
       env: options?.env ?? {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
+        ...nonInteractiveEnv(),
         GIT_SSH_COMMAND: "ssh -oBatchMode=yes"
       }
     }).trim();

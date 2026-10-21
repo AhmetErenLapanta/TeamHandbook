@@ -294,12 +294,69 @@ These, and only these:
    say whether a newer version exists. It sends no content, makes no model call, and is
    skipped silently when it cannot be made.
 
+How far the list above holds was measured for the forge commands named below, and rests
+on one more thing. To open a request, and to check that one can be opened, TeamHandbook
+runs `gh` or `glab`, and git runs them too when one of them is its credential helper. Each
+is a separate program with network traffic of its own besides the request it is asked to
+make. Left to themselves:
+
+- glab 1.123.0 sends a usage event for each command it was measured on - `auth status`,
+  `api` and `mr list` - though not for `auth git-credential`: `POST
+  /api/v4/usage_data/track_event`. Its body, as recorded, holds the event name,
+  `send_to_snowplow`, the command and subcommand (`command_and_subcommand`, `label`,
+  `property`), its version, the OS, the architecture, the name of the coding agent it runs
+  under (also in its User-Agent header), the project path for a command given one with
+  `-R`, and for `glab api` the endpoint path and HTTP method, a path that can itself name a
+  project. It goes to glab's default host - the one `GITLAB_HOST` or its config names,
+  gitlab.com when neither does - and not necessarily to the GitLab the command is about:
+  `glab auth status --hostname` with a self-managed host sent it to gitlab.com. glab also
+  asks gitlab.com for its latest release, `auth git-credential` included, once a day by its
+  own documentation; an `auth status` whose sign-in check failed skipped it.
+- gh 2.100.0 sends a usage event to GitHub (`cafe.github.com`) for a sampled share of runs;
+  at its default sampling it was observed once, in 1 of 30 runs of `gh api`. Its body, as
+  recorded, holds the command, the names of the flags given (not their values), a device
+  id, an invocation id, a timestamp, its version, the OS, the architecture, the coding
+  agent, whether it runs in a terminal, in CI or in GitHub Actions, the sampling rate, and
+  its color, spinner and accessibility settings. It sent none for the commands this
+  product and git run without opening a request - `auth status` and `auth git-credential`,
+  0 of 5 each with sampling forced to every run - but it still wrote the device id file it
+  keeps for the purpose. `auth status` was measured with a failed sign-in; the signed-in
+  path was not measured. `auth git-credential` was measured returning a credential.
+
+Every call this product makes to either CLI, and every git call it makes that reaches a
+remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in
+its environment, and that is all it changes: TeamHandbook neither reads nor writes your gh
+and glab configuration, so the same CLI run from your own terminal keeps your setting.
+Measured against a local recording server with every other connection refused, five runs
+per case: glab's usage event and its release check each went from 5 of 5 to 0, including
+with `telemetry: true` and `check_update: true` in its config file; with gh's sampling
+forced to every run, its event went from 5 of 5 to 0 for `gh api` and `gh pr list`,
+including with `telemetry: enabled` in its config file, and the device id file was not
+written. The shipped `/handbook:share` screen, checking sign-in against a self-managed
+GitLab it was signed in to, made 2 connections to gitlab.com per run before this, the
+usage event and the release check, and none after; the same glab check against a host it
+was not signed in to made 1, the usage event alone, and none with these switches.
+
+So the list holds for the commands measured: glab's `auth status`, `api`, `mr list` and
+`auth git-credential`, and gh's `auth status`, `api`, `pr list` and `auth git-credential`.
+The two that open a request, `gh pr create` and `glab mr create`, were not run against the
+recorder; that they are switched off the same way is inferred from the same variables
+being read by the same programs, not measured. A CLI version that renames or ignores these
+variables is not switched off by them.
+
 ## What `/handbook:mine` reads and sends
 
 `/handbook:mine` with no arguments reads git history and nothing else. It walks the
-repository you are in, plus any you name with `--repo` or list under `mine.repos`, all
-read-only, and prints what repeats. It makes no model call and opens no network
-connection, so listing costs nothing and discloses nothing.
+repository you are in, plus any you name with `--repo` or list under `mine.repos`, and
+prints what repeats. It makes no model call. In a full clone it opens no network
+connection and writes nothing into the repository, so listing costs nothing and discloses
+nothing. A partial clone is the exception: in a repository cloned with `--filter` (such as
+`--filter=blob:none`), the history read (`git log --numstat`) needs file contents the
+clone left on its remote, and git fetches each one it lacks from that remote and writes it
+into the repository's `.git`. Measured on a local clone missing 6 blobs: 3 fetches and 0
+blobs missing afterwards, against no fetch on a full clone of the same history. Those
+fetches run in the environment of this product's other remote calls, measured carrying
+`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`.
 
 Asking for a draft is what sends anything. Picking a workflow sends the screened
 evidence for that one workflow to `claude -p`, exactly as any other Claude Code prompt

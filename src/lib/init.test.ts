@@ -62,6 +62,16 @@ describe("nonInteractiveEnv", () => {
     });
   });
 
+  it("given a shell that turned the forge CLIs' reporting on, when a forge or git call is built, then the call carries it switched off", () => {
+    const env = nonInteractiveEnv({ PATH: "/usr/bin", GLAB_SEND_TELEMETRY: "1", GLAB_CHECK_UPDATE: "true", GH_TELEMETRY: "enabled" });
+
+    expect(env).toMatchObject({
+      GLAB_SEND_TELEMETRY: "0",
+      GLAB_CHECK_UPDATE: "false",
+      GH_TELEMETRY: "0",
+    });
+  });
+
   it("given the caller's environment, when it is extended, then PATH and the rest survive", () => {
     const env = nonInteractiveEnv({ PATH: "/usr/bin", HOME: "/home/dev" });
 

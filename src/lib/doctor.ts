@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
-import { hostFromUrl, loadTeamConfig, marketplacesRoot } from "./init.js";
+import { hostFromUrl, loadTeamConfig, marketplacesRoot, nonInteractiveEnv } from "./init.js";
 import { compareVersions, readPluginVersion } from "./branch.js";
 import { forgeSignInProblem, forgeTool } from "./forge.js";
 import type { TeamConfig } from "./init.js";
@@ -58,9 +58,11 @@ export const runCommand: CommandRunner = (cmd, args, timeoutMs, options) => {
       ...(options?.input === undefined ? {} : { input: options.input }),
       ...(options?.cwd ? { cwd: options.cwd } : {}),
       // never let git/ssh block on an interactive prompt; stdin is closed anyway
+      // every child that brings no environment of its own gets the product's call environment, so no
+      // forge CLI reports usage (the model probe brings the harvest's);
+      // NO_COLOR keeps the ✔/✘ glyphs the MCP check parses, and an unmatched line reads as unknown
       env: options?.env ?? {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
+        ...nonInteractiveEnv(),
         GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
       },
     }).trim();

@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { openedRequestUrl, openPr } from "./forge.js";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import { forgeSignInProblem, openedRequestUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner, RequestAssignment } from "./forge.js";
 
 const GITLAB = "git@gitlab.com:acme/skills.git";
@@ -323,5 +326,71 @@ describe("which address is the opened request", () => {
   it("given a repository with no web address, when it is read, then the shape alone decides", () => {
     expect(openedRequestUrl(`${PR}\n`, "/srv/git/skills.git")).toBe(PR);
     expect(openedRequestUrl("https://github.com/acme/skills/pull/new/handbook-42\n", "/srv/git/skills.git")).toBeNull();
+  });
+});
+
+describe("the forge CLI's own reporting", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function tree(root: string): Record<string, string> {
+    const files: Record<string, string> = {};
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else files[relative(root, path)] = readFileSync(path, "utf8");
+      }
+    };
+    walk(root);
+    return files;
+  }
+
+  it("given a user whose gh and glab report usage, when the product checks sign-in and opens a request with either CLI, then every call carries the reporting switched off and their config is untouched", () => {
+    const userHome = mkdtempSync(join(tmpdir(), "handbook-user-"));
+    // Where each real CLI keeps its settings, so a stand-in that changes them changes the same file.
+    const configs = {
+      gh: join(userHome, ".config", "gh", "config.yml"),
+      glab: join(userHome, ...(platform() === "darwin" ? ["Library", "Application Support"] : [".config"]), "glab-cli", "config.yml"),
+    };
+    mkdirSync(dirname(configs.gh), { recursive: true });
+    mkdirSync(dirname(configs.glab), { recursive: true });
+    writeFileSync(configs.gh, "telemetry: enabled\n");
+    writeFileSync(configs.glab, "telemetry: true\ncheck_update: true\n");
+    const seen = mkdtempSync(join(tmpdir(), "handbook-forge-env-"));
+    const bin = mkdtempSync(join(tmpdir(), "handbook-bin-"));
+    for (const tool of ["gh", "glab"] as const) {
+      // A stand-in that does what the real CLI does with a call that changes its settings: it
+      // writes the user's config file. Any such call the product makes turns this test red.
+      writeFileSync(
+        join(bin, tool),
+        "#!/bin/sh\n" +
+          `echo "${tool} $*|GH_TELEMETRY=$GH_TELEMETRY|GLAB_SEND_TELEMETRY=$GLAB_SEND_TELEMETRY|GLAB_CHECK_UPDATE=$GLAB_CHECK_UPDATE" >> "$FORGE_ENV_SEEN/calls"\n` +
+          'case "$1 $2" in\n' +
+          '  "config get"|"config list") ;;\n' +
+          `  config\\ *|"auth login"|"auth logout"|"auth refresh"|"auth setup-git"|"auth switch") echo "$*" >> "${configs[tool]}" ;;\n` +
+          '  "pr create") echo https://github.com/acme/skills/pull/12 ;;\n' +
+          '  "mr create") echo https://gitlab.com/acme/skills/-/merge_requests/12 ;;\n' +
+          "esac\n",
+      );
+      chmodSync(join(bin, tool), 0o755);
+    }
+    vi.stubEnv("HOME", userHome);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("FORGE_ENV_SEEN", seen);
+    vi.stubEnv("GLAB_SEND_TELEMETRY", "1");
+    vi.stubEnv("GH_TELEMETRY", "enabled");
+    const before = tree(userHome);
+
+    for (const repoUrl of [GITHUB, GITLAB]) {
+      expect(forgeSignInProblem(repoUrl, userHome, runForge)).toBeNull();
+      expect(openPr(repoUrl, "TEAM-12", "t", "b", userHome, runForge, ASSIGNED).url).not.toBeNull();
+    }
+
+    expect(tree(userHome)).toEqual(before);
+    const calls = readFileSync(join(seen, "calls"), "utf8").trim().split("\n");
+    expect(new Set(calls.map((call) => call.split(" ")[0]))).toEqual(new Set(["gh", "glab"]));
+    for (const call of calls) expect(call).toMatch(/\|GH_TELEMETRY=0\|GLAB_SEND_TELEMETRY=0\|GLAB_CHECK_UPDATE=false$/);
   });
 });
