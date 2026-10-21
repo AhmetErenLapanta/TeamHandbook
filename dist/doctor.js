@@ -1613,6 +1613,8 @@ var runCommand = (cmd, args, timeoutMs, options) => {
       ...options?.input === void 0 ? {} : { input: options.input },
       ...options?.cwd ? { cwd: options.cwd } : {},
       // never let git/ssh block on an interactive prompt; stdin is closed anyway
+      // every child, claude included, gets the product's call environment so no forge CLI reports usage;
+      // NO_COLOR keeps the ✔/✘ glyphs the MCP check parses, and an unmatched line reads as unknown
       env: options?.env ?? {
         ...nonInteractiveEnv(),
         GIT_SSH_COMMAND: "ssh -oBatchMode=yes"

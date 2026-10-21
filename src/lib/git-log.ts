@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { nonInteractiveEnv } from "./init.js";
 
 /** One file a commit touched, with the status letter git reported for it. */
 export interface CommitFile {
@@ -49,6 +50,7 @@ const defaultRunner: GitRunner = (args, cwd) =>
     encoding: "utf8",
     maxBuffer: MAX_OUTPUT_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
+    env: nonInteractiveEnv(),
   });
 
 /** Record and field separators, chosen because a commit subject cannot contain either. */
@@ -56,8 +58,10 @@ const RECORD = "\x1e";
 const FIELD = "\x1f";
 
 /**
- * Reads one repository's history. Never fetches: mining runs against whatever the machine already
- * has, so it cannot be the reason a repository changes or a network call leaves the machine.
+ * Reads one repository's history. It asks for no fetch: mining runs against whatever the machine
+ * already has. The exception is a partial clone (--filter=blob:none), where --numstat needs blobs
+ * the clone left on the remote and git fetches each one it lacks; that fetch runs in the same
+ * environment as every other remote call this product makes, which is why the runner sets it.
  *
  * --raw and --numstat together give the status letter and the line counts in a single walk; asking
  * for --name-status alongside --numstat silently keeps only one of the two.

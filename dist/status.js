@@ -794,7 +794,8 @@ var defaultRunner = (args, cwd) => execFileSync("git", args, {
   cwd,
   encoding: "utf8",
   maxBuffer: MAX_OUTPUT_BYTES,
-  stdio: ["ignore", "pipe", "pipe"]
+  stdio: ["ignore", "pipe", "pipe"],
+  env: nonInteractiveEnv()
 });
 var RECORD = "";
 var FIELD = "";
