@@ -103,7 +103,8 @@ export function forgeSignInProblem(repoUrl: string, repoDir: string, forge: Forg
 
 /**
  * Who a request is assigned to: whoever opens it, which is what a template's `/assign me`
- * says and what a request opened with `--description` no longer gets from the template.
+ * says and what a request glab opens never gets from the template, which GitLab applies
+ * only on its web page and to a push.
  * The literal, never a name read off this machine: gh documents `@me` as self-assign and
  * glab resolves it to the account it is signed in with, so the forge decides who "me" is.
  */

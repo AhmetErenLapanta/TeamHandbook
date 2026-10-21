@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
-import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, forgeTool, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
 import { requestNoteLines, requestNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
 import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
@@ -410,7 +410,10 @@ menu. When you announce a merge to the team, include these two commands.
 
 The requests TeamHandbook opens here carry the reviewers and labels listed in
 \`.teamhandbook.json\`, and none while it lists none. To change them, run
-\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`.
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. On GitLab, a request
+\`glab\` opens does not get the project's merge request template, which GitLab applies
+only on its web page and to a push, so reviewers or labels that template sets reach
+these requests only once they are listed here.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
@@ -1221,7 +1224,7 @@ export function initTeamRepo(
   if (!direct) {
     // Read back from the clone rather than taken from the flags, so a team file the
     // repository already had, and kept, is what the request is assigned by.
-    const { assignment: assigned, dropped } = readTeamAssignment(repoDir);
+    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
     const opened = openPr(
       url,
       scaffoldBranch,
@@ -1234,7 +1237,7 @@ export function initTeamRepo(
     prUrl = opened.url;
     prError = opened.error;
     alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened);
+    notes = requestNotes(dropped, assigned, opened, { tool: forgeTool(url), reviewersRecorded });
   }
   saveTeamConfig(
     {

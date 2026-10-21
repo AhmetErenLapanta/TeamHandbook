@@ -1019,7 +1019,10 @@ menu. When you announce a merge to the team, include these two commands.
 
 The requests TeamHandbook opens here carry the reviewers and labels listed in
 \`.teamhandbook.json\`, and none while it lists none. To change them, run
-\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`.
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. On GitLab, a request
+\`glab\` opens does not get the project's merge request template, which GitLab applies
+only on its web page and to a push, so reviewers or labels that template sets reach
+these requests only once they are listed here.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
