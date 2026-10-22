@@ -6,6 +6,7 @@ import { CORPUS_A } from "./secret-corpus.js";
 import { detectSecret } from "./secrets.js";
 import {
   buildTranscriptSlice,
+  looksKeyBearing,
   PER_USER_CAP,
   readTranscriptTexts,
   redactSlice,
@@ -264,6 +265,27 @@ describe("redactSlice", () => {
     expect(redacted).toBe(3);
   });
 
+  it("given an access key id with its secret three lines below, when the slice is redacted, then the four-line run takes the secret", () => {
+    // given the same output with two fields between the halves, the widest run the second pass reads
+    const secret = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY";
+    const slice = [
+      "Assistant: {",
+      '    "AccessKey": {',
+      '        "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",',
+      '        "Status": "Active",',
+      '        "CreateDate": "2026-10-22T09:00:00Z",',
+      `        "SecretAccessKey": "${secret}",`,
+      "    }",
+      "}",
+    ].join("\n");
+    expect(detectSecret(slice.split("\n")[5]!)).toBeNull();
+    // when it is redacted
+    const { clean } = redactSlice(slice);
+    // then the secret does not survive
+    expect(clean).not.toContain(secret.slice(0, 13));
+    expect(clean).toContain("Assistant: {");
+  });
+
   it("given a netrc entry with one field per line, when the slice is redacted, then the password does not survive", () => {
     // given a .netrc pasted the way the file is usually laid out
     const slice = [
@@ -395,6 +417,20 @@ describe("looksKeyBearing - realistic keys vs realistic prose", () => {
     ["one unwrapped line, no header", body],
   ])("drops a real-sized key pasted as %s", (_label, text) => {
     expect(slice(text)).not.toContain("SECRETMARKER");
+  });
+
+  // The two exemptions are bound to the exact length a digest has and to an image's own first
+  // bytes; a key body carried behind either prefix is the shape loosening one would let through.
+  // Asked of the detector itself: a line this long never fits a developer turn's share of the
+  // slice, so the slice alone would hide a loosened exemption behind its own length cap.
+  const headless = body.slice("MIIEpAIBAAKCAQEA".length);
+  it.each([
+    ["a sha256 integrity prefix", `integrity sha256-${headless}=`],
+    ["a sha384 integrity prefix", `integrity sha384-${headless}`],
+    ["a sha512 integrity prefix", `integrity sha512-${headless}==`],
+    ["an image data URI that does not open with an image's first bytes", `src="data:image/png;base64,${headless}"`],
+  ])("given a key body behind %s, when the message is read, then it still counts as key material", (_label, text) => {
+    expect(looksKeyBearing(text)).toBe(true);
   });
 
   it.each([

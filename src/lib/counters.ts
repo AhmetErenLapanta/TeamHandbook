@@ -94,12 +94,13 @@ export function incrementRedactionBlocked(home: string = handbookHome(), by = 1)
 
 // Dump raw hook payloads to ~/.teamhandbook/debug for schema diagnosis. OPT-IN only:
 // raw payloads can contain secrets (a failing `curl` with a token), so this never
-// runs unless the user explicitly sets TEAMHANDBOOK_DEBUG - the default health signal
-// is the counters above, which carry no content. Capped and best-effort.
+// runs unless the user explicitly sets TEAMHANDBOOK_DEBUG=1 - the default health signal
+// is the counters above, which carry no content. Capped and best-effort. Only "1" opts in:
+// a presence check turned dumping on for TEAMHANDBOOK_DEBUG=0, the value meant to keep it off.
 const DEBUG_DUMP_CAP = 50;
 
 export function maybeDumpPayload(raw: string, home: string = handbookHome()): void {
-  if (!process.env.TEAMHANDBOOK_DEBUG) return;
+  if (process.env.TEAMHANDBOOK_DEBUG !== "1") return;
   try {
     const dir = join(home, "debug");
     mkdirSync(dir, { recursive: true });
