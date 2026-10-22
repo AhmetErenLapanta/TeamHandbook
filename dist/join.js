@@ -1,10 +1,10 @@
 // src/lib/join.ts
-import { readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
@@ -40,6 +40,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(root, prefix));
   } catch {
     return mkdtempSync(join(tmpdir(), prefix));
+  }
+}
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
   }
 }
 var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
@@ -687,7 +695,7 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       ...example ? { branchExample: example } : {}
     };
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function prefixNote(problem) {

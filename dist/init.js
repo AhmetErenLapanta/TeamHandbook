@@ -37,6 +37,26 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
+function inWorkdir(prefix, home, work) {
+  const dir = handbookWorkdir(prefix, home);
+  let result;
+  try {
+    result = work(dir);
+  } catch (err) {
+    removeWorkdir(dir);
+    throw err;
+  }
+  const leftover = removeWorkdir(dir);
+  return leftover ? { ...result, leftoverWorkdir: leftover } : result;
+}
 var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
@@ -67,7 +87,7 @@ function configIsBroken(home = handbookHome()) {
 // src/lib/init.ts
 import { execFileSync as execFileSync4, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname4, join as join5 } from "node:path";
 
 // src/lib/score.ts
@@ -1682,8 +1702,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-", home);
-  try {
+  return inWorkdir("handbook-init-", home, (workdir) => {
     const repoDir = join5(workdir, "repo");
     try {
       git(["clone", "--", url, repoDir], workdir);
@@ -1791,12 +1810,7 @@ Opened by TeamHandbook.`,
       ...notes.length ? { requestNotes: notes } : {},
       ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
     };
-  } finally {
-    try {
-      rmSync3(workdir, { recursive: true, force: true });
-    } catch {
-    }
-  }
+  });
 }
 function formatInitSuccess(result) {
   const isGitHub = !!result.url && (hostFromUrl(result.url) ?? "").includes("github");
@@ -1813,6 +1827,7 @@ function formatInitSuccess(result) {
       ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
       `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`
     ],
+    ...result.leftoverWorkdir ? [`  note:        could not remove the scratch clone at ${displayPath(result.leftoverWorkdir)}; it is safe to delete`] : [],
     // Silence is the wrong signal here: a team whose README already said something
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...result.skipped?.length ? [
@@ -1859,11 +1874,11 @@ function formatInitSuccess(result) {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname6, join as join7 } from "node:path";
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname5, join as join6, relative } from "node:path";
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
@@ -2283,7 +2298,7 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     }
     return plan;
   } finally {
-    rmSync5(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function refreshPushPrefix(team, choice, repoDir) {
@@ -2479,7 +2494,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
       ...request
     };
   } finally {
-    rmSync5(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function withheldLines(files) {

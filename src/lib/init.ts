@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
@@ -9,7 +9,7 @@ import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr
 import { requestNoteLines, requestNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
 import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
-import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { handbookHome, inWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
@@ -1112,6 +1112,8 @@ export interface InitResult {
   proposedMessage?: string;
   // its fingerprint, which a delegated run has to name back
   proposalHash?: string;
+  // the scratch clone the run could not remove, left for the user to delete
+  leftoverWorkdir?: string;
 }
 
 export function initTeamRepo(
@@ -1173,8 +1175,7 @@ export function initTeamRepo(
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-", home);
-  try {
+  return inWorkdir("handbook-init-", home, (workdir): InitResult => {
     const repoDir = join(workdir, "repo");
     // Clone first, always. Building a fresh history locally and pushing it assumed the
     // remote was empty, and most teams create the repository through their organisation's
@@ -1269,7 +1270,7 @@ export function initTeamRepo(
     if (!direct) {
       // Read back from the clone rather than taken from the flags, so a team file the
       // repository already had, and kept, is what the request is assigned by.
-    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+      const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
       const opened = openPr(
         url,
         scaffoldBranch,
@@ -1282,7 +1283,7 @@ export function initTeamRepo(
       prUrl = opened.url;
       prError = opened.error;
       alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
     }
     saveTeamConfig(
       {
@@ -1310,15 +1311,7 @@ export function initTeamRepo(
       ...(notes.length ? { requestNotes: notes } : {}),
       ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
     };
-  } finally {
-    // By the time this runs the scaffold has reached the remote and the config is written,
-    // or the run has already failed with its own reason. A clone the OS refuses to delete
-    // must not replace either with a raw ENOTEMPTY and no link to the request, so a leftover
-    // scratch directory is the price rather than the result.
-    try {
-      rmSync(workdir, { recursive: true, force: true });
-    } catch {}
-  }
+  });
 }
 
 export function formatInitSuccess(result: InitResult): string {
@@ -1343,6 +1336,9 @@ export function formatInitSuccess(result: InitResult): string {
           ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
           `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`,
         ]),
+    ...(result.leftoverWorkdir
+      ? [`  note:        could not remove the scratch clone at ${displayPath(result.leftoverWorkdir)}; it is safe to delete`]
+      : []),
     // Silence is the wrong signal here: a team whose README already said something
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...(result.skipped?.length

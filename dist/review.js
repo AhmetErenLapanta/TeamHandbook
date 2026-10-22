@@ -41,6 +41,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
 var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
@@ -1330,14 +1338,14 @@ import { join as join15 } from "node:path";
 
 // src/lib/deliver.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync8, rmdirSync, rmSync as rmSync6 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync8, rmdirSync, rmSync as rmSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { basename as basename4, dirname as dirname7, join as join11, relative as relative3 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname4, join as join8 } from "node:path";
 
 // src/lib/distill.ts
@@ -2175,7 +2183,7 @@ init_skill_files();
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5, join as join9, relative } from "node:path";
 init_skill_files();
 init_queue();
@@ -2417,7 +2425,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     let pushed;
     try {
       git(["checkout", "-b", branch], repoDir);
-      if (occupied) rmSync5(join9(repoDir, skillDir), { recursive: true, force: true });
+      if (occupied) rmSync4(join9(repoDir, skillDir), { recursive: true, force: true });
       copySkillPayload(
         candidateDir,
         join9(repoDir, skillDir),
@@ -2453,7 +2461,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       ...request
     };
   } finally {
-    rmSync5(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 var TEAM_SKILLS_DIR = "skills";
@@ -2634,7 +2642,7 @@ function installLocally(dir, meta, skillsDir, options) {
   }
   try {
     const skillMd = readFileSync8(join11(dir, "SKILL.md"), "utf8");
-    if (updatedExisting) rmSync6(target, { recursive: true, force: true });
+    if (updatedExisting) rmSync5(target, { recursive: true, force: true });
     copySkillPayload(dir, target, slug === meta.slug ? skillMd : renameSkillMd(skillMd, slug));
   } catch (err) {
     return { error: `delivery failed: ${String(err)}` };
@@ -2830,7 +2838,7 @@ function commitProjectSkill(git, repoDir, target, subject) {
   return null;
 }
 function uninstall(target, skillsDir) {
-  rmSync6(target, { recursive: true, force: true });
+  rmSync5(target, { recursive: true, force: true });
   for (const dir of [skillsDir, dirname7(skillsDir)]) {
     try {
       rmdirSync(dir);

@@ -15,13 +15,16 @@ afterAll(() => rmSync(home, { recursive: true, force: true }));
 
 // The floor above only holds while nothing reaches the state directory around it, and a
 // new default that builds the path from homedir() would undo it without failing a single
-// case. Where the real one does not exist yet (CI, a fresh home), a file that creates it
-// fails here and names the place.
+// case. Where the real one does not exist yet (CI, a fresh home), the file during which it
+// appears fails here and names the place. Files run side by side in other workers, so it
+// can say when the directory appeared, not which file made it.
 const realHandbookHome = join(homedir(), ".teamhandbook");
 const realHandbookHomeExisted = existsSync(realHandbookHome);
 afterAll(() => {
   if (!realHandbookHomeExisted && existsSync(realHandbookHome)) {
-    throw new Error(`this file created ${realHandbookHome}; a test must not reach the real handbook home`);
+    throw new Error(
+      `${realHandbookHome} appeared while this file ran; a test (this file or one running beside it) reached the real handbook home`,
+    );
   }
 });
 
