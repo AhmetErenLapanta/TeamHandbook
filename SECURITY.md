@@ -263,7 +263,8 @@ These, and only these:
      the result says so. A request `glab` opens carries TeamHandbook's description and never
      the project's own merge request template, because GitLab does not apply that template
      to a request opened through its API, so nothing its quick actions set reaches it; when
-     `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
+     `.teamhandbook.json` has no `reviewers` key or no `labels` key, the result says so,
+     names only the missing one, and says how to record it.
      A request GitLab opens from a push is assigned to nobody by TeamHandbook, because
      `merge_request.assign` takes a username and, without `glab`, nothing here knows
      yours; the result asks you to assign yourself if the project's template did not.

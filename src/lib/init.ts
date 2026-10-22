@@ -1272,7 +1272,7 @@ export function initTeamRepo(
   if (!direct) {
     // Read back from the clone rather than taken from the flags, so a team file the
     // repository already had, and kept, is what the request is assigned by.
-    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+    const { assignment: assigned, dropped, reviewersRecorded, labelsRecorded } = readTeamAssignment(repoDir);
     const opened = openPr(
       url,
       scaffoldBranch,
@@ -1285,7 +1285,7 @@ export function initTeamRepo(
     prUrl = opened.url;
     prError = opened.error;
     alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded, labelsRecorded });
   }
   saveTeamConfig(
     {
