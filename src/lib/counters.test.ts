@@ -41,4 +41,13 @@ describe("maybeDumpPayload", () => {
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toHaveLength(1);
   });
+
+  it.each(["0", "false", "no", "off", "true"])(
+    "given TEAMHANDBOOK_DEBUG=%s, when a payload arrives, then nothing is written, because only 1 opts in",
+    (value) => {
+      process.env.TEAMHANDBOOK_DEBUG = value;
+      maybeDumpPayload(raw, home);
+      expect(existsSync(join(home, "debug"))).toBe(false);
+    },
+  );
 });
