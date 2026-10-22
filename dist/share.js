@@ -26,6 +26,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
 var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
@@ -710,7 +718,7 @@ import { join as join12 } from "node:path";
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync6, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname3, join as join7 } from "node:path";
 
@@ -1759,7 +1767,7 @@ init_queue();
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync9, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname4, join as join10, relative } from "node:path";
 init_skill_files();
 init_queue();
@@ -2184,7 +2192,7 @@ function teamAssets(team, git = runGit) {
   } catch {
     return null;
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
@@ -2378,7 +2386,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       }
       for (const skill of goingSkills) {
         const dest = join10(repoDir, TEAM_SKILLS_DIR, skill.name);
-        if (replacedSkills.includes(skill.name)) rmSync3(dest, { recursive: true, force: true });
+        if (replacedSkills.includes(skill.name)) rmSync2(dest, { recursive: true, force: true });
         copySkillPayload(skill.dir, dest, skill.skillMd, skill.files);
       }
       version = bumpPluginVersion(repoDir, decided.claims);
@@ -2428,7 +2436,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       ...request
     };
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 

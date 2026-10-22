@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { handbookHome, handbookWorkdir, removeWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig, marketplacesRoot, nonInteractiveEnv } from "./init.js";
 import { compareVersions, readPluginVersion } from "./branch.js";
@@ -346,7 +346,7 @@ function remoteDistributionState(
   } catch {
     return null;
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeWorkdir(dir);
   }
 }
 
