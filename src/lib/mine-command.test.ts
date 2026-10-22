@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,6 +86,48 @@ describe("listing the work a repository repeats", () => {
     const found = screen.match(INTERNAL_TERMS);
     // then there are none
     expect(found?.[0] ?? null).toBeNull();
+  });
+
+  describe("a blobless clone whose remote is out of reach", () => {
+    // A history read needs file contents a blobless clone left on its remote, so with the remote
+    // gone git cannot read the history at all.
+    function offlineBloblessClone(source: string): string {
+      const scratch = mkdtempSync(join(tmpdir(), "handbook-mine-offline-"));
+      const origin = join(scratch, "origin.git");
+      execFileSync("git", ["clone", "-q", "--bare", source, origin]);
+      execFileSync("git", ["-C", origin, "config", "uploadpack.allowFilter", "true"]);
+      execFileSync("git", ["clone", "-q", "--filter=blob:none", `file://${origin}`, join(scratch, "clone")]);
+      rmSync(origin, { recursive: true, force: true });
+      return join(scratch, "clone");
+    }
+
+    it("given only that clone, when it is listed, then it names the clone and says nothing could be read rather than that nothing repeats", async () => {
+      const clone = offlineBloblessClone(repos[0]!);
+      const out = capture();
+
+      const code = await runMineCommand(["list"], { cwd: clone, home, ...out, options: FIXTURE_THRESHOLDS });
+
+      const screen = out.lines.join("\n");
+      expect(code).toBe(1);
+      expect(screen).toContain(`Could not read the history of ${clone}`);
+      // git's own reason follows, in whatever language git speaks on this machine
+      expect(screen).toMatch(/so it is left out: \S/);
+      expect(screen).not.toContain("No repeating work found");
+      rmSync(join(clone, ".."), { recursive: true, force: true });
+    });
+
+    it("given that clone beside a readable repository, when they are listed, then the readable one's work is listed and the clone is named as left out", async () => {
+      const clone = offlineBloblessClone(repos[1]!);
+      const out = capture();
+
+      const code = await runMineCommand(["list", "--repo", clone], { cwd: repos[0], home, ...out, options: FIXTURE_THRESHOLDS });
+
+      const screen = out.lines.join("\n");
+      expect(code).toBe(0);
+      expect(screen).toContain(`Could not read the history of ${clone}, so it is left out`);
+      expect(screen).toContain("Repeating work found in 1 repository");
+      rmSync(join(clone, ".."), { recursive: true, force: true });
+    });
   });
 
   it("given a history with nothing repeated, when it is listed, then it says so rather than showing an empty list", () => {
