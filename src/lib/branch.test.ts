@@ -933,6 +933,14 @@ describe("the refresh plan and a branch the user gave", () => {
   });
 });
 
+/** What a request glab opened says when the team file records no reviewers. */
+const TEMPLATE_SKIPPED =
+  "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
+  "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
+  'and if it sets none, record that with /handbook:init --upgrade --reviewers "".';
+/** The start of what a GitLab request still to be opened by hand says. */
+const BY_HAND = "When you open the request, assign yourself on it if the project's template does not";
+
 /** The team file as a repository records it, with whatever reviewers and labels a case needs. */
 function teamFile(extra: Record<string, unknown>): Record<string, string> {
   return { [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix: "", ...extra }, null, 2) + "\n" };
@@ -966,15 +974,24 @@ const assignmentFlagsOf = (args: string[] | undefined) =>
   (args ?? []).filter((arg) => arg.startsWith("--reviewer") || arg.startsWith("--label"));
 
 describe("the reviewers and labels a team file holds", () => {
-  it("given neither key, when the request reads it, then nothing is assigned and nothing is said", () => {
-    expect(readTeamAssignment(teamFileIn({}))).toEqual({ assignment: { reviewers: [], labels: [] }, dropped: null });
+  it("given neither key, when the request reads it, then nothing is assigned and no reviewers are recorded", () => {
+    expect(readTeamAssignment(teamFileIn({}))).toEqual({
+      assignment: { reviewers: [], labels: [] },
+      dropped: null,
+      reviewersRecorded: false,
+    });
   });
 
-  it("given empty lists, when the request reads them, then nothing is assigned and nothing is said", () => {
+  it("given empty lists, when the request reads them, then nothing is assigned and the empty list counts as recorded", () => {
     expect(readTeamAssignment(teamFileIn({ reviewers: [], labels: [] }))).toEqual({
       assignment: { reviewers: [], labels: [] },
       dropped: null,
+      reviewersRecorded: true,
     });
+  });
+
+  it("given labels alone, when the request reads them, then no reviewers are recorded", () => {
+    expect(readTeamAssignment(teamFileIn({ labels: ["skills"] })).reviewersRecorded).toBe(false);
   });
 
   it("given names the way people type them, when the request reads them, then the @ is dropped and scoped or local labels are kept", () => {
@@ -983,6 +1000,7 @@ describe("the reviewers and labels a team file holds", () => {
     expect(read).toEqual({
       assignment: { reviewers: ["ada.lovelace", "grace_hopper"], labels: ["type::docs", "équipe"] },
       dropped: null,
+      reviewersRecorded: true,
     });
   });
 
@@ -991,6 +1009,7 @@ describe("the reviewers and labels a team file holds", () => {
 
     expect(read.assignment).toEqual({ reviewers: [], labels: ["skills"] });
     expect(read.dropped).toBe(`${TEAM_PREFIX_FILE} holds values this request left out (reviewers is not a list).`);
+    expect(read.reviewersRecorded).toBe(true);
   });
 
   it("given more than twenty entries, when the request reads them, then none of them is used", () => {
@@ -1242,10 +1261,10 @@ describe("a request carries what the team file says when it is opened", () => {
     });
 
     expect(result).toMatchObject({ ok: true, manualUrl: undefined });
-    expect(formatInitSuccess(result)).toContain("Add reviewers @ada to the request when you open it.");
+    expect(formatInitSuccess(result)).toContain("When you open the request, add reviewers @ada.");
   });
 
-  it("given a team file that records nobody, when a share is opened, then the request is assigned to whoever opens it and nothing is said", () => {
+  it("given a team file that records nobody, when glab opens a share, then the request is assigned to whoever opens it and the skipped template is named", () => {
     const { forge, creates } = recordingForge();
 
     const result = shareOn(teamFor(bareHandbook(teamFile({}))), forge, "TEAM-12");
@@ -1253,7 +1272,7 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/1" });
     expect(creates).toHaveLength(1);
     expect(creates[0]).toContain("--assignee=@me");
-    expect(result.requestNotes).toBeUndefined();
+    expect(result.requestNotes).toEqual([TEMPLATE_SKIPPED]);
   });
 
   it("given the assignee refused and no lists recorded, when a share is opened, then the request goes once more and the reader is told without a team file fix", () => {
@@ -1273,10 +1292,11 @@ describe("a request carries what the team file says when it is opened", () => {
     expect(result.requestNotes).toEqual([
       "The request was opened without its assignment (assignee you): the forge refused it " +
         "(error resolving assignee usernames: 403 Forbidden). Set it on the request by hand.",
+      TEMPLATE_SKIPPED,
     ]);
   });
 
-  it("given no lists and a forge that fails every open differently, when a share is opened, then it is asked twice at most and nothing is said to be refused", () => {
+  it("given no lists and a forge that fails every open differently, when a share is opened, then it is asked twice at most and only the assignee to set is said", () => {
     const creates: string[][] = [];
     const forge: ForgeRunner = (_tool, args) => {
       if (args[0] === "auth") return "Logged in";
@@ -1287,12 +1307,12 @@ describe("a request carries what the team file says when it is opened", () => {
       });
     };
 
-    const result = shareOn(teamFor(bareHandbook(teamFile({}))), forge, "TEAM-12");
+    const result = shareOn(teamFor(GITLAB), forge, "TEAM-12", hostedAt(GITLAB, bareHandbook(teamFile({}))));
 
     expect(creates).toHaveLength(2);
     expect(creates[0]).toContain("--assignee=@me");
     expect(result).toMatchObject({ ok: true, prError: "read tcp [::1]:58902->[::1]:443: read: connection reset by peer" });
-    expect(result.requestNotes).toBeUndefined();
+    expect(result.requestNotes).toEqual([`${BY_HAND}.`]);
   });
 
   it("given reviewers and a token the forge refuses on both attempts, when a share is opened, then the team file is not blamed for it", () => {
@@ -1301,10 +1321,11 @@ describe("a request carries what the team file says when it is opened", () => {
       throw Object.assign(new Error("Command failed"), { stderr: "HTTP 401: Bad credentials\n" });
     };
 
-    const result = shareOn(teamFor(bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] }))), forge, "TEAM-12");
+    const bare = bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] }));
+    const result = shareOn(teamFor(GITLAB), forge, "TEAM-12", hostedAt(GITLAB, bare));
 
     expect(result).toMatchObject({ ok: true, prError: "HTTP 401: Bad credentials" });
-    expect(result.requestNotes).toEqual(["Add reviewers @ada; labels skills to the request when you open it."]);
+    expect(result.requestNotes).toEqual([`${BY_HAND}, and add reviewers @ada; labels skills.`]);
   });
 
   it("given reviewers and labels both refused, when the request is opened without them, then the list reads whole and apart from the assignee", () => {
@@ -1385,7 +1406,7 @@ describe("the reviewers and labels without the forge CLI", () => {
       branch: "TEAM-12",
     });
 
-    expect(result.requestNotes).toEqual(["Add labels skills to the request when you open it."]);
+    expect(result.requestNotes).toEqual([`${BY_HAND}, and add labels skills.`]);
   });
 
   it("given GitHub and no gh, when the branch is pushed, then the link comes with the assignment to add", () => {
@@ -1400,7 +1421,7 @@ describe("the reviewers and labels without the forge CLI", () => {
     );
 
     expect(result).toMatchObject({ ok: true, manualUrl: "https://github.com/acme/skills/pull/new/TEAM-12" });
-    expect(formatShareResult({ team: result, refused: [] })).toContain("Add reviewers @ada to the request when you open it.");
+    expect(formatShareResult({ team: result, refused: [] })).toContain("When you open the request, assign yourself on it, and add reviewers @ada.");
   });
 });
 
@@ -1494,5 +1515,103 @@ describe("a refresh and a team file whose lists it cannot carry", () => {
     expect(result).toMatchObject({ ok: true, refreshed: [TEAM_PREFIX_FILE] });
     const recorded = JSON.parse(execFileSync("git", ["-C", bare, "show", `TEAM-12-x:${TEAM_PREFIX_FILE}`], { encoding: "utf8" }));
     expect(recorded).toMatchObject({ reviewers: ["grace"], labels: ["skills"] });
+  });
+});
+
+describe("the template GitLab does not apply to a request glab opens", () => {
+  const shareTo = (url: string, bare: string, forge: ForgeRunner, reply?: (args: string[]) => string) =>
+    publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(url), hostedAt(url, bare, reply), forge, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+
+  it.each([
+    ["records no key at all", {}],
+    ["records labels and no reviewers", { labels: ["skills"] }],
+  ])("given a team file that %s, when glab opens the request, then the reader is told once how to record the template's lists", (_name, extra) => {
+    const { forge } = recordingForge();
+
+    const result = shareTo(GITLAB, bareHandbook(teamFile(extra)), forge);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/1" });
+    expect(result.requestNotes).toEqual([TEMPLATE_SKIPPED]);
+  });
+
+  it.each([
+    ["records reviewers", { reviewers: ["ada"] }],
+    ["records nobody on purpose", { reviewers: [] }],
+  ])("given a team file that %s, when glab opens the request, then nothing is said about the template", (_name, extra) => {
+    const { forge } = recordingForge();
+
+    const result = shareTo(GITLAB, bareHandbook(teamFile(extra)), forge);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/1" });
+    expect(result.requestNotes).toBeUndefined();
+  });
+
+  it("given no reviewers key and a request already open, when glab is answered with it, then this run is not said to have skipped a template", () => {
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      throw Object.assign(new Error("Command failed"), {
+        stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n",
+      });
+    };
+
+    const result = shareTo(GITLAB, bareHandbook(teamFile({})), forge);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
+    expect(result.requestNotes).toEqual([
+      "The forge reported a request already open for this branch, so none was opened: the push is on that one.",
+    ]);
+  });
+
+  it("given no reviewers key, when gh opens the request, then nothing is said about a template", () => {
+    const { forge } = recordingForge("https://github.com/acme/skills/pull/1\n");
+
+    const result = shareTo(GITHUB, bareHandbook(teamFile({})), forge);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/1" });
+    expect(result.requestNotes).toBeUndefined();
+  });
+
+  it("given no reviewers key and no glab, when GitLab opens the request from the push, then nothing is said about a skipped template", () => {
+    const result = shareTo(GITLAB, bareHandbook(teamFile({})), noForge, () => OPENED);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
+    expect(result.requestNotes).toEqual([
+      "GitLab opened the request from the push, which names no assignee: assign yourself on it if the project's template did not.",
+    ]);
+  });
+
+  it("given no glab, when the request is left to a link rather than opened by the push, then the assignee is asked for on the same condition", () => {
+    const linked = shareTo(GITLAB, bareHandbook(teamFile({})), noForge);
+
+    expect(linked).toMatchObject({ ok: true, manualUrl: "https://gitlab.com/acme/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TEAM-12" });
+    expect(linked.requestNotes).toEqual([`${BY_HAND}.`]);
+  });
+
+  it.each([
+    ["records nobody", {}, undefined],
+    ["records reviewers", { reviewers: ["ada"] }, ["When you open the request, add reviewers @ada."]],
+  ])("given a Bitbucket team file that %s and no CLI, when the request is left to a link, then no forge's assignee rule is claimed for it", (_name, extra, notes) => {
+    const bitbucket = "git@bitbucket.org:acme/skills.git";
+
+    const result = shareTo(bitbucket, bareHandbook(teamFile(extra)), noForge);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(result.prUrl).toBeUndefined();
+    expect(result.requestNotes).toEqual(notes);
+  });
+
+  it.each([
+    ["no reviewers flag", {}, true],
+    ["an empty reviewers flag", { reviewers: [] }, false],
+  ])("given %s at setup, when glab opens the scaffold request, then the template note follows what the team file records", (_name, assignment, said) => {
+    const { forge } = recordingForge();
+
+    const result = initTeamRepo(plainProject(), "acme-skills", home, gitAs, undefined, forge, undefined, "", false, APPROVED, assignment);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(formatInitSuccess(result).includes(TEMPLATE_SKIPPED)).toBe(said);
   });
 });

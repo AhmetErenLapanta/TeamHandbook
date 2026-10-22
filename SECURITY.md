@@ -260,13 +260,17 @@ These, and only these:
      command carries the literal `--assignee=@me`, which the CLI resolves against the
      account it is already signed in with, so no name from this machine - its account, its
      git identity - is sent. If the forge refuses it, the request is opened without it and
-     the result says so. A request GitLab opens from a push is assigned to nobody by
-     TeamHandbook, because `merge_request.assign` takes a username and, without `glab`,
-     nothing here knows yours; the result asks you to assign yourself if the project's
-     template did not. The one push that does not ask is the first `/handbook:init`: it
-     pushes the scaffold to `handbook/scaffold` by default, or `<prefix>scaffold` with
-     `--branch-prefix`, or straight to the default branch of an empty repository, after
-     you have confirmed the repository itself. Its message is still yours.
+     the result says so. A request `glab` opens carries TeamHandbook's description and never
+     the project's own merge request template, because GitLab does not apply that template
+     to a request opened through its API, so nothing its quick actions set reaches it; when
+     `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
+     A request GitLab opens from a push is assigned to nobody by TeamHandbook, because
+     `merge_request.assign` takes a username and, without `glab`, nothing here knows
+     yours; the result asks you to assign yourself if the project's template did not.
+     The one push that does not ask is the first `/handbook:init`: it pushes the scaffold
+     to `handbook/scaffold` by default, or `<prefix>scaffold` with `--branch-prefix`, or
+     straight to the default branch of an empty repository, after you have confirmed the
+     repository itself. Its message is still yours.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
