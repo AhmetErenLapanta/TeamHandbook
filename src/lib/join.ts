@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   assertSafeGitUrl,
@@ -13,7 +13,7 @@ import { isSafeSlug } from "./queue.js";
 import { configIsBroken } from "./config.js";
 import { cloneFailureReason } from "./git-errors.js";
 import type { GitRunner } from "./init.js";
-import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { handbookHome, handbookWorkdir, removeWorkdir } from "./session-state.js";
 import { displayPath } from "./display-path.js";
 import { readTeamBranchExample } from "./branch.js";
 
@@ -169,7 +169,7 @@ export function joinTeamRepo(
       ...(example ? { branchExample: example } : {}),
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 

@@ -103,6 +103,16 @@ export async function runMineCommand(argv: string[], deps: MineRunDeps = {}): Pr
   // exactly the units the list ranked rather than from a second read that may differ.
   const options: MineOptions = deps.options ?? {};
   const collection = collectUnits(paths, options);
+  // A history git could not read is not a history with nothing in it. Measured: a blobless clone
+  // whose remote was out of reach listed "No repeating work found ... an answer, not a failure"
+  // for a history whose full clone holds work done 84 times.
+  for (const { path, reason } of collection.unreadable) {
+    fail(`Could not read the history of ${path}, so it is left out: ${reason}`);
+  }
+  if (collection.repos === 0 && collection.unreadable.length > 0) {
+    fail("No history could be read, so nothing can be said about what repeats here.");
+    return 1;
+  }
   const mined = shapesFromUnits(collection, options);
   if (sessionDetectEnabled(deps.home)) {
     try {

@@ -26,6 +26,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
 var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
@@ -656,7 +664,7 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/counters.ts
@@ -1264,7 +1272,7 @@ function marketplacesRoot() {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5, join as join9 } from "node:path";
 
 // src/lib/publish.ts
@@ -1841,7 +1849,7 @@ function checkHomeWritable(home) {
   try {
     mkdirSync6(home, { recursive: true });
     writeFileSync5(probe, "ok");
-    rmSync5(probe, { force: true });
+    rmSync4(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
@@ -1897,7 +1905,7 @@ function remoteDistributionState(team, run) {
   } catch {
     return null;
   } finally {
-    rmSync5(dir, { recursive: true, force: true });
+    removeWorkdir(dir);
   }
 }
 function gitHead(dir, run) {

@@ -124,6 +124,42 @@ export function handbookWorkdir(prefix: string, home: string = handbookHome()): 
   }
 }
 
+/**
+ * Removes a scratch directory from handbookWorkdir, and returns its path when it could not.
+ * Cleanup runs once the work is over: the push has reached the remote and the config is
+ * written, or the run has already failed with its own reason. A directory the OS refuses to
+ * delete (a file another process holds, an immutable flag) must not replace that outcome
+ * with a raw ENOTEMPTY and no link to what was opened, so the error is swallowed and the
+ * path handed back for a caller that wants to say what it left behind.
+ */
+export function removeWorkdir(dir: string): string | undefined {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return undefined;
+  } catch {
+    return dir;
+  }
+}
+
+/** Runs `work` in a fresh scratch directory and removes it afterwards; a directory that
+ * could not be removed is reported on the result rather than in place of it. */
+export function inWorkdir<T extends object>(
+  prefix: string,
+  home: string,
+  work: (dir: string) => T,
+): T & { leftoverWorkdir?: string } {
+  const dir = handbookWorkdir(prefix, home);
+  let result: T;
+  try {
+    result = work(dir);
+  } catch (err) {
+    removeWorkdir(dir);
+    throw err;
+  }
+  const leftover = removeWorkdir(dir);
+  return leftover ? { ...result, leftoverWorkdir: leftover } : result;
+}
+
 function sessionFile(sessionId: string, home: string): string {
   const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
   return join(home, "sessions", `${safe}.json`);

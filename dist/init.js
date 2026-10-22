@@ -37,6 +37,26 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
+function inWorkdir(prefix, home, work) {
+  const dir = handbookWorkdir(prefix, home);
+  let result;
+  try {
+    result = work(dir);
+  } catch (err) {
+    removeWorkdir(dir);
+    throw err;
+  }
+  const leftover = removeWorkdir(dir);
+  return leftover ? { ...result, leftoverWorkdir: leftover } : result;
+}
 var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
@@ -953,7 +973,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`
+      `GitLab opened the request from the push and assigned it to the account that pushed, unless the project's default template assigns someone else${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
@@ -1688,114 +1708,115 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-");
-  const repoDir = join5(workdir, "repo");
-  try {
-    git(["clone", "--", url, repoDir], workdir);
-  } catch (err) {
-    return { ok: false, error: cloneFailureReason(url, err) };
-  }
-  let branch;
-  try {
-    branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    branch = "";
-  }
-  if (!branch) {
-    return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
-  }
-  let isEmptyRepo;
-  try {
-    isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    isEmptyRepo = true;
-  }
-  if (existsSync2(join5(repoDir, ".claude-plugin", "marketplace.json"))) {
-    return {
+  return inWorkdir("handbook-init-", home, (workdir) => {
+    const repoDir = join5(workdir, "repo");
+    try {
+      git(["clone", "--", url, repoDir], workdir);
+    } catch (err) {
+      return { ok: false, error: cloneFailureReason(url, err) };
+    }
+    let branch;
+    try {
+      branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      branch = "";
+    }
+    if (!branch) {
+      return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
+    }
+    let isEmptyRepo;
+    try {
+      isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      isEmptyRepo = true;
+    }
+    if (existsSync2(join5(repoDir, ".claude-plugin", "marketplace.json"))) {
+      return {
+        ok: false,
+        error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
+      };
+    }
+    const stopped = (error) => ({
       ok: false,
-      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
-    };
-  }
-  const stopped = (error) => ({
-    ok: false,
-    error,
-    proposedMessage: proposal,
-    proposalHash: proposalFingerprint(proposal)
-  });
-  const unavailable = isEmptyRepo ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open` : commitMessage.message === void 0 ? (() => {
-    const blocked = forgeSignInProblem(url, repoDir, forge);
-    return blocked ? noRequestPossible(blocked) : null;
-  })() : null;
-  const decided = decideCommitSubject(
-    commitMessage,
-    proposal,
-    commitMessagePrefix(commitPrefix),
-    "run /handbook:init again",
-    unavailable ?? void 0
-  );
-  if ("error" in decided) return stopped(decided.error);
-  const { skipped } = writeSkeletonPreserving(
-    repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment, productVersion() ?? void 0)
-  );
-  const scaffoldBranch = `${branchPrefix}scaffold`;
-  const direct = isEmptyRepo;
-  try {
-    if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
-    git(["add", "-A"], repoDir);
-    git([...identity, "commit", "-m", decided.subject], repoDir);
-    pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
-  } catch (err) {
-    return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
-  }
-  let prUrl = null;
-  let prError;
-  let notes = [];
-  let alreadyOpen = false;
-  if (!direct) {
-    const { assignment: assigned, dropped, reviewersRecorded, labelsRecorded } = readTeamAssignment(repoDir);
-    const opened = openPr(
-      url,
-      scaffoldBranch,
-      "chore: set up the team handbook",
-      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal)
+    });
+    const unavailable = isEmptyRepo ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open` : commitMessage.message === void 0 ? (() => {
+      const blocked = forgeSignInProblem(url, repoDir, forge);
+      return blocked ? noRequestPossible(blocked) : null;
+    })() : null;
+    const decided = decideCommitSubject(
+      commitMessage,
+      proposal,
+      commitMessagePrefix(commitPrefix),
+      "run /handbook:init again",
+      unavailable ?? void 0
+    );
+    if ("error" in decided) return stopped(decided.error);
+    const { skipped } = writeSkeletonPreserving(
+      repoDir,
+      skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment, productVersion() ?? void 0)
+    );
+    const scaffoldBranch = `${branchPrefix}scaffold`;
+    const direct = isEmptyRepo;
+    try {
+      if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
+      git(["add", "-A"], repoDir);
+      git([...identity, "commit", "-m", decided.subject], repoDir);
+      pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
+    } catch (err) {
+      return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
+    }
+    let prUrl = null;
+    let prError;
+    let notes = [];
+    let alreadyOpen = false;
+    if (!direct) {
+      const { assignment: assigned, dropped, reviewersRecorded, labelsRecorded } = readTeamAssignment(repoDir);
+      const opened = openPr(
+        url,
+        scaffoldBranch,
+        "chore: set up the team handbook",
+        `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
 
 Opened by TeamHandbook.`,
-      repoDir,
-      forge,
-      assigned
+        repoDir,
+        forge,
+        assigned
+      );
+      prUrl = opened.url;
+      prError = opened.error;
+      alreadyOpen = opened.existing === true;
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded, labelsRecorded });
+    }
+    saveTeamConfig(
+      {
+        repoUrl: url,
+        marketplaceName,
+        initializedAt: now,
+        ...branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {},
+        ...commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}
+      },
+      home
     );
-    prUrl = opened.url;
-    prError = opened.error;
-    alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded, labelsRecorded });
-  }
-  saveTeamConfig(
-    {
-      repoUrl: url,
-      marketplaceName,
-      initializedAt: now,
-      ...branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {},
-      ...commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}
-    },
-    home
-  );
-  return {
-    ok: true,
-    name: marketplaceName,
-    url,
-    home,
-    branch: direct ? branch : scaffoldBranch,
-    defaultBranch: branch,
-    merged: direct,
-    skipped,
-    withCi,
-    commitMessage: decided.subject,
-    ...prUrl ? { prUrl } : {},
-    ...prError ? { prError } : {},
-    ...notes.length ? { requestNotes: notes } : {},
-    ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
-  };
+    return {
+      ok: true,
+      name: marketplaceName,
+      url,
+      home,
+      branch: direct ? branch : scaffoldBranch,
+      defaultBranch: branch,
+      merged: direct,
+      skipped,
+      withCi,
+      commitMessage: decided.subject,
+      ...prUrl ? { prUrl } : {},
+      ...prError ? { prError } : {},
+      ...notes.length ? { requestNotes: notes } : {},
+      ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
+    };
+  });
 }
 function formatInitSuccess(result) {
   const isGitHub = !!result.url && (hostFromUrl(result.url) ?? "").includes("github");
@@ -1812,6 +1833,7 @@ function formatInitSuccess(result) {
       ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
       `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`
     ],
+    ...result.leftoverWorkdir ? [`  note:        could not remove the scratch clone at ${displayPath(result.leftoverWorkdir)}; it is safe to delete`] : [],
     // Silence is the wrong signal here: a team whose README already said something
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...result.skipped?.length ? [
@@ -1858,7 +1880,7 @@ function formatInitSuccess(result) {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname6, join as join7 } from "node:path";
 
 // src/lib/publish.ts
@@ -2282,7 +2304,7 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     }
     return plan;
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function refreshPushPrefix(team, choice, repoDir) {
@@ -2478,7 +2500,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
       ...request
     };
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function withheldLines(files) {
