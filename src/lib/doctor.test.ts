@@ -878,6 +878,47 @@ describe("doctor team plugin copy check", () => {
     rmSync(seed, { recursive: true, force: true });
   });
 
+  it("given a copy that is not a clone inside some other git repository, when diagnosed, then that repository's commit is not read as the copy's", () => {
+    // given a plain-directory copy under a parent directory that is itself a git repository
+    const { seed } = teamRepoByCommit();
+    execFileSync("git", ["init", "-b", "main", marketRoot]);
+    writeFileSync(join(marketRoot, "unrelated.txt"), "x\n");
+    execFileSync("git", ["-C", marketRoot, "add", "-A"]);
+    execFileSync("git", ["-C", marketRoot, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "dotfiles"]);
+    marketplaceCopyAt("0.3.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const report = runDoctor(home, recordingRunner([]), marketRoot);
+
+    // then the parent's HEAD used to produce a warning about a commit the copy never had
+    expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a copy versioned by commit and a team repo that carries a version line again, when diagnosed, then it says so and compares the commits", () => {
+    // given the switch, this machine's copy taken after it, and an older copy's share putting the line back
+    const { seed, commit } = teamRepoByCommit();
+    const local = subscribed();
+    commit({ ".claude-plugin/plugin.json": JSON.stringify({ name: "t", version: "0.1.1" }) });
+    const remoteHead = execFileSync("git", ["-C", bare, "rev-parse", "main"], { encoding: "utf8" }).trim();
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    const gitCalls: string[] = [];
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner(gitCalls), marketRoot), "team plugin copy");
+
+    // then
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("the team repo carries a version line again (v0.1.1) while this machine's copy is versioned by commit");
+    expect(check.detail).toContain("A share from a TeamHandbook older than 0.30.0");
+    expect(check.detail).toContain("`/handbook:init --upgrade --commit-versioning`");
+    expect(check.detail).toContain(`commit ${local.slice(0, 12)}, the team repo ${remoteHead.slice(0, 12)}`);
+    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
+    rmSync(seed, { recursive: true, force: true });
+  });
+
   it("given the team repo cannot be reached, when diagnosed, then the check is absent rather than guessing", () => {
     // given
     marketplaceCopyAt("0.3.0");

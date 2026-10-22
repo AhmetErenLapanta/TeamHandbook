@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handbookHome, handbookWorkdir } from "./session-state.js";
@@ -347,8 +347,11 @@ function remoteDistributionState(
     // act on is a warning nobody reads. A file the repository has never had is not
     // ambiguous in the same way: no version of the scaffold ever put it there.
     const behind = countStaleSkeleton(dir, team);
-    if (byCommit) return { head: gitHead(dir, run), skillCount, missing: behind.absent };
-    return typeof version === "string" ? { version, skillCount, missing: behind.absent } : null;
+    // The commit is read on both kinds: a copy left versioned by commit while the repository
+    // carries a version again has nothing else to be compared on.
+    const head = gitHead(dir, run);
+    if (byCommit) return { head, skillCount, missing: behind.absent };
+    return typeof version === "string" ? { version, ...(head ? { head } : {}), skillCount, missing: behind.absent } : null;
   } catch {
     return null;
   } finally {
@@ -357,10 +360,15 @@ function remoteDistributionState(
 }
 
 /** The commit a clone has checked out, or undefined for anything that is not a clone. Local:
- * `-C` rather than a working directory, so it never reads whichever repository the doctor runs in. */
+ * `-C` rather than a working directory, so it never reads whichever repository the doctor runs in.
+ * The clone's own root is checked too: a copy that is a plain directory inside some other
+ * repository - a home directory kept under git, say - answered with that repository's HEAD,
+ * measured, and the doctor warned about a commit the copy never had. */
 function gitHead(dir: string, run: CommandRunner): string | undefined {
   try {
-    return /^[0-9a-f]{40,64}$/.exec(run("git", ["-C", dir, "rev-parse", "HEAD"], 5_000).trim())?.[0];
+    const [root, head] = run("git", ["-C", dir, "rev-parse", "--show-toplevel", "HEAD"], 5_000).trim().split("\n");
+    if (!root || realpathSync(root.trim()) !== realpathSync(dir)) return undefined;
+    return /^[0-9a-f]{40,64}$/.exec(head?.trim() ?? "")?.[0];
   } catch {
     return undefined;
   }
@@ -425,7 +433,7 @@ function checkTeamCopy(home: string, remote: RemoteState | undefined, marketRoot
   if (!remote.version) return remote.head ? checkTeamCopyCommit(team.marketplaceName, remote.head, gitHead(copy, run)) : null;
   const remoteVersion = remote.version;
   const local = readPluginVersion(copy);
-  if (!local) return null;
+  if (!local) return versionedByCommit(copy) ? checkVersionLineBack(team.marketplaceName, remote, gitHead(copy, run)) : null;
   const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
   if (behind <= 0) {
@@ -436,6 +444,27 @@ function checkTeamCopy(home: string, remote: RemoteState | undefined, marketRoot
     `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached ` +
       `this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; ` +
       "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
+  );
+}
+
+/**
+ * A repository that carries a version again while this copy, installed after the switch,
+ * carries none. Nothing compares as a number here, and the return is silent everywhere else:
+ * a share from an older TeamHandbook writes the line back, and from then on a merge that
+ * raises nothing reaches nobody. So it is said, and the copy is still compared by commit.
+ */
+function checkVersionLineBack(marketplace: string, remote: RemoteState, local: string | undefined): DoctorCheck {
+  const behind =
+    remote.head && local && remote.head !== local
+      ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run ` +
+        `\`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.`
+      : "";
+  return warn(
+    "team plugin copy",
+    `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. ` +
+      "A share from a TeamHandbook older than 0.30.0, or a conflict resolved on the side with the version, puts it back. " +
+      "Take it out with `/handbook:init --upgrade --commit-versioning`, and have everyone who shares run a current TeamHandbook." +
+      behind,
   );
 }
 

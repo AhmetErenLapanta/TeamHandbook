@@ -1217,10 +1217,11 @@ edit to this README - reaches a teammate's copy when their marketplace updates.`
 var UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
 moved, but a teammate's copy only picks it up when their marketplace updates, so
-anything committed here by hand reaches nobody unless it raises the version too.
+anything committed here by hand reaches nobody unless it raises the version too.`;
+var SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
 which every merge reaches teammates without raising anything.`;
-function readmeFor(name, url, byCommit) {
+function readmeFor(name, url, byCommit, withCi) {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -1251,7 +1252,7 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION}
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION + (withCi ? "" : SWITCH_POINTER)}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
@@ -1437,7 +1438,7 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
       null,
       2
     ) + "\n",
-    "README.md": readmeFor(name, url, pluginVersion === void 0),
+    "README.md": readmeFor(name, url, pluginVersion === void 0, withCi),
     "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
     // "" is this team saying its forge asks for nothing, while an absent file is a
@@ -2113,7 +2114,7 @@ function versionPlan(repoDir, toCommit = false) {
   const raw = readIfPresent(join7(repoDir, PLUGIN_MANIFEST));
   if (raw === null) {
     return {
-      blocked: `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds it without one, and from then on the repository is versioned by commit.`
+      blocked: existsSync4(join7(repoDir, CI_MARKER)) ? `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds it at 0.1.0, the version the repository's version-bump job raises from.` : `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds it without one, and from then on the repository is versioned by commit.`
     };
   }
   const manifest = parseObject(raw);
@@ -2510,7 +2511,7 @@ function formatUpgradePlan(plan) {
     "",
     "The team's own content is never part of this: skills/, commands/, agents/ and .mcp.json are",
     "not offered and cannot be written, and inside the two manifests the team's own entries - the",
-    `${plan.commitVersioning ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`
+    `${plan.commitVersioning || plan.version?.byCommit ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`
   );
   const version = plan.version ?? {};
   if (plan.commitVersioning && version.current !== void 0) {

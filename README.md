@@ -78,7 +78,8 @@ working: there is no lock-in.
 
 ## Install
 
-**Requires** Claude Code >= 2.1 and Node.js >= 22.
+**Requires** Claude Code >= 2.1 and Node.js >= 22. Versioning a team repository by commit was
+measured with Claude Code 2.1.306; earlier 2.1 releases were not measured.
 
 ### Setting it up for your team
 

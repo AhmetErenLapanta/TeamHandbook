@@ -189,6 +189,15 @@ describe("skeletonFiles", () => {
     expect(files["README.md"]).not.toContain("--with-ci");
   });
 
+  it("given a repository that runs the version-bump job, when its README is generated, then it does not offer the switch the job refuses", () => {
+    // when
+    const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", true)["README.md"]!;
+
+    // then
+    expect(readme).toContain("raises the version in");
+    expect(readme).not.toContain("--commit-versioning");
+  });
+
   it("given a teammate whose marketplace does not auto-update, when the README is read, then it names the two commands that bring a merge in", () => {
     // given the scaffold for a marketplace called acme-skills
     const readme = skeletonFiles("acme-skills", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;

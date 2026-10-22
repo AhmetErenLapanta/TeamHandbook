@@ -360,11 +360,15 @@ edit to this README - reaches a teammate's copy when their marketplace updates.`
 const UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
 moved, but a teammate's copy only picks it up when their marketplace updates, so
-anything committed here by hand reaches nobody unless it raises the version too.
+anything committed here by hand reaches nobody unless it raises the version too.`;
+
+// Not in a repository that runs the version-bump job: the flag is refused there, because
+// the job fails on a manifest without a version.
+const SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
 which every merge reaches teammates without raising anything.`;
 
-function readmeFor(name: string, url: string, byCommit: boolean): string {
+function readmeFor(name: string, url: string, byCommit: boolean, withCi: boolean): string {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -395,7 +399,7 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION}
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION + (withCi ? "" : SWITCH_POINTER)}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
@@ -640,7 +644,7 @@ export function skeletonFiles(
         null,
         2,
       ) + "\n",
-    "README.md": readmeFor(name, url, pluginVersion === undefined),
+    "README.md": readmeFor(name, url, pluginVersion === undefined, withCi),
     "skills/README.md":
       "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
@@ -878,6 +882,9 @@ const INIT_COMMIT_PREFIX_FIX =
   'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is ' +
   "remembered for every skill shared later.";
 
+/** Where the prefix a push carried came from, which decides what correcting it means. */
+export type CommitPrefixSource = "config" | "repository" | "flag";
+
 /**
  * What to do about a commit-message rule on a path that is NOT /handbook:init.
  *
@@ -891,9 +898,6 @@ const INIT_COMMIT_PREFIX_FIX =
  * fixes one machine, and it is a file a sandboxed session may not be allowed to touch at
  * all, while recording the prefix in the repository fixes it for everyone who joins after.
  */
-/** Where the prefix a push carried came from, which decides what correcting it means. */
-export type CommitPrefixSource = "config" | "repository" | "flag";
-
 export function teamCommitPrefixFix(team: TeamConfig, retry: string, source: CommitPrefixSource = "config"): string {
   const known = team.commitPrefix?.trim();
   // Recorded, and recorded as nothing. Falling through to the "nobody knows" branch below

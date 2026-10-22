@@ -20,6 +20,7 @@ import { runGit, TEAM_PREFIX_FILE } from "./init.js";
 import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
 import type { CandidateMeta } from "./queue.js";
 import type { GroundedCase } from "./distill.js";
+import { createGitLabRepo } from "./gitlab-fixture.js";
 
 
 /**
@@ -1469,5 +1470,65 @@ describe("a delegated wording needs a merge request to be about", () => {
     expect(probe.proposedBranch).toBeUndefined();
     expect(probe.error).not.toContain("glpat");
     expect(gitIn(remote, ["branch", "--list"]).replace(/^\*\s*/, "").trim()).toBe("main");
+  });
+});
+
+describe("a push refused for a prefix this machine took from the repository", () => {
+  const gitlab: McpServerEntry = {
+    name: "gitlab",
+    scope: "user",
+    config: { type: "http", url: "https://gitlab.com/api/v4/mcp" },
+  };
+
+  /** A project recording TEAM-1 whose rule asks for another prefix, and a teammate whose
+   * config has none of its own. */
+  function refusingProject() {
+    return createGitLabRepo({
+      defaultBranch: "main",
+      rules: { commitMessage: "^OTHER-9 " },
+      seed: {
+        ".claude-plugin/plugin.json": JSON.stringify({ name: "acme", version: "0.1.0" }, null, 2) + "\n",
+        [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix: "TEAM-1" }, null, 2) + "\n",
+        "skills/README.md": "skills\n",
+      },
+    });
+  }
+
+  it("given a teammate with no prefix of their own, when a share is refused, then the refusal names the repository's record and no config key", () => {
+    // given
+    const repo = refusingProject();
+    try {
+      // when
+      const result = publishTeamSelection({ servers: [gitlab] }, { repoUrl: repo.url, marketplaceName: "acme" }, undefined, () => "", {
+        branch: "TEAM-1-gitlab",
+      });
+
+      // then
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain(`The prefix the team repository records in ${TEAM_PREFIX_FILE}, "TEAM-1", does not satisfy that rule`);
+      expect(result.error).not.toContain("The prefix this machine uses");
+      expect(repo.branches()).toEqual(["main"]);
+    } finally {
+      repo.remove();
+    }
+  });
+
+  it("given a teammate with no prefix of their own, when an approval to the team is refused, then the refusal names the repository's record and no config key", () => {
+    // given
+    const repo = refusingProject();
+    try {
+      // when
+      const result = publishCandidate(candidateDir, meta(), { repoUrl: repo.url, marketplaceName: "acme" }, undefined, () => "", {
+        branch: "TEAM-1-fix-npm-test",
+      });
+
+      // then
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain(`The prefix the team repository records in ${TEAM_PREFIX_FILE}, "TEAM-1", does not satisfy that rule`);
+      expect(result.error).not.toContain("The prefix this machine uses");
+      expect(repo.branches()).toEqual(["main"]);
+    } finally {
+      repo.remove();
+    }
   });
 });

@@ -656,7 +656,7 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/counters.ts
@@ -976,10 +976,11 @@ edit to this README - reaches a teammate's copy when their marketplace updates.`
 var UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
 moved, but a teammate's copy only picks it up when their marketplace updates, so
-anything committed here by hand reaches nobody unless it raises the version too.
+anything committed here by hand reaches nobody unless it raises the version too.`;
+var SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
 which every merge reaches teammates without raising anything.`;
-function readmeFor(name, url, byCommit) {
+function readmeFor(name, url, byCommit, withCi) {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -1010,7 +1011,7 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION}
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION + (withCi ? "" : SWITCH_POINTER)}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
@@ -1196,7 +1197,7 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
       null,
       2
     ) + "\n",
-    "README.md": readmeFor(name, url, pluginVersion2 === void 0),
+    "README.md": readmeFor(name, url, pluginVersion2 === void 0, withCi),
     "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
     // "" is this team saying its forge asks for nothing, while an absent file is a
@@ -1875,8 +1876,9 @@ function remoteDistributionState(team, run) {
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
-    if (byCommit) return { head: gitHead(dir, run), skillCount, missing: behind.absent };
-    return typeof version === "string" ? { version, skillCount, missing: behind.absent } : null;
+    const head = gitHead(dir, run);
+    if (byCommit) return { head, skillCount, missing: behind.absent };
+    return typeof version === "string" ? { version, ...head ? { head } : {}, skillCount, missing: behind.absent } : null;
   } catch {
     return null;
   } finally {
@@ -1885,7 +1887,9 @@ function remoteDistributionState(team, run) {
 }
 function gitHead(dir, run) {
   try {
-    return /^[0-9a-f]{40,64}$/.exec(run("git", ["-C", dir, "rev-parse", "HEAD"], 5e3).trim())?.[0];
+    const [root, head] = run("git", ["-C", dir, "rev-parse", "--show-toplevel", "HEAD"], 5e3).trim().split("\n");
+    if (!root || realpathSync(root.trim()) !== realpathSync(dir)) return void 0;
+    return /^[0-9a-f]{40,64}$/.exec(head?.trim() ?? "")?.[0];
   } catch {
     return void 0;
   }
@@ -1924,7 +1928,7 @@ function checkTeamCopy(home, remote, marketRoot, run) {
   if (!remote.version) return remote.head ? checkTeamCopyCommit(team.marketplaceName, remote.head, gitHead(copy, run)) : null;
   const remoteVersion = remote.version;
   const local = readPluginVersion(copy);
-  if (!local) return null;
+  if (!local) return versionedByCommit(copy) ? checkVersionLineBack(team.marketplaceName, remote, gitHead(copy, run)) : null;
   const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
   if (behind <= 0) {
@@ -1933,6 +1937,13 @@ function checkTeamCopy(home, remote, marketRoot, run) {
   return warn(
     "team plugin copy",
     `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
+  );
+}
+function checkVersionLineBack(marketplace, remote, local) {
+  const behind = remote.head && local && remote.head !== local ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.` : "";
+  return warn(
+    "team plugin copy",
+    `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. A share from a TeamHandbook older than 0.30.0, or a conflict resolved on the side with the version, puts it back. Take it out with \`/handbook:init --upgrade --commit-versioning\`, and have everyone who shares run a current TeamHandbook.` + behind
   );
 }
 function checkTeamCopyCommit(marketplace, remote, local) {

@@ -923,6 +923,25 @@ describe("a repository versioned by commit", () => {
     expect(text).toContain("This repository is versioned by commit");
     expect(text).not.toContain("WARNING");
     expect(text).not.toContain("no teammate's copy will pick it up");
+    // there is no version to carry across, so the sentence about what is carried does not name one
+    expect(text).toContain("fields the team added, any extra plugins, the marketplace owner - are carried across");
+    expect(text).not.toContain("plugin version, any extra plugins");
+  });
+
+  it("given a repository running the version-bump job with no plugin.json, when planned, then the plan names the version the file is sent with", () => {
+    // given
+    const remote = handbookRepo((url) => {
+      const { [PLUGIN_MANIFEST]: _manifest, ...files } = currentScaffold(teamFor(url), true);
+      return { ...files, ...TEAM_CONTENT };
+    });
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then the plan and the file it would send say the same thing
+    expect(plan.version?.blocked).toContain("adds it at 0.1.0, the version the repository's version-bump job raises from");
+    expect(plan.version?.blocked).not.toContain("versioned by commit");
+    expect(plan.diff).toContain('+  "version": "0.1.0"');
   });
 
   it("given a manifest with no version, when a refresh is sent, then the manifest keeps none and the result says the merge is the delivery", () => {

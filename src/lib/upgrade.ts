@@ -677,10 +677,14 @@ function unreadableManifests(repoDir: string, candidates: CandidateSet): string[
 export function versionPlan(repoDir: string, toCommit = false): VersionPlan {
   const raw = readIfPresent(join(repoDir, PLUGIN_MANIFEST));
   if (raw === null) {
+    // The version-bump job cannot run on a manifest without a version, so the skeleton gives
+    // that repository one (skeletonFiles), and the sentence has to say which it will be.
     return {
-      blocked:
-        `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds ` +
-        "it without one, and from then on the repository is versioned by commit.",
+      blocked: existsSync(join(repoDir, CI_MARKER))
+        ? `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds ` +
+          "it at 0.1.0, the version the repository's version-bump job raises from."
+        : `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds ` +
+          "it without one, and from then on the repository is versioned by commit.",
     };
   }
   const manifest = parseObject(raw);
@@ -1291,7 +1295,7 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "",
     "The team's own content is never part of this: skills/, commands/, agents/ and .mcp.json are",
     "not offered and cannot be written, and inside the two manifests the team's own entries - the",
-    `${plan.commitVersioning ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`,
+    `${plan.commitVersioning || plan.version?.byCommit ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`,
   );
   // The version is stated on its own line with the real numbers, because it is not one of
   // the files above and moves whether or not the manifest is chosen: a reader who declined
