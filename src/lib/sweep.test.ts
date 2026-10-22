@@ -6,7 +6,7 @@ import { buildSweepPrompt, collectSweepSubjects, parseSweepVerdicts, sweepQueue 
 import { listArchiveManifests, readArchiveManifest, readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
-import { UNTRUSTED_OPEN } from "./prompt-safety.js";
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from "./prompt-safety.js";
 
 let home: string;
 
@@ -73,6 +73,20 @@ describe("buildSweepPrompt", () => {
     expect(prompt).toContain("some-rule:");
     // the body is never sent: the test reads the description and the expectation
     expect(prompt).not.toContain("SKILL.md");
+  });
+
+  it("given subjects, when the prompt is built, then every word of theirs sits between the fence's open and close", () => {
+    const prompt = buildSweepPrompt([
+      { slug: "slug-marker-q1", description: "description-marker-q2", expect: "expect-marker-q3" },
+      { slug: "slug-marker-q4", description: "description-marker-q5", expect: "" },
+    ]);
+
+    const inside = prompt.slice(prompt.indexOf(UNTRUSTED_OPEN), prompt.indexOf(UNTRUSTED_CLOSE));
+    const outside = prompt.slice(0, prompt.indexOf(UNTRUSTED_OPEN)) + prompt.slice(prompt.indexOf(UNTRUSTED_CLOSE));
+    for (const marker of ["slug-marker-q1", "description-marker-q2", "expect-marker-q3", "slug-marker-q4", "description-marker-q5"]) {
+      expect(inside).toContain(marker);
+      expect(outside).not.toContain(marker);
+    }
   });
 
   it("given a candidate whose description names the machine, when the prompt is built, then the sweep sends it masked", () => {
