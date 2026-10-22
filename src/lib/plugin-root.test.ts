@@ -1,7 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { pluginVersion } from "./plugin-root.js";
 
 let roots: string[] = [];
@@ -55,3 +57,34 @@ describe("pluginVersion", () => {
     expect(version).toBe("unknown");
   });
 });
+
+describe("the shipped bundles and the root they read", () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+  it.each(["status.js", "doctor.js"])(
+    "given %s installed under a root carrying its own version, when it runs, then its header names that version",
+    (bundle) => {
+      // given the bundle where Claude Code puts it: <root>/dist, beside that root's manifest
+      const root = copyWith({ name: "teamhandbook", version: "7.7.7" }, { version: "7.7.7" });
+      mkdirSync(join(root, "dist"));
+      copyFileSync(join(repoRoot, "dist", bundle), join(root, "dist", bundle));
+      const home = mkdtempSync(join(tmpdir(), "handbook-home-"));
+      roots.push(home);
+
+      // when
+      let out: string;
+      try {
+        out = execFileSync("node", [join(root, "dist", bundle)], {
+          encoding: "utf8",
+          env: { ...process.env, TEAMHANDBOOK_HOME: home, PATH: dirname(process.execPath) },
+        });
+      } catch (err) {
+        out = String((err as { stdout?: unknown }).stdout ?? "");
+      }
+
+      // then the default root is the bundle's own, not the repository the test runs in
+      expect(out.split("\n")[0]).toContain("(v7.7.7");
+    },
+  );
+});
+

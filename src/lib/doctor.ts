@@ -672,7 +672,9 @@ export function runDoctor(
   marketRoot: string = marketplacesRoot(),
   root: string | null = pluginRoot(),
 ): DoctorReport {
-  const version = pluginVersion();
+  // The same root the release check reads from: a version read from anywhere else compared
+  // one copy's release with another copy's tags.
+  const version = pluginVersion(root);
   const release = checkRelease(version, run, marketRoot, root);
   const checks: DoctorCheck[] = [
     ...(release ? [release] : []),

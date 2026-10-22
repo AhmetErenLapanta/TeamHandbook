@@ -776,7 +776,9 @@ describe("a newer release than the one installed", () => {
   function installed(version: string): { root: string; marketRoot: string } {
     const plugins = temp("handbook-plugins-");
     const root = join(plugins, "cache", "acme-tools", "handbook", version);
-    mkdirSync(root, { recursive: true });
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    // An installed copy carries its manifest, and the doctor reads its version from there.
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "handbook", version }));
     mkdirSync(join(plugins, "marketplaces", "acme-tools"), { recursive: true });
     return { root, marketRoot: join(plugins, "marketplaces") };
   }
@@ -829,7 +831,8 @@ describe("a newer release than the one installed", () => {
       throw new Error(`unexpected command ${cmd}`);
     };
     const doctor = runDoctor(home, run, marketRoot, root);
-    expect(doctor.checks.find((c) => c.name === "version")?.detail).toContain("a newer version is available (99.0.0)");
+    expect(doctor.version).toBe("0.12.0");
+    expect(doctor.checks.find((c) => c.name === "version")?.detail).toContain("0.12.0 is installed and a newer version is available (99.0.0)");
     const offline: CommandRunner = (cmd, args) => {
       if (cmd === "git" && args[0] === "ls-remote" && args[1] === "--tags") throw new Error("offline");
       return run(cmd, args, 0);

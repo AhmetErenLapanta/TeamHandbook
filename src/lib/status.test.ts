@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats, pluginVersion } from "./status.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats } from "./status.js";
 import { incrementRedactionBlocked } from "./counters.js";
 import { pipelineLogFile } from "./pipeline.js";
 import { archiveCandidate, writeCandidateMeta } from "./queue.js";
@@ -84,6 +85,12 @@ describe("lastPipelineRun", () => {
   });
 });
 
+/** The version in this repository's own manifest, read from the file rather than through the
+ * function under test, so the default root it resolves is what the comparison checks. */
+const SHIPPED_VERSION = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".claude-plugin", "plugin.json"), "utf8"),
+).version;
+
 describe("gatherStatus / formatStatus", () => {
   it("assembles ledger, queue, counters, last run, and config defaults", () => {
     appendSignals([signal(), signal({ kind: "weak", fingerprint: "def456" })], home);
@@ -94,7 +101,7 @@ describe("gatherStatus / formatStatus", () => {
     const report = gatherStatus(home);
     expect(report).toEqual({
       home,
-      version: pluginVersion(),
+      version: SHIPPED_VERSION,
       ledger: { total: 2, candidates: 1, weak: 1, distinctFingerprints: 2 },
       queue: { pending: 1, approved: 1, rejected: 1, archived: 0 },
       unreadable: [],
