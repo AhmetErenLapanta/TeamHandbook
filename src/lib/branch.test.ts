@@ -1405,15 +1405,16 @@ describe("the reviewers and labels without the forge CLI", () => {
     );
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(
-      "GitLab opened the request from the push, which names no assignee and cannot set reviewers: " +
-        "assign yourself on it if the project's template did not, and add reviewers @ada, @grace by hand.",
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else; " +
+        "no push option sets reviewers, so add reviewers @ada, @grace by hand.",
     );
     expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign"))).toBe(false);
     expect(text).not.toContain("labels skills");
     expect(text).toContain("Paste this into it:");
   });
 
-  it("given GitLab and no glab and no reviewers, when GitLab opens the request from the push, then no assignee is guessed and the reader is told", () => {
+  it("given GitLab and no glab and no reviewers, when GitLab opens the request from the push, then no assignee is sent and the reader is told who GitLab assigned", () => {
     const bare = bareHandbook(teamFile({}));
     const pushes: string[][] = [];
 
@@ -1430,8 +1431,25 @@ describe("the reviewers and labels without the forge CLI", () => {
 
     expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign"))).toBe(false);
     expect(result.requestNotes).toEqual([
-      "GitLab opened the request from the push, which names no assignee: assign yourself on it if the project's template did not.",
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else.",
     ]);
+  });
+
+  it.each([
+    ["records reviewers", { reviewers: ["ada"] }],
+    ["records none", {}],
+  ])("given a team file that %s and no glab, when GitLab opens the request from the push, then the reader is not asked to assign themselves", (_name, extra) => {
+    const result = publishTeamSelection(
+      { skills: [{ name: "my-skill", dir: localSkill("my-skill") }] },
+      teamFor(GITLAB),
+      hostedAt(GITLAB, bareHandbook(teamFile(extra)), () => OPENED),
+      noForge,
+      { commitMessage: APPROVED, branch: "TEAM-12" },
+    );
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
+    expect(formatShareResult({ team: result, refused: [] })).not.toMatch(/assign yourself/i);
   });
 
   it("given a server that refuses push options, when the push goes plain, then the labels are among what to add by hand", () => {
@@ -1619,11 +1637,12 @@ describe("the template GitLab does not apply to a request glab opens", () => {
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
     expect(result.requestNotes).toEqual([
-      "GitLab opened the request from the push, which names no assignee: assign yourself on it if the project's template did not.",
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else.",
     ]);
   });
 
-  it("given no glab, when the request is left to a link rather than opened by the push, then the assignee is asked for on the same condition", () => {
+  it("given no glab, when the request is left to a link rather than opened by the push, then the assignee is asked for, which the push leaves to GitLab", () => {
     const linked = shareTo(GITLAB, bareHandbook(teamFile({})), noForge);
 
     expect(linked).toMatchObject({ ok: true, manualUrl: "https://gitlab.com/acme/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TEAM-12" });
