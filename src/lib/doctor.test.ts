@@ -911,7 +911,7 @@ describe("doctor team plugin copy check", () => {
     // then
     expect(check.level).toBe("warn");
     expect(check.detail).toContain("the team repo carries a version line again (v0.1.1) while this machine's copy is versioned by commit");
-    expect(check.detail).toContain("A share from a TeamHandbook older than 0.30.0");
+    expect(check.detail).toContain("A share from a TeamHandbook older than 0.31.0");
     expect(check.detail).toContain("`/handbook:init --upgrade --commit-versioning`");
     expect(check.detail).toContain(`commit ${local.slice(0, 12)}, the team repo ${remoteHead.slice(0, 12)}`);
     expect(check.detail).toContain("`/plugin marketplace update t`");

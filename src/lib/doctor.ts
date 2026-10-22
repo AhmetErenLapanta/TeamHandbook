@@ -462,7 +462,7 @@ function checkVersionLineBack(marketplace: string, remote: RemoteState, local: s
   return warn(
     "team plugin copy",
     `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. ` +
-      "A share from a TeamHandbook older than 0.30.0, or a conflict resolved on the side with the version, puts it back. " +
+      "A share from a TeamHandbook older than 0.31.0, or a conflict resolved on the side with the version, puts it back. " +
       "Take it out with `/handbook:init --upgrade --commit-versioning`, and have everyone who shares run a current TeamHandbook." +
       behind,
   );

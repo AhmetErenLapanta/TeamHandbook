@@ -1943,7 +1943,7 @@ function checkVersionLineBack(marketplace, remote, local) {
   const behind = remote.head && local && remote.head !== local ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.` : "";
   return warn(
     "team plugin copy",
-    `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. A share from a TeamHandbook older than 0.30.0, or a conflict resolved on the side with the version, puts it back. Take it out with \`/handbook:init --upgrade --commit-versioning\`, and have everyone who shares run a current TeamHandbook.` + behind
+    `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. A share from a TeamHandbook older than 0.31.0, or a conflict resolved on the side with the version, puts it back. Take it out with \`/handbook:init --upgrade --commit-versioning\`, and have everyone who shares run a current TeamHandbook.` + behind
   );
 }
 function checkTeamCopyCommit(marketplace, remote, local) {
