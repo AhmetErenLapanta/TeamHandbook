@@ -24,7 +24,7 @@ function copyWith(manifest: Record<string, unknown>, pkg?: Record<string, unknow
 describe("pluginVersion", () => {
   it("given a manifest carrying a version, when the version is read, then that is the answer", () => {
     // given
-    const root = copyWith({ name: "teamhandbook", version: "0.30.0" }, { version: "0.30.0" });
+    const root = copyWith({ name: "teamhandbook", version: "0.30.0" }, { version: "0.29.0" });
 
     // when
     const version = pluginVersion(root);
