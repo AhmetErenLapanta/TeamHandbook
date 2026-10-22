@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.30.0] - 2026-10-22
+
+### Added
+
+- **A request `glab` opens to your team repository now says when the project's merge
+  request template was left out.** This is only about the requests TeamHandbook opens to
+  your team repository on GitLab, and only while `.teamhandbook.json` has no `reviewers`
+  key. GitLab does not apply a project's merge request template to a request opened
+  through its API, which is how `glab` opens one, so reviewers or labels that template sets
+  never reach it. The result says so and how to record them with
+  `/handbook:init --upgrade --reviewers <a,b> --labels <x>`, or, if the template sets none,
+  with `--reviewers ""`. A team that has recorded reviewers, an empty list included, does
+  not see it, and neither does a request GitLab opens from the push, where the template
+  applies.
+- **The README `/handbook:init` writes into a team repository and SECURITY.md say the
+  same.** `/handbook:init --upgrade` offers the new README to an existing team repository.
+
+### Fixed
+
+- **A request left for you to open by hand now reminds you to assign yourself,** as the
+  note on a request GitLab opens from the push already did: on GitHub always, on GitLab if
+  the project's template does not. On any other host it asks only for the reviewers and
+  labels the team records.
+
 ## [0.29.0] - 2026-10-21
 
 ### Added
