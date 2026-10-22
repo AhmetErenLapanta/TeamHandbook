@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.31.2] - 2026-10-22
+
+### Fixed
+
+- **The note on a push GitLab turns into a request now covers a request already open for
+  the branch.** In that case GitLab updates the open request instead of opening one: it
+  takes its title from the push and changes no assignee, and the note now says so rather
+  than saying a request was opened and assigned to whoever pushed.
+
 ## [0.31.1] - 2026-10-22
 
 ### Changed
