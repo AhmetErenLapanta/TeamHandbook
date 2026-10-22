@@ -1267,7 +1267,13 @@ export function initTeamRepo(
       ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    // By the time this runs the scaffold has reached the remote and the config is written,
+    // or the run has already failed with its own reason. A clone the OS refuses to delete
+    // must not replace either with a raw ENOTEMPTY and no link to the request, so a leftover
+    // scratch directory is the price rather than the result.
+    try {
+      rmSync(workdir, { recursive: true, force: true });
+    } catch {}
   }
 }
 

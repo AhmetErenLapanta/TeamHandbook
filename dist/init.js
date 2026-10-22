@@ -1720,7 +1720,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     let notes = [];
     let alreadyOpen = false;
     if (!direct) {
-    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+      const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
       const opened = openPr(
         url,
         scaffoldBranch,
@@ -1735,7 +1735,7 @@ Opened by TeamHandbook.`,
       prUrl = opened.url;
       prError = opened.error;
       alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
     }
     saveTeamConfig(
       {
@@ -1764,7 +1764,10 @@ Opened by TeamHandbook.`,
       ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
     };
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    try {
+      rmSync3(workdir, { recursive: true, force: true });
+    } catch {
+    }
   }
 }
 function formatInitSuccess(result) {
