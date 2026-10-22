@@ -1674,3 +1674,56 @@ describe("the template GitLab does not apply to a request glab opens", () => {
     expect(formatInitSuccess(result).includes(TEMPLATE_SKIPPED)).toBe(said);
   });
 });
+
+describe("what each way of opening a request carries and says, for one team file", () => {
+  // One table for every route, so a sentence that differs between two of them is a row that
+  // differs, not two tests in two corners of this file.
+  const TEAM = { reviewers: ["ada"], labels: ["skills"] };
+  const share = (url: string, forge: ForgeRunner, git: GitRunner) =>
+    publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(url), git, forge, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+  const refusingOptions = (bare: string): GitRunner => (args, cwd) => {
+    if (args[0] === "push" && args.includes("-o")) throw new Error("git push failed: fatal: the receiving end does not support push options");
+    return gitAs(args.map((a) => (a === GITLAB ? bare : a)), cwd);
+  };
+
+  it.each([
+    ["gh opens it", GITHUB, "https://github.com/acme/skills/pull/1\n"],
+    ["glab opens it", GITLAB, "https://gitlab.com/acme/skills/-/merge_requests/1\n"],
+  ])("given %s, when the share runs, then the reviewers, the labels and the assignee go on the command and nothing is left to add", (_name, url, reply) => {
+    const { forge, creates } = recordingForge(reply);
+
+    const result = share(url, forge, hostedAt(url, bareHandbook(teamFile(TEAM))));
+
+    expect(creates[0]).toEqual(expect.arrayContaining(["--assignee=@me", "--reviewer=ada", "--label=skills"]));
+    expect(result.requestNotes).toBeUndefined();
+  });
+
+  it("given GitLab opening it from the push, when the share runs, then the labels go as a push option and only the reviewers are left to add", () => {
+    const pushes: string[][] = [];
+
+    const result = share(GITLAB, noForge, hostedAt(GITLAB, bareHandbook(teamFile(TEAM)), (args) => {
+      pushes.push(args);
+      return OPENED;
+    }));
+
+    expect(pushes[0]).toEqual(expect.arrayContaining(["-o", "merge_request.label=skills"]));
+    expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign") || arg.startsWith("merge_request.description"))).toBe(false);
+    expect(result.requestNotes).toHaveLength(1);
+    expect(result.requestNotes![0]).toMatch(/; no push option sets reviewers, so add reviewers @ada by hand\.$/);
+  });
+
+  it.each([
+    ["a GitLab server that takes no push options", GITLAB, "When you open the request, assign yourself on it if the project's template does not, and add reviewers @ada; labels skills."],
+    ["GitHub without gh", GITHUB, "When you open the request, assign yourself on it, and add reviewers @ada; labels skills."],
+  ])("given %s, when the request is left to a link, then neither list goes and both are named to add", (_name, url, said) => {
+    const bare = bareHandbook(teamFile(TEAM));
+
+    const result = share(url, noForge, url === GITLAB ? refusingOptions(bare) : hostedAt(url, bare));
+
+    expect(result.prUrl).toBeUndefined();
+    expect(result.requestNotes).toEqual([said]);
+  });
+});

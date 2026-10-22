@@ -175,8 +175,9 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
    because a skill somebody reads, a server that connects and a command somebody types are
    not interchangeable, and it names the commit the request carries. The team repository
    got a COPY, so the skill the user already uses is untouched and keeps working. When
-   GitLab opened the request from the push, the output ends with the request's description
-   to paste into it: a push cannot carry one, and the reviewer needs it.
+   GitLab took the request from the push - opened it, or updated the one already open for
+   the branch - the output ends with the request's description to paste into it: a push
+   cannot carry one, and the reviewer needs it.
    **If the list or the result names copies that are on this machine twice** - the user's
    own and an identical one inside the team plugin, which is what a merged share leaves
    behind - relay that block as printed, commands included. Those commands are the user's
