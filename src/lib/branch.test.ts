@@ -933,15 +933,15 @@ describe("the refresh plan and a branch the user gave", () => {
   });
 });
 
-/** The team file as a repository records it, with whatever reviewers and labels a case needs. */
 /** What a request glab opened says when the team file records no reviewers. */
 const TEMPLATE_SKIPPED =
-  "GitLab applies the project's merge request template only to a request opened on its web page or by a push, " +
-  "not to one glab opens: if that template sets reviewers or labels, record them with " +
-  "/handbook:init --upgrade --reviewers <a,b> --labels <x>.";
+  "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
+  "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
+  'and if it sets none, record that with /handbook:init --upgrade --reviewers "".';
 /** The start of what a GitLab request still to be opened by hand says. */
 const BY_HAND = "When you open the request, assign yourself on it if the project's template does not";
 
+/** The team file as a repository records it, with whatever reviewers and labels a case needs. */
 function teamFile(extra: Record<string, unknown>): Record<string, string> {
   return { [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix: "", ...extra }, null, 2) + "\n" };
 }
@@ -1261,7 +1261,7 @@ describe("a request carries what the team file says when it is opened", () => {
     });
 
     expect(result).toMatchObject({ ok: true, manualUrl: undefined });
-    expect(formatInitSuccess(result)).toContain(`${BY_HAND}, and add reviewers @ada.`);
+    expect(formatInitSuccess(result)).toContain("When you open the request, add reviewers @ada.");
   });
 
   it("given a team file that records nobody, when glab opens a share, then the request is assigned to whoever opens it and the skipped template is named", () => {
@@ -1307,7 +1307,7 @@ describe("a request carries what the team file says when it is opened", () => {
       });
     };
 
-    const result = shareOn(teamFor(bareHandbook(teamFile({}))), forge, "TEAM-12");
+    const result = shareOn(teamFor(GITLAB), forge, "TEAM-12", hostedAt(GITLAB, bareHandbook(teamFile({}))));
 
     expect(creates).toHaveLength(2);
     expect(creates[0]).toContain("--assignee=@me");
@@ -1321,7 +1321,8 @@ describe("a request carries what the team file says when it is opened", () => {
       throw Object.assign(new Error("Command failed"), { stderr: "HTTP 401: Bad credentials\n" });
     };
 
-    const result = shareOn(teamFor(bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] }))), forge, "TEAM-12");
+    const bare = bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] }));
+    const result = shareOn(teamFor(GITLAB), forge, "TEAM-12", hostedAt(GITLAB, bare));
 
     expect(result).toMatchObject({ ok: true, prError: "HTTP 401: Bad credentials" });
     expect(result.requestNotes).toEqual([`${BY_HAND}, and add reviewers @ada; labels skills.`]);
@@ -1587,6 +1588,19 @@ describe("the template GitLab does not apply to a request glab opens", () => {
 
     expect(linked).toMatchObject({ ok: true, manualUrl: "https://gitlab.com/acme/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TEAM-12" });
     expect(linked.requestNotes).toEqual([`${BY_HAND}.`]);
+  });
+
+  it.each([
+    ["records nobody", {}, undefined],
+    ["records reviewers", { reviewers: ["ada"] }, ["When you open the request, add reviewers @ada."]],
+  ])("given a Bitbucket team file that %s and no CLI, when the request is left to a link, then no forge's assignee rule is claimed for it", (_name, extra, notes) => {
+    const bitbucket = "git@bitbucket.org:acme/skills.git";
+
+    const result = shareTo(bitbucket, bareHandbook(teamFile(extra)), noForge);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(result.prUrl).toBeUndefined();
+    expect(result.requestNotes).toEqual(notes);
   });
 
   it.each([

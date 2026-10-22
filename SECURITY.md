@@ -260,8 +260,8 @@ These, and only these:
      account it is already signed in with, so no name from this machine - its account, its
      git identity - is sent. If the forge refuses it, the request is opened without it and
      the result says so. A request `glab` opens carries TeamHandbook's description and never
-     the project's own merge request template, which GitLab applies only on its web page
-     and to a push, so nothing that template's quick actions set reaches it; when
+     the project's own merge request template, because GitLab does not apply that template
+     to a request opened through its API, so nothing its quick actions set reaches it; when
      `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
      A request GitLab opens from a push is assigned to nobody by TeamHandbook, because
      `merge_request.assign` takes a username and, without `glab`, nothing here knows

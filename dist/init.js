@@ -717,6 +717,9 @@ function assignmentList(assignment) {
 }
 function requestNotes(dropped, assignment, pr, team) {
   const list = assignmentList(assignment);
+  const host = hostFromUrl(team.repoUrl) ?? "";
+  const assignYourself = host.includes("github") ? "assign yourself on it" : host.includes("gitlab") ? "assign yourself on it if the project's template does not" : null;
+  const byHand = [...assignYourself ? [assignYourself] : [], ...list ? [`add ${list}`] : []].join(", and ");
   const asked = [...list ? [list] : [], "assignee you"].join("; ");
   const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
@@ -729,12 +732,10 @@ function requestNotes(dropped, assignment, pr, team) {
     ...refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : [],
     ...refused && !pr.url && !pr.existing ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
     ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
-    ...opened && team.tool === "glab" && !team.reviewersRecorded ? [
-      "GitLab applies the project's merge request template only to a request opened on its web page or by a push, not to one glab opens: if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>."
+    ...opened && forgeTool(team.repoUrl) === "glab" && !team.reviewersRecorded ? [
+      `GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, and if it sets none, record that with /handbook:init --upgrade --reviewers "".`
     ] : [],
-    ...!pr.url && !pr.existing ? [
-      `When you open the request, assign yourself on it${team.tool === "glab" ? " if the project's template does not" : ""}${list ? `, and add ${list}` : ""}.`
-    ] : []
+    ...byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []
   ];
 }
 function requestNoteLines(notes) {
@@ -927,7 +928,7 @@ function pushBranch(git, repoDir, ref, options = []) {
 function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
   const { assignment, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-  const team = { tool: forgeTool(repoUrl), reviewersRecorded };
+  const team = { repoUrl, reviewersRecorded };
   const withNotes = (outcome, notes) => notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
     const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
@@ -1267,10 +1268,10 @@ menu. When you announce a merge to the team, include these two commands.
 
 The requests TeamHandbook opens here carry the reviewers and labels listed in
 \`.teamhandbook.json\`, and none while it lists none. To change them, run
-\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. On GitLab, a request
-\`glab\` opens does not get the project's merge request template, which GitLab applies
-only on its web page and to a push, so reviewers or labels that template sets reach
-the requests \`glab\` opens only once they are listed here.
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. GitLab does not apply the
+project's merge request template to a request opened through its API, which is how
+\`glab\` opens one, so reviewers or labels that template sets reach the requests
+\`glab\` opens only once they are listed here.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
@@ -1733,7 +1734,7 @@ Opened by TeamHandbook.`,
     prUrl = opened.url;
     prError = opened.error;
     alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { tool: forgeTool(url), reviewersRecorded });
+    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
   }
   saveTeamConfig(
     {

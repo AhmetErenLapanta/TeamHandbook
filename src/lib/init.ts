@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeRemoteUrl, slugifySkillName } from "./distill.js";
 export { hostFromUrl } from "./forge.js";
-import { forgeSignInProblem, forgeTool, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
+import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr, runForge } from "./forge.js";
 import { requestNoteLines, requestNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
 import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
@@ -410,10 +410,10 @@ menu. When you announce a merge to the team, include these two commands.
 
 The requests TeamHandbook opens here carry the reviewers and labels listed in
 \`.teamhandbook.json\`, and none while it lists none. To change them, run
-\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. On GitLab, a request
-\`glab\` opens does not get the project's merge request template, which GitLab applies
-only on its web page and to a push, so reviewers or labels that template sets reach
-the requests \`glab\` opens only once they are listed here.
+\`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. GitLab does not apply the
+project's merge request template to a request opened through its API, which is how
+\`glab\` opens one, so reviewers or labels that template sets reach the requests
+\`glab\` opens only once they are listed here.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
@@ -1237,7 +1237,7 @@ export function initTeamRepo(
     prUrl = opened.url;
     prError = opened.error;
     alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { tool: forgeTool(url), reviewersRecorded });
+    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
   }
   saveTeamConfig(
     {

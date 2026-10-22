@@ -351,20 +351,31 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * the assignee with the lists, because openPr asks for every request to be assigned to the
  * person opening it; only a name from the lists is one to correct in the team file.
  *
- * GitLab fills its default template in only on its web page and for a push, both through
- * the one service that skips it when a description is given; the API glab opens a request
- * through never applies it. So a request glab opened lacks whatever the template's quick
- * actions set, and a team whose file says nothing about reviewers is told once per request
- * how to record them. A team that recorded them, `[]` included, has already answered.
- * A request still to be opened by hand gets the assignee in the same words a push gives it.
+ * GitLab fills its default template in through one service, which skips it when a
+ * description is given and which the API glab opens a request through never reaches. So a
+ * request glab opened lacks whatever the template's quick actions set, and a team whose
+ * file says nothing about reviewers is told on each such request how to record them, or
+ * how to record that the template sets none. A team that recorded them, `[]` included,
+ * has already answered.
+ * A request still to be opened by hand gets the assignee in the same words a push gives it,
+ * on the two forges whose new-request page is known: GitHub's assigns nobody, and GitLab's
+ * template may. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
+ * follows neither rule, so there the note asks only for the lists.
  */
 export function requestNotes(
   dropped: string | null,
   assignment: RequestAssignment,
   pr: { url: string | null; unassigned?: string; existing?: true },
-  team: { tool: "gh" | "glab"; reviewersRecorded: boolean },
+  team: { repoUrl: string; reviewersRecorded: boolean },
 ): string[] {
   const list = assignmentList(assignment);
+  const host = hostFromUrl(team.repoUrl) ?? "";
+  const assignYourself = host.includes("github")
+    ? "assign yourself on it"
+    : host.includes("gitlab")
+      ? "assign yourself on it if the project's template does not"
+      : null;
+  const byHand = [...(assignYourself ? [assignYourself] : []), ...(list ? [`add ${list}`] : [])].join(", and ");
   // One refusal answers the whole assignment, so it is named whole, in parentheses where a
   // semicolon cannot be read as joining the last list to the assignee.
   const asked = [...(list ? [list] : []), "assignee you"].join("; ");
@@ -387,19 +398,14 @@ export function requestNotes(
       ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
       : []),
     ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
-    ...(opened && team.tool === "glab" && !team.reviewersRecorded
+    ...(opened && forgeTool(team.repoUrl) === "glab" && !team.reviewersRecorded
       ? [
-          "GitLab applies the project's merge request template only to a request opened on its web page or by a push, " +
-            "not to one glab opens: if that template sets reviewers or labels, record them with " +
-            "/handbook:init --upgrade --reviewers <a,b> --labels <x>.",
+          "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
+            "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
+            'and if it sets none, record that with /handbook:init --upgrade --reviewers "".',
         ]
       : []),
-    ...(!pr.url && !pr.existing
-      ? [
-          `When you open the request, assign yourself on it${team.tool === "glab" ? " if the project's template does not" : ""}` +
-            `${list ? `, and add ${list}` : ""}.`,
-        ]
-      : []),
+    ...(byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []),
   ];
 }
 
@@ -811,7 +817,7 @@ export function openRequest(
 ): RequestOutcome {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? undefined;
   const { assignment, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-  const team = { tool: forgeTool(repoUrl), reviewersRecorded };
+  const team = { repoUrl, reviewersRecorded };
   const withNotes = (outcome: RequestOutcome, notes: string[]): RequestOutcome =>
     notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
