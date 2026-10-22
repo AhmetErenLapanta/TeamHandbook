@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.30.1] - 2026-10-22
+
+### Fixed
+
+- **Setting `TEAMHANDBOOK_DEBUG` to any value other than `1` wrote raw tool-call payloads to
+  disk before redaction.** With `0`, `false`, `no`, `off` or `true`, tool-call payloads,
+  and the harvest model's reply, went to `~/.teamhandbook/debug/` as it came, so a
+  secret in a payload, such as a token in a failing command, landed there unredacted. This
+  has been so since 0.10.1. Only `TEAMHANDBOOK_DEBUG=1` turns the dump on now, and
+  `TEAMHANDBOOK_DEBUG=true` no longer does. If you ever set the variable to anything other
+  than `1`, delete `~/.teamhandbook/debug/`: TeamHandbook does not delete it for you.
+
+### Changed
+
+- **SECURITY.md now says that the harvest model's reply is written to the same debug
+  directory, and only with `TEAMHANDBOOK_DEBUG=1`.**
+- **SECURITY.md now covers `gh auth status` when signed in:** it sends no usage event
+  there either, measured with a recorder that does see the event `gh api` sends.
+
 ## [0.30.0] - 2026-10-22
 
 ### Added
