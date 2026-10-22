@@ -1877,7 +1877,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      `GitLab opened the request from the push and assigned it to the account that pushed${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`
+      `GitLab opened the request from the push and assigned it to the account that pushed, unless the project's default template assigns someone else${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }

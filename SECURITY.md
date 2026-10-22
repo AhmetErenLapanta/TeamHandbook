@@ -263,12 +263,14 @@ These, and only these:
      the project's own merge request template, because GitLab does not apply that template
      to a request opened through its API, so nothing its quick actions set reaches it; when
      `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
-     A request GitLab opens from a push is assigned by GitLab to the account that pushed:
-     its push-option handler sets that assignee on every request it creates. That rule is
-     in GitLab's code, not its documentation, and was read there; it holds since GitLab
-     12.2, and versions before that were not checked. TeamHandbook sends no assignee with
-     the push, because `merge_request.assign` takes a username and, without `glab`,
-     nothing here knows yours.
+     A request GitLab opens from a push is assigned by GitLab to the account that pushed,
+     unless the project's default template assigns someone else: the push-option handler
+     sets the pusher as assignee on every request it creates, and an `/assign` in the
+     template replaces that assignee when the request is created. That rule is in GitLab's
+     code, not its documentation, and was read there; the handler has set the pusher since
+     its first release, GitLab 11.10. TeamHandbook sends no assignee with the push, because
+     `merge_request.assign` takes a username or a numeric ID and, without `glab`, nothing
+     here knows either of yours.
      The one push that does not ask is the first `/handbook:init`: it pushes the scaffold
      to `handbook/scaffold` by default, or `<prefix>scaffold` with `--branch-prefix`, or
      straight to the default branch of an empty repository, after you have confirmed the

@@ -360,7 +360,7 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * A request still to be opened by hand asks its opener to assign themselves, on the two
  * forges whose new-request page is known: GitHub's assigns nobody, and GitLab's template
  * may. A push is not asked to: GitLab assigns what it opens from one to the account that
- * pushed. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
+ * pushed, unless the project's default template assigns someone else. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
  * follows neither rule, so there the note asks only for the lists.
  */
 export function requestNotes(
@@ -841,11 +841,17 @@ export function openRequest(
     // a guess could assign someone else; `@me` is no username there and assigns nobody.
     // None is needed: GitLab assigns every request it creates from a push to the account
     // that pushed (push_options_handler_service.rb, create_params, read at b1883a02ab44 and
-    // there since 12.2), which is the person opening it, the assignee every other path asks
-    // for. GitLab's documentation does not say so; the rule is its code.
+    // there since the handler's first release, 11.10), which is the person opening it, the
+    // assignee every other path asks for. GitLab's documentation does not say so; the rule
+    // is its code. A project's default template can still replace it: the push fills an
+    // empty description from that template, and creating the request runs the template's
+    // quick actions before its assignees (issuable_base_service.rb:221, :227), so an
+    // `/assign` there sets the assignees in place of the pusher. The note says so rather
+    // than naming an assignee this run did not see.
     const notes = [
       ...(dropped ? [dropped] : []),
-      "GitLab opened the request from the push and assigned it to the account that pushed" +
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else" +
         `${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`,
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
