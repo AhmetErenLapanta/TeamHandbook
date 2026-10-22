@@ -178,6 +178,18 @@ describe("skeletonFiles", () => {
     expect(readme).not.toContain("raises the version in");
   });
 
+  it("given a team README, when it says who reviews a request, then it tells each way a request is opened apart and claims none for the push", () => {
+    // when
+    const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!.replace(/\s+/g, " ");
+
+    // then
+    expect(readme).toContain("TeamHandbook adds the reviewers and labels listed in `.teamhandbook.json` to the requests it opens here, and adds none while it lists none.");
+    expect(readme).toContain("A request GitLab opens from a push takes the labels; no push option sets reviewers, so those are printed for you to add.");
+    expect(readme).toContain("A request you open from the printed link takes neither until you add them");
+    expect(readme).toContain("A request GitLab opens from a push, or one you open on its web page, does get that template.");
+    expect(readme).not.toContain("carry the reviewers and labels listed");
+  });
+
   it("given a repository that raises a version, when its README is generated, then it says so and names the way out", () => {
     // when
     const files = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", false, undefined, {}, undefined, "0.1.5");
