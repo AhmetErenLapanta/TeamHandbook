@@ -320,8 +320,10 @@ make. Left to themselves:
   its color, spinner and accessibility settings. It sent none for the commands this
   product and git run without opening a request - `auth status` and `auth git-credential`,
   0 of 5 each with sampling forced to every run - but it still wrote the device id file it
-  keeps for the purpose. `auth status` was measured with a failed sign-in; the signed-in
-  path was not measured. `auth git-credential` was measured returning a credential.
+  keeps for the purpose. `auth status` was measured both with a failed sign-in and signed
+  in to github.com, with and without `--hostname`, against a local stand-in for its API
+  that returned the token's scopes; under the same setup `gh api` sent its event in 5 of 5
+  runs. `auth git-credential` was measured returning a credential.
 
 Every call this product makes to either CLI, and every git call it makes that reaches a
 remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in
