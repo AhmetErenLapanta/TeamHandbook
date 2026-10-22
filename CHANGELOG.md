@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.30.1] - 2026-10-22
+
+### Fixed
+
+- **Setting `TEAMHANDBOOK_DEBUG` to any value other than `1` wrote raw tool-call payloads to
+  disk before redaction.** With `0`, `false`, `no`, `off` or `true`, tool-call payloads,
+  and the harvest model's reply, went to `~/.teamhandbook/debug/` as it came, so a
+  secret in a payload, such as a token in a failing command, landed there unredacted. This
+  has been so since 0.10.1. Only `TEAMHANDBOOK_DEBUG=1` turns the dump on now, and
+  `TEAMHANDBOOK_DEBUG=true` no longer does. If you ever set the variable to anything other
+  than `1`, delete `~/.teamhandbook/debug/`: TeamHandbook does not delete it for you.
+
+### Changed
+
+- **SECURITY.md now says that the harvest model's reply is written to the same debug
+  directory, and only with `TEAMHANDBOOK_DEBUG=1`.**
+- **SECURITY.md now covers `gh auth status` when signed in:** it sends no usage event
+  there either, measured with a recorder that does see the event `gh api` sends.
+
+## [0.30.0] - 2026-10-22
+
+### Added
+
+- **A request `glab` opens to your team repository now says when the project's merge
+  request template was left out.** This is only about the requests TeamHandbook opens to
+  your team repository on GitLab, and only while `.teamhandbook.json` has no `reviewers`
+  key. GitLab does not apply a project's merge request template to a request opened
+  through its API, which is how `glab` opens one, so reviewers or labels that template sets
+  never reach it. The result says so and how to record them with
+  `/handbook:init --upgrade --reviewers <a,b> --labels <x>`, or, if the template sets none,
+  with `--reviewers ""`. A team that has recorded reviewers, an empty list included, does
+  not see it, and neither does a request GitLab opens from the push, where the template
+  applies.
+- **The README `/handbook:init` writes into a team repository and SECURITY.md say the
+  same.** `/handbook:init --upgrade` offers the new README to an existing team repository.
+
+### Fixed
+
+- **A request left for you to open by hand now reminds you to assign yourself,** as the
+  note on a request GitLab opens from the push already did: on GitHub always, on GitLab if
+  the project's template does not. On any other host it asks only for the reviewers and
+  labels the team records.
+
 ## [0.29.0] - 2026-10-21
 
 ### Added

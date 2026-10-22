@@ -297,8 +297,14 @@ export function readRecordedAssignment(repoDir: string): { recorded: RecordedAss
  * changes its list reaches every teammate's next request without anyone joining again.
  * A value that fails a check is left out and the request still goes, and every one left
  * out is counted by its reason in `dropped`, so nothing is lost without the user being told.
+ * `reviewersRecorded` keeps what the empty list loses: whether the team said anything about
+ * reviewers at all, `[]` and a value left out included, or left the key out and said nothing.
  */
-export function readTeamAssignment(repoDir: string): { assignment: RequestAssignment; dropped: string | null } {
+export function readTeamAssignment(repoDir: string): {
+  assignment: RequestAssignment;
+  dropped: string | null;
+  reviewersRecorded: boolean;
+} {
   const raw = readTeamFile(repoDir);
   const assignment: RequestAssignment = { reviewers: [], labels: [] };
   const said: string[] = [];
@@ -324,6 +330,7 @@ export function readTeamAssignment(repoDir: string): { assignment: RequestAssign
   return {
     assignment,
     dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null,
+    reviewersRecorded: raw.reviewers !== undefined,
   };
 }
 
@@ -343,13 +350,32 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * and what it carries is not claimed either way: this run did not set it. A refusal counts
  * the assignee with the lists, because openPr asks for every request to be assigned to the
  * person opening it; only a name from the lists is one to correct in the team file.
+ *
+ * GitLab fills its default template in through one service, which skips it when a
+ * description is given and which the API glab opens a request through never reaches. So a
+ * request glab opened lacks whatever the template's quick actions set, and a team whose
+ * file says nothing about reviewers is told on each such request how to record them, or
+ * how to record that the template sets none. A team that recorded them, `[]` included,
+ * has already answered.
+ * A request still to be opened by hand gets the assignee in the same words a push gives it,
+ * on the two forges whose new-request page is known: GitHub's assigns nobody, and GitLab's
+ * template may. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
+ * follows neither rule, so there the note asks only for the lists.
  */
 export function requestNotes(
   dropped: string | null,
   assignment: RequestAssignment,
   pr: { url: string | null; unassigned?: string; existing?: true },
+  team: { repoUrl: string; reviewersRecorded: boolean },
 ): string[] {
   const list = assignmentList(assignment);
+  const host = hostFromUrl(team.repoUrl) ?? "";
+  const assignYourself = host.includes("github")
+    ? "assign yourself on it"
+    : host.includes("gitlab")
+      ? "assign yourself on it if the project's template does not"
+      : null;
+  const byHand = [...(assignYourself ? [assignYourself] : []), ...(list ? [`add ${list}`] : [])].join(", and ");
   // One refusal answers the whole assignment, so it is named whole, in parentheses where a
   // semicolon cannot be read as joining the last list to the assignee.
   const asked = [...(list ? [list] : []), "assignee you"].join("; ");
@@ -372,7 +398,14 @@ export function requestNotes(
       ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
       : []),
     ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
-    ...(list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []),
+    ...(opened && forgeTool(team.repoUrl) === "glab" && !team.reviewersRecorded
+      ? [
+          "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
+            "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
+            'and if it sets none, record that with /handbook:init --upgrade --reviewers "".',
+        ]
+      : []),
+    ...(byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []),
   ];
 }
 
@@ -801,12 +834,13 @@ export function openRequest(
   pushed: Pushed,
 ): RequestOutcome {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? undefined;
-  const { assignment, dropped } = readTeamAssignment(repoDir);
+  const { assignment, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+  const team = { repoUrl, reviewersRecorded };
   const withNotes = (outcome: RequestOutcome, notes: string[]): RequestOutcome =>
     notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
     const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
-    const notes = requestNotes(dropped, assignment, pr);
+    const notes = requestNotes(dropped, assignment, pr, team);
     // A request already open is the request, and a link to open another would only send the
     // reader to a page the forge refuses.
     return withNotes(
@@ -831,7 +865,7 @@ export function openRequest(
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
   const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
-  return withNotes({ manualUrl, prError }, requestNotes(dropped, assignment, { url: null }));
+  return withNotes({ manualUrl, prError }, requestNotes(dropped, assignment, { url: null }, team));
 }
 
 /**

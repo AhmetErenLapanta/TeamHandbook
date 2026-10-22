@@ -1136,7 +1136,7 @@ function bumpCounter(field, home = handbookHome(), by = 1) {
 }
 var DEBUG_DUMP_CAP = 50;
 function maybeDumpPayload(raw, home = handbookHome()) {
-  if (!process.env.TEAMHANDBOOK_DEBUG) return;
+  if (process.env.TEAMHANDBOOK_DEBUG !== "1") return;
   try {
     const dir = join9(home, "debug");
     mkdirSync5(dir, { recursive: true });

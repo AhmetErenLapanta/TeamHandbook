@@ -19,8 +19,14 @@ import {
 } from "./distill.js";
 import type { SkillArtifact } from "./distill.js";
 import type { GateVerdict, ScoreResult } from "./score.js";
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from "./prompt-safety.js";
 import type { Signal } from "./signals.js";
 import { parseSkillFrontmatter } from "./skill-index.js";
+
+function outsideFences(prompt: string): string {
+  const [head, ...fenced] = prompt.split(UNTRUSTED_OPEN);
+  return head + fenced.map((part) => part.slice(part.indexOf(UNTRUSTED_CLOSE))).join("");
+}
 
 function candidate(overrides: Partial<Signal> = {}): Signal {
   return {
@@ -165,6 +171,35 @@ describe("slugifySkillName", () => {
 });
 
 describe("buildDistillPrompt", () => {
+  it("given a case of either kind, when the prompt is built, then every field it carries sits between the fence's open and close", () => {
+    const prompts = [
+      buildDistillPrompt(
+        candidate({
+          command: "command-marker-q1",
+          error: "error-marker-q2",
+          resolvedCommand: "resolved-marker-q3",
+          edits: ["/repo/edit-marker-q4.ts"],
+        }),
+        4,
+      ),
+      buildDistillPrompt(
+        candidate({
+          edits: ["/repo/touched-marker-q5.ts"],
+          task: { goal: "goal-marker-q6", steps: ["step-marker-q7"], verification: "verified-marker-q8" },
+        }),
+        4,
+      ),
+    ];
+
+    const markers = ["command", "error", "resolved", "edit", "touched", "goal", "step", "verified"];
+    const sent = prompts.join("\n");
+    for (const marker of markers) {
+      expect(sent).toMatch(new RegExp(`${marker}-marker-q\\d+`));
+      expect(prompts.map(outsideFences).join("\n")).not.toMatch(new RegExp(`${marker}-marker-q\\d+`));
+    }
+  });
+
+
   it("includes the case facts and the ledger occurrence count", () => {
     const prompt = buildDistillPrompt(candidate(), 4);
     expect(prompt).toContain("failed command:\n  npm test");

@@ -339,3 +339,5 @@ the running list on the
 ## License
 
 [Apache-2.0](LICENSE).
+
+Built by [Ahmet Eren Lapanta](https://erenlapanta.com).

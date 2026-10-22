@@ -108,7 +108,8 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   `reject --never`. Notice state (`welcomed`, `notified-counters.json`,
   `nudged-team`, `last-digest`, `seen-skills.json`) - what has
   already been shown to you, so a notice never repeats.
-- `debug/` - raw hook payloads, written only when you set `TEAMHANDBOOK_DEBUG=1`.
+- `debug/` - raw hook payloads and the harvest model's raw reply, written only when you set
+  `TEAMHANDBOOK_DEBUG=1`; any other value, `0` and `false` included, leaves it off.
 - `abandoned.jsonl` - a harvest job that failed to reach `claude` three times is
   parked here rather than dropped silently, so the session's evidence stays
   recoverable. It persists until you delete it; `/handbook:status` reports the count.
@@ -259,13 +260,17 @@ These, and only these:
      command carries the literal `--assignee=@me`, which the CLI resolves against the
      account it is already signed in with, so no name from this machine - its account, its
      git identity - is sent. If the forge refuses it, the request is opened without it and
-     the result says so. A request GitLab opens from a push is assigned to nobody by
-     TeamHandbook, because `merge_request.assign` takes a username and, without `glab`,
-     nothing here knows yours; the result asks you to assign yourself if the project's
-     template did not. The one push that does not ask is the first `/handbook:init`: it
-     pushes the scaffold to `handbook/scaffold` by default, or `<prefix>scaffold` with
-     `--branch-prefix`, or straight to the default branch of an empty repository, after
-     you have confirmed the repository itself. Its message is still yours.
+     the result says so. A request `glab` opens carries TeamHandbook's description and never
+     the project's own merge request template, because GitLab does not apply that template
+     to a request opened through its API, so nothing its quick actions set reaches it; when
+     `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
+     A request GitLab opens from a push is assigned to nobody by TeamHandbook, because
+     `merge_request.assign` takes a username and, without `glab`, nothing here knows
+     yours; the result asks you to assign yourself if the project's template did not.
+     The one push that does not ask is the first `/handbook:init`: it pushes the scaffold
+     to `handbook/scaffold` by default, or `<prefix>scaffold` with `--branch-prefix`, or
+     straight to the default branch of an empty repository, after you have confirmed the
+     repository itself. Its message is still yours.
 3. **On your explicit selection:** `/handbook:init` pushes the scaffold to a repository you
    name and confirm, and `/handbook:init --upgrade` opens a PR that brings an already
    scaffolded repository's scaffold files up to this version. `--upgrade` writes only files
@@ -322,8 +327,10 @@ make. Left to themselves:
   its color, spinner and accessibility settings. It sent none for the commands this
   product and git run without opening a request - `auth status` and `auth git-credential`,
   0 of 5 each with sampling forced to every run - but it still wrote the device id file it
-  keeps for the purpose. `auth status` was measured with a failed sign-in; the signed-in
-  path was not measured. `auth git-credential` was measured returning a credential.
+  keeps for the purpose. `auth status` was measured both with a failed sign-in and signed
+  in to github.com, with and without `--hostname`, against a local stand-in for its API
+  that returned the token's scopes; under the same setup `gh api` opened its connection to
+  `cafe.github.com` in 5 of 5 runs. `auth git-credential` was measured returning a credential.
 
 Every call this product makes to either CLI, and every git call it makes that reaches a
 remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in

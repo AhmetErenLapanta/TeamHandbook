@@ -1638,7 +1638,8 @@ function readTeamAssignment(repoDir) {
   }
   return {
     assignment,
-    dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null
+    dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null,
+    reviewersRecorded: raw.reviewers !== void 0
   };
 }
 function assignmentList(assignment) {
@@ -1648,8 +1649,11 @@ function assignmentList(assignment) {
   ];
   return parts.length ? parts.join("; ") : null;
 }
-function requestNotes(dropped, assignment, pr) {
+function requestNotes(dropped, assignment, pr, team) {
   const list = assignmentList(assignment);
+  const host = hostFromUrl(team.repoUrl) ?? "";
+  const assignYourself = host.includes("github") ? "assign yourself on it" : host.includes("gitlab") ? "assign yourself on it if the project's template does not" : null;
+  const byHand = [...assignYourself ? [assignYourself] : [], ...list ? [`add ${list}`] : []].join(", and ");
   const asked = [...list ? [list] : [], "assignee you"].join("; ");
   const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
@@ -1662,7 +1666,10 @@ function requestNotes(dropped, assignment, pr) {
     ...refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : [],
     ...refused && !pr.url && !pr.existing ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
     ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
-    ...list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []
+    ...opened && forgeTool(team.repoUrl) === "glab" && !team.reviewersRecorded ? [
+      `GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, and if it sets none, record that with /handbook:init --upgrade --reviewers "".`
+    ] : [],
+    ...byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []
   ];
 }
 function requestNoteLines(notes) {
@@ -1862,11 +1869,12 @@ function pushBranch(git, repoDir, ref, options = []) {
 }
 function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
-  const { assignment, dropped } = readTeamAssignment(repoDir);
+  const { assignment, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+  const team = { repoUrl, reviewersRecorded };
   const withNotes = (outcome, notes) => notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
     const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
-    const notes = requestNotes(dropped, assignment, pr);
+    const notes = requestNotes(dropped, assignment, pr, team);
     return withNotes(
       pr.url ? { prUrl: pr.url } : { ...pr.existing ? {} : { manualUrl }, ...pr.error ? { prError: pr.error } : {} },
       notes
@@ -1882,7 +1890,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
   const prError = pushed.optionsSent ? `${forgeProblem}, and GitLab did not report opening a request for the push` : forgeProblem;
-  return withNotes({ manualUrl, prError }, requestNotes(dropped, assignment, { url: null }));
+  return withNotes({ manualUrl, prError }, requestNotes(dropped, assignment, { url: null }, team));
 }
 function pushFailure(repoUrl, branch, subject, err, rerun, commitPrefixFix) {
   const fix = [
