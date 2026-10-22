@@ -31,15 +31,17 @@ interface CycleRead {
   via: string;
 }
 
-// The tsconfig resolves like a bundler, so "./x.js", "./x" and "./dir" all reach a source
-// file. A relative specifier that matches none of them is not skipped: a dropped edge is a
-// cycle this check cannot see.
 function skipParens(node: ts.Expression): ts.Expression {
   return ts.isParenthesizedExpression(node) ? skipParens(node.expression) : node;
 }
 
+// The tsconfig resolves like a bundler, so "./x.js", "./x" and "./dir" all reach a source
+// file. A relative specifier that matches none of them is not skipped: a dropped edge is a
+// cycle this check cannot see. A file that is not code (JSON and the like) is data with no
+// imports of its own, so it closes no cycle and is not an edge.
 function resolveImport(from: string, specifier: string, files: Map<string, ts.SourceFile>): string | null {
   if (!specifier.startsWith(".")) return null;
+  if (/\.[A-Za-z]+$/.test(specifier) && !/\.[mc]?[jt]s$/.test(specifier)) return null;
   const base = resolve(dirname(from), specifier);
   for (const candidate of [base.replace(/\.js$/, ".ts"), `${base}.ts`, join(base, "index.ts")]) {
     if (files.has(candidate)) return candidate;
@@ -61,9 +63,8 @@ function cycleReads(sources: Map<string, string>, root: string): CycleRead[] {
     const names = new Map<string, string>();
     for (const statement of file.statements) {
       if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-        const target = resolveImport(path, statement.moduleSpecifier.text, files);
         const clause = statement.importClause;
-        if (!target || clause?.isTypeOnly) continue;
+        if (clause?.isTypeOnly) continue;
         const values: string[] = [];
         if (clause?.name) values.push(clause.name.text);
         const bindings = clause?.namedBindings;
@@ -71,13 +72,19 @@ function cycleReads(sources: Map<string, string>, root: string): CycleRead[] {
         if (bindings && ts.isNamedImports(bindings)) {
           for (const element of bindings.elements) if (!element.isTypeOnly) values.push(element.name.text);
         }
-        if (!clause || values.length) out.add(target);
+        // Resolved only once something is evaluated: a type-only import may name a module
+        // that exists only as a declaration file, which is no edge and no source file here.
+        if (clause && !values.length) continue;
+        const target = resolveImport(path, statement.moduleSpecifier.text, files);
+        if (!target) continue;
+        out.add(target);
         for (const value of values) names.set(value, target);
       } else if (
         ts.isExportDeclaration(statement) &&
         !statement.isTypeOnly &&
         statement.moduleSpecifier &&
-        ts.isStringLiteral(statement.moduleSpecifier)
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        !(statement.exportClause && ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.every((e) => e.isTypeOnly))
       ) {
         const target = resolveImport(path, statement.moduleSpecifier.text, files);
         if (target) out.add(target);
@@ -141,7 +148,9 @@ function cycleReads(sources: Map<string, string>, root: string): CycleRead[] {
         }
       }
     }
+    // Default parameter values are evaluated by the call, before the body.
     const runBody = (fn: ts.FunctionLikeDeclaration, via: string, entered: Set<string>): void => {
+      for (const parameter of fn.parameters) if (parameter.initializer) walk(parameter.initializer, via, entered);
       if (fn.body && ts.isBlock(fn.body)) ts.forEachChild(fn.body, (child) => walk(child, via, entered));
       else if (fn.body) walk(fn.body, via, entered);
     };
@@ -149,12 +158,31 @@ function cycleReads(sources: Map<string, string>, root: string): CycleRead[] {
       const fn = localFunctions.get(name);
       if (fn && !entered.has(name)) runBody(fn, `${via} via ${name}()`, new Set([...entered, name]));
     };
+    // A local class built with new runs its constructor and instance field initializers, and
+    // those of every local class it extends.
+    const runNew = (name: string, via: string, entered: Set<string>): void => {
+      const local = localClasses.get(name);
+      if (!local || entered.has(name)) return;
+      const inside = new Set([...entered, name]);
+      for (const member of local.members) {
+        const isStatic = ts.canHaveModifiers(member) && ts.getModifiers(member)?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+        if (ts.isConstructorDeclaration(member)) runBody(member, via, inside);
+        if (ts.isPropertyDeclaration(member) && !isStatic && member.initializer) walk(member.initializer, via, inside);
+      }
+      const base = local.heritageClauses?.find((c) => c.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+      if (base && ts.isIdentifier(base)) runNew(base.text, via, inside);
+    };
     // A function body is skipped where it is only defined, and walked where module-level
-    // code runs it right then: a call to a function of this file, by name, as an argument
-    // (.map(fn)), as a method of a local object or as a template tag; a function expression
-    // passed to a call or invoked in place; the constructor and instance fields of a local
-    // class built with new. Measured: each of these baked undefined into a bundle while an
-    // earlier version of this walk, which skipped every function body, stayed green.
+    // code may run it: a call to a function of this file, by name, as an argument (.map(fn)),
+    // as a method of a local object, as a static method of a local class or as a template
+    // tag; a function expression invoked in place or passed to a call; the constructor and
+    // instance fields of a local class built with new. A function passed to a call is assumed
+    // to run at once: a deferred one (setTimeout, .then) is reported too, which is the safe
+    // side, and the fix the message names still applies. Measured: each of these baked
+    // undefined into a bundle while an earlier version of this walk, which entered only a
+    // direct call to a local function, stayed green. Known gaps, none of them in the tree:
+    // a local function reached through .call or .apply, an alias, an object getter, or a
+    // local object's method passed by reference (.map(o.f)).
     const walk = (node: ts.Node, via: string, entered: Set<string>): void => {
       if (ts.isFunctionLike(node)) return;
       if (ts.isClassLike(node)) {
@@ -188,6 +216,10 @@ function cycleReads(sources: Map<string, string>, root: string): CycleRead[] {
         if (ts.isCallExpression(node) && ts.isIdentifier(callee)) runLocal(callee.text, via, entered);
         if (ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)) runBody(callee, `${via} via an inline call`, entered);
         if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)) {
+          const member = localClasses.get(callee.expression.text)?.members.find(
+            (m) => m.name && ts.isIdentifier(m.name) && m.name.text === callee.name.text && ts.canHaveModifiers(m) && !!ts.getModifiers(m)?.some((x) => x.kind === ts.SyntaxKind.StaticKeyword),
+          );
+          if (member && ts.isMethodDeclaration(member)) runBody(member, `${via} via ${callee.getText()}()`, entered);
           const method = localObjects.get(callee.expression.text)?.properties.find((p) => p.name && ts.isIdentifier(p.name) && p.name.text === callee.name.text);
           if (method && ts.isMethodDeclaration(method)) runBody(method, `${via} via ${callee.getText()}()`, entered);
           if (method && ts.isPropertyAssignment(method)) {
@@ -195,17 +227,7 @@ function cycleReads(sources: Map<string, string>, root: string): CycleRead[] {
             if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) runBody(value, `${via} via ${callee.getText()}()`, entered);
           }
         }
-        if (ts.isNewExpression(node) && ts.isIdentifier(callee)) {
-          const local = localClasses.get(callee.text);
-          if (local && !entered.has(callee.text)) {
-            const inside = new Set([...entered, callee.text]);
-            for (const member of local.members) {
-              const isStatic = ts.canHaveModifiers(member) && ts.getModifiers(member)?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
-              if (ts.isConstructorDeclaration(member)) runBody(member, `${via} via new ${callee.text}()`, inside);
-              if (ts.isPropertyDeclaration(member) && !isStatic && member.initializer) walk(member.initializer, `${via} via new ${callee.text}()`, inside);
-            }
-          }
-        }
+        if (ts.isNewExpression(node) && ts.isIdentifier(callee)) runNew(callee.text, `${via} via new ${callee.text}()`, entered);
         for (const argument of node.arguments ?? []) {
           const value = skipParens(argument);
           if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) runBody(value, `${via} via a callback`, entered);
@@ -319,6 +341,12 @@ describe("a module-level value read from inside an import cycle", () => {
     ["the instance field of a local class built with new", `class Note { text = \`in \${TEAM_FILE}\`; }\nexport const CORRECT = new Note().text;`, "module level via new Note()"],
     ["a method of a local object", `const notes = { correct() { return \`in \${TEAM_FILE}\`; } };\nexport const CORRECT = notes.correct();`, "module level via notes.correct()"],
     ["a local template tag", `function tag(parts: TemplateStringsArray) { return parts[0] + TEAM_FILE; }\nexport const CORRECT = tag\`in \`;`, "module level via tag()"],
+    ["a default parameter of a local function", `function label(file = TEAM_FILE) { return \`in \${file}\`; }\nexport const CORRECT = label();`, "module level via label()"],
+    ["a default parameter of a function invoked in place", `export const CORRECT = ((file = TEAM_FILE) => \`in \${file}\`)();`, "module level via an inline call"],
+    ["a static method of a local class", `class Notes { static render() { return \`in \${TEAM_FILE}\`; } }\nexport const CORRECT = Notes.render();`, "module level via Notes.render()"],
+    ["the constructor of a local class built with new", `class Note { text: string; constructor() { this.text = \`in \${TEAM_FILE}\`; } }\nexport const CORRECT = new Note().text;`, "module level via new Note()"],
+    ["a field a local class inherits from a local class", `class Base { text = \`in \${TEAM_FILE}\`; }\nclass Note extends Base {}\nexport const CORRECT = new Note().text;`, "module level via new Note()"],
+    ["an arrow-valued property of a local object", `const notes = { correct: () => \`in \${TEAM_FILE}\` };\nexport const CORRECT = notes.correct();`, "module level via notes.correct()"],
   ])("given %s reading from the cycle, when swept, then the read is reported", (_shape, notes, via) => {
     const reads = cycleReads(
       fixture({ "notes.ts": `import { TEAM_FILE } from "./setup.js";\n${notes}\n`, "setup.ts": setup }),
@@ -338,6 +366,29 @@ describe("a module-level value read from inside an import cycle", () => {
     );
 
     expect(reads.map((r) => [r.file, r.name])).toEqual([["notes.ts", "TEAM_FILE"]]);
+  });
+
+  it("given the cycle closed by an import of a directory, when swept, then the read is reported", () => {
+    const reads = cycleReads(
+      fixture({
+        "notes.ts": `import { TEAM_FILE } from "./cfg";\nexport const CORRECT = \`in \${TEAM_FILE}\`;\n`,
+        "cfg/index.ts": `import { CORRECT } from "../notes.js";\nexport const TEAM_FILE = ".team.json";\nexport function run() { return CORRECT; }\n`,
+      }),
+      "/fixture",
+    );
+
+    expect(reads.map((r) => [r.file, r.name, r.from])).toEqual([["notes.ts", "TEAM_FILE", "cfg/index.ts"]]);
+  });
+
+  it("given a JSON import and a type-only import from a module that is only a declaration, when swept, then neither is an edge and nothing fails", () => {
+    const reads = cycleReads(
+      fixture({
+        "notes.ts": `import manifest from "../package.json" with { type: "json" };\nimport type { Shape } from "./shape.js";\nexport const NAME: Shape = manifest.name;\n`,
+      }),
+      "/fixture",
+    );
+
+    expect(reads).toEqual([]);
   });
 
   it("given a relative import that matches no source file, when swept, then the sweep fails rather than dropping the edge", () => {
