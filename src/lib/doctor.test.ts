@@ -497,6 +497,30 @@ describe("doctor auth + git identity checks", () => {
     expect(check.detail).not.toContain("logged in");
   });
 
+  it("given a proxy that asks for its own credentials, when diagnosed, then it is not called a missing login and the CLI's own line is the evidence", () => {
+    // given a logged-in machine behind a proxy: the CLI reports the 407 on stdout
+    const runner = failingProbe({ stdout: "API Error: 407 Proxy Authentication Required\n" });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.detail).not.toContain("NOT logged in");
+    expect(check.detail).toContain("API Error: 407 Proxy Authentication Required");
+    expect(check.detail).not.toContain("Command failed");
+  });
+
+  it("given an error naming a sign-in URL, when diagnosed, then the URL alone does not make it a missing login", () => {
+    // given
+    const runner = failingProbe({ stderr: "Error: request to https://sso.example.com/login was refused" });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.detail).not.toContain("NOT logged in");
+  });
+
   it("given a probe that times out, when diagnosed, then it says installed and does not claim a login", () => {
     // given --version answering proves nothing about the session
     const runner = failingProbe({ code: "ETIMEDOUT" });

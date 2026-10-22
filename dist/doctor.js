@@ -1723,7 +1723,16 @@ function failureText(err) {
   const failed = err;
   return [err instanceof Error ? err.message : String(err), failed?.stdout, failed?.stderr].filter((part) => typeof part === "string").join("\n");
 }
-var SIGNED_OUT = /not logged in|\/login|logged out|authentication/i;
+function failureLine(err) {
+  const failed = err;
+  const said = [failed?.stderr, failed?.stdout, err instanceof Error ? err.message : String(err)];
+  for (const part of said) {
+    const line = typeof part === "string" ? part.split("\n").find((text) => text.trim()) : void 0;
+    if (line) return line.trim();
+  }
+  return "";
+}
+var SIGNED_OUT = /not logged in|please run \/login|logged out|authentication_error/i;
 function checkClaudeCli(run, home) {
   const unknownIsolation = warn(
     "model call isolation",
@@ -1802,7 +1811,7 @@ function checkClaudeCli(run, home) {
       return [
         fail(
           "claude CLI",
-          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
+          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${failureLine(err).slice(0, 120)}`
         ),
         unknownIsolation
       ];

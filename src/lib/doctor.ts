@@ -100,13 +100,6 @@ function checkNode(): DoctorCheck {
 const PROBE_TIMEOUT_MS = 60_000;
 
 /**
- * The CLI check and the isolation check come out of ONE probe, on purpose. Two probes would
- * be two calls to pay for, and - worse - the isolation line would be free to say "ok"
- * about an argument list and an environment that no successful call had ever used. What
- * makes it green here is that a real `claude -p` answered through exactly the invocation
- * the harvest builds.
- */
-/**
  * Everything a failed call said: the error's message, and its stdout and stderr. Node puts only
  * stderr into the message, and a logged-out `claude -p` writes "Not logged in · Please run
  * /login" to stdout with stderr empty, measured - read from the message alone, the one sign
@@ -119,11 +112,32 @@ function failureText(err: unknown): string {
     .join("\n");
 }
 
-// What a logged-out CLI says: the measured "Not logged in · Please run /login", and an API's
-// `authentication_error`. A bare "auth" also matched failures that merely mention
-// authenticating something else, and called them a missing login.
-const SIGNED_OUT = /not logged in|\/login|logged out|authentication/i;
+/** The CLI's own first sentence about a failure: the first line it wrote to stderr, else to
+ * stdout, else the error's own. The message alone always began "Command failed: claude -p",
+ * which named the command and none of the reason. */
+function failureLine(err: unknown): string {
+  const failed = err as { stdout?: unknown; stderr?: unknown } | null;
+  const said = [failed?.stderr, failed?.stdout, err instanceof Error ? err.message : String(err)];
+  for (const part of said) {
+    const line = typeof part === "string" ? part.split("\n").find((text) => text.trim()) : undefined;
+    if (line) return line.trim();
+  }
+  return "";
+}
 
+// What a logged-out CLI says: the measured "Not logged in · Please run /login", and the API's
+// `authentication_error`. A bare "auth", and then a bare "authentication", also matched a
+// proxy's 407 and a cloud provider's credential failures - a machine that is logged in, told to
+// run /login. "/login" alone matched any sign-in URL in an error.
+const SIGNED_OUT = /not logged in|please run \/login|logged out|authentication_error/i;
+
+/**
+ * The CLI check and the isolation check come out of ONE probe, on purpose. Two probes would
+ * be two calls to pay for, and - worse - the isolation line would be free to say "ok"
+ * about an argument list and an environment that no successful call had ever used. What
+ * makes it green here is that a real `claude -p` answered through exactly the invocation
+ * the harvest builds.
+ */
 function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
   const unknownIsolation = warn(
     "model call isolation",
@@ -215,7 +229,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
       return [
         fail(
           "claude CLI",
-          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
+          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${failureLine(err).slice(0, 120)}`,
         ),
         unknownIsolation,
       ];
