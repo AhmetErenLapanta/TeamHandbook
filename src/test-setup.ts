@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach } from "vitest";
@@ -12,6 +12,18 @@ import { afterAll, afterEach } from "vitest";
 const home = mkdtempSync(join(tmpdir(), "handbook-suite-home-"));
 process.env.TEAMHANDBOOK_HOME = home;
 afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+// The floor above only holds while nothing reaches the state directory around it, and a
+// new default that builds the path from homedir() would undo it without failing a single
+// case. Where the real one does not exist yet (CI, a fresh home), a file that creates it
+// fails here and names the place.
+const realHandbookHome = join(homedir(), ".teamhandbook");
+const realHandbookHomeExisted = existsSync(realHandbookHome);
+afterAll(() => {
+  if (!realHandbookHomeExisted && existsSync(realHandbookHome)) {
+    throw new Error(`this file created ${realHandbookHome}; a test must not reach the real handbook home`);
+  }
+});
 
 // The worker reports results to the main process over an RPC whose 60s deadline is a
 // timer in the worker itself. The runner goes from one test to the next without handing
