@@ -360,7 +360,10 @@ clone left on its remote, and git fetches each one it lacks from that remote and
 into the repository's `.git`. Measured on a local clone missing 6 blobs: 3 fetches and 0
 blobs missing afterwards, against no fetch on a full clone of the same history. Those
 fetches run in the environment of this product's other remote calls, measured carrying
-`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`.
+`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`. A shallow clone (`--depth`) fetched nothing.
+When a partial clone's remote cannot be reached, git cannot read its history at all: the
+listing names that repository with git's reason and leaves it out, and when no repository
+was readable it says so and exits with an error rather than reporting that nothing repeats.
 
 Asking for a draft is what sends anything. Picking a workflow sends the screened
 evidence for that one workflow to `claude -p`, exactly as any other Claude Code prompt
@@ -512,7 +515,13 @@ fired, and how many lines screening dropped.
 file map names still exist, whether recent work still follows that map, how often the
 skill was called, and whether another skill's description answers the same requests. The
 share screen shows the same overlap warning. Both are read-only: nothing is changed,
-redrafted or deleted because of a finding, no model is called and no connection is opened.
+redrafted or deleted because of a finding, and no model is called. In a full clone no
+connection is opened either. A partial clone is the same exception as for `/handbook:mine`,
+because the history read is the same one: git fetches the file contents the clone left on
+its remote and writes them into the repository's `.git`. Measured on a local blobless clone
+of a six-commit history with 15 contents missing: `/handbook:status` made 5 fetches and left
+none missing, against no fetch on a full clone, in 3 runs of each. Whichever of the two
+commands reads that history first makes the fetches; the other then finds nothing missing.
 
 **What it reads.** The `SKILL.md` of each delivered skill; the repository a skill was
 installed into, or the repositories its map rows name when `mined-workflows.json` knows
@@ -521,13 +530,15 @@ read `/handbook:mine` makes); `skill-usage.json` and `workflows.jsonl`; and the 
 description of every skill this machine loads - the project's `.claude/skills`, your
 `~/.claude/skills`, and the team repository's skills as your local clone of it holds them.
 
-**What it writes.** Nothing. The only new data is in `skill-usage.json` as described above,
+**What it writes.** Nothing, apart from the file contents git fetches into a partial clone's
+`.git` as described above. The only new data is in `skill-usage.json` as described above,
 written by the hook rather than by this report: beside the name, running count and time of
 the last call it already kept, how many calls fell on each of the last 30 days, and never
 the call's arguments.
 
-**What leaves your machine.** Nothing. The team repository's skills are read from the
-clone already on disk, so the overlap warning makes no request.
+**What leaves your machine.** Nothing of yours. On a partial clone the history read asks
+that repository's own remote for the file contents it lacks, as above. The team repository's
+skills are read from the clone already on disk, so the overlap warning makes no request.
 
 ## Removing your data
 

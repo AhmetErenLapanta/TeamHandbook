@@ -20,9 +20,12 @@ spending anything.
 
 This reads the git history of the current repository (plus any `--repo <path>` the user
 named, plus any configured in `mine.repos`) and prints the work that repeats, most
-established first. It makes no model call and touches the network not at all. Relay its
-output to the user as it is printed - the numbers beside each workflow are what lets them
-recognise their own work, and the file map under it is the measured part.
+established first. It makes no model call. In a full clone it touches the network not at
+all; in a partial clone (`--filter`) git fetches the file contents the history read needs
+from the repository's own remote. Relay its output to the user as it is printed - the
+numbers beside each workflow are what lets them recognise their own work, and the file map
+under it is the measured part. A line saying a history could not be read is part of the
+answer: relay it, because a repository left out is not a repository with nothing repeated.
 
 If it finds nothing, say so plainly. A young repository, or one whose commits each touch
 something different, genuinely has no repeating work to find; that is an answer.
