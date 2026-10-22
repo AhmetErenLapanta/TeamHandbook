@@ -737,15 +737,14 @@ init_secrets();
 import { readFileSync as readFileSync5 } from "node:fs";
 import { dirname as dirname2, join as join7 } from "node:path";
 import { fileURLToPath } from "node:url";
-function pluginVersion() {
-  const root = pluginRoot();
+function pluginVersion(root = pluginRoot()) {
   if (!root) return "unknown";
   try {
     const parsed = JSON.parse(readFileSync5(join7(root, ".claude-plugin", "plugin.json"), "utf8"));
     if (typeof parsed?.version === "string") return parsed.version;
   } catch {
   }
-  return "unknown";
+  return productVersion(root) ?? "unknown";
 }
 function pluginRoot() {
   const here = dirname2(fileURLToPath(import.meta.url));
@@ -757,6 +756,15 @@ function pluginRoot() {
     }
   }
   return null;
+}
+function productVersion(root = pluginRoot()) {
+  if (!root) return null;
+  try {
+    const parsed = JSON.parse(readFileSync5(join7(root, "package.json"), "utf8"));
+    return typeof parsed?.version === "string" ? parsed.version : null;
+  } catch {
+    return null;
+  }
 }
 
 // src/lib/init.ts

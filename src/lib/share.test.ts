@@ -763,6 +763,20 @@ describe("shareSelection", () => {
     expect(formatShareResult(result)).toContain("commit: feat: the deploy runbook, written down at last");
   });
 
+  it("given a team repository versioned by commit, when the selection runs, then the result says the merge is what teammates fetch", () => {
+    // given
+    remote = teamRepo({ ".claude-plugin/plugin.json": JSON.stringify({ name: "acme" }, null, 2) + "\n" });
+    writeSkill(userHome, "deploy-runbook");
+
+    // when
+    const result = shareSelection(select({ skills: ["deploy-runbook"] }), team(), paths(), undefined, forge);
+
+    // then
+    const printed = formatShareResult(result);
+    expect(printed).toContain("versioned by commit, so the merge is what teammates fetch");
+    expect(printed).not.toContain("plugin version raised");
+  });
+
   it("given a few of each were selected, when the selection runs, then every kind goes out in one request", () => {
     remote = teamRepo();
     writeSkill(userHome, "deploy-runbook");

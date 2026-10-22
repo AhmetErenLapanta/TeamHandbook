@@ -9,7 +9,7 @@ import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr
 import { requestNoteLines, requestNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
 import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
-import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { handbookHome, inWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
@@ -353,7 +353,22 @@ version-bump:
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
 
-function readmeFor(name: string, url: string): string {
+const UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
+by the commit it installs: everything merged here - a skill, a server, a command, an
+edit to this README - reaches a teammate's copy when their marketplace updates.`;
+
+const UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
+\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
+moved, but a teammate's copy only picks it up when their marketplace updates, so
+anything committed here by hand reaches nobody unless it raises the version too.`;
+
+// Not in a repository that runs the version-bump job: the flag is refused there, because
+// the job fails on a manifest without a version.
+const SWITCH_POINTER = `
+\`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
+which every merge reaches teammates without raising anything.`;
+
+function readmeFor(name: string, url: string, byCommit: boolean, withCi: boolean): string {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -384,15 +399,11 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-Every skill arrives as a merge request that also raises the version in
-\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates.
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION + (withCi ? "" : SWITCH_POINTER)}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
-Nothing here needs CI, an access token, or the right to push to a protected branch. If
-skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
-job that bumps the version on merge instead, together with the script it runs.
+Nothing here needs CI, an access token, or the right to push to a protected branch.
 
 ### Getting new skills
 
@@ -599,7 +610,11 @@ export function skeletonFiles(
   branchExample?: string,
   assignment: RecordedAssignment = {},
   scaffoldVersion?: string,
+  version?: string,
 ): Record<string, string> {
+  // The version-bump job raises plugin.json's version on every merge and throws without
+  // one, so a repository that runs it starts at a number.
+  const pluginVersion = version ?? (withCi ? "0.1.0" : undefined);
   const files: Record<string, string> = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -624,12 +639,15 @@ export function skeletonFiles(
         {
           name,
           description: "Skills, MCP servers, and slash commands your team has approved through TeamHandbook.",
-          version: "0.1.0",
+          // Only for a repository that raises a number on every merge. Without one, Claude
+          // Code versions the plugin by commit and every merge reaches teammates, with no
+          // version line for two requests to conflict on and none for a merge to forget.
+          ...(pluginVersion !== undefined ? { version: pluginVersion } : {}),
         },
         null,
         2,
       ) + "\n",
-    "README.md": readmeFor(name, url),
+    "README.md": readmeFor(name, url, pluginVersion === undefined, withCi),
     "skills/README.md":
       "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
@@ -867,6 +885,9 @@ const INIT_COMMIT_PREFIX_FIX =
   'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is ' +
   "remembered for every skill shared later.";
 
+/** Where the prefix a push carried came from, which decides what correcting it means. */
+export type CommitPrefixSource = "config" | "repository" | "flag";
+
 /**
  * What to do about a commit-message rule on a path that is NOT /handbook:init.
  *
@@ -880,7 +901,7 @@ const INIT_COMMIT_PREFIX_FIX =
  * fixes one machine, and it is a file a sandboxed session may not be allowed to touch at
  * all, while recording the prefix in the repository fixes it for everyone who joins after.
  */
-export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
+export function teamCommitPrefixFix(team: TeamConfig, retry: string, source: CommitPrefixSource = "config"): string {
   const known = team.commitPrefix?.trim();
   // Recorded, and recorded as nothing. Falling through to the "nobody knows" branch below
   // told this user their repository carries no record when it carries one, and sent them to
@@ -897,6 +918,23 @@ export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
       `~/.teamhandbook/config.json, then ${retry}.`
     );
   }
+  // Taken from the repository because this machine has none: there is no config key here
+  // to correct, and calling it this machine's prefix sent the reader to one.
+  if (known && source === "repository") {
+    return (
+      `The prefix the team repository records in ${TEAM_PREFIX_FILE}, "${known}", does not satisfy that ` +
+      "rule; this machine has none of its own and used that one. Correct the record with " +
+      '`/handbook:init --upgrade --commit-prefix "<the prefix the rule requires>"`, which fixes it for ' +
+      'everyone who shares after; to unblock only this machine, set "commitPrefix" under "team" in ' +
+      `~/.teamhandbook/config.json, then ${retry}.`
+    );
+  }
+  if (known && source === "flag") {
+    return (
+      `The prefix given with --commit-prefix, "${known}", does not satisfy that rule. It is used for this ` +
+      "run only, so nothing on this machine or in the repository needs correcting."
+    );
+  }
   if (known) {
     return (
       `The prefix this machine uses, "${known}", does not satisfy that rule. Correct ` +
@@ -907,7 +945,7 @@ export function teamCommitPrefixFix(team: TeamConfig, retry: string): string {
   }
   return (
     "This machine does not know the team's commit-message prefix: /handbook:join reads it " +
-    `from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran ` +
+    `from the repository, and this one does not record it (no "commitPrefix" in ${TEAM_PREFIX_FILE}). Whoever ran ` +
     "/handbook:init can add it there once with `/handbook:init --upgrade`, and every share after " +
     'that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a ' +
     `prefix that satisfies the rule, then ${retry}.`
@@ -1074,6 +1112,8 @@ export interface InitResult {
   proposedMessage?: string;
   // its fingerprint, which a delegated run has to name back
   proposalHash?: string;
+  // the scratch clone the run could not remove, left for the user to delete
+  leftoverWorkdir?: string;
 }
 
 export function initTeamRepo(
@@ -1092,6 +1132,12 @@ export function initTeamRepo(
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   const assignmentProblem = assignmentRecordProblem(assignment);
   if (assignmentProblem) return { ok: false, error: assignmentProblem };
+  // The same checks a prefix read back out of the repository has to pass, since this one is
+  // written there, into the config and into the first commit's title.
+  const prefixProblem = commitPrefixProblem(commitPrefix.trim());
+  if (prefixProblem) {
+    return { ok: false, error: `that commit-message prefix cannot be used: it is ${prefixProblem}. Nothing was changed.` };
+  }
   try {
     assertSafeGitUrl(url);
   } catch (err) {
@@ -1129,142 +1175,143 @@ export function initTeamRepo(
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-");
-  const repoDir = join(workdir, "repo");
-  // Clone first, always. Building a fresh history locally and pushing it assumed the
-  // remote was empty, and most teams create the repository through their organisation's
-  // tooling, which leaves a README in it. It also assumed the branch was called main,
-  // while plenty of organisations still default to master - and a scaffold pushed to
-  // the wrong branch is a handbook whose version-bump CI never runs.
-  try {
-    git(["clone", "--", url, repoDir], workdir);
-  } catch (err) {
-    return { ok: false, error: cloneFailureReason(url, err) };
-  }
-  let branch: string;
-  try {
-    branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    branch = "";
-  }
-  if (!branch) {
-    return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
-  }
-  // No commits yet means no branch to open a request against; that is the only case
-  // where the scaffold has to land on the default branch directly.
-  let isEmptyRepo: boolean;
-  try {
-    isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    isEmptyRepo = true;
-  }
-  if (existsSync(join(repoDir, ".claude-plugin", "marketplace.json"))) {
-    return {
+  return inWorkdir("handbook-init-", home, (workdir): InitResult => {
+    const repoDir = join(workdir, "repo");
+    // Clone first, always. Building a fresh history locally and pushing it assumed the
+    // remote was empty, and most teams create the repository through their organisation's
+    // tooling, which leaves a README in it. It also assumed the branch was called main,
+    // while plenty of organisations still default to master - and a scaffold pushed to
+    // the wrong branch is a handbook whose version-bump CI never runs.
+    try {
+      git(["clone", "--", url, repoDir], workdir);
+    } catch (err) {
+      return { ok: false, error: cloneFailureReason(url, err) };
+    }
+    let branch: string;
+    try {
+      branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      branch = "";
+    }
+    if (!branch) {
+      return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
+    }
+    // No commits yet means no branch to open a request against; that is the only case
+    // where the scaffold has to land on the default branch directly.
+    let isEmptyRepo: boolean;
+    try {
+      isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      isEmptyRepo = true;
+    }
+    if (existsSync(join(repoDir, ".claude-plugin", "marketplace.json"))) {
+      return {
+        ok: false,
+        error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
+      };
+    }
+    // The decision about the message sits HERE, after the clone, because whether "you
+    // decide" can be honoured at all is something only the clone can say. An empty
+    // repository has no branch to open a request against, so the scaffold goes straight to
+    // the default branch and there is no merge request for a delegation to be about; a
+    // repository that is not empty gets one, but only from a machine whose forge CLI is
+    // there and signed in. Refusing here costs the clone, which is removed on the way out
+    // like every other one, and still leaves no branch on the remote and nothing on this machine.
+    const stopped = (error: string): InitResult => ({
       ok: false,
-      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
-    };
-  }
-  // The decision about the message sits HERE, after the clone, because whether "you
-  // decide" can be honoured at all is something only the clone can say. An empty
-  // repository has no branch to open a request against, so the scaffold goes straight to
-  // the default branch and there is no merge request for a delegation to be about; a
-  // repository that is not empty gets one, but only from a machine whose forge CLI is
-  // there and signed in. Refusing here costs the clone - which this command keeps either
-  // way - and still leaves no branch on the remote and nothing on this machine.
-  const stopped = (error: string): InitResult => ({
-    ok: false,
-    error,
-    proposedMessage: proposal,
-    proposalHash: proposalFingerprint(proposal),
-  });
-  const unavailable = isEmptyRepo
-    ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open`
-    : commitMessage.message === undefined
-      ? (() => {
-          const blocked = forgeSignInProblem(url, repoDir, forge);
-          return blocked ? noRequestPossible(blocked) : null;
-        })()
-      : null;
-  const decided = decideCommitSubject(
-    commitMessage,
-    proposal,
-    commitMessagePrefix(commitPrefix),
-    "run /handbook:init again",
-    unavailable ?? undefined,
-  );
-  if ("error" in decided) return stopped(decided.error);
-  const { skipped } = writeSkeletonPreserving(
-    repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment, productVersion() ?? undefined),
-  );
-  // An empty repository has no default branch to open a merge request against, so the
-  // first commit has to go straight to it. Everywhere else the scaffold arrives the way
-  // every skill will: a branch and a merge request. Pushing to the default branch needs
-  // write access to a protected branch, which on most teams means Maintainer, while
-  // pushing a new branch is something almost any member can do - and the person setting
-  // the handbook up is not necessarily the person who administers the project.
-  const scaffoldBranch = `${branchPrefix}scaffold`;
-  const direct = isEmptyRepo;
-  try {
-    if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
-    git(["add", "-A"], repoDir);
-    // Commit as the developer, not as a stand-in address. publish has always done this
-    // because a forge that checks commit authors rejects anything else, and init pushes
-    // to the same repository under the same rules. "TeamHandbook@localhost" was an
-    // author waiting to be refused.
-    git([...identity, "commit", "-m", decided.subject], repoDir);
-    pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
-  } catch (err) {
-    return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
-  }
-  let prUrl: string | null = null;
-  let prError: string | undefined;
-  let notes: string[] = [];
-  let alreadyOpen = false;
-  if (!direct) {
-    // Read back from the clone rather than taken from the flags, so a team file the
-    // repository already had, and kept, is what the request is assigned by.
-    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-    const opened = openPr(
-      url,
-      scaffoldBranch,
-      "chore: set up the team handbook",
-      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.\n\nOpened by TeamHandbook.`,
-      repoDir,
-      forge,
-      assigned,
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal),
+    });
+    const unavailable = isEmptyRepo
+      ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open`
+      : commitMessage.message === undefined
+        ? (() => {
+            const blocked = forgeSignInProblem(url, repoDir, forge);
+            return blocked ? noRequestPossible(blocked) : null;
+          })()
+        : null;
+    const decided = decideCommitSubject(
+      commitMessage,
+      proposal,
+      commitMessagePrefix(commitPrefix),
+      "run /handbook:init again",
+      unavailable ?? undefined,
     );
-    prUrl = opened.url;
-    prError = opened.error;
-    alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
-  }
-  saveTeamConfig(
-    {
-      repoUrl: url,
-      marketplaceName,
-      initializedAt: now,
-      ...(branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {}),
-      ...(commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}),
-    },
-    home,
-  );
-  return {
-    ok: true,
-    name: marketplaceName,
-    url,
-    home,
-    branch: direct ? branch : scaffoldBranch,
-    defaultBranch: branch,
-    merged: direct,
-    skipped,
-    withCi,
-    commitMessage: decided.subject,
-    ...(prUrl ? { prUrl } : {}),
-    ...(prError ? { prError } : {}),
-    ...(notes.length ? { requestNotes: notes } : {}),
-    ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
-  };
+    if ("error" in decided) return stopped(decided.error);
+    const { skipped } = writeSkeletonPreserving(
+      repoDir,
+      skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment, productVersion() ?? undefined),
+    );
+    // An empty repository has no default branch to open a merge request against, so the
+    // first commit has to go straight to it. Everywhere else the scaffold arrives the way
+    // every skill will: a branch and a merge request. Pushing to the default branch needs
+    // write access to a protected branch, which on most teams means Maintainer, while
+    // pushing a new branch is something almost any member can do - and the person setting
+    // the handbook up is not necessarily the person who administers the project.
+    const scaffoldBranch = `${branchPrefix}scaffold`;
+    const direct = isEmptyRepo;
+    try {
+      if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
+      git(["add", "-A"], repoDir);
+      // Commit as the developer, not as a stand-in address. publish has always done this
+      // because a forge that checks commit authors rejects anything else, and init pushes
+      // to the same repository under the same rules. "TeamHandbook@localhost" was an
+      // author waiting to be refused.
+      git([...identity, "commit", "-m", decided.subject], repoDir);
+      pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
+    } catch (err) {
+      return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
+    }
+    let prUrl: string | null = null;
+    let prError: string | undefined;
+    let notes: string[] = [];
+    let alreadyOpen = false;
+    if (!direct) {
+      // Read back from the clone rather than taken from the flags, so a team file the
+      // repository already had, and kept, is what the request is assigned by.
+      const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+      const opened = openPr(
+        url,
+        scaffoldBranch,
+        "chore: set up the team handbook",
+        `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.\n\nOpened by TeamHandbook.`,
+        repoDir,
+        forge,
+        assigned,
+      );
+      prUrl = opened.url;
+      prError = opened.error;
+      alreadyOpen = opened.existing === true;
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+    }
+    saveTeamConfig(
+      {
+        repoUrl: url,
+        marketplaceName,
+        initializedAt: now,
+        ...(branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {}),
+        ...(commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}),
+      },
+      home,
+    );
+    return {
+      ok: true,
+      name: marketplaceName,
+      url,
+      home,
+      branch: direct ? branch : scaffoldBranch,
+      defaultBranch: branch,
+      merged: direct,
+      skipped,
+      withCi,
+      commitMessage: decided.subject,
+      ...(prUrl ? { prUrl } : {}),
+      ...(prError ? { prError } : {}),
+      ...(notes.length ? { requestNotes: notes } : {}),
+      ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
+    };
+  });
 }
 
 export function formatInitSuccess(result: InitResult): string {
@@ -1289,6 +1336,9 @@ export function formatInitSuccess(result: InitResult): string {
           ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
           `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`,
         ]),
+    ...(result.leftoverWorkdir
+      ? [`  note:        could not remove the scratch clone at ${displayPath(result.leftoverWorkdir)}; it is safe to delete`]
+      : []),
     // Silence is the wrong signal here: a team whose README already said something
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...(result.skipped?.length

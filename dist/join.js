@@ -1,5 +1,5 @@
 // src/lib/join.ts
-import { readFileSync as readFileSync5, rmSync as rmSync3 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/lib/init.ts
@@ -40,6 +40,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(root, prefix));
   } catch {
     return mkdtempSync(join(tmpdir(), prefix));
+  }
+}
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
   }
 }
 var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
@@ -687,7 +695,7 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       ...example ? { branchExample: example } : {}
     };
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function prefixNote(problem) {

@@ -292,6 +292,37 @@ describe("approveAndDeliver (team mode)", () => {
     });
   });
 
+  it("given a team repo versioned by commit, when a skill is approved to it, then the manifest is untouched and the result says the merge is the delivery", () => {
+    // given a plugin.json with no version, written into the bare repo by fetching from a clone
+    const seed = mkdtempSync(join(tmpdir(), "handbook-seed-"));
+    const versionless = JSON.stringify({ name: "t" }, null, 2) + "\n";
+    try {
+      execFileSync("git", ["clone", remote, join(seed, "repo")], { stdio: "ignore" });
+      mkdirSync(join(seed, "repo", ".claude-plugin"));
+      writeFileSync(join(seed, "repo", ".claude-plugin", "plugin.json"), versionless);
+      execFileSync("git", ["-C", join(seed, "repo"), "add", "-A"]);
+      execFileSync("git", ["-C", join(seed, "repo"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "manifest"]);
+      execFileSync("git", ["-C", remote, "fetch", join(seed, "repo"), "main:main"], { stdio: "ignore" });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+    }
+    saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
+    seedCandidate(meta());
+
+    // when
+    const result = approveAndDeliver(
+      home, "fix-npm-test", "/fallback", "2026-08-08T01:00:00Z",
+      undefined, undefined, () => "https://gitlab.acme.com/team/skills/-/merge_requests/8\n",
+      undefined, undefined, { commitMessage: APPROVED },
+    );
+
+    // then
+    expect(result).toMatchObject({ ok: true, mode: "team", versionedByCommit: true });
+    expect(result.version).toBeUndefined();
+    expect(execFileSync("git", ["-C", remote, "show", `${result.branch}:.claude-plugin/plugin.json`], { encoding: "utf8" })).toBe(versionless);
+    expect(formatApproveResult("fix-npm-test", result)).toContain("versioned by commit");
+  });
+
   it("given a forge that refuses the branch name, when sharing, then nothing is learned and the config is byte-identical", () => {
     saveTeamConfig({ repoUrl: remote, marketplaceName: "t" }, home);
     const configFile = join(home, "config.json");
@@ -1527,5 +1558,33 @@ describe("a mined draft delivered into the project it came from", () => {
     expect(result.ok).toBe(true);
     expect(result.commitMessage).toBeUndefined();
     expect(log()).toContain("seed");
+  });
+});
+
+describe("formatApproveResult on the version teammates update to", () => {
+  const shared = {
+    ok: true,
+    mode: "team" as const,
+    deliveredTo: "https://example.com/mr/9",
+    prUrl: "https://example.com/mr/9",
+    branch: "fix-npm-test",
+  };
+
+  it("given a repository versioned by commit, when the approval is printed, then it says the merge is what copies update to", () => {
+    // when
+    const printed = formatApproveResult("fix-npm-test", { ...shared, versionedByCommit: true });
+
+    // then
+    expect(printed).toContain("versioned by commit, so the merge itself is what teammates' copies update to");
+    expect(printed).not.toContain("raises the handbook");
+  });
+
+  it("given a raised version, when the approval is printed, then it names that version as before", () => {
+    // when
+    const printed = formatApproveResult("fix-npm-test", { ...shared, version: "0.1.6" });
+
+    // then
+    expect(printed).toContain("raises the handbook to v0.1.6");
+    expect(printed).not.toContain("versioned by commit");
   });
 });

@@ -37,6 +37,26 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
+function inWorkdir(prefix, home, work) {
+  const dir = handbookWorkdir(prefix, home);
+  let result;
+  try {
+    result = work(dir);
+  } catch (err) {
+    removeWorkdir(dir);
+    throw err;
+  }
+  const leftover = removeWorkdir(dir);
+  return leftover ? { ...result, leftoverWorkdir: leftover } : result;
+}
 var SLEEPER = new Int32Array(new SharedArrayBuffer(4));
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var SESSION_ORPHAN_MS = 3 * 60 * 60 * 1e3;
@@ -772,6 +792,14 @@ function readPluginVersion(repoDir) {
     return void 0;
   }
 }
+function versionedByCommit(repoDir) {
+  try {
+    const plugin = JSON.parse(readFileSync3(join3(repoDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof plugin === "object" && plugin !== null && !Array.isArray(plugin) && plugin.version === void 0;
+  } catch {
+    return false;
+  }
+}
 function openVersionClaims(git, repoDir, heads, current) {
   if (!current || !versionParts(current)) return [];
   try {
@@ -943,7 +971,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`
+      `GitLab opened the request from the push and assigned it to the account that pushed, unless the project's default template assigns someone else${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
@@ -1211,7 +1239,17 @@ version-bump:
     - git commit -am "${bump}"
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
-function readmeFor(name, url) {
+var UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
+by the commit it installs: everything merged here - a skill, a server, a command, an
+edit to this README - reaches a teammate's copy when their marketplace updates.`;
+var UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
+\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
+moved, but a teammate's copy only picks it up when their marketplace updates, so
+anything committed here by hand reaches nobody unless it raises the version too.`;
+var SWITCH_POINTER = `
+\`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
+which every merge reaches teammates without raising anything.`;
+function readmeFor(name, url, byCommit, withCi) {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -1242,15 +1280,11 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-Every skill arrives as a merge request that also raises the version in
-\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates.
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION + (withCi ? "" : SWITCH_POINTER)}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
-Nothing here needs CI, an access token, or the right to push to a protected branch. If
-skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
-job that bumps the version on merge instead, together with the script it runs.
+Nothing here needs CI, an access token, or the right to push to a protected branch.
 
 ### Getting new skills
 
@@ -1403,7 +1437,8 @@ function readTeamCommitPrefix(repoDir) {
   const problem = commitPrefixProblem(value);
   return problem ? { problem } : { prefix: value };
 }
-function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}, scaffoldVersion) {
+function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}, scaffoldVersion, version) {
+  const pluginVersion = version ?? (withCi ? "0.1.0" : void 0);
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -1426,12 +1461,15 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
       {
         name,
         description: "Skills, MCP servers, and slash commands your team has approved through TeamHandbook.",
-        version: "0.1.0"
+        // Only for a repository that raises a number on every merge. Without one, Claude
+        // Code versions the plugin by commit and every merge reaches teammates, with no
+        // version line for two requests to conflict on and none for a merge to forget.
+        ...pluginVersion !== void 0 ? { version: pluginVersion } : {}
       },
       null,
       2
     ) + "\n",
-    "README.md": readmeFor(name, url),
+    "README.md": readmeFor(name, url, pluginVersion === void 0, withCi),
     "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
     // "" is this team saying its forge asks for nothing, while an absent file is a
@@ -1556,15 +1594,21 @@ function gitIdentityArgs(git) {
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
-function teamCommitPrefixFix(team, retry) {
+function teamCommitPrefixFix(team, retry, source = "config") {
   const known = team.commitPrefix?.trim();
   if (known === "") {
     return `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit had none, and the rule now says otherwise. Correct "commitPrefix" in that file in the repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it for everyone. To unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
   }
+  if (known && source === "repository") {
+    return `The prefix the team repository records in ${TEAM_PREFIX_FILE}, "${known}", does not satisfy that rule; this machine has none of its own and used that one. Correct the record with \`/handbook:init --upgrade --commit-prefix "<the prefix the rule requires>"\`, which fixes it for everyone who shares after; to unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
+  }
+  if (known && source === "flag") {
+    return `The prefix given with --commit-prefix, "${known}", does not satisfy that rule. It is used for this run only, so nothing on this machine or in the repository needs correcting.`;
+  }
   if (known) {
     return `The prefix this machine uses, "${known}", does not satisfy that rule. Correct "commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran /handbook:init record the right one in the repository with \`/handbook:init --upgrade\` so no teammate hits this, then ${retry}.`;
   }
-  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
+  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no "commitPrefix" in ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
 }
 var IDENTITY_RULES = [
   /(author|committer)'s email/i,
@@ -1623,6 +1667,10 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
   if (!url.trim()) return { ok: false, error: "a git URL is required" };
   const assignmentProblem = assignmentRecordProblem(assignment);
   if (assignmentProblem) return { ok: false, error: assignmentProblem };
+  const prefixProblem = commitPrefixProblem(commitPrefix.trim());
+  if (prefixProblem) {
+    return { ok: false, error: `that commit-message prefix cannot be used: it is ${prefixProblem}. Nothing was changed.` };
+  }
   try {
     assertSafeGitUrl(url);
   } catch (err) {
@@ -1654,114 +1702,115 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-");
-  const repoDir = join5(workdir, "repo");
-  try {
-    git(["clone", "--", url, repoDir], workdir);
-  } catch (err) {
-    return { ok: false, error: cloneFailureReason(url, err) };
-  }
-  let branch;
-  try {
-    branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    branch = "";
-  }
-  if (!branch) {
-    return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
-  }
-  let isEmptyRepo;
-  try {
-    isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    isEmptyRepo = true;
-  }
-  if (existsSync2(join5(repoDir, ".claude-plugin", "marketplace.json"))) {
-    return {
+  return inWorkdir("handbook-init-", home, (workdir) => {
+    const repoDir = join5(workdir, "repo");
+    try {
+      git(["clone", "--", url, repoDir], workdir);
+    } catch (err) {
+      return { ok: false, error: cloneFailureReason(url, err) };
+    }
+    let branch;
+    try {
+      branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      branch = "";
+    }
+    if (!branch) {
+      return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
+    }
+    let isEmptyRepo;
+    try {
+      isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      isEmptyRepo = true;
+    }
+    if (existsSync2(join5(repoDir, ".claude-plugin", "marketplace.json"))) {
+      return {
+        ok: false,
+        error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
+      };
+    }
+    const stopped = (error) => ({
       ok: false,
-      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
-    };
-  }
-  const stopped = (error) => ({
-    ok: false,
-    error,
-    proposedMessage: proposal,
-    proposalHash: proposalFingerprint(proposal)
-  });
-  const unavailable = isEmptyRepo ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open` : commitMessage.message === void 0 ? (() => {
-    const blocked = forgeSignInProblem(url, repoDir, forge);
-    return blocked ? noRequestPossible(blocked) : null;
-  })() : null;
-  const decided = decideCommitSubject(
-    commitMessage,
-    proposal,
-    commitMessagePrefix(commitPrefix),
-    "run /handbook:init again",
-    unavailable ?? void 0
-  );
-  if ("error" in decided) return stopped(decided.error);
-  const { skipped } = writeSkeletonPreserving(
-    repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment, productVersion() ?? void 0)
-  );
-  const scaffoldBranch = `${branchPrefix}scaffold`;
-  const direct = isEmptyRepo;
-  try {
-    if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
-    git(["add", "-A"], repoDir);
-    git([...identity, "commit", "-m", decided.subject], repoDir);
-    pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
-  } catch (err) {
-    return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
-  }
-  let prUrl = null;
-  let prError;
-  let notes = [];
-  let alreadyOpen = false;
-  if (!direct) {
-    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-    const opened = openPr(
-      url,
-      scaffoldBranch,
-      "chore: set up the team handbook",
-      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal)
+    });
+    const unavailable = isEmptyRepo ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open` : commitMessage.message === void 0 ? (() => {
+      const blocked = forgeSignInProblem(url, repoDir, forge);
+      return blocked ? noRequestPossible(blocked) : null;
+    })() : null;
+    const decided = decideCommitSubject(
+      commitMessage,
+      proposal,
+      commitMessagePrefix(commitPrefix),
+      "run /handbook:init again",
+      unavailable ?? void 0
+    );
+    if ("error" in decided) return stopped(decided.error);
+    const { skipped } = writeSkeletonPreserving(
+      repoDir,
+      skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment, productVersion() ?? void 0)
+    );
+    const scaffoldBranch = `${branchPrefix}scaffold`;
+    const direct = isEmptyRepo;
+    try {
+      if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
+      git(["add", "-A"], repoDir);
+      git([...identity, "commit", "-m", decided.subject], repoDir);
+      pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
+    } catch (err) {
+      return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
+    }
+    let prUrl = null;
+    let prError;
+    let notes = [];
+    let alreadyOpen = false;
+    if (!direct) {
+      const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+      const opened = openPr(
+        url,
+        scaffoldBranch,
+        "chore: set up the team handbook",
+        `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
 
 Opened by TeamHandbook.`,
-      repoDir,
-      forge,
-      assigned
+        repoDir,
+        forge,
+        assigned
+      );
+      prUrl = opened.url;
+      prError = opened.error;
+      alreadyOpen = opened.existing === true;
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+    }
+    saveTeamConfig(
+      {
+        repoUrl: url,
+        marketplaceName,
+        initializedAt: now,
+        ...branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {},
+        ...commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}
+      },
+      home
     );
-    prUrl = opened.url;
-    prError = opened.error;
-    alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
-  }
-  saveTeamConfig(
-    {
-      repoUrl: url,
-      marketplaceName,
-      initializedAt: now,
-      ...branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {},
-      ...commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}
-    },
-    home
-  );
-  return {
-    ok: true,
-    name: marketplaceName,
-    url,
-    home,
-    branch: direct ? branch : scaffoldBranch,
-    defaultBranch: branch,
-    merged: direct,
-    skipped,
-    withCi,
-    commitMessage: decided.subject,
-    ...prUrl ? { prUrl } : {},
-    ...prError ? { prError } : {},
-    ...notes.length ? { requestNotes: notes } : {},
-    ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
-  };
+    return {
+      ok: true,
+      name: marketplaceName,
+      url,
+      home,
+      branch: direct ? branch : scaffoldBranch,
+      defaultBranch: branch,
+      merged: direct,
+      skipped,
+      withCi,
+      commitMessage: decided.subject,
+      ...prUrl ? { prUrl } : {},
+      ...prError ? { prError } : {},
+      ...notes.length ? { requestNotes: notes } : {},
+      ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
+    };
+  });
 }
 function formatInitSuccess(result) {
   const isGitHub = !!result.url && (hostFromUrl(result.url) ?? "").includes("github");
@@ -1778,6 +1827,7 @@ function formatInitSuccess(result) {
       ...result.prError ? [`               (could not open it automatically: ${result.prError})`] : [],
       `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`
     ],
+    ...result.leftoverWorkdir ? [`  note:        could not remove the scratch clone at ${displayPath(result.leftoverWorkdir)}; it is safe to delete`] : [],
     // Silence is the wrong signal here: a team whose README already said something
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...result.skipped?.length ? [
@@ -1824,7 +1874,7 @@ function formatInitSuccess(result) {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname6, join as join7 } from "node:path";
 
 // src/lib/publish.ts
@@ -1849,7 +1899,8 @@ function bumpPluginVersion(repoDir, past = []) {
   if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync6(file, "utf8"));
-    const current = String(plugin.version ?? "0.1.0");
+    if (plugin.version === void 0) return null;
+    const current = String(plugin.version);
     const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
@@ -1861,10 +1912,14 @@ function bumpPluginVersion(repoDir, past = []) {
   }
 }
 function commitPrefixForPush(team, repoDir) {
-  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team), source: "config" };
   const recorded = readTeamCommitPrefix(repoDir);
-  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
-  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
+  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team), source: "config" };
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    source: "repository"
+  };
 }
 
 // src/lib/upgrade.ts
@@ -1892,13 +1947,14 @@ function parseObject(text) {
     return null;
   }
 }
-function mergePluginManifest(existing, fresh) {
+function mergePluginManifest(existing, fresh, byCommit = false) {
   if (existing === null) return fresh;
   const current = parseObject(existing);
   if (!current) return null;
   const next = JSON.parse(fresh);
+  delete next.version;
   const merged = { ...current, ...next };
-  if (typeof current.version === "string") merged.version = current.version;
+  if (byCommit) delete merged.version;
   return JSON.stringify(merged, null, 2) + "\n";
 }
 function isOwnPlugin(entry) {
@@ -1990,7 +2046,7 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
-function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commitPrefix) {
+function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commitPrefix, commitVersioning = false) {
   const withCi = existsSync4(join7(repoDir, CI_MARKER));
   const recordedExample = readTeamBranchExample(repoDir);
   const example = branchExample ?? recordedExample.example;
@@ -2011,7 +2067,9 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
     prefix,
     withCi,
     example,
-    assigned
+    assigned,
+    void 0,
+    commitVersioning ? void 0 : readPluginVersion(repoDir)
   );
   const known = commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team);
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
@@ -2053,7 +2111,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join7(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join7(repoDir, path)), content) : path === TEAM_PREFIX_FILE ? mergeTeamFile(readIfPresent(join7(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join7(repoDir, path)), content, commitVersioning) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join7(repoDir, path)), content) : path === TEAM_PREFIX_FILE ? mergeTeamFile(readIfPresent(join7(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
@@ -2085,20 +2143,24 @@ function unreadableManifests(repoDir, candidates) {
     (path) => !(path in candidates.files) && !explained.has(path) && readIfPresent(join7(repoDir, path)) !== null
   );
 }
-function versionPlan(repoDir) {
+function versionPlan(repoDir, toCommit = false) {
   const raw = readIfPresent(join7(repoDir, PLUGIN_MANIFEST));
-  const manifest = raw === null ? null : parseObject(raw);
-  const current = manifest && typeof manifest.version === "string" ? manifest.version : void 0;
-  if (!current) {
+  if (raw === null) {
     return {
-      blocked: `${PLUGIN_MANIFEST} in this repository declares no version this can read, so the refresh cannot raise one and no teammate's copy will pick it up. Refreshing that file itself puts a version there, and every refresh after it raises that.`
+      blocked: existsSync4(join7(repoDir, CI_MARKER)) ? `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds it at 0.1.0, the version the repository's version-bump job raises from.` : `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds it without one, and from then on the repository is versioned by commit.`
     };
   }
-  const parts = current.split(".").map(Number);
-  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+  const manifest = parseObject(raw);
+  if (!manifest) {
+    return { blocked: `${PLUGIN_MANIFEST} in this repository is not valid JSON, so the refresh cannot read a version there or raise one.` };
+  }
+  const current = typeof manifest.version === "string" ? manifest.version : void 0;
+  if (manifest.version === void 0 || toCommit) return { ...current ? { current } : {}, byCommit: true };
+  const parts = (current ?? "").split(".").map(Number);
+  if (!current || parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
     return {
-      current,
-      blocked: `the plugin version "${current}" is not a three-part MAJOR.MINOR.PATCH number, so it cannot be raised - and without a raise, no teammate's copy refreshes for this. Set a three-part version in ${PLUGIN_MANIFEST} by hand first.`
+      ...current ? { current } : {},
+      blocked: `the plugin version ${JSON.stringify(manifest.version)} is not a three-part MAJOR.MINOR.PATCH number, so it cannot be raised - and without a raise, no teammate's copy refreshes for this. Set a three-part version in ${PLUGIN_MANIFEST} by hand first.`
     };
   }
   return { current, next: [parts[0], parts[1], (parts[2] ?? 0) + 1].join(".") };
@@ -2174,18 +2236,24 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     if ("error" in running) return { ok: false, error: running.error };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
+    const versioningError = commitVersioningError(choice, repoDir);
+    if (versioningError) return { ok: false, error: versioningError };
     const candidates = upgradeCandidates(
       repoDir,
       team,
       choice.branchExample,
       assignmentAsked(choice),
-      choice.commitPrefix
+      choice.commitPrefix,
+      choice.commitVersioning
     );
     const files = classify(repoDir, candidates.files);
     const paths = refreshable(files);
     const unreadable = unreadableManifests(repoDir, candidates);
-    const preview = previewPush(git, forge, repoDir, team, REFRESH_SLUG, choice.hints);
-    const versionClaim = versionClaimProblem(preview, "run the refresh again");
+    const pushPrefix = refreshPushPrefix(team, choice, repoDir);
+    const proposedMessage = commitSubject(pushPrefix.prefix, REFRESH_COMMIT_TITLE);
+    const preview = previewPush(git, forge, repoDir, pushPrefix.team, REFRESH_SLUG, choice.hints);
+    const versionClaim = choice.commitVersioning ? null : versionClaimProblem(preview, "run the refresh again");
+    const openRaises = choice.commitVersioning ? preview.claims.map((claim) => `"${claim.branch}" (${claim.version})`) : [];
     const answer = branchAnswer(choice, preview, git, repoDir, "run the refresh again");
     const branch = choice.branch !== void 0 && !answer.said ? { branch: choice.branch } : answer.shown;
     const branchProblem = choice.branch !== void 0 || !answer.shown ? answer.said : null;
@@ -2194,15 +2262,17 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
       url: team.repoUrl,
       files,
       withCi: existsSync4(join7(repoDir, CI_MARKER)),
-      version: versionPlan(repoDir),
-      proposedMessage: commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE),
-      proposalHash: proposalFingerprint(commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE)),
+      version: versionPlan(repoDir, choice.commitVersioning),
+      proposedMessage,
+      proposalHash: proposalFingerprint(proposedMessage),
       stamp: scaffoldStamp(repoDir, candidates, running.release),
       ...choice.commitPrefix !== void 0 ? { commitPrefix: choice.commitPrefix.trim() } : {},
+      ...choice.commitVersioning ? { commitVersioning: true, marketplaceName: team.marketplaceName } : {},
       ...branch ? { branch } : {},
       ...branchProblem ? { branchProblem } : {},
       ...preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {},
       ...versionClaim ? { versionClaim } : {},
+      ...openRaises.length ? { openRaises } : {},
       ...!choice.branchExample && !readTeamBranchExample(repoDir).example ? { asksBranchExample: true } : {},
       ...candidates.linked.length ? { linked: candidates.linked } : {},
       ...candidates.withheld.length ? { withheld: candidates.withheld } : {},
@@ -2228,21 +2298,21 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     }
     return plan;
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function refreshPushPrefix(team, choice, repoDir) {
   if (choice.commitPrefix === void 0) return commitPrefixForPush(team, repoDir);
   const given = choice.commitPrefix.trim();
-  return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given) };
+  return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given), source: "flag" };
 }
-var SHELL_ACTIVE = /["`$\\]/;
+var SHELL_ACTIVE = /["`$\\!]/;
 function commitPrefixFlagError(prefix) {
   if (prefix === void 0) return null;
   if (!prefix.trim()) {
     return "--commit-prefix needs the prefix the team's forge requires; an empty one is not something this records. Nothing was changed.";
   }
-  const problem = commitPrefixProblem(prefix.trim()) ?? (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign or a backslash" : null);
+  const problem = commitPrefixProblem(prefix.trim()) ?? (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign, a backslash or an exclamation mark" : null);
   return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 function branchExampleError(example, git, repoDir) {
@@ -2252,8 +2322,21 @@ function branchExampleError(example, git, repoDir) {
   const named = branchTrace(example) ? "that example" : `"${example}"`;
   return `${named} cannot be recorded as the example branch name: ${problem}. Nothing was changed.`;
 }
+function commitVersioningError(choice, repoDir) {
+  if (!choice.commitVersioning) return null;
+  if (existsSync4(join7(repoDir, CI_MARKER))) {
+    return `--commit-versioning cannot be used while this repository runs the version-bump job: ${CI_MARKER} raises the version on every merge and fails on a manifest without one. Take the job and that script out of the repository first. Nothing was changed.`;
+  }
+  if (versionedByCommit(repoDir)) {
+    return `this repository is already versioned by commit: ${PLUGIN_MANIFEST} carries no version, so --commit-versioning has nothing to take out. Nothing was changed.`;
+  }
+  if (versionPlan(repoDir).current === void 0) {
+    return `--commit-versioning takes the version line out of ${PLUGIN_MANIFEST}, and this repository has no such file with a version this can read. Nothing was changed.`;
+  }
+  return null;
+}
 function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage = {}, choice = {}) {
-  if (!paths.length && !recordsAsked(choice)) {
+  if (!paths.length && !recordsAsked(choice) && !choice.commitVersioning) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
   }
   const assignmentProblem = assignmentRecordProblem(assignmentAsked(choice));
@@ -2281,17 +2364,21 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
     if ("error" in running) return { ok: false, error: running.error };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
+    const versioningError = commitVersioningError(choice, repoDir);
+    if (versioningError) return { ok: false, error: versioningError };
     const candidates = upgradeCandidates(
       repoDir,
       team,
       choice.branchExample,
       assignmentAsked(choice),
-      choice.commitPrefix
+      choice.commitPrefix,
+      choice.commitVersioning
     );
     const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
     if (recordsAsked(choice) && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
       paths = [...paths, TEAM_PREFIX_FILE];
     }
+    if (choice.commitVersioning && !paths.includes(PLUGIN_MANIFEST)) paths = [...paths, PLUGIN_MANIFEST];
     if (!paths.length) {
       return { ok: false, error: `${TEAM_PREFIX_FILE} already records that, so nothing was changed.` };
     }
@@ -2308,7 +2395,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
         return { ok: false, error: `"${path}" already matches this version, so nothing was changed.` };
       }
     }
-    const version = versionPlan(repoDir);
+    const version = versionPlan(repoDir, choice.commitVersioning);
     const stamp = scaffoldStamp(repoDir, candidates, running.release);
     const stamps = !stamp.blocked && (!stamp.ifSent || paths.includes(TEAM_PREFIX_FILE));
     const title = REFRESH_COMMIT_TITLE;
@@ -2318,9 +2405,10 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
       git,
       forge,
       repoDir,
-      team,
+      team: pushPrefix.team,
       slug: REFRESH_SLUG,
-      choice,
+      // The switch raises nothing, so an open branch's number is not one it can collide with.
+      choice: choice.commitVersioning ? { ...choice, versionAfterOpen: true } : choice,
       message: commitMessage,
       proposedMessage: commitSubject(messagePrefix, title),
       messagePrefix,
@@ -2330,6 +2418,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
     const { branch } = decided;
     let pushed;
     let raised = null;
+    let byCommit = false;
     let written = paths;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -2339,6 +2428,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
         written = [...paths, TEAM_PREFIX_FILE];
       }
       if (version.next) raised = bumpPluginVersion(repoDir, decided.claims);
+      byCommit = versionedByCommit(repoDir);
       const { missing } = stage(git, repoDir, written);
       if (missing.length) return { ok: false, error: ignoredPathsMessage(missing) };
       git([...identity, "commit", "-m", decided.subject], repoDir);
@@ -2359,10 +2449,11 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
           "run the refresh again",
           // The one route that works on this run whoever recorded what: a refresh takes the
           // prefix the forge requires as a flag, and the files it writes record it.
-          `${teamCommitPrefixFix(pushPrefix.team, "run this again")} Or run the refresh again with --commit-prefix "<the prefix the rule requires>", which this commit and the files it refreshes carry.`
+          `${teamCommitPrefixFix(pushPrefix.team, "run this again", pushPrefix.source)} ${pushPrefix.source === "flag" ? "Run" : "Or run"} the refresh again with --commit-prefix "<the prefix the rule requires>", which this commit and the files it refreshes carry.`
         )
       };
     }
+    const removed = byCommit && version.current !== void 0;
     const request = openRequest(
       team.repoUrl,
       branch,
@@ -2370,8 +2461,14 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
       [
         "Refreshes the scaffold files this repository received from `/handbook:init` to the version",
         "TeamHandbook ships today. Nothing under `skills/`, `commands/`, `agents/` or `.mcp.json` is",
-        "touched; in the two manifests the team's own entries are carried across, and the plugin",
-        "version is raised rather than reset, so teammates' copies pick this up.",
+        "touched; in the two manifests the team's own entries are carried across.",
+        "",
+        ...raised ? ["The plugin version is raised rather than reset, so teammates' copies pick this up."] : removed ? [
+          "This takes the version line out of `.claude-plugin/plugin.json`: from this merge on the",
+          "repository is versioned by commit, and every merge reaches teammates' copies when their",
+          "marketplace updates. Open requests that raise the version conflict with this one; merge or",
+          "close them first."
+        ] : byCommit ? ["The repository is versioned by commit, so this merge is what teammates' copies update to."] : ["The plugin version is not raised: " + (version.blocked ?? "nothing here can raise it.")],
         "",
         "Files in this request:",
         ...written.map((path) => `- \`${path}\``),
@@ -2390,12 +2487,14 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
       branch,
       commitMessage: decided.subject,
       ...raised ? { version: raised } : {},
-      ...raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {},
+      ...removed ? { versionLineRemoved: true } : {},
+      ...byCommit ? { versionedByCommit: true } : {},
+      ...raised || byCommit ? {} : version.blocked ? { versionNotRaised: version.blocked } : {},
       ...stamps ? {} : { scaffoldNotRecorded: stampMissing(stamp) },
       ...request
     };
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function withheldLines(files) {
@@ -2411,6 +2510,7 @@ function refreshAudience(plan) {
     ...paths.includes(TEAM_PREFIX_FILE) ? ["teammates who join after you"] : [],
     ...paths.some((path) => path.startsWith("hooks/")) ? ["the notice teammates see when new skills arrive"] : [],
     ...paths.includes("README.md") ? ["people reading the repository's README"] : [],
+    ...plan.commitVersioning ? ["how every merge reaches teammates' copies"] : [],
     ...paths.some((path) => path.startsWith(".claude-plugin/")) ? ["how the plugin is described in teammates' plugin list"] : [],
     ...paths.some((path) => path === CI_MARKER || path.endsWith(".yml")) ? ["the repository's version-bump job"] : []
   ];
@@ -2444,10 +2544,18 @@ function formatUpgradePlan(plan) {
     "",
     "The team's own content is never part of this: skills/, commands/, agents/ and .mcp.json are",
     "not offered and cannot be written, and inside the two manifests the team's own entries - the",
-    "plugin version, any extra plugins, the marketplace owner - are carried across, not replaced."
+    `${plan.commitVersioning || plan.version?.byCommit ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`
   );
   const version = plan.version ?? {};
-  if (version.next) {
+  if (plan.commitVersioning && version.current !== void 0) {
+    lines.push("", ...commitVersioningSwitch(version.current, plan.marketplaceName ?? "<marketplace>", plan.openRaises ?? []));
+  } else if (version.byCommit) {
+    lines.push(
+      "",
+      `This repository is versioned by commit: ${PLUGIN_MANIFEST} carries no version, so there is none to raise,`,
+      "and the merge itself is what teammates' copies update to when their marketplace updates."
+    );
+  } else if (version.next) {
     lines.push(
       "",
       `The merge request also raises the plugin version, ${version.current} -> ${version.next}, the way every share does.`,
@@ -2482,8 +2590,9 @@ function formatUpgradePlan(plan) {
     "Nothing has been changed, in this repository or on this machine. To send a refresh, name",
     "each file you want:",
     "",
-    `  ${paths.map((path) => `--file ${path}`).join(" ")}` + (plan.commitPrefix !== void 0 ? ` --commit-prefix "${plan.commitPrefix}"` : ""),
-    ...plan.commitPrefix !== void 0 ? ["", "--commit-prefix is used for this run only and saved nowhere, so it goes on that run too."] : []
+    `  ${paths.map((path) => `--file ${path}`).join(" ")}` + (plan.commitPrefix !== void 0 ? ` --commit-prefix "${plan.commitPrefix}"` : "") + (plan.commitVersioning ? " --commit-versioning" : ""),
+    ...plan.commitPrefix !== void 0 ? ["", "--commit-prefix is used for this run only and saved nowhere, so it goes on that run too."] : [],
+    ...plan.commitVersioning ? ["", "--commit-versioning is used for this run only and saved nowhere, so it goes on that run too."] : []
   );
   if (plan.proposedMessage) {
     lines.push(
@@ -2498,6 +2607,21 @@ function formatUpgradePlan(plan) {
   if (plan.versionClaim) lines.push("", `WARNING: ${plan.versionClaim}`);
   lines.push(...branchExampleQuestion(plan));
   return lines.join("\n");
+}
+function commitVersioningSwitch(current, marketplace, open) {
+  return [
+    `This request switches the repository to versioning by commit: it takes "version": "${current}" out of`,
+    `${PLUGIN_MANIFEST}, nothing raises a version after it, and every merge reaches teammates' copies when`,
+    "their marketplace updates.",
+    "Open requests that raise the version conflict with this commit - they change the line it deletes - so",
+    "merge or close them first.",
+    ...open.length ? [`Open now: ${open.join(", ")}.`] : [],
+    "Once this is merged, each teammate moves to the new scheme with:",
+    `  /plugin marketplace update ${marketplace}`,
+    "  /reload-plugins",
+    "A TeamHandbook older than this one still raises a version when it shares, which puts the line back:",
+    "have everyone who shares to this repository update TeamHandbook first."
+  ];
 }
 function branchExampleQuestion(plan) {
   if (!plan.asksBranchExample) return [];
@@ -2517,6 +2641,7 @@ function formatUpgradeResult(result) {
     `  branch:      ${result.branch}`,
     ...result.commitMessage ? [`  commit:      ${result.commitMessage}`] : [],
     ...result.version ? [`  version:     raised to ${result.version}`] : [],
+    ...result.versionLineRemoved ? ["  version:     line taken out - once this is merged, the repository is versioned by commit"] : result.versionedByCommit ? ["  version:     none to raise - the repository is versioned by commit, so the merge is what teammates update to"] : [],
     ...result.versionNotRaised ? [`  version:     NOT raised. ${result.versionNotRaised}`] : [],
     ...result.scaffoldNotRecorded ? [`  scaffold:    ${result.scaffoldNotRecorded}`] : [],
     result.prUrl ? `  request:     ${result.prUrl}` : `  request:     open it here - ${result.manualUrl ?? `push ${result.branch} and open a request against the default branch`}`,
@@ -2531,7 +2656,7 @@ function formatUpgradeResult(result) {
 // src/cli/init.ts
 function usage() {
   console.error(
-    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message <fingerprint>] [--reviewers <a,b>] [--labels <a,b>]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>] [--reviewers <a,b>] [--labels <a,b>] [--commit-prefix <prefix>]"
+    "usage: init.js <git-url> [--name <marketplace-name>] [--branch-prefix <prefix>] [--commit-prefix <prefix>] [--with-ci] [--message <commit message>] [--delegate-message <fingerprint>] [--reviewers <a,b>] [--labels <a,b>]\n       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] [--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>] [--reviewers <a,b>] [--labels <a,b>] [--commit-prefix <prefix>] [--commit-versioning]"
   );
   process.exit(2);
 }
@@ -2581,10 +2706,13 @@ function upgrade(args) {
     ...branchExample !== void 0 ? { branchExample } : {},
     ...assignment,
     ...args.includes("--version-after-open") ? { versionAfterOpen: true } : {},
+    // Taking the version line out is a choice made for this run, never a default and never
+    // saved: a refresh does not rewrite what the team has unless asked to.
+    ...args.includes("--commit-versioning") ? { commitVersioning: true } : {},
     hints: branchHints(process.cwd(), runGit, hint)
   };
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--upgrade" || args[i] === "--version-after-open") continue;
+    if (["--upgrade", "--version-after-open", "--commit-versioning"].includes(args[i])) continue;
     const valued = [
       "--message",
       "--delegate-message",

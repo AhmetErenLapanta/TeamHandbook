@@ -26,6 +26,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
 var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
@@ -656,7 +664,7 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/counters.ts
@@ -853,6 +861,14 @@ function readPluginVersion(repoDir) {
     return void 0;
   }
 }
+function versionedByCommit(repoDir) {
+  try {
+    const plugin = JSON.parse(readFileSync4(join5(repoDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof plugin === "object" && plugin !== null && !Array.isArray(plugin) && plugin.version === void 0;
+  } catch {
+    return false;
+  }
+}
 
 // src/lib/init.ts
 init_session_state();
@@ -877,15 +893,14 @@ init_secrets();
 import { readFileSync as readFileSync5 } from "node:fs";
 import { dirname as dirname2, join as join6 } from "node:path";
 import { fileURLToPath } from "node:url";
-function pluginVersion() {
-  const root = pluginRoot();
+function pluginVersion(root = pluginRoot()) {
   if (!root) return "unknown";
   try {
     const parsed = JSON.parse(readFileSync5(join6(root, ".claude-plugin", "plugin.json"), "utf8"));
     if (typeof parsed?.version === "string") return parsed.version;
   } catch {
   }
-  return "unknown";
+  return productVersion(root) ?? "unknown";
 }
 function pluginRoot() {
   const here = dirname2(fileURLToPath(import.meta.url));
@@ -897,6 +912,15 @@ function pluginRoot() {
     }
   }
   return null;
+}
+function productVersion(root = pluginRoot()) {
+  if (!root) return null;
+  try {
+    const parsed = JSON.parse(readFileSync5(join6(root, "package.json"), "utf8"));
+    return typeof parsed?.version === "string" ? parsed.version : null;
+  } catch {
+    return null;
+  }
 }
 
 // src/lib/init.ts
@@ -962,7 +986,17 @@ version-bump:
     - git commit -am "${bump}"
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
-function readmeFor(name, url) {
+var UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
+by the commit it installs: everything merged here - a skill, a server, a command, an
+edit to this README - reaches a teammate's copy when their marketplace updates.`;
+var UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
+\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
+moved, but a teammate's copy only picks it up when their marketplace updates, so
+anything committed here by hand reaches nobody unless it raises the version too.`;
+var SWITCH_POINTER = `
+\`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
+which every merge reaches teammates without raising anything.`;
+function readmeFor(name, url, byCommit, withCi) {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
@@ -993,15 +1027,11 @@ can never stop to ask for a password.
 
 ## How updates flow
 
-Every skill arrives as a merge request that also raises the version in
-\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates.
+${byCommit ? UPDATES_BY_COMMIT : UPDATES_BY_VERSION + (withCi ? "" : SWITCH_POINTER)}
 Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
 \`grounded-case.json\` evidence it was distilled from).
 
-Nothing here needs CI, an access token, or the right to push to a protected branch. If
-skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
-job that bumps the version on merge instead, together with the script it runs.
+Nothing here needs CI, an access token, or the right to push to a protected branch.
 
 ### Getting new skills
 
@@ -1154,7 +1184,8 @@ function readTeamCommitPrefix(repoDir) {
   const problem = commitPrefixProblem(value);
   return problem ? { problem } : { prefix: value };
 }
-function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}, scaffoldVersion) {
+function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branchExample, assignment = {}, scaffoldVersion, version) {
+  const pluginVersion2 = version ?? (withCi ? "0.1.0" : void 0);
   const files = {
     "hooks/hooks.json": CONSUMER_NOTICE_HOOKS + "\n",
     "hooks/notice.mjs": CONSUMER_NOTICE_SCRIPT,
@@ -1177,12 +1208,15 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
       {
         name,
         description: "Skills, MCP servers, and slash commands your team has approved through TeamHandbook.",
-        version: "0.1.0"
+        // Only for a repository that raises a number on every merge. Without one, Claude
+        // Code versions the plugin by commit and every merge reaches teammates, with no
+        // version line for two requests to conflict on and none for a merge to forget.
+        ...pluginVersion2 !== void 0 ? { version: pluginVersion2 } : {}
       },
       null,
       2
     ) + "\n",
-    "README.md": readmeFor(name, url),
+    "README.md": readmeFor(name, url, pluginVersion2 === void 0, withCi),
     "skills/README.md": "Approved skills land here, one directory per skill (SKILL.md + grounded-case.json).\n",
     // Written even when there is no prefix, because "" and "absent" are different answers:
     // "" is this team saying its forge asks for nothing, while an absent file is a
@@ -1234,7 +1268,7 @@ function marketplacesRoot() {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5, join as join9 } from "node:path";
 
 // src/lib/publish.ts
@@ -1295,13 +1329,14 @@ function parseObject(text) {
     return null;
   }
 }
-function mergePluginManifest(existing, fresh) {
+function mergePluginManifest(existing, fresh, byCommit = false) {
   if (existing === null) return fresh;
   const current = parseObject(existing);
   if (!current) return null;
   const next = JSON.parse(fresh);
+  delete next.version;
   const merged = { ...current, ...next };
-  if (typeof current.version === "string") merged.version = current.version;
+  if (byCommit) delete merged.version;
   return JSON.stringify(merged, null, 2) + "\n";
 }
 function isOwnPlugin(entry) {
@@ -1347,7 +1382,7 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
-function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commitPrefix) {
+function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commitPrefix, commitVersioning = false) {
   const withCi = existsSync4(join9(repoDir, CI_MARKER));
   const recordedExample = readTeamBranchExample(repoDir);
   const example = branchExample ?? recordedExample.example;
@@ -1368,7 +1403,9 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
     prefix,
     withCi,
     example,
-    assigned
+    assigned,
+    void 0,
+    commitVersioning ? void 0 : readPluginVersion(repoDir)
   );
   const known = commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team);
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
@@ -1410,7 +1447,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
       });
       continue;
     }
-    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join9(repoDir, path)), content) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join9(repoDir, path)), content) : path === TEAM_PREFIX_FILE ? mergeTeamFile(readIfPresent(join9(repoDir, path)), content) : content;
+    const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join9(repoDir, path)), content, commitVersioning) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join9(repoDir, path)), content) : path === TEAM_PREFIX_FILE ? mergeTeamFile(readIfPresent(join9(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
   return { files, linked, withheld };
@@ -1808,7 +1845,7 @@ function checkHomeWritable(home) {
   try {
     mkdirSync6(home, { recursive: true });
     writeFileSync5(probe, "ok");
-    rmSync5(probe, { force: true });
+    rmSync4(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
@@ -1851,17 +1888,29 @@ function remoteDistributionState(team, run) {
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
     const version = JSON.parse(readFileSync10(join12(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const byCommit = versionedByCommit(dir);
     let skillCount = 0;
     try {
       skillCount = readdirSync4(join12(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
-    return typeof version === "string" ? { version, skillCount, missing: behind.absent } : null;
+    const head = gitHead(dir, run);
+    if (byCommit) return { head, skillCount, missing: behind.absent };
+    return typeof version === "string" ? { version, ...head ? { head } : {}, skillCount, missing: behind.absent } : null;
   } catch {
     return null;
   } finally {
-    rmSync5(dir, { recursive: true, force: true });
+    removeWorkdir(dir);
+  }
+}
+function gitHead(dir, run) {
+  try {
+    const [root, head] = run("git", ["-C", dir, "rev-parse", "--show-toplevel", "HEAD"], 5e3).trim().split("\n");
+    if (!root || realpathSync(root.trim()) !== realpathSync(dir)) return void 0;
+    return /^[0-9a-f]{40,64}$/.exec(head?.trim() ?? "")?.[0];
+  } catch {
+    return void 0;
   }
 }
 function checkTeamRepo(home, run) {
@@ -1874,28 +1923,31 @@ function checkTeamRepo(home, run) {
     return { check: fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`) };
   }
   const dist = remoteDistributionState(team, run);
-  const remoteVersion = dist?.version;
+  const remote = dist ? { ...dist.version ? { version: dist.version } : {}, ...dist.head ? { head: dist.head } : {} } : void 0;
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
     const check = warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.skillCount} merged skill(s) sit at plugin version 0.1.0 - the version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN variable / Actions write permission)`
     );
-    return { check, remoteVersion };
+    return { check, remote };
   }
   if (dist && dist.missing > 0) {
     const check = warn(
       "team repo",
       `${team.repoUrl} reachable, but ${dist.missing} scaffold file(s) this version ships are not in it at all - run \`/handbook:init --upgrade\` to see what they are and pick which to add (your skills, commands and MCP settings are never touched)`
     );
-    return { check, remoteVersion };
+    return { check, remote };
   }
-  return { check: ok("team repo", `${team.repoUrl} reachable`), remoteVersion };
+  return { check: ok("team repo", `${team.repoUrl} reachable`), remote };
 }
-function checkTeamCopy(home, remoteVersion, marketRoot) {
+function checkTeamCopy(home, remote, marketRoot, run) {
   const team = loadTeamConfig(home);
-  if (!team || !remoteVersion) return null;
-  const local = readPluginVersion(join12(marketRoot, team.marketplaceName));
-  if (!local) return null;
+  if (!team || !remote) return null;
+  const copy = join12(marketRoot, team.marketplaceName);
+  if (!remote.version) return remote.head ? checkTeamCopyCommit(team.marketplaceName, remote.head, gitHead(copy, run)) : null;
+  const remoteVersion = remote.version;
+  const local = readPluginVersion(copy);
+  if (!local) return versionedByCommit(copy) ? checkVersionLineBack(team.marketplaceName, remote, gitHead(copy, run)) : null;
   const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
   if (behind <= 0) {
@@ -1904,6 +1956,24 @@ function checkTeamCopy(home, remoteVersion, marketRoot) {
   return warn(
     "team plugin copy",
     `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
+  );
+}
+function checkVersionLineBack(marketplace, remote, local) {
+  const behind = remote.head && local && remote.head !== local ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.` : "";
+  return warn(
+    "team plugin copy",
+    `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. A share from a TeamHandbook older than 0.31.0, or a conflict resolved on the side with the version, puts it back. Take it out with \`/handbook:init --upgrade --commit-versioning\`, and have everyone who shares run a current TeamHandbook.` + behind
+  );
+}
+function checkTeamCopyCommit(marketplace, remote, local) {
+  if (!local) return null;
+  const short = (sha) => sha.slice(0, 12);
+  if (local === remote) {
+    return ok("team plugin copy", `this machine's marketplace copy is at commit ${short(local)}, the same as the team repo`);
+  }
+  return warn(
+    "team plugin copy",
+    `this machine's marketplace copy is at commit ${short(local)} but the team repo is at ${short(remote)}, so what was merged since has not reached this machine - run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
   );
 }
 function checkForge(home, run) {
@@ -2036,7 +2106,7 @@ function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketp
   ];
   const teamRepo = checkTeamRepo(home, run);
   checks.push(teamRepo.check);
-  const teamCopy = checkTeamCopy(home, teamRepo.remoteVersion, marketRoot);
+  const teamCopy = checkTeamCopy(home, teamRepo.remote, marketRoot, run);
   if (teamCopy) checks.push(teamCopy);
   const identity = checkGitIdentity(home, run);
   if (identity) checks.push(identity);

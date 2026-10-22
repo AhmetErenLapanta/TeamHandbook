@@ -50,9 +50,11 @@ exactly what the rule is.
 6. **If it fails for any other reason** - credentials, access, a protected branch - relay
    the error as-is and stop. Those need a person, not a retry.
 7. Relay the CLI output verbatim - it contains the message to send teammates.
-8. Add `--with-ci` only if the user says skills will also be committed to this repository by
-   hand. The version bump normally travels inside each skill's own merge request, so the
-   scaffold needs no CI, no access token, and no right to push to a protected branch.
+8. Do not add `--with-ci` unless the user asks for a version-bump job by name. The scaffold
+   writes no version into `.claude-plugin/plugin.json`, so Claude Code versions the plugin by
+   commit and every merge - a skill's request or a commit made by hand - reaches teammates
+   with no CI, no access token, and no right to push to a protected branch. `--with-ci`
+   starts the repository at a version instead, and that job raises it on every merge.
 9. **If the user says who should review the team's requests, or how they are labelled**, add
    `--reviewers <a,b>` and `--labels <a,b>` to the run. They are recorded in
    `.teamhandbook.json`, and the scaffold's request and every later one carry them. Do not
@@ -92,8 +94,9 @@ re-init. That loses the repository. Refresh it in place instead:
    says so). The branch is used exactly as given and is never saved as a setting. A run
    missing either answer is refused and nothing is pushed. It opens one merge request. The
    team's own skills, commands, agents and `.mcp.json` are not offered and cannot be
-   written, and inside the two manifests the team's own entries - the plugin version, any
-   extra plugins, the marketplace owner - are carried across rather than replaced.
+   written, and inside the two manifests the team's own entries - the plugin version or its
+   absence, any extra plugins, the marketplace owner - are carried across rather than
+   replaced.
    **If the plan asks what a branch name looks like in this repository**, ask the user once
    for one real example (`TEAM-123-short-description`, say) or let them skip it. An answer
    goes on the same run as `--branch-example "<example>"`, which records it in
@@ -107,11 +110,23 @@ re-init. That loses the repository. Refresh it in place instead:
    There is no assignee to record: each request TeamHandbook opens with `gh` or `glab` asks
    to be assigned to whoever opens it, and the result says when that did not happen.
    Someone asking for requests "assigned to me" needs nothing from this run.
-4. **Read the plan's version line back to the user rather than promising a refresh.** The
-   merge request normally raises the plugin version, which is what makes teammates' copies
-   pick it up - but a repository whose version is not a three-part `MAJOR.MINOR.PATCH`
-   number cannot be raised, and the plan says so with a `WARNING`. When it does, the fix is
-   to set a three-part version by hand first; a refresh merged without one reaches nobody.
+4. **Read the plan's version line back to the user rather than promising a refresh.** A
+   repository whose plugin manifest carries no version is versioned by commit, and the plan
+   says the merge itself is what teammates' copies update to. One that carries a version has
+   it raised by the merge request, which is what makes teammates' copies pick it up - but a
+   version that is not a three-part `MAJOR.MINOR.PATCH` number cannot be raised, and the plan
+   says so with a `WARNING`. When it does, the fix is to set a three-part version by hand
+   first; a refresh merged without one reaches nobody.
+   **Only if the user asks for the repository to stop carrying a version**, run the plan
+   again with `--commit-versioning`. Never add it on your own: it takes the version line out
+   of the team's manifest, which a refresh does not do unasked. Read its paragraph back as
+   it stands - requests already open that raise the version conflict with it and are merged
+   or closed first, teammates run the two commands it prints once it is merged, and
+   everyone who shares to the repository updates TeamHandbook first - and put the same
+   `--commit-versioning` on the run that sends; that run sends `.claude-plugin/plugin.json`
+   whether or not it is named. It is used for that run only and saved nowhere. It is
+   refused on a repository that runs the version-bump job, and on one already versioned by
+   commit.
 5. A `NOT OFFERED` line is not a file to argue with, and naming it anyway is refused. Its
    reason says which case it is. A symbolic link on that path, or a value in
    `.teamhandbook.json` that cannot be carried across, is fixed in the repository or
