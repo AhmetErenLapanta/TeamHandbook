@@ -447,6 +447,69 @@ describe("doctor auth + git identity checks", () => {
     expect(doctorExitCode(report)).toBe(1);
   });
 
+  /** A `claude -p` that fails the way execFileSync reports it: the message carries only stderr. */
+  function failingProbe(fields: { stdout?: string; stderr?: string; code?: string }): CommandRunner {
+    return (cmd, args) => {
+      if (cmd === "claude" && args[0] === "--version") return "2.1.308 (Claude Code)";
+      if (cmd === "claude" && args[0] === "-p") {
+        const err = new Error(`Command failed: claude -p --model sonnet\n${fields.stderr ?? ""}`) as Error & typeof fields;
+        Object.assign(err, { stdout: fields.stdout ?? "", stderr: fields.stderr ?? "", ...(fields.code ? { code: fields.code } : {}) });
+        throw err;
+      }
+      return "";
+    };
+  }
+
+  it("given a logged-out CLI that says so on stdout with stderr empty, when diagnosed, then it reports NOT logged in", () => {
+    // given the measured shape: exit 1, stdout "Not logged in · Please run /login", stderr empty
+    const runner = failingProbe({ stdout: "Not logged in · Please run /login\n" });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.level).toBe("fail");
+    expect(check.detail).toContain("installed but NOT logged in");
+  });
+
+  it("given an authentication error on stderr, when diagnosed, then it still reports NOT logged in", () => {
+    // given
+    const runner = failingProbe({ stderr: 'API Error: 401 {"type":"error","error":{"type":"authentication_error"}}' });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.detail).toContain("installed but NOT logged in");
+  });
+
+  it("given a failure that only mentions authenticating something else, when diagnosed, then it is not called a missing login and claims no login", () => {
+    // given
+    const runner = failingProbe({ stderr: "Error: could not authenticate the proxy at 10.0.0.1" });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.level).toBe("fail");
+    expect(check.detail).not.toContain("NOT logged in");
+    expect(check.detail).toMatch(/^installed, but `claude -p --model /);
+    expect(check.detail).not.toContain("logged in");
+  });
+
+  it("given a probe that times out, when diagnosed, then it says installed and does not claim a login", () => {
+    // given --version answering proves nothing about the session
+    const runner = failingProbe({ code: "ETIMEDOUT" });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.level).toBe("warn");
+    expect(check.detail).toMatch(/^installed, but the probe with model/);
+    expect(check.detail).not.toContain("logged in");
+  });
+
   it("adds a git-identity check only in team mode and flags a missing email", () => {
     expect(runDoctor(home, happyRunner).checks.find((c) => c.name === "git identity")).toBeUndefined();
     saveTeamConfig({ repoUrl: "git@x:t/s.git", marketplaceName: "t" }, home);

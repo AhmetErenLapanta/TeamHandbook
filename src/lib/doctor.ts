@@ -106,6 +106,24 @@ const PROBE_TIMEOUT_MS = 60_000;
  * makes it green here is that a real `claude -p` answered through exactly the invocation
  * the harvest builds.
  */
+/**
+ * Everything a failed call said: the error's message, and its stdout and stderr. Node puts only
+ * stderr into the message, and a logged-out `claude -p` writes "Not logged in · Please run
+ * /login" to stdout with stderr empty, measured - read from the message alone, the one sign
+ * that it was logged out never reached the check.
+ */
+function failureText(err: unknown): string {
+  const failed = err as { stdout?: unknown; stderr?: unknown } | null;
+  return [err instanceof Error ? err.message : String(err), failed?.stdout, failed?.stderr]
+    .filter((part): part is string => typeof part === "string")
+    .join("\n");
+}
+
+// What a logged-out CLI says: the measured "Not logged in · Please run /login", and an API's
+// `authentication_error`. A bare "auth" also matched failures that merely mention
+// authenticating something else, and called them a missing login.
+const SIGNED_OUT = /not logged in|\/login|logged out|authentication/i;
+
 function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
   const unknownIsolation = warn(
     "model call isolation",
@@ -176,7 +194,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
-      if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
+      if (SIGNED_OUT.test(failureText(err))) {
         return [
           fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then"),
           unknownIsolation,
@@ -189,7 +207,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
         return [
           warn(
             "claude CLI",
-            `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
+            `installed, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
           ),
           unknownIsolation,
         ];
@@ -197,7 +215,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
       return [
         fail(
           "claude CLI",
-          `logged in, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
+          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
         ),
         unknownIsolation,
       ];
