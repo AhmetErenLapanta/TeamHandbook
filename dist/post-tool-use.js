@@ -528,7 +528,7 @@ function incrementRedactionBlocked(home = handbookHome(), by = 1) {
 }
 var DEBUG_DUMP_CAP = 50;
 function maybeDumpPayload(raw, home = handbookHome()) {
-  if (!process.env.TEAMHANDBOOK_DEBUG) return;
+  if (process.env.TEAMHANDBOOK_DEBUG !== "1") return;
   try {
     const dir = join2(home, "debug");
     mkdirSync3(dir, { recursive: true });

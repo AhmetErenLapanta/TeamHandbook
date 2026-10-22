@@ -41,6 +41,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync2(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
 var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
@@ -1706,6 +1714,14 @@ function readPluginVersion(repoDir) {
     return void 0;
   }
 }
+function versionedByCommit(repoDir) {
+  try {
+    const plugin = JSON.parse(readFileSync4(join7(repoDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof plugin === "object" && plugin !== null && !Array.isArray(plugin) && plugin.version === void 0;
+  } catch {
+    return false;
+  }
+}
 function openVersionClaims(git, repoDir, heads, current) {
   if (!current || !versionParts(current)) return [];
   try {
@@ -1877,7 +1893,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`
+      `GitLab opened the request from the push and assigned it to the account that pushed, unless the project's default template assigns someone else${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
@@ -2092,15 +2108,21 @@ function runGit(args, cwd) {
 }
 var INIT_BRANCH_PREFIX_FIX = 'Re-run with a prefix that fits, for example --branch-prefix "TEAM-1-", and it is remembered for every skill shared later.';
 var INIT_COMMIT_PREFIX_FIX = 'Re-run with a prefix that satisfies it, for example --commit-prefix "TEAM-1", and it is remembered for every skill shared later.';
-function teamCommitPrefixFix(team, retry) {
+function teamCommitPrefixFix(team, retry, source = "config") {
   const known = team.commitPrefix?.trim();
   if (known === "") {
     return `The team repository records that no prefix is needed (${TEAM_PREFIX_FILE}), so this commit had none, and the rule now says otherwise. Correct "commitPrefix" in that file in the repository and run \`/handbook:join <url>\` again, which re-reads it - that is what fixes it for everyone. To unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
   }
+  if (known && source === "repository") {
+    return `The prefix the team repository records in ${TEAM_PREFIX_FILE}, "${known}", does not satisfy that rule; this machine has none of its own and used that one. Correct the record with \`/handbook:init --upgrade --commit-prefix "<the prefix the rule requires>"\`, which fixes it for everyone who shares after; to unblock only this machine, set "commitPrefix" under "team" in ~/.teamhandbook/config.json, then ${retry}.`;
+  }
+  if (known && source === "flag") {
+    return `The prefix given with --commit-prefix, "${known}", does not satisfy that rule. It is used for this run only, so nothing on this machine or in the repository needs correcting.`;
+  }
   if (known) {
     return `The prefix this machine uses, "${known}", does not satisfy that rule. Correct "commitPrefix" under "team" in ~/.teamhandbook/config.json, and have whoever ran /handbook:init record the right one in the repository with \`/handbook:init --upgrade\` so no teammate hits this, then ${retry}.`;
   }
-  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
+  return `This machine does not know the team's commit-message prefix: /handbook:join reads it from the repository, and this one does not record it (no "commitPrefix" in ${TEAM_PREFIX_FILE}). Whoever ran /handbook:init can add it there once with \`/handbook:init --upgrade\`, and every share after that picks it up; or set "commitPrefix" under "team" in ~/.teamhandbook/config.json to a prefix that satisfies the rule, then ${retry}.`;
 }
 var IDENTITY_RULES = [
   /(author|committer)'s email/i,
@@ -2277,7 +2299,8 @@ function bumpPluginVersion(repoDir, past = []) {
   if (symlinkOnPath(repoDir, ".claude-plugin/plugin.json")) return null;
   try {
     const plugin = JSON.parse(readFileSync6(file, "utf8"));
-    const current = String(plugin.version ?? "0.1.0");
+    if (plugin.version === void 0) return null;
+    const current = String(plugin.version);
     const parts = current.split(".").map(Number);
     if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
     parts[2] = (parts[2] ?? 0) + 1;
@@ -2321,10 +2344,14 @@ function skillCollisionMessage(name, chosen) {
   return chosen ? `${taken} Pick a name nothing has taken with --as, or drop --as and approve with --update to send this candidate as an update to the skill it actually collided with.` : `${taken} Approve again with --update to send yours as an update to it, or with --as <name> to send it under a different name.`;
 }
 function commitPrefixForPush(team, repoDir) {
-  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team) };
+  if (typeof team.commitPrefix === "string") return { team, prefix: teamCommitPrefix(team), source: "config" };
   const recorded = readTeamCommitPrefix(repoDir);
-  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team) };
-  return { team: { ...team, commitPrefix: recorded.prefix }, prefix: commitMessagePrefix(recorded.prefix) };
+  if (recorded.prefix === void 0) return { team, prefix: teamCommitPrefix(team), source: "config" };
+  return {
+    team: { ...team, commitPrefix: recorded.prefix },
+    prefix: commitMessagePrefix(recorded.prefix),
+    source: "repository"
+  };
 }
 function publishCandidate(candidateDir, meta, team, git = runGit, forge = runForge, options = {}) {
   try {
@@ -2378,6 +2405,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       };
     }
     let version = null;
+    let byCommit = false;
     const title = buildPrTitle(skillSlug, occupied);
     const proposal = commitSubject(commitPrefix, title);
     const decided = decidePush({
@@ -2404,6 +2432,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
         skillSlug === meta.slug ? candidateSkillMd : renameSkillMd(candidateSkillMd, skillSlug)
       );
       version = bumpPluginVersion(repoDir, decided.claims);
+      byCommit = versionedByCommit(repoDir);
       git(["add", "-A"], repoDir);
       git([...identityArgs, "commit", "-m", decided.subject], repoDir);
       pushed = pushBranch(
@@ -2415,7 +2444,7 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
     } catch (err) {
       return {
         ok: false,
-        ...pushFailure(team.repoUrl, branch, decided.subject, err, "approve it again", teamCommitPrefixFix(pushTeam.team, "approve again"))
+        ...pushFailure(team.repoUrl, branch, decided.subject, err, "approve it again", teamCommitPrefixFix(pushTeam.team, "approve again", pushTeam.source))
       };
     }
     const body = buildPrBody(meta, readGroundedCase(candidateDir), occupied);
@@ -2428,10 +2457,11 @@ function publishCandidate(candidateDir, meta, team, git = runGit, forge = runFor
       commitMessage: decided.subject,
       ...occupied ? { updatedExisting: true } : {},
       ...version ? { version } : {},
+      ...byCommit ? { versionedByCommit: true } : {},
       ...request
     };
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 var TEAM_SKILLS_DIR = "skills";
@@ -2703,6 +2733,7 @@ function deliverToTeam(dir, meta, team, decidedAt, git, forge, options) {
     commitMessage: published.commitMessage,
     prUrl: published.prUrl,
     ...published.version ? { version: published.version } : {},
+    ...published.versionedByCommit ? { versionedByCommit: true } : {},
     manualUrl: published.manualUrl,
     ...published.prError ? { prError: published.prError } : {},
     ...published.unattachedDescription ? { unattachedDescription: published.unattachedDescription } : {},
@@ -2821,7 +2852,7 @@ function formatApproveResult(slug, result) {
   const landedAt = result.deliveredTo ? displayPath(result.deliveredTo) : "(not recorded)";
   const lines = [];
   if (result.mode === "team") {
-    const bump = result.version ? ` It also raises the handbook to v${result.version}, the version teammates' copies update to.` : "";
+    const bump = result.version ? ` It also raises the handbook to v${result.version}, the version teammates' copies update to.` : result.versionedByCommit ? " The handbook is versioned by commit, so the merge itself is what teammates' copies update to." : "";
     const what = result.updatedExisting ? `Sent "${name}" to the team as an update to the skill they already had` : `Shared "${name}" with the team`;
     if (result.prUrl) {
       lines.push(`${what}: ${result.prUrl}`);

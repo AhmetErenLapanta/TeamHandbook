@@ -152,6 +152,7 @@ export interface DeliverResult {
   branch?: string;
   prUrl?: string;
   version?: string;
+  versionedByCommit?: boolean;
   manualUrl?: string;
   error?: string;
   // set when solo delivery could not use the origin project and fell back to cwd
@@ -466,6 +467,7 @@ function deliverToTeam(
     commitMessage: published.commitMessage,
     prUrl: published.prUrl,
     ...(published.version ? { version: published.version } : {}),
+    ...(published.versionedByCommit ? { versionedByCommit: true } : {}),
     manualUrl: published.manualUrl,
     ...(published.prError ? { prError: published.prError } : {}),
     ...(published.unattachedDescription ? { unattachedDescription: published.unattachedDescription } : {}),
@@ -677,7 +679,9 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
     // reaches anyone until a human merges it.
     const bump = result.version
       ? ` It also raises the handbook to v${result.version}, the version teammates' copies update to.`
-      : "";
+      : result.versionedByCommit
+        ? " The handbook is versioned by commit, so the merge itself is what teammates' copies update to."
+        : "";
     const what = result.updatedExisting
       ? `Sent "${name}" to the team as an update to the skill they already had`
       : `Shared "${name}" with the team`;

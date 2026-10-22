@@ -108,7 +108,8 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   `reject --never`. Notice state (`welcomed`, `notified-counters.json`,
   `nudged-team`, `last-digest`, `seen-skills.json`) - what has
   already been shown to you, so a notice never repeats.
-- `debug/` - raw hook payloads, written only when you set `TEAMHANDBOOK_DEBUG=1`.
+- `debug/` - raw hook payloads and the harvest model's raw reply, written only when you set
+  `TEAMHANDBOOK_DEBUG=1`; any other value, `0` and `false` included, leaves it off.
 - `abandoned.jsonl` - a harvest job that failed to reach `claude` three times is
   parked here rather than dropped silently, so the session's evidence stays
   recoverable. It persists until you delete it; `/handbook:status` reports the count.
@@ -263,9 +264,14 @@ These, and only these:
      the project's own merge request template, because GitLab does not apply that template
      to a request opened through its API, so nothing its quick actions set reaches it; when
      `.teamhandbook.json` has no `reviewers` key, the result says so and how to add one.
-     A request GitLab opens from a push is assigned to nobody by TeamHandbook, because
-     `merge_request.assign` takes a username and, without `glab`, nothing here knows
-     yours; the result asks you to assign yourself if the project's template did not.
+     A request GitLab opens from a push is assigned by GitLab to the account that pushed,
+     unless the project's default template assigns someone else: the push-option handler
+     sets the pusher as assignee on every request it creates, and an `/assign` in the
+     template replaces that assignee when the request is created. That rule is in GitLab's
+     code, not its documentation, and was read there; the handler has set the pusher since
+     its first release, GitLab 11.10. TeamHandbook sends no assignee with the push, because
+     `merge_request.assign` takes a username or a numeric ID and, without `glab`, nothing
+     here knows either of yours.
      The one push that does not ask is the first `/handbook:init`: it pushes the scaffold
      to `handbook/scaffold` by default, or `<prefix>scaffold` with `--branch-prefix`, or
      straight to the default branch of an empty repository, after you have confirmed the
@@ -276,7 +282,9 @@ These, and only these:
    the scaffold itself generates, and only the ones you name one by one with `--file`:
    without a `--file` it prints the diff and makes no change at all. It never writes
    `skills/`, `commands/`, `agents/` or `.mcp.json`, and inside the two `.claude-plugin`
-   manifests it carries the team's own entries across rather than replacing them. An
+   manifests it carries the team's own entries across rather than replacing them - the
+   plugin version included, or its absence. Only `--commit-versioning`, given on that run,
+   takes the version line out of `plugin.json`, and nothing saves that choice. An
    example branch name you give it with `--branch-example` is screened like a branch and
    written into the team's `.teamhandbook.json` in that same request, for teammates who
    join afterwards to read. Reviewer and label names given with `--reviewers` and
@@ -324,8 +332,10 @@ make. Left to themselves:
   its color, spinner and accessibility settings. It sent none for the commands this
   product and git run without opening a request - `auth status` and `auth git-credential`,
   0 of 5 each with sampling forced to every run - but it still wrote the device id file it
-  keeps for the purpose. `auth status` was measured with a failed sign-in; the signed-in
-  path was not measured. `auth git-credential` was measured returning a credential.
+  keeps for the purpose. `auth status` was measured both with a failed sign-in and signed
+  in to github.com, with and without `--hostname`, against a local stand-in for its API
+  that returned the token's scopes; under the same setup `gh api` opened its connection to
+  `cafe.github.com` in 5 of 5 runs. `auth git-credential` was measured returning a credential.
 
 Every call this product makes to either CLI, and every git call it makes that reaches a
 remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in
@@ -348,6 +358,24 @@ recorder; that they are switched off the same way is inferred from the same vari
 being read by the same programs, not measured. A CLI version that renames or ignores these
 variables is not switched off by them.
 
+glab still writes its own configuration file, and the switches above do not stop it. Before
+a push, and on the `/handbook:share` and `/handbook:doctor` screens, TeamHandbook checks that
+a request can be opened by asking `auth status`; for a team repository whose address does not
+name GitHub that is glab, so `/handbook:doctor`, `/handbook:share`, `/handbook:init`,
+`/handbook:init --upgrade` and `/handbook:review` approving to the team all run it. Measured
+against a local stand-in for the forge, with every other connection refused, glab 1.123.0
+wrote that file in three situations:
+
+- holding an OAuth2 token past its expiry, it renewed the token with the forge that issued
+  it and wrote the new token and expiry into the file: 3 of 3 runs with the product's
+  environment and 6 of 6 without it;
+- with no configuration at all, it created its configuration directory and file: 3 of 3;
+- with a valid token it renewed nothing, and wrote only its own version into a file that did
+  not yet record it: 3 of 3, and nothing at all in 3 of 3 runs on a file that did.
+
+The token was kept in the file for these runs; a token kept in the operating system's keyring
+was not measured. gh's own writes to its configuration were not measured.
+
 ## What `/handbook:mine` reads and sends
 
 `/handbook:mine` with no arguments reads git history and nothing else. It walks the
@@ -360,7 +388,13 @@ clone left on its remote, and git fetches each one it lacks from that remote and
 into the repository's `.git`. Measured on a local clone missing 6 blobs: 3 fetches and 0
 blobs missing afterwards, against no fetch on a full clone of the same history. Those
 fetches run in the environment of this product's other remote calls, measured carrying
-`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`.
+`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`. A shallow clone without `--filter` fetched
+nothing. When a partial clone's remote cannot be reached and the history read needs a file
+content the clone does not hold yet, git cannot read that history: the listing names that
+repository with git's reason and leaves it out, and when no repository was readable it says
+so and exits with an error rather than reporting that nothing repeats. A clone whose contents
+an earlier read already fetched reads offline as a full clone does: measured, the same work
+was listed offline as online, 3 of 3.
 
 Asking for a draft is what sends anything. Picking a workflow sends the screened
 evidence for that one workflow to `claude -p`, exactly as any other Claude Code prompt
@@ -512,7 +546,13 @@ fired, and how many lines screening dropped.
 file map names still exist, whether recent work still follows that map, how often the
 skill was called, and whether another skill's description answers the same requests. The
 share screen shows the same overlap warning. Both are read-only: nothing is changed,
-redrafted or deleted because of a finding, no model is called and no connection is opened.
+redrafted or deleted because of a finding, and no model is called. In a full clone no
+connection is opened either. A partial clone is the same exception as for `/handbook:mine`,
+because the history read is the same one: git fetches the file contents the clone left on
+its remote and writes them into the repository's `.git`. Measured on a local blobless clone
+of a six-commit history with 15 contents missing: `/handbook:status` made 5 fetches and left
+none missing, against no fetch on a full clone, in 3 runs of each. Whichever of the two
+commands reads that history first makes the fetches; the other then finds nothing missing.
 
 **What it reads.** The `SKILL.md` of each delivered skill; the repository a skill was
 installed into, or the repositories its map rows name when `mined-workflows.json` knows
@@ -521,13 +561,15 @@ read `/handbook:mine` makes); `skill-usage.json` and `workflows.jsonl`; and the 
 description of every skill this machine loads - the project's `.claude/skills`, your
 `~/.claude/skills`, and the team repository's skills as your local clone of it holds them.
 
-**What it writes.** Nothing. The only new data is in `skill-usage.json` as described above,
+**What it writes.** Nothing, apart from the file contents git fetches into a partial clone's
+`.git` as described above. The only new data is in `skill-usage.json` as described above,
 written by the hook rather than by this report: beside the name, running count and time of
 the last call it already kept, how many calls fell on each of the last 30 days, and never
 the call's arguments.
 
-**What leaves your machine.** Nothing. The team repository's skills are read from the
-clone already on disk, so the overlap warning makes no request.
+**What leaves your machine.** Nothing but, on a partial clone, a request to that
+repository's own remote for the file contents the clone lacks, as above. The team repository's
+skills are read from the clone already on disk, so the overlap warning makes no request.
 
 ## Removing your data
 

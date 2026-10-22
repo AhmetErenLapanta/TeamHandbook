@@ -16,7 +16,7 @@ import type { HarvestEvidence, HarvestItem, HarvestJob } from "./harvest.js";
 import { archiveCandidate, readCandidateMeta, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
 import { candidatesDir } from "./skill-index.js";
-import { UNTRUSTED_OPEN } from "./prompt-safety.js";
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from "./prompt-safety.js";
 import { readTeachings } from "./teachings.js";
 
 let home: string;
@@ -34,6 +34,10 @@ afterEach(() => {
 // included.
 const STAND_IN = "alice";
 const HOME_PATH = ["", "Users", STAND_IN, "work", "api"].join("/");
+
+function outsideFence(prompt: string): string {
+  return prompt.slice(0, prompt.indexOf(UNTRUSTED_OPEN)) + prompt.slice(prompt.indexOf(UNTRUSTED_CLOSE));
+}
 
 function item(overrides: Partial<HarvestItem> = {}): HarvestItem {
   return {
@@ -430,6 +434,36 @@ describe("buildHarvestPrompt", () => {
     expect(prompt).toContain("recurred 3×");
     expect(prompt).toContain("old-skill");
     expect(prompt).toContain("empty array [] is a valid");
+  });
+
+  it("given every field carrying session text, when the prompt is built, then each one sits between the fence's open and close", () => {
+    const prompt = buildHarvestPrompt({
+      slice: "User: slice-marker-q1",
+      evidence: {
+        pairs: [
+          {
+            fingerprint: "abcdefabcdefabcd",
+            family: "family-marker-q2",
+            command: "command-marker-q3",
+            error: "error-marker-q4",
+            resolvedCommand: "resolved-marker-q5",
+            edits: ["edit-marker-q6.ts"],
+          },
+        ],
+        work: { families: ["work-marker-q7"], exts: [".ext-marker-q8"] },
+        recurrence: {},
+        corrections: [{ at: "x", text: "typed-marker-q9" }],
+      },
+      existingSkills: [{ name: "skill-marker-q10", description: "description-marker-q11" }],
+      recentDecisions: ["- decision-marker-q12: rejected"],
+      maxItems: 3,
+    });
+
+    const markers = ["slice", "family", "error", "resolved", "edit", "work", "ext", "typed", "skill", "description", "decision"];
+    for (const marker of markers) {
+      expect(prompt).toMatch(new RegExp(`${marker}-marker-q\\d+`));
+      expect(outsideFence(prompt)).not.toMatch(new RegExp(`${marker}-marker-q\\d+`));
+    }
   });
 
   it("given the session text carries a home path, when the prompt is built, then the model is shown the path without its owner", () => {

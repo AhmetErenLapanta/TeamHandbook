@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { handbookHome, handbookWorkdir, removeWorkdir } from "./session-state.js";
 import { readCounters } from "./counters.js";
 import { hostFromUrl, loadTeamConfig, marketplacesRoot, nonInteractiveEnv } from "./init.js";
-import { compareVersions, readPluginVersion } from "./branch.js";
+import { compareVersions, readPluginVersion, versionedByCommit } from "./branch.js";
 import { forgeSignInProblem, forgeTool } from "./forge.js";
 import type { TeamConfig } from "./init.js";
 import { countStaleSkeleton } from "./upgrade.js";
@@ -315,14 +315,19 @@ function checkHooks(home: string): DoctorCheck {
 // Shallow-clone the remote and read plugin.json - merged skills present while the
 // version is still the scaffold's 0.1.0 means the bump CI never ran. Best-effort: any
 // error falls back to plain reachability (which was already confirmed).
+//
+// A plugin.json with no version is a repository versioned by commit, not one this cannot
+// read: returning nothing for it dropped the missing-files check and the copy comparison
+// together, and the copy comparison is then made on the commit instead of the number.
 function remoteDistributionState(
   team: TeamConfig,
   run: CommandRunner,
-): { version: string; skillCount: number; missing: number } | null {
+): { version?: string; head?: string; skillCount: number; missing: number } | null {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25_000);
     const version = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const byCommit = versionedByCommit(dir);
     let skillCount = 0;
     try {
       skillCount = readdirSync(join(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
@@ -342,15 +347,38 @@ function remoteDistributionState(
     // act on is a warning nobody reads. A file the repository has never had is not
     // ambiguous in the same way: no version of the scaffold ever put it there.
     const behind = countStaleSkeleton(dir, team);
-    return typeof version === "string" ? { version, skillCount, missing: behind.absent } : null;
+    // The commit is read on both kinds: a copy left versioned by commit while the repository
+    // carries a version again has nothing else to be compared on.
+    const head = gitHead(dir, run);
+    if (byCommit) return { head, skillCount, missing: behind.absent };
+    return typeof version === "string" ? { version, ...(head ? { head } : {}), skillCount, missing: behind.absent } : null;
   } catch {
     return null;
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeWorkdir(dir);
   }
 }
 
-function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; remoteVersion?: string } {
+/** The commit a clone has checked out, or undefined for anything that is not a clone. Local:
+ * `-C` rather than a working directory, so it never reads whichever repository the doctor runs in.
+ * The clone's own root is checked too: a copy that is a plain directory inside some other
+ * repository - a home directory kept under git, say - answered with that repository's HEAD,
+ * measured, and the doctor warned about a commit the copy never had. */
+function gitHead(dir: string, run: CommandRunner): string | undefined {
+  try {
+    const [root, head] = run("git", ["-C", dir, "rev-parse", "--show-toplevel", "HEAD"], 5_000).trim().split("\n");
+    if (!root || realpathSync(root.trim()) !== realpathSync(dir)) return undefined;
+    return /^[0-9a-f]{40,64}$/.exec(head?.trim() ?? "")?.[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/** What the team repository's default branch is at, as a version where it carries one and
+ * otherwise as the commit Claude Code versions it by. */
+type RemoteState = { version?: string; head?: string };
+
+function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; remote?: RemoteState } {
   const team = loadTeamConfig(home);
   if (!team) return { check: ok("team repo", "not configured (solo mode - that's fine)") };
   try {
@@ -363,7 +391,7 @@ function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; 
     return { check: fail("team repo", `${team.repoUrl} NOT reachable - approvals cannot publish (${message})`) };
   }
   const dist = remoteDistributionState(team, run);
-  const remoteVersion = dist?.version;
+  const remote = dist ? { ...(dist.version ? { version: dist.version } : {}), ...(dist.head ? { head: dist.head } : {}) } : undefined;
   if (dist && dist.skillCount > 0 && dist.version === "0.1.0") {
     const check = warn(
       "team repo",
@@ -371,7 +399,7 @@ function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; 
         "version-bump CI has not run, so teammates are NOT receiving updates (check the TEAMHANDBOOK_CI_TOKEN " +
         "variable / Actions write permission)",
     );
-    return { check, remoteVersion };
+    return { check, remote };
   }
   if (dist && dist.missing > 0) {
     const check = warn(
@@ -380,9 +408,9 @@ function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; 
         "it at all - run `/handbook:init --upgrade` to see what they are and pick which to add " +
         "(your skills, commands and MCP settings are never touched)",
     );
-    return { check, remoteVersion };
+    return { check, remote };
   }
-  return { check: ok("team repo", `${team.repoUrl} reachable`), remoteVersion };
+  return { check: ok("team repo", `${team.repoUrl} reachable`), remote };
 }
 
 // A merge raises the team repo's version, but the copy Claude Code installed from it moves
@@ -393,11 +421,19 @@ function checkTeamRepo(home: string, run: CommandRunner): { check: DoctorCheck; 
 // network call, and whenever either version cannot be read the check stays out of the report.
 // Behind is a warning, not a failure: with auto-update on, a copy is still behind between a
 // merge and the next refresh, and that is a correctly configured machine.
-function checkTeamCopy(home: string, remoteVersion: string | undefined, marketRoot: string): DoctorCheck | null {
+//
+// A team repository versioned by commit has no number to compare, and Claude Code moves the
+// copy when the commit moves, so the two commits are compared instead: the marketplace's own
+// clone against the one checkTeamRepo made. Both are already on disk, so it is still no
+// network call; a copy still at a version before the switch differs by commit too.
+function checkTeamCopy(home: string, remote: RemoteState | undefined, marketRoot: string, run: CommandRunner): DoctorCheck | null {
   const team = loadTeamConfig(home);
-  if (!team || !remoteVersion) return null;
-  const local = readPluginVersion(join(marketRoot, team.marketplaceName));
-  if (!local) return null;
+  if (!team || !remote) return null;
+  const copy = join(marketRoot, team.marketplaceName);
+  if (!remote.version) return remote.head ? checkTeamCopyCommit(team.marketplaceName, remote.head, gitHead(copy, run)) : null;
+  const remoteVersion = remote.version;
+  const local = readPluginVersion(copy);
+  if (!local) return versionedByCommit(copy) ? checkVersionLineBack(team.marketplaceName, remote, gitHead(copy, run)) : null;
   const behind = compareVersions(remoteVersion, local);
   if (behind === null) return null;
   if (behind <= 0) {
@@ -407,6 +443,41 @@ function checkTeamCopy(home: string, remoteVersion: string | undefined, marketRo
     "team plugin copy",
     `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached ` +
       `this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; ` +
+      "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
+  );
+}
+
+/**
+ * A repository that carries a version again while this copy, installed after the switch,
+ * carries none. Nothing compares as a number here, and the return is silent everywhere else:
+ * a share from an older TeamHandbook writes the line back, and from then on a merge that
+ * raises nothing reaches nobody. So it is said, and the copy is still compared by commit.
+ */
+function checkVersionLineBack(marketplace: string, remote: RemoteState, local: string | undefined): DoctorCheck {
+  const behind =
+    remote.head && local && remote.head !== local
+      ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run ` +
+        `\`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.`
+      : "";
+  return warn(
+    "team plugin copy",
+    `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. ` +
+      "A share from a TeamHandbook older than 0.31.0, or a conflict resolved on the side with the version, puts it back. " +
+      "Take it out with `/handbook:init --upgrade --commit-versioning`, and have everyone who shares run a current TeamHandbook." +
+      behind,
+  );
+}
+
+function checkTeamCopyCommit(marketplace: string, remote: string, local: string | undefined): DoctorCheck | null {
+  if (!local) return null;
+  const short = (sha: string): string => sha.slice(0, 12);
+  if (local === remote) {
+    return ok("team plugin copy", `this machine's marketplace copy is at commit ${short(local)}, the same as the team repo`);
+  }
+  return warn(
+    "team plugin copy",
+    `this machine's marketplace copy is at commit ${short(local)} but the team repo is at ${short(remote)}, so what was merged ` +
+      `since has not reached this machine - run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`; ` +
       "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
   );
 }
@@ -613,7 +684,7 @@ export function runDoctor(
   ];
   const teamRepo = checkTeamRepo(home, run);
   checks.push(teamRepo.check);
-  const teamCopy = checkTeamCopy(home, teamRepo.remoteVersion, marketRoot);
+  const teamCopy = checkTeamCopy(home, teamRepo.remote, marketRoot, run);
   if (teamCopy) checks.push(teamCopy);
   const identity = checkGitIdentity(home, run);
   if (identity) checks.push(identity);

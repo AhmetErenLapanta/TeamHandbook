@@ -125,8 +125,9 @@ direction - the candidates the HARVEST proposed, which nobody asked for.
      command, by that name. Theirs is untouched. On the first run nothing else travelled
      either, because that run stops for the commit message, so the answer goes on the SAME
      run as the rest of the selection rather than in a command of its own: the output says
-     which. Never split one selection into two requests - two opened before either is
-     merged claim the same plugin version, and the second reaches nobody. These are listed
+     which. Never split one selection into two requests - in a repository that carries a
+     version, two opened before either is merged claim the same one, and the second
+     reaches nobody. These are listed
      in their own group, apart from the real faults. This is the refusal that has a way
      forward: ask, per name, whether to send that one as an update to the team's copy, and
      never add the flag on your own initiative. Say the consequence before they pick: after
@@ -202,9 +203,10 @@ not consent. The result says which names it actually replaced; relay that line a
 rather than summarising it, since "shared" and "replaced what the team was using" are not
 the same event for the people on the other end.
 
-Everything selected travels as ONE merge request, with one version bump, rather than one
-request each. That is deliberate: two requests opened before either is merged both claim
-the same plugin version, and the second one to be merged then reaches nobody. Picking five
+Everything selected travels as ONE merge request rather than one request each. That is
+deliberate: the team reviews it once, and in a repository that still carries a plugin
+version, two requests opened before either is merged both claim the same one, and the
+second one to be merged then reaches nobody. Picking five
 skills is exactly that case five times over, which is why skills travel in this batch too.
 It is also why this command is run once with everything the user picked, rather than once
 per item.

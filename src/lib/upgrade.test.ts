@@ -264,6 +264,30 @@ describe("mergePluginManifest", () => {
   it("given a repository with no manifest at all, when it is refreshed, then the scaffold's is offered whole", () => {
     expect(mergePluginManifest(null, fresh)).toBe(fresh);
   });
+
+  it("given a manifest with no version, when it is refreshed from one carrying 0.1.0, then no version comes back", () => {
+    // given a repository versioned by commit
+    const existing = JSON.stringify({ name: "acme-skills", description: "old" }, null, 2) + "\n";
+
+    // when
+    const merged = JSON.parse(mergePluginManifest(existing, fresh)!);
+
+    // then the skeleton's number is not carried in: the old merge put 0.1.0 here
+    expect(merged).not.toHaveProperty("version");
+    expect(merged.description).toBe("today");
+  });
+
+  it("given a manifest at 0.1.5, when it is refreshed by commit, then the version line goes and the team's fields stay", () => {
+    // given
+    const existing = JSON.stringify({ name: "acme-skills", version: "0.1.5", author: { name: "Platform" } }, null, 2) + "\n";
+
+    // when
+    const merged = JSON.parse(mergePluginManifest(existing, fresh, true)!);
+
+    // then
+    expect(merged).not.toHaveProperty("version");
+    expect(merged.author).toEqual({ name: "Platform" });
+  });
 });
 
 describe("planUpgrade", () => {
@@ -877,7 +901,172 @@ describe("a plugin version the refresh cannot raise", () => {
 
     // the old shape wrote 0.1.1 into a file nobody selected, and said nothing about it
     expect(show(remote, result.branch!, PLUGIN_MANIFEST)).toBe('{"name":"acme-skills"}\n');
-    expect(result.versionNotRaised).toContain("declares no version");
+    expect(result.versionNotRaised).toBeUndefined();
+  });
+});
+
+describe("a repository versioned by commit", () => {
+  function versionlessRepo(): string {
+    return handbookRepo((remote) => ({ ...currentScaffold(teamFor(remote)), "README.md": "# older\n", ...TEAM_CONTENT }));
+  }
+
+  it("given a manifest with no version, when the plan runs, then it is the normal state and no warning is printed", () => {
+    // given
+    const remote = versionlessRepo();
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.version).toEqual({ byCommit: true });
+    const text = formatUpgradePlan(plan);
+    expect(text).toContain("This repository is versioned by commit");
+    expect(text).not.toContain("WARNING");
+    expect(text).not.toContain("no teammate's copy will pick it up");
+    // there is no version to carry across, so the sentence about what is carried does not name one
+    expect(text).toContain("fields the team added, any extra plugins, the marketplace owner - are carried across");
+    expect(text).not.toContain("plugin version, any extra plugins");
+  });
+
+  it("given a repository running the version-bump job with no plugin.json, when planned, then the plan names the version the file is sent with", () => {
+    // given
+    const remote = handbookRepo((url) => {
+      const { [PLUGIN_MANIFEST]: _manifest, ...files } = currentScaffold(teamFor(url), true);
+      return { ...files, ...TEAM_CONTENT };
+    });
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then the plan and the file it would send say the same thing
+    expect(plan.version?.blocked).toContain("adds it at 0.1.0, the version the repository's version-bump job raises from");
+    expect(plan.version?.blocked).not.toContain("versioned by commit");
+    expect(plan.diff).toContain('+  "version": "0.1.0"');
+  });
+
+  it("given a manifest with no version, when a refresh is sent, then the manifest keeps none and the result says the merge is the delivery", () => {
+    // given
+    const remote = versionlessRepo();
+    const before = show(remote, "main", PLUGIN_MANIFEST);
+
+    // when
+    const result = applyUpgrade(teamFor(remote), ["README.md"], gitWithIdentity, noForge);
+
+    // then
+    expect(result).toMatchObject({ ok: true, versionedByCommit: true });
+    expect(result.version).toBeUndefined();
+    expect(result.versionNotRaised).toBeUndefined();
+    expect(show(remote, result.branch!, PLUGIN_MANIFEST)).toBe(before);
+    expect(JSON.parse(before)).not.toHaveProperty("version");
+    expect(formatUpgradeResult(result)).toContain("versioned by commit, so the merge is what teammates update to");
+  });
+});
+
+describe("switching a repository to versioning by commit", () => {
+  /** Today's scaffold in a repository that still raises a number, as every repository
+   * scaffolded before this did. */
+  function versionedRepo(withCi = false): string {
+    return handbookRepo((remote) => {
+      const files = skeletonFiles("acme-skills", remote, null, "", withCi, undefined, {}, undefined, "0.1.5");
+      const plugin = { ...JSON.parse(files[PLUGIN_MANIFEST]!), author: { name: "Platform" } };
+      return {
+        ...files,
+        [PLUGIN_MANIFEST]: JSON.stringify(plugin, null, 2) + "\n",
+        "README.md": "# older\n",
+        ...TEAM_CONTENT,
+      };
+    });
+  }
+
+  it("given a repository at 0.1.5, when it is planned without the flag, then its version line stays and is raised as before", () => {
+    // given
+    const remote = versionedRepo();
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.files!.find((file) => file.path === PLUGIN_MANIFEST)?.state).toBe("current");
+    expect(plan.version).toEqual({ current: "0.1.5", next: "0.1.6" });
+    expect(formatUpgradePlan(plan)).not.toContain("switches the repository");
+  });
+
+  it("given the flag, when it is planned, then it says what the switch does to open requests, teammates and older copies", () => {
+    // given
+    const remote = versionedRepo();
+
+    // when
+    const plan = planUpgrade(teamFor(remote), undefined, undefined, { commitVersioning: true });
+
+    // then
+    expect(plan.version).toEqual({ current: "0.1.5", byCommit: true });
+    expect(plan.files!.find((file) => file.path === PLUGIN_MANIFEST)?.state).toBe("differs");
+    expect(plan.diff).toContain('-  "version": "0.1.5",');
+    const text = formatUpgradePlan(plan);
+    expect(text).toContain("This request switches the repository to versioning by commit");
+    expect(text).toContain("Open requests that raise the version conflict with this commit");
+    expect(text).toContain("/plugin marketplace update acme-skills");
+    expect(text).toContain("/reload-plugins");
+    expect(text).toContain("update TeamHandbook first");
+    expect(text).toContain(`--file ${PLUGIN_MANIFEST}`);
+    expect(text).toContain("--commit-versioning");
+    expect(text).not.toContain("raises the plugin version");
+    expect(text.split("\n")[0]).toContain("how every merge reaches teammates' copies");
+  });
+
+  it("given the flag, when the refresh is sent naming only the README, then the manifest joins it without a version and nothing is saved", () => {
+    // given
+    const remote = versionedRepo();
+    const home = temp("handbook-home-");
+    saveTeamConfig(teamFor(remote), home);
+    const config = readFileSync(join(home, "config.json"), "utf8");
+    vi.stubEnv("TEAMHANDBOOK_HOME", home);
+
+    // when
+    let result;
+    try {
+      result = applyUpgrade(teamFor(remote), ["README.md"], gitWithIdentity, noForge, APPROVED, { commitVersioning: true });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    // then
+    expect(result).toMatchObject({ ok: true, versionLineRemoved: true, versionedByCommit: true });
+    expect(result.refreshed).toContain(PLUGIN_MANIFEST);
+    expect(result.version).toBeUndefined();
+    const plugin = JSON.parse(show(remote, result.branch!, PLUGIN_MANIFEST));
+    expect(plugin).not.toHaveProperty("version");
+    expect(plugin.author).toEqual({ name: "Platform" });
+    expect(show(remote, result.branch!, "README.md")).toContain("carries no version, so Claude Code versions the plugin");
+    expect(formatUpgradeResult(result)).toContain("line taken out");
+    expect(readFileSync(join(home, "config.json"), "utf8")).toBe(config);
+  });
+
+  it("given a repository already versioned by commit, when the flag is given, then it is refused and nothing is pushed", () => {
+    // given
+    const remote = handbookRepo((url) => ({ ...currentScaffold(teamFor(url)), ...TEAM_CONTENT }));
+    const before = heads(remote);
+
+    // when
+    const plan = planUpgrade(teamFor(remote), undefined, undefined, { commitVersioning: true });
+    const result = applyUpgrade(teamFor(remote), [], gitWithIdentity, noForge, APPROVED, { commitVersioning: true });
+
+    // then
+    expect(plan.error).toContain("already versioned by commit");
+    expect(result.error).toContain("already versioned by commit");
+    expect(heads(remote)).toBe(before);
+  });
+
+  it("given a repository running the version-bump job, when the flag is given, then it is refused because the job needs a version", () => {
+    // given
+    const remote = versionedRepo(true);
+
+    // when
+    const plan = planUpgrade(teamFor(remote), undefined, undefined, { commitVersioning: true });
+
+    // then
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toContain("runs the version-bump job");
   });
 });
 
@@ -1297,6 +1486,49 @@ describe("the refresh commit's prefix and the record's", () => {
     expect(repo.branches()).toEqual(["main"]);
   });
 
+  it("given a teammate with no prefix of their own, when the push is refused, then the record is named as the repository's and corrected there", () => {
+    // given
+    const repo = repoRecording("TEAM-1", { commitMessage: "^OTHER-9 " });
+
+    // when
+    const result = applyUpgrade(joinerFor(repo.url), ["README.md"], gitWithIdentity, noForge, APPROVED, { branch: "TEAM-1-refresh" });
+
+    // then
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain(`The prefix the team repository records in ${TEAM_PREFIX_FILE}, "TEAM-1", does not satisfy that rule`);
+    expect(result.error).not.toContain("The prefix this machine uses");
+  });
+
+  it("given a prefix given on the run, when the push is refused, then nothing on the machine is sent to be corrected", () => {
+    // given
+    const repo = repoRecording("TEAM-1", { commitMessage: "^TEAM-1 " });
+
+    // when
+    const result = applyUpgrade(joinerFor(repo.url), ["README.md"], gitWithIdentity, noForge, APPROVED, {
+      branch: "TEAM-1-refresh",
+      commitPrefix: "WRONG-1",
+    });
+
+    // then
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('The prefix given with --commit-prefix, "WRONG-1", does not satisfy that rule');
+    expect(result.error).toContain('Run the refresh again with --commit-prefix "<the prefix the rule requires>"');
+    expect(result.error).not.toContain("config.json");
+  });
+
+  it("given a teammate with no prefix of their own, when the refresh is planned, then the branch is proposed from the record as a share's is", () => {
+    // given
+    const repo = repoRecording("TEAM-1");
+
+    // when
+    const plan = planUpgrade(joinerFor(repo.url), gitWithIdentity, noForge);
+    const probe = applyUpgradeDeciding(joinerFor(repo.url), ["README.md"], gitWithIdentity, noForge, APPROVED);
+
+    // then
+    expect(plan.branch).toEqual({ branch: "TEAM-1-refresh-scaffold" });
+    expect(probe.proposedBranch).toBe("TEAM-1-refresh-scaffold");
+  });
+
   it("given that refusal, when the refresh is run again with the prefix the rule requires, then it goes through", () => {
     const repo = repoRecording("TEAM-1", { commitMessage: "^TEAM-1 " });
     const other = { ...joinerFor(repo.url), commitPrefix: "OTHER-9" };
@@ -1317,10 +1549,11 @@ describe("the refresh commit's prefix and the record's", () => {
       return gitWithIdentity(args, cwd);
     };
 
-    for (const prefix of ["TE`whoami`AM", 'TE"AM', "TE$(id)AM", "TE\\AM"]) {
+    // `!` too: interactive bash and zsh expand history inside double quotes
+    for (const prefix of ["TE`whoami`AM", 'TE"AM', "TE$(id)AM", "TE\\AM", "TE!AM", "TEAM-1!"]) {
       const plan = planUpgrade(joinerFor(currentHandbookRepo()), watching, noForge, { commitPrefix: prefix });
       expect(plan.error, prefix).toBe(
-        "that commit-message prefix cannot be used: it is carrying a quote, a backtick, a dollar sign or a backslash. Nothing was changed.",
+        "that commit-message prefix cannot be used: it is carrying a quote, a backtick, a dollar sign, a backslash or an exclamation mark. Nothing was changed.",
       );
     }
     expect(cloned).toEqual([]);

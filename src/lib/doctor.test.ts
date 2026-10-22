@@ -767,6 +767,158 @@ describe("doctor team plugin copy check", () => {
     expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
   });
 
+  /** A team repository whose plugin.json carries no version, written into the bare one
+   * by fetching from a seed, plus a function that adds a commit to it the same way. */
+  function teamRepoByCommit(files: Record<string, string> = {}): { seed: string; commit: (more: Record<string, string>) => void } {
+    execFileSync("git", ["init", "--bare", "-b", "main", bare]);
+    const seed = mkdtempSync(join(tmpdir(), "handbook-teamseed-"));
+    execFileSync("git", ["init", "-b", "main", seed]);
+    const commit = (more: Record<string, string>) => {
+      for (const [path, body] of Object.entries(more)) {
+        mkdirSync(join(seed, dirname(path)), { recursive: true });
+        writeFileSync(join(seed, path), body);
+      }
+      execFileSync("git", ["-C", seed, "add", "-A"]);
+      execFileSync("git", ["-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "change"]);
+      execFileSync("git", ["-C", bare, "fetch", seed, "main:main"]);
+    };
+    commit({ ".claude-plugin/plugin.json": JSON.stringify({ name: "t" }), ...files });
+    return { seed, commit };
+  }
+
+  /** This machine's marketplace copy, which Claude Code keeps as a clone of the team repo. */
+  function subscribed(): string {
+    execFileSync("git", ["clone", bare, join(marketRoot, "t")]);
+    return execFileSync("git", ["-C", join(marketRoot, "t"), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  }
+
+  it("given a team repo versioned by commit and a copy on the same commit, when diagnosed, then it passes without a network call of its own", () => {
+    // given
+    const { seed } = teamRepoByCommit();
+    const head = subscribed();
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    const gitCalls: string[] = [];
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner(gitCalls), marketRoot), "team plugin copy");
+
+    // then
+    expect(check.level).toBe("ok");
+    expect(check.detail).toContain(`at commit ${head.slice(0, 12)}, the same as the team repo`);
+    expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a team repo versioned by commit that moved since this copy updated, when diagnosed, then it warns with both commits and the two commands", () => {
+    // given
+    const { seed, commit } = teamRepoByCommit();
+    const local = subscribed();
+    commit({ "skills/fix-thing/SKILL.md": "---\nname: fix-thing\n---\n" });
+    const remoteHead = execFileSync("git", ["-C", bare, "rev-parse", "main"], { encoding: "utf8" }).trim();
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    const gitCalls: string[] = [];
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner(gitCalls), marketRoot), "team plugin copy");
+
+    // then
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain(`at commit ${local.slice(0, 12)} but the team repo is at ${remoteHead.slice(0, 12)}`);
+    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(check.detail).toContain("`/reload-plugins`");
+    expect(check.detail).not.toContain("v0.");
+    expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a copy still at 0.1.5 and a team repo that took the version line out, when diagnosed, then it is compared by commit and warns", () => {
+    // given the repository a copy subscribed to while it raised a version
+    const { seed, commit } = teamRepoByCommit({ ".claude-plugin/plugin.json": JSON.stringify({ name: "t", version: "0.1.5" }) });
+    subscribed();
+    commit({ ".claude-plugin/plugin.json": JSON.stringify({ name: "t" }) });
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner([]), marketRoot), "team plugin copy");
+
+    // then
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("has not reached this machine");
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a team repo versioned by commit with a scaffold file missing, when diagnosed, then the missing-files warning still fires and 0.1.0 is not mentioned", () => {
+    // given today's scaffold with merged skills and its README gone
+    const scaffold = skeletonFiles("t", bare, null, "", false);
+    delete scaffold["README.md"];
+    const { seed } = teamRepoByCommit({ ...scaffold, "skills/fix-thing/SKILL.md": "---\nname: fix-thing\n---\n" });
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t", initializedAt: "2026-01-01T00:00:00Z" }, home);
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner([]), marketRoot), "team repo");
+
+    // then
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("1 scaffold file(s)");
+    expect(check.detail).not.toContain("0.1.0");
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a copy that is not a clone, when its team repo is versioned by commit, then the check is absent rather than guessing", () => {
+    // given
+    const { seed } = teamRepoByCommit();
+    marketplaceCopyAt("0.3.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const report = runDoctor(home, recordingRunner([]), marketRoot);
+
+    // then
+    expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a copy that is not a clone inside some other git repository, when diagnosed, then that repository's commit is not read as the copy's", () => {
+    // given a plain-directory copy under a parent directory that is itself a git repository
+    const { seed } = teamRepoByCommit();
+    execFileSync("git", ["init", "-b", "main", marketRoot]);
+    writeFileSync(join(marketRoot, "unrelated.txt"), "x\n");
+    execFileSync("git", ["-C", marketRoot, "add", "-A"]);
+    execFileSync("git", ["-C", marketRoot, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "dotfiles"]);
+    marketplaceCopyAt("0.3.0");
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const report = runDoctor(home, recordingRunner([]), marketRoot);
+
+    // then the parent's HEAD used to produce a warning about a commit the copy never had
+    expect(report.checks.find((c) => c.name === "team plugin copy")).toBeUndefined();
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a copy versioned by commit and a team repo that carries a version line again, when diagnosed, then it says so and compares the commits", () => {
+    // given the switch, this machine's copy taken after it, and an older copy's share putting the line back
+    const { seed, commit } = teamRepoByCommit();
+    const local = subscribed();
+    commit({ ".claude-plugin/plugin.json": JSON.stringify({ name: "t", version: "0.1.1" }) });
+    const remoteHead = execFileSync("git", ["-C", bare, "rev-parse", "main"], { encoding: "utf8" }).trim();
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+    const gitCalls: string[] = [];
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner(gitCalls), marketRoot), "team plugin copy");
+
+    // then
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("the team repo carries a version line again (v0.1.1) while this machine's copy is versioned by commit");
+    expect(check.detail).toContain("A share from a TeamHandbook older than 0.31.0");
+    expect(check.detail).toContain("`/handbook:init --upgrade --commit-versioning`");
+    expect(check.detail).toContain(`commit ${local.slice(0, 12)}, the team repo ${remoteHead.slice(0, 12)}`);
+    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
+    rmSync(seed, { recursive: true, force: true });
+  });
+
   it("given the team repo cannot be reached, when diagnosed, then the check is absent rather than guessing", () => {
     // given
     marketplaceCopyAt("0.3.0");
