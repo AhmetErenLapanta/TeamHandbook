@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { forgeNotice, hostFromUrl, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
@@ -40,7 +40,7 @@ import {
   versionPast,
 } from "./branch.js";
 import type { BranchProposal, PushChoice, Pushed, RecordedAssignment, VersionClaim } from "./branch.js";
-import { handbookWorkdir } from "./session-state.js";
+import { handbookWorkdir, removeWorkdir } from "./session-state.js";
 import { productVersion } from "./plugin-root.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
@@ -926,7 +926,7 @@ export function planUpgrade(
     }
     return plan;
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 
@@ -1229,7 +1229,7 @@ export function applyUpgrade(
       ...request,
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 

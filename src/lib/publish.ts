@@ -1,4 +1,4 @@
-import { handbookWorkdir } from "./session-state.js";
+import { handbookWorkdir, removeWorkdir } from "./session-state.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -536,7 +536,7 @@ export function publishCandidate(
       ...request,
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 
@@ -1020,7 +1020,7 @@ export function teamAssets(team: TeamConfig, git: GitRunner = runGit): TeamAsset
   } catch {
     return null;
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 
@@ -1372,7 +1372,7 @@ export function publishTeamSelection(
       ...request,
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 

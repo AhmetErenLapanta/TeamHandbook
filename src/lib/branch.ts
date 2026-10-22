@@ -357,9 +357,10 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * file says nothing about reviewers is told on each such request how to record them, or
  * how to record that the template sets none. A team that recorded them, `[]` included,
  * has already answered.
- * A request still to be opened by hand gets the assignee in the same words a push gives it,
- * on the two forges whose new-request page is known: GitHub's assigns nobody, and GitLab's
- * template may. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
+ * A request still to be opened by hand asks its opener to assign themselves, on the two
+ * forges whose new-request page is known: GitHub's assigns nobody, and GitLab's template
+ * may. A push is not asked to: GitLab assigns what it opens from one to the account that
+ * pushed, unless the project's default template assigns someone else. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
  * follows neither rule, so there the note asks only for the lists.
  */
 export function requestNotes(
@@ -855,12 +856,21 @@ export function openRequest(
     // reviewers, which no push option sets, are printed for a person to add. No assignee
     // rides either: `merge_request.assign` takes a username or an ID, and without glab
     // nothing here knows the forge's name for this person - the git identity is not it, and
-    // a guess could assign someone else. The template GitLab applies to a request opened
-    // without a description may assign it, so the note asks only for what it did not.
+    // a guess could assign someone else; `@me` is no username there and assigns nobody.
+    // None is needed: GitLab assigns every request it creates from a push to the account
+    // that pushed (push_options_handler_service.rb, create_params, read at b1883a02ab44 and
+    // there since the handler's first release, 11.10), which is the person opening it, the
+    // assignee every other path asks for. GitLab's documentation does not say so; the rule
+    // is its code. A project's default template can still replace it: the push fills an
+    // empty description from that template, and creating the request runs the template's
+    // quick actions before its assignees (issuable_base_service.rb:221, :227), so an
+    // `/assign` there sets the assignees in place of the pusher. The note says so rather
+    // than naming an assignee this run did not see.
     const notes = [
       ...(dropped ? [dropped] : []),
-      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: ` +
-        `assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`,
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else" +
+        `${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`,
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }

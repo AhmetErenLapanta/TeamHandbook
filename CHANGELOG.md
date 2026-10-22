@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.31.1] - 2026-10-22
+
+### Changed
+
+- **`/handbook:mine` no longer reports "No repeating work" for a history it could not
+  read.** A partial clone whose remote is out of reach, when the read needs file contents
+  the clone never fetched, is now named with "Could not read the history of ..., so it is
+  left out", and the command exits with an error when no history could be read at all. A
+  directory that is not a git repository, or one with no commits, now ends the same way.
+- **SECURITY.md now says what `glab` writes when TeamHandbook checks that a request can be
+  opened.** Before a push, and on the `/handbook:share` and `/handbook:doctor` screens, it
+  asks `glab auth status` for a team repository that is not on GitHub. Holding an expired
+  OAuth2 token, `glab` renews it with the forge and writes the new token into its own
+  configuration file, and with no configuration it creates one; the telemetry switches do
+  not stop that. SECURITY.md names the commands that run the check and what was not
+  measured.
+- **SECURITY.md is more exact about partial and shallow clones:** a partial clone whose
+  remote is out of reach can still be read for whatever an earlier read already fetched,
+  and a shallow clone without `--filter` fetches nothing.
+
+### Fixed
+
+- **`/handbook:init` no longer leaves a clone of your team repository behind.** Every run
+  kept its scratch clone under `~/.teamhandbook/tmp/` (or `tmp/` under `TEAMHANDBOOK_HOME`
+  when that is set); it is now removed when the command finishes, whether it succeeded or
+  stopped. Directories named `handbook-init-*` under `~/.teamhandbook/tmp/` are left over
+  from earlier runs and can be deleted.
+- **A scratch clone the system refuses to delete no longer replaces what a command already
+  did with a raw error.** In `/handbook:join`, `/handbook:doctor`, `/handbook:share`,
+  `/handbook:review` and `/handbook:init --upgrade`, the branch had already reached the
+  remote, or the setting had been written, and the command still ended with an error and a
+  stack trace. The result is now reported as usual and the clone is left under
+  `~/.teamhandbook/tmp/`; `/handbook:init` names the one it left.
+- **The note on a request GitLab opens from the push no longer says it names no assignee.**
+  GitLab assigns that request to the account that pushed, unless the project's default
+  template assigns someone else, and the note now says so. Earlier entries in this
+  changelog said such a request is not assigned and asked you to assign yourself; that was
+  wrong.
+
 ## [0.31.0] - 2026-10-22
 
 ### Added

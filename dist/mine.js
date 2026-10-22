@@ -4021,6 +4021,13 @@ ${USAGE}`);
   const paths = repoPaths(cwd, values.repo ?? [], loadMineConfig(deps.home).repos);
   const options = deps.options ?? {};
   const collection = collectUnits(paths, options);
+  for (const { path, reason } of collection.unreadable) {
+    fail(`Could not read the history of ${path}, so it is left out: ${reason}`);
+  }
+  if (collection.repos === 0 && collection.unreadable.length > 0) {
+    fail("No history could be read, so nothing can be said about what repeats here.");
+    return 1;
+  }
   const mined = shapesFromUnits(collection, options);
   if (sessionDetectEnabled(deps.home)) {
     try {
