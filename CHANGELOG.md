@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.31.0] - 2026-10-22
+
+### Added
+
+- **A team repository can be versioned by commit: `/handbook:init --upgrade
+  --commit-versioning`.** It takes the version line out of the team plugin's
+  `.claude-plugin/plugin.json`, and from then on every merge is itself what teammates'
+  copies update to: sharing and review raise no version, and `--upgrade` keeps the
+  manifest without one. The plan says what the switch means before anything is sent: it
+  names the requests already open that raise a version, since those conflict with it, gives
+  `/plugin marketplace update <name>` and `/reload-plugins` for teammates once it is merged,
+  and asks everyone who shares to the repository to update TeamHandbook first, because an
+  older copy still raises a version. The flag is used only when given, is saved nowhere, and
+  is refused on a repository that runs the version-bump job or is already versioned by
+  commit. A repository that keeps its version is not touched: `--upgrade` still raises it,
+  and never removes the line without the flag.
+- **A team repository set up with `/handbook:init` is versioned by commit from the start.**
+  The scaffold writes no version. `--with-ci` still starts the repository at a version,
+  because its bump job needs one.
+- **`/handbook:doctor` understands a repository versioned by commit.** It compares the
+  commit this machine's marketplace copy is at with the team repository's and, when the copy
+  is behind, gives the commands that update it. It still reports scaffold files the
+  repository is missing. If a version line has come back into such a repository, it says so,
+  names how that happens (a share from a TeamHandbook older than this release, or a
+  conflict resolved on the side with the version), and how to take it out again.
+- **Results and request descriptions speak truthfully in a repository versioned by commit:**
+  there is no version to raise, and the merge is what teammates fetch.
+- **The README `/handbook:init` writes into a team repository, the README's own diagram,
+  SECURITY.md and the instructions for `/handbook:init` and `/handbook:share` cover
+  repositories with and without a version.** `/handbook:init --upgrade` offers the new
+  README to an existing team repository.
+
+### Fixed
+
+- **A commit-message prefix carrying an exclamation mark is now refused,** like one
+  carrying a quote, a backtick, a dollar sign or a backslash, since the plan prints it
+  inside double quotes for a shell.
+- **`/handbook:init --commit-prefix` at setup now runs the same checks on the prefix as a
+  refresh does.**
+- **When a push is refused over its commit prefix, the message says where that prefix came
+  from:** the flag, the team repository or this machine. It no longer calls a prefix taken
+  from the repository the one this machine uses.
+
 ## [0.30.1] - 2026-10-22
 
 ### Fixed
