@@ -1,10 +1,10 @@
 // src/lib/join.ts
-import { readFileSync as readFileSync5, rmSync as rmSync3 } from "node:fs";
+import { readFileSync as readFileSync5, rmSync as rmSync4 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/lib/session-state.ts
@@ -687,7 +687,7 @@ function joinTeamRepo(url, home = handbookHome(), git = runGit, now = (/* @__PUR
       ...example ? { branchExample: example } : {}
     };
   } finally {
-    rmSync3(workdir, { recursive: true, force: true });
+    rmSync4(workdir, { recursive: true, force: true });
   }
 }
 function prefixNote(problem) {

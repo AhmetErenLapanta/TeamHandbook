@@ -67,7 +67,7 @@ function configIsBroken(home = handbookHome()) {
 // src/lib/init.ts
 import { execFileSync as execFileSync4, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname4, join as join5 } from "node:path";
 
 // src/lib/score.ts
@@ -1643,114 +1643,118 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-");
-  const repoDir = join5(workdir, "repo");
+  const workdir = handbookWorkdir("handbook-init-", home);
   try {
-    git(["clone", "--", url, repoDir], workdir);
-  } catch (err) {
-    return { ok: false, error: cloneFailureReason(url, err) };
-  }
-  let branch;
-  try {
-    branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    branch = "";
-  }
-  if (!branch) {
-    return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
-  }
-  let isEmptyRepo;
-  try {
-    isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    isEmptyRepo = true;
-  }
-  if (existsSync2(join5(repoDir, ".claude-plugin", "marketplace.json"))) {
-    return {
+    const repoDir = join5(workdir, "repo");
+    try {
+      git(["clone", "--", url, repoDir], workdir);
+    } catch (err) {
+      return { ok: false, error: cloneFailureReason(url, err) };
+    }
+    let branch;
+    try {
+      branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      branch = "";
+    }
+    if (!branch) {
+      return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
+    }
+    let isEmptyRepo;
+    try {
+      isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      isEmptyRepo = true;
+    }
+    if (existsSync2(join5(repoDir, ".claude-plugin", "marketplace.json"))) {
+      return {
+        ok: false,
+        error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
+      };
+    }
+    const stopped = (error) => ({
       ok: false,
-      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`
-    };
-  }
-  const stopped = (error) => ({
-    ok: false,
-    error,
-    proposedMessage: proposal,
-    proposalHash: proposalFingerprint(proposal)
-  });
-  const unavailable = isEmptyRepo ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open` : commitMessage.message === void 0 ? (() => {
-    const blocked = forgeSignInProblem(url, repoDir, forge);
-    return blocked ? noRequestPossible(blocked) : null;
-  })() : null;
-  const decided = decideCommitSubject(
-    commitMessage,
-    proposal,
-    commitMessagePrefix(commitPrefix),
-    "run /handbook:init again",
-    unavailable ?? void 0
-  );
-  if ("error" in decided) return stopped(decided.error);
-  const { skipped } = writeSkeletonPreserving(
-    repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment, productVersion() ?? void 0)
-  );
-  const scaffoldBranch = `${branchPrefix}scaffold`;
-  const direct = isEmptyRepo;
-  try {
-    if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
-    git(["add", "-A"], repoDir);
-    git([...identity, "commit", "-m", decided.subject], repoDir);
-    pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
-  } catch (err) {
-    return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
-  }
-  let prUrl = null;
-  let prError;
-  let notes = [];
-  let alreadyOpen = false;
-  if (!direct) {
-    const { assignment: assigned, dropped } = readTeamAssignment(repoDir);
-    const opened = openPr(
-      url,
-      scaffoldBranch,
-      "chore: set up the team handbook",
-      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal)
+    });
+    const unavailable = isEmptyRepo ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open` : commitMessage.message === void 0 ? (() => {
+      const blocked = forgeSignInProblem(url, repoDir, forge);
+      return blocked ? noRequestPossible(blocked) : null;
+    })() : null;
+    const decided = decideCommitSubject(
+      commitMessage,
+      proposal,
+      commitMessagePrefix(commitPrefix),
+      "run /handbook:init again",
+      unavailable ?? void 0
+    );
+    if ("error" in decided) return stopped(decided.error);
+    const { skipped } = writeSkeletonPreserving(
+      repoDir,
+      skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, void 0, assignment, productVersion() ?? void 0)
+    );
+    const scaffoldBranch = `${branchPrefix}scaffold`;
+    const direct = isEmptyRepo;
+    try {
+      if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
+      git(["add", "-A"], repoDir);
+      git([...identity, "commit", "-m", decided.subject], repoDir);
+      pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
+    } catch (err) {
+      return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
+    }
+    let prUrl = null;
+    let prError;
+    let notes = [];
+    let alreadyOpen = false;
+    if (!direct) {
+      const { assignment: assigned, dropped } = readTeamAssignment(repoDir);
+      const opened = openPr(
+        url,
+        scaffoldBranch,
+        "chore: set up the team handbook",
+        `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.
 
 Opened by TeamHandbook.`,
-      repoDir,
-      forge,
-      assigned
+        repoDir,
+        forge,
+        assigned
+      );
+      prUrl = opened.url;
+      prError = opened.error;
+      alreadyOpen = opened.existing === true;
+      notes = requestNotes(dropped, assigned, opened);
+    }
+    saveTeamConfig(
+      {
+        repoUrl: url,
+        marketplaceName,
+        initializedAt: now,
+        ...branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {},
+        ...commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}
+      },
+      home
     );
-    prUrl = opened.url;
-    prError = opened.error;
-    alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened);
+    return {
+      ok: true,
+      name: marketplaceName,
+      url,
+      home,
+      branch: direct ? branch : scaffoldBranch,
+      defaultBranch: branch,
+      merged: direct,
+      skipped,
+      withCi,
+      commitMessage: decided.subject,
+      ...prUrl ? { prUrl } : {},
+      ...prError ? { prError } : {},
+      ...notes.length ? { requestNotes: notes } : {},
+      ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
+    };
+  } finally {
+    rmSync3(workdir, { recursive: true, force: true });
   }
-  saveTeamConfig(
-    {
-      repoUrl: url,
-      marketplaceName,
-      initializedAt: now,
-      ...branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {},
-      ...commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}
-    },
-    home
-  );
-  return {
-    ok: true,
-    name: marketplaceName,
-    url,
-    home,
-    branch: direct ? branch : scaffoldBranch,
-    defaultBranch: branch,
-    merged: direct,
-    skipped,
-    withCi,
-    commitMessage: decided.subject,
-    ...prUrl ? { prUrl } : {},
-    ...prError ? { prError } : {},
-    ...notes.length ? { requestNotes: notes } : {},
-    ...!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? void 0 } : {}
-  };
 }
 function formatInitSuccess(result) {
   const isGitHub = !!result.url && (hostFromUrl(result.url) ?? "").includes("github");
@@ -1813,11 +1817,11 @@ function formatInitSuccess(result) {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname6, join as join7 } from "node:path";
 
 // src/lib/publish.ts
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync6, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname5, join as join6, relative } from "node:path";
 function symlinkOnPath(repoDir, path) {
   let current = repoDir;
@@ -2217,7 +2221,7 @@ function planUpgrade(team, git = runGit, forge = runForge, choice = {}) {
     }
     return plan;
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    rmSync5(workdir, { recursive: true, force: true });
   }
 }
 function refreshPushPrefix(team, choice, repoDir) {
@@ -2384,7 +2388,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
       ...request
     };
   } finally {
-    rmSync4(workdir, { recursive: true, force: true });
+    rmSync5(workdir, { recursive: true, force: true });
   }
 }
 function withheldLines(files) {

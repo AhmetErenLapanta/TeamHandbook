@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -896,6 +896,27 @@ describe("initTeamRepo", () => {
       expect(readme).toBe("# our repo\n");
     } finally {
       rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("given one scaffold that is pushed and one refused after its clone, when each returns, then neither leaves its clone under the handbook home", () => {
+    // Every other command removes its clone on the way out; init kept each one, so every
+    // run left a full copy of the team repository behind under the state directory.
+    const pushed = bareRepo();
+    const refused = seededRepo("master");
+    const otherHome = mkdtempSync(join(tmpdir(), "handbook-test-"));
+    try {
+      const done = initTeamRepo(pushed, "acme-skills", home);
+      const stopped = initTeamRepoDeciding(refused, "acme-skills", otherHome, undefined, undefined, noForge, undefined, "", false, {
+        delegated: proposalFingerprint("chore: scaffold team skill base"),
+      });
+
+      expect(done.ok).toBe(true);
+      expect(stopped.error).toContain("no merge request can be opened from this machine");
+      expect(readdirSync(join(home, "tmp"))).toEqual([]);
+      expect(readdirSync(join(otherHome, "tmp"))).toEqual([]);
+    } finally {
+      for (const dir of [pushed, refused, otherHome]) rmSync(dir, { recursive: true, force: true });
     }
   });
 
