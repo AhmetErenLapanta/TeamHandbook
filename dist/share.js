@@ -26,6 +26,14 @@ function handbookWorkdir(prefix, home = handbookHome()) {
     return mkdtempSync(join(tmpdir(), prefix));
   }
 }
+function removeWorkdir(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return void 0;
+  } catch {
+    return dir;
+  }
+}
 var EDIT_ATTACH_WINDOW_MS, SLEEPER, SESSION_MAX_AGE_MS, SESSION_ORPHAN_MS;
 var init_session_state = __esm({
   "src/lib/session-state.ts"() {
@@ -1260,7 +1268,7 @@ function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem,
     const reviewers = assignmentList({ reviewers: assignment.reviewers, labels: [] });
     const notes = [
       ...dropped ? [dropped] : [],
-      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`
+      `GitLab opened the request from the push and assigned it to the account that pushed, unless the project's default template assigns someone else${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
@@ -2203,7 +2211,7 @@ function teamAssets(team, git = runGit) {
   } catch {
     return null;
   } finally {
-    rmSync2(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 function publishTeamSelection(selection, team, git = runGit, forge = runForge, options = {}) {
@@ -2450,7 +2458,7 @@ function publishTeamSelection(selection, team, git = runGit, forge = runForge, o
       ...request
     };
   } finally {
-    rmSync2(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 

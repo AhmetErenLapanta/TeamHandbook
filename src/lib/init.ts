@@ -9,7 +9,7 @@ import { forgeSignInProblem, hostFromUrl, manualPrUrl, noRequestPossible, openPr
 import { requestNoteLines, requestNotes, assignmentRecordProblem, pushBranch, readTeamAssignment } from "./branch.js";
 import type { RecordedAssignment } from "./branch.js";
 import type { ForgeRunner } from "./forge.js";
-import { handbookHome, handbookWorkdir } from "./session-state.js";
+import { handbookHome, inWorkdir } from "./session-state.js";
 import { cloneFailureReason } from "./git-errors.js";
 import { configIsBroken, readConfigFile } from "./config.js";
 import { writeFileAtomic } from "./fs-atomic.js";
@@ -1112,6 +1112,8 @@ export interface InitResult {
   proposedMessage?: string;
   // its fingerprint, which a delegated run has to name back
   proposalHash?: string;
+  // the scratch clone the run could not remove, left for the user to delete
+  leftoverWorkdir?: string;
 }
 
 export function initTeamRepo(
@@ -1173,142 +1175,143 @@ export function initTeamRepo(
     };
   }
   const proposal = commitSubject(commitMessagePrefix(commitPrefix), SCAFFOLD_COMMIT_TITLE);
-  const workdir = handbookWorkdir("handbook-init-");
-  const repoDir = join(workdir, "repo");
-  // Clone first, always. Building a fresh history locally and pushing it assumed the
-  // remote was empty, and most teams create the repository through their organisation's
-  // tooling, which leaves a README in it. It also assumed the branch was called main,
-  // while plenty of organisations still default to master - and a scaffold pushed to
-  // the wrong branch is a handbook whose version-bump CI never runs.
-  try {
-    git(["clone", "--", url, repoDir], workdir);
-  } catch (err) {
-    return { ok: false, error: cloneFailureReason(url, err) };
-  }
-  let branch: string;
-  try {
-    branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    branch = "";
-  }
-  if (!branch) {
-    return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
-  }
-  // No commits yet means no branch to open a request against; that is the only case
-  // where the scaffold has to land on the default branch directly.
-  let isEmptyRepo: boolean;
-  try {
-    isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
-  } catch {
-    isEmptyRepo = true;
-  }
-  if (existsSync(join(repoDir, ".claude-plugin", "marketplace.json"))) {
-    return {
+  return inWorkdir("handbook-init-", home, (workdir): InitResult => {
+    const repoDir = join(workdir, "repo");
+    // Clone first, always. Building a fresh history locally and pushing it assumed the
+    // remote was empty, and most teams create the repository through their organisation's
+    // tooling, which leaves a README in it. It also assumed the branch was called main,
+    // while plenty of organisations still default to master - and a scaffold pushed to
+    // the wrong branch is a handbook whose version-bump CI never runs.
+    try {
+      git(["clone", "--", url, repoDir], workdir);
+    } catch (err) {
+      return { ok: false, error: cloneFailureReason(url, err) };
+    }
+    let branch: string;
+    try {
+      branch = String(git(["symbolic-ref", "--short", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      branch = "";
+    }
+    if (!branch) {
+      return { ok: false, error: `cannot tell which branch ${url} uses by default; push a first commit to it and re-run` };
+    }
+    // No commits yet means no branch to open a request against; that is the only case
+    // where the scaffold has to land on the default branch directly.
+    let isEmptyRepo: boolean;
+    try {
+      isEmptyRepo = !String(git(["rev-parse", "--verify", "HEAD"], repoDir) ?? "").trim();
+    } catch {
+      isEmptyRepo = true;
+    }
+    if (existsSync(join(repoDir, ".claude-plugin", "marketplace.json"))) {
+      return {
+        ok: false,
+        error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
+      };
+    }
+    // The decision about the message sits HERE, after the clone, because whether "you
+    // decide" can be honoured at all is something only the clone can say. An empty
+    // repository has no branch to open a request against, so the scaffold goes straight to
+    // the default branch and there is no merge request for a delegation to be about; a
+    // repository that is not empty gets one, but only from a machine whose forge CLI is
+    // there and signed in. Refusing here costs the clone, which is removed on the way out
+    // like every other one, and still leaves no branch on the remote and nothing on this machine.
+    const stopped = (error: string): InitResult => ({
       ok: false,
-      error: `${url} is already a handbook - run /handbook:join ${url} to point this machine at it instead of scaffolding it again`,
-    };
-  }
-  // The decision about the message sits HERE, after the clone, because whether "you
-  // decide" can be honoured at all is something only the clone can say. An empty
-  // repository has no branch to open a request against, so the scaffold goes straight to
-  // the default branch and there is no merge request for a delegation to be about; a
-  // repository that is not empty gets one, but only from a machine whose forge CLI is
-  // there and signed in. Refusing here costs the clone - which this command keeps either
-  // way - and still leaves no branch on the remote and nothing on this machine.
-  const stopped = (error: string): InitResult => ({
-    ok: false,
-    error,
-    proposedMessage: proposal,
-    proposalHash: proposalFingerprint(proposal),
-  });
-  const unavailable = isEmptyRepo
-    ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open`
-    : commitMessage.message === undefined
-      ? (() => {
-          const blocked = forgeSignInProblem(url, repoDir, forge);
-          return blocked ? noRequestPossible(blocked) : null;
-        })()
-      : null;
-  const decided = decideCommitSubject(
-    commitMessage,
-    proposal,
-    commitMessagePrefix(commitPrefix),
-    "run /handbook:init again",
-    unavailable ?? undefined,
-  );
-  if ("error" in decided) return stopped(decided.error);
-  const { skipped } = writeSkeletonPreserving(
-    repoDir,
-    skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment, productVersion() ?? undefined),
-  );
-  // An empty repository has no default branch to open a merge request against, so the
-  // first commit has to go straight to it. Everywhere else the scaffold arrives the way
-  // every skill will: a branch and a merge request. Pushing to the default branch needs
-  // write access to a protected branch, which on most teams means Maintainer, while
-  // pushing a new branch is something almost any member can do - and the person setting
-  // the handbook up is not necessarily the person who administers the project.
-  const scaffoldBranch = `${branchPrefix}scaffold`;
-  const direct = isEmptyRepo;
-  try {
-    if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
-    git(["add", "-A"], repoDir);
-    // Commit as the developer, not as a stand-in address. publish has always done this
-    // because a forge that checks commit authors rejects anything else, and init pushes
-    // to the same repository under the same rules. "TeamHandbook@localhost" was an
-    // author waiting to be refused.
-    git([...identity, "commit", "-m", decided.subject], repoDir);
-    pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
-  } catch (err) {
-    return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
-  }
-  let prUrl: string | null = null;
-  let prError: string | undefined;
-  let notes: string[] = [];
-  let alreadyOpen = false;
-  if (!direct) {
-    // Read back from the clone rather than taken from the flags, so a team file the
-    // repository already had, and kept, is what the request is assigned by.
-    const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-    const opened = openPr(
-      url,
-      scaffoldBranch,
-      "chore: set up the team handbook",
-      `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.\n\nOpened by TeamHandbook.`,
-      repoDir,
-      forge,
-      assigned,
+      error,
+      proposedMessage: proposal,
+      proposalHash: proposalFingerprint(proposal),
+    });
+    const unavailable = isEmptyRepo
+      ? `${url} has no commits yet, so the scaffold goes straight to ${branch} and there is no merge request to open`
+      : commitMessage.message === undefined
+        ? (() => {
+            const blocked = forgeSignInProblem(url, repoDir, forge);
+            return blocked ? noRequestPossible(blocked) : null;
+          })()
+        : null;
+    const decided = decideCommitSubject(
+      commitMessage,
+      proposal,
+      commitMessagePrefix(commitPrefix),
+      "run /handbook:init again",
+      unavailable ?? undefined,
     );
-    prUrl = opened.url;
-    prError = opened.error;
-    alreadyOpen = opened.existing === true;
-    notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
-  }
-  saveTeamConfig(
-    {
-      repoUrl: url,
-      marketplaceName,
-      initializedAt: now,
-      ...(branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {}),
-      ...(commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}),
-    },
-    home,
-  );
-  return {
-    ok: true,
-    name: marketplaceName,
-    url,
-    home,
-    branch: direct ? branch : scaffoldBranch,
-    defaultBranch: branch,
-    merged: direct,
-    skipped,
-    withCi,
-    commitMessage: decided.subject,
-    ...(prUrl ? { prUrl } : {}),
-    ...(prError ? { prError } : {}),
-    ...(notes.length ? { requestNotes: notes } : {}),
-    ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
-  };
+    if ("error" in decided) return stopped(decided.error);
+    const { skipped } = writeSkeletonPreserving(
+      repoDir,
+      skeletonFiles(marketplaceName, url, hostFromUrl(url), commitPrefix, withCi, undefined, assignment, productVersion() ?? undefined),
+    );
+    // An empty repository has no default branch to open a merge request against, so the
+    // first commit has to go straight to it. Everywhere else the scaffold arrives the way
+    // every skill will: a branch and a merge request. Pushing to the default branch needs
+    // write access to a protected branch, which on most teams means Maintainer, while
+    // pushing a new branch is something almost any member can do - and the person setting
+    // the handbook up is not necessarily the person who administers the project.
+    const scaffoldBranch = `${branchPrefix}scaffold`;
+    const direct = isEmptyRepo;
+    try {
+      if (!direct) git(["checkout", "-b", scaffoldBranch], repoDir);
+      git(["add", "-A"], repoDir);
+      // Commit as the developer, not as a stand-in address. publish has always done this
+      // because a forge that checks commit authors rejects anything else, and init pushes
+      // to the same repository under the same rules. "TeamHandbook@localhost" was an
+      // author waiting to be refused.
+      git([...identity, "commit", "-m", decided.subject], repoDir);
+      pushBranch(git, repoDir, direct ? `HEAD:${branch}` : `HEAD:${scaffoldBranch}`);
+    } catch (err) {
+      return { ok: false, error: pushFailureReason(url, direct ? branch : scaffoldBranch, err) };
+    }
+    let prUrl: string | null = null;
+    let prError: string | undefined;
+    let notes: string[] = [];
+    let alreadyOpen = false;
+    if (!direct) {
+      // Read back from the clone rather than taken from the flags, so a team file the
+      // repository already had, and kept, is what the request is assigned by.
+      const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+      const opened = openPr(
+        url,
+        scaffoldBranch,
+        "chore: set up the team handbook",
+        `Scaffolds this repository as a Claude Code marketplace so approved skills can be distributed from it: marketplace manifest, plugin manifest${withCi ? ", the version-bump CI," : ","} and a \`skills/\` directory.\n\nOpened by TeamHandbook.`,
+        repoDir,
+        forge,
+        assigned,
+      );
+      prUrl = opened.url;
+      prError = opened.error;
+      alreadyOpen = opened.existing === true;
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+    }
+    saveTeamConfig(
+      {
+        repoUrl: url,
+        marketplaceName,
+        initializedAt: now,
+        ...(branchPrefix !== DEFAULT_BRANCH_PREFIX ? { branchPrefix } : {}),
+        ...(commitPrefix ? { commitPrefix: commitPrefix.trim() } : {}),
+      },
+      home,
+    );
+    return {
+      ok: true,
+      name: marketplaceName,
+      url,
+      home,
+      branch: direct ? branch : scaffoldBranch,
+      defaultBranch: branch,
+      merged: direct,
+      skipped,
+      withCi,
+      commitMessage: decided.subject,
+      ...(prUrl ? { prUrl } : {}),
+      ...(prError ? { prError } : {}),
+      ...(notes.length ? { requestNotes: notes } : {}),
+      ...(!direct && !prUrl && !alreadyOpen ? { manualUrl: manualPrUrl(url, scaffoldBranch) ?? undefined } : {}),
+    };
+  });
 }
 
 export function formatInitSuccess(result: InitResult): string {
@@ -1333,6 +1336,9 @@ export function formatInitSuccess(result: InitResult): string {
           ...(result.prError ? [`               (could not open it automatically: ${result.prError})`] : []),
           `  NOT LIVE until that is merged into ${result.defaultBranch}. Share the message below after it is.`,
         ]),
+    ...(result.leftoverWorkdir
+      ? [`  note:        could not remove the scratch clone at ${displayPath(result.leftoverWorkdir)}; it is safe to delete`]
+      : []),
     // Silence is the wrong signal here: a team whose README already said something
     // keeps it, and then the join instructions live nowhere unless they are told.
     ...(result.skipped?.length
