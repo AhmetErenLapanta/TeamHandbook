@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { forgeSignInProblem, openedRequestUrl, openPr, runForge } from "./forge.js";
+import { assignmentFailure, forgeSignInProblem, openedRequestUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner, RequestAssignment } from "./forge.js";
 
 const GITLAB = "git@gitlab.com:acme/skills.git";
@@ -135,7 +135,7 @@ describe("the request is assigned to whoever opens it", () => {
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, NONE);
 
     expect(calls).toHaveLength(1);
-    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not assign user: 'me' not found" });
+    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not assign user: 'me' not found", partial: true });
   });
 
   it("given no lists, a first attempt lost to the network and a retry told the request is open, when it is over, then no third request is asked for and nothing is said to be refused", () => {
@@ -197,7 +197,7 @@ describe("an assignment the forge refuses", () => {
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(1);
-    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not request reviewer: 'adaa' not found" });
+    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not request reviewer: 'adaa' not found", partial: true });
   });
 
   it("given a retry the forge answers with the request already open, when it fails, then nothing more is asked and that request is the result", () => {
@@ -392,5 +392,63 @@ describe("the forge CLI's own reporting", () => {
     const calls = readFileSync(join(seen, "calls"), "utf8").trim().split("\n");
     expect(new Set(calls.map((call) => call.split(" ")[0]))).toEqual(new Set(["gh", "glab"]));
     for (const call of calls) expect(call).toMatch(/\|GH_TELEMETRY=0\|GLAB_SEND_TELEMETRY=0\|GLAB_CHECK_UPDATE=false$/);
+  });
+});
+
+describe("what a failed open's words say about its assignment", () => {
+  const GLAB_EXISTS = { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" };
+  const RESET = (port: number) => ({ stderr: `read tcp [::1]:5890${port}->[::1]:443: read: connection reset by peer\n` });
+
+  it.each([
+    ["glab refusing a name, as its error handler prints it", "Failed to find user by name: adaa.", "lists"],
+    ["gh on GitHub Enterprise refusing the assignee", "could not assign user: 'dev' not found", "assignee"],
+    ["gh on GitHub Enterprise refusing a reviewer", "could not request reviewer: 'adaa' not found", "lists"],
+    ["gh on GitHub Enterprise refusing a label", "could not add label: 'skills' not found", "lists"],
+    ["a dropped connection", "read tcp [::1]:58901->[::1]:443: read: connection reset by peer", "fault"],
+    ["a host that does not resolve", "dial tcp: lookup gitlab.example: no such host", "fault"],
+    ["a refused token", "HTTP 401: Bad credentials", "fault"],
+    ["a forge error", "500 Internal Server Error", "fault"],
+    ["words this does not read", "pull request update failed: GraphQL: something went sideways", null],
+  ])("given %s, when it is read, then it is taken for what it says", (_name, reason, kind) => {
+    expect(assignmentFailure(reason)).toBe(kind);
+  });
+
+  it("given lists and a first attempt lost to the network, when the retry finds the request open, then the team file is not blamed", () => {
+    const { forge, calls } = scripted(RESET(1), GLAB_EXISTS);
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: MR, existing: true });
+  });
+
+  it("given lists and a first attempt lost to the network, when the retry is lost too, then nothing is said to be refused", () => {
+    const { forge, calls } = scripted(RESET(1), RESET(2));
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: null, error: "read tcp [::1]:58902->[::1]:443: read: connection reset by peer" });
+  });
+
+  it("given no lists and the assignee refused in words gh uses, when the retry finds the request open, then the refusal is kept", () => {
+    const { forge, calls } = scripted(
+      { stderr: "could not assign user: 'dev' not found\n" },
+      { stderr: `a pull request for branch "TEAM-12" into branch "main" already exists:\n${PR}\n` },
+    );
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: PR, existing: true, unassigned: "could not assign user: 'dev' not found" });
+  });
+
+  it("given no lists and the assignee refused in words gh uses, when the retry fails for another reason, then both reasons are kept", () => {
+    const { forge, calls } = scripted({ stderr: "could not assign user: 'dev' not found\n" }, { stderr: "500 Internal Server Error\n" });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: null, error: "500 Internal Server Error", unassigned: "could not assign user: 'dev' not found" });
   });
 });

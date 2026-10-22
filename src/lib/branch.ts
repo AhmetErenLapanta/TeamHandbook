@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { uniqueSlug } from "./distill.js";
 import {
+  assignmentFailure,
   forgeNotice,
   forgeSignInProblem,
   forgeTool,
@@ -342,17 +343,22 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * and what a request still needs by hand. A request already open is not called opened,
  * and what it carries is not claimed either way: this run did not set it. A refusal counts
  * the assignee with the lists, because openPr asks for every request to be assigned to the
- * person opening it; only a name from the lists is one to correct in the team file.
+ * person opening it; only a name from the lists is one to correct in the team file, so the
+ * team file is not named when the forge's words say it refused the assignee, or when they
+ * say a connection dropped or a token was refused, which is also never called a refusal.
+ * A request gh opened before its assignment failed is not said to lack all of it: gh sets
+ * the assignment after it creates the request, so some of it may already be there.
  */
 export function requestNotes(
   dropped: string | null,
   assignment: RequestAssignment,
-  pr: { url: string | null; unassigned?: string; existing?: true },
+  pr: { url: string | null; unassigned?: string; partial?: true; existing?: true },
 ): string[] {
   const list = assignmentList(assignment);
   // One refusal answers the whole assignment, so it is named whole, in parentheses where a
   // semicolon cannot be read as joining the last list to the assignee.
   const asked = [...(list ? [list] : []), "assignee you"].join("; ");
+  const failure = pr.unassigned ? assignmentFailure(pr.unassigned) : null;
   const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   // Built here, at the call, and never as a module constant: branch.ts and init.ts import
   // each other, and the bundle evaluates this module before TEAM_PREFIX_FILE is assigned, so
@@ -360,16 +366,23 @@ export function requestNotes(
   // saw the right name.
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
-  const fix = list ? `, and ${correct}` : ".";
+  const fix = list && failure !== "assignee" && failure !== "fault" ? `, and ${correct}` : ".";
+  const openedLine = pr.partial
+    ? `The request was opened, and then its assignment (${asked}) ${failure === "fault" ? "failed" : "was refused"} (${pr.unassigned}). ` +
+      `Check what of it is on the request and set the rest by hand${fix}`
+    : failure === "fault"
+      ? `The request was opened without its assignment (${asked}): the first attempt failed (${pr.unassigned}) ` +
+        "and the second was sent without it. Set it on the request by hand."
+      : `The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`;
   return [
     ...(pr.existing
       ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."]
       : []),
     ...(dropped ? [dropped] : []),
-    ...(refused && opened ? [`The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`] : []),
+    ...(refused && opened ? [openedLine] : []),
     ...(refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : []),
     ...(refused && !pr.url && !pr.existing
-      ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
+      ? [`The assignment (${asked}) did not go: ${refused}.${fix === "." ? "" : ` Before it is asked for again, ${correct}`}`]
       : []),
     ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
     ...(list && !pr.url && !pr.existing ? [`Add ${list} to the request when you open it.`] : []),

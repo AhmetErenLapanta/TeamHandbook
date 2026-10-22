@@ -158,6 +158,29 @@ function forgeFailure(tool: "gh" | "glab", err: unknown): string {
   return (said ?? String(e?.message ?? err)).slice(0, 160);
 }
 
+/**
+ * What a failed open's own words say about the assignment it carried, or null when they
+ * say nothing this reads. Taken from the CLIs' sources at glab 1.123.0 and gh 2.100.0: glab
+ * resolves every name before it creates anything and refuses one with "failed to find user
+ * by name"; gh on GitHub Enterprise resolves them first too and refuses with "could not
+ * assign user", "could not request reviewer" or "could not add label". The assignee is
+ * always the person opening the request, so only gh's assignee refusal is about them; the
+ * rest name someone from the team's lists. A dropped connection, a refused token or a
+ * forge's own error refuses nobody, and is told apart so it is never called a refusal.
+ */
+export function assignmentFailure(reason: string): "assignee" | "lists" | "fault" | null {
+  if (/could not assign user/i.test(reason)) return "assignee";
+  if (/failed to find user by name|could not request reviewer|could not add label/i.test(reason)) return "lists";
+  if (
+    /\b(?:read|write|dial) (?:tcp|udp)\b|connection (?:reset|refused)|no such host|i\/o timeout|tls handshake|\b(?:401|50[0234])\b|unauthorized|bad credentials/i.test(
+      reason,
+    )
+  ) {
+    return "fault";
+  }
+  return null;
+}
+
 function outputOf(err: unknown): string {
   const e = err as { stdout?: unknown; stderr?: unknown };
   return `${typeof e?.stdout === "string" ? e.stdout : ""}\n${typeof e?.stderr === "string" ? e.stderr : ""}`;
@@ -195,12 +218,18 @@ function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { 
  * blind retry would open a second request. The failed call's own output is read for an
  * opened request before anything is retried, and a forge that answers either call with the
  * request already open for the branch is not asked again. A timeout is never retried:
- * whether the request exists is exactly what it leaves unknown. When the retry fails too,
- * or finds the request already open, `unassigned` is kept only when the team's lists went:
- * a name there is the one thing to correct before asking again. Without them the first
- * failure is not said to be a refusal, because a second call says nothing about what the
- * first one refused - a network error even differs in its local port each time. And a
- * retry that fails exactly as the first did shows the assignment was not what was refused.
+ * whether the request exists is exactly what it leaves unknown. A request gh reports
+ * having opened before it failed is `partial`: gh creates it first and sets its assignment
+ * after, so some of it may already be on it.
+ *
+ * When the retry fails too, or finds the request already open, `unassigned` is kept when
+ * the first failure's own words name the assignment (assignmentFailure), and never when
+ * they name a dropped connection, a refused token or a forge error, which refused nobody.
+ * Words this does not read keep the older rule: kept only when the team's lists went, since
+ * a name there is the one thing to correct before asking again; a second call says
+ * nothing about what the first one refused - a network error even differs in its local
+ * port each time. And a retry that fails exactly as the first did shows the assignment was
+ * not what was refused.
  */
 export function openPr(
   repoUrl: string,
@@ -211,7 +240,7 @@ export function openPr(
   forge: ForgeRunner,
   assignment: RequestAssignment = { reviewers: [], labels: [] },
   assignee: string = SELF_ASSIGNEE,
-): { url: string | null; error?: string; unassigned?: string; existing?: true } {
+): { url: string | null; error?: string; unassigned?: string; partial?: true; existing?: true } {
   const tool = forgeTool(repoUrl);
   const create = (extra: string[]) =>
     extractUrl(
@@ -237,14 +266,16 @@ export function openPr(
     const code = (err as { code?: string })?.code;
     if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
     const opened = openedRequestUrl(outputOf(err), repoUrl);
-    if (opened) return { url: opened, unassigned: reason };
+    if (opened) return { url: opened, unassigned: reason, partial: true };
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
+      const failure = assignmentFailure(reason);
+      const named = failure === "assignee" || failure === "lists" || (failure === null && listed.length > 0);
       const existing = existingRequest(tool, repoUrl, retryErr);
-      if (existing) return { ...existing, ...(listed.length ? { unassigned: reason } : {}) };
+      if (existing) return { ...existing, ...(named ? { unassigned: reason } : {}) };
       const error = forgeFailure(tool, retryErr);
-      return { url: null, error, ...(listed.length && error !== reason ? { unassigned: reason } : {}) };
+      return { url: null, error, ...(named && error !== reason ? { unassigned: reason } : {}) };
     }
   }
 }

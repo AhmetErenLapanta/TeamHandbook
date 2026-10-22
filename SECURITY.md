@@ -671,9 +671,15 @@ once more without it - unless the failed call already reported a request it open
 the forge answered that a request for the branch already exists. The assignee, `@me`, rides
 on every request, so every failed open is asked for that second time, never a third; both
 forges refuse a second open request for a branch, in the sentence read above. When the
-second attempt fails too or finds the request already open, the assignment is named only
-if the team's lists went with it, a name there being the one thing to correct, and not
-when the second attempt failed exactly as the first did.
+second attempt fails too or finds the request already open, the first failure is named as
+a refusal of the assignment when its own words say so (`gh` and `glab` each name the user
+or label they could not find), and never when they say a connection dropped, a token was
+refused or the forge failed; words the product does not read are named only if the team's
+lists went with the request, a name there being the one thing to correct. A second attempt
+that failed exactly as the first did names nothing. The team file is never named as the
+thing to correct for a refused assignee, or for a failure that refused nobody. A request `gh`
+opened before its assignment failed is said to lack part of it, not all of it, because `gh`
+sets the assignment after it creates the request.
 
 The name, the prefix and the example are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what
