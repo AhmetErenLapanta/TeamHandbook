@@ -150,11 +150,22 @@ function assignmentFlags(assignment: RequestAssignment): string[] {
 }
 
 // The last line a failing CLI wrote, except one that is only a URL: gh ends its refusal of a
-// second request with the address of the first, and that address is not a reason.
+// second request with the address of the first, and that address is not a reason. glab
+// 1.123.0 prints through an error handler that puts an "ERROR" banner first, wraps the
+// message to the terminal's width and closes a list of errors with a line holding only
+// "." - its last line is a fragment or a lone ".", so its message is read whole: what
+// follows the banner, the punctuation-only lines dropped and the wrapped lines joined. A
+// long one keeps its end rather than its start: a Go error chain names its cause last.
 function forgeFailure(tool: "gh" | "glab", err: unknown): string {
   const e = err as { code?: string; stderr?: string; message?: string };
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
   const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const banner = tool === "glab" ? lines.indexOf("ERROR") : -1;
+  if (banner >= 0) {
+    const message = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ");
+    const joined = message.replace(/\s+/g, " ");
+    if (joined) return joined.length > 160 ? `…${joined.slice(-159)}` : joined;
+  }
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
 }
@@ -164,21 +175,37 @@ function forgeFailure(tool: "gh" | "glab", err: unknown): string {
  * say nothing this reads. Taken from the CLIs' sources at glab 1.123.0 and gh 2.100.0: glab
  * resolves every name before it creates anything and refuses one with "failed to find user
  * by name"; gh on GitHub Enterprise resolves them first too and refuses with "could not
- * assign user", "could not request reviewer" or "could not add label". The assignee is
- * always the person opening the request, so only gh's assignee refusal is about them; the
- * rest name someone from the team's lists. A dropped connection, a refused token or a
- * forge's own error refuses nobody, and is told apart so it is never called a refusal.
+ * assign user", "could not request reviewer" or "could not add label". On github.com gh
+ * creates the request first and passes on the server's own words when the assignment
+ * after it fails, which this does not read. The assignee is always the person opening the
+ * request, so only gh's assignee refusal is about them; the rest name someone from the
+ * team's lists.
+ *
+ * A dropped connection, a refused token or a forge's own error refuses nobody, and is told
+ * apart in the words the two CLIs were measured printing for it: Go's network errors as
+ * both pass them on (`dial tcp`, `connection refused`, `no such host`, `: EOF`), gh's own
+ * sentences for an unresolvable host and a refused token, and a status code only where an
+ * HTTP status stands - "HTTP 500" from gh, ": 401 {message" from glab - because a bare
+ * number also appears in a username such as `qa-503`, and reading it as a fault would hide
+ * that name's refusal from the team that has to correct it.
  */
+const FAULT_WORDS: RegExp[] = [
+  /\b(?:read|write|dial) (?:tcp|udp)\b/,
+  /connection (?:reset|refused)/i,
+  /no such host/i,
+  /i\/o timeout/i,
+  /tls handshake/i,
+  /: EOF\b/,
+  /error connecting to|check your internet connection/,
+  /Try authenticating with/,
+  /\bHTTP (?:401|50[0234])\b/,
+  /: (?:401|50[0234]) \{/,
+];
+
 export function assignmentFailure(reason: string): "assignee" | "lists" | "fault" | null {
   if (/could not assign user/i.test(reason)) return "assignee";
   if (/failed to find user by name|could not request reviewer|could not add label/i.test(reason)) return "lists";
-  if (
-    /\b(?:read|write|dial) (?:tcp|udp)\b|connection (?:reset|refused)|no such host|i\/o timeout|tls handshake|\b(?:401|50[0234])\b|unauthorized|bad credentials/i.test(
-      reason,
-    )
-  ) {
-    return "fault";
-  }
+  if (FAULT_WORDS.some((words) => words.test(reason))) return "fault";
   return null;
 }
 
@@ -225,7 +252,8 @@ function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { 
  *
  * When the retry fails too, or finds the request already open, `unassigned` is kept when
  * the first failure's own words name the assignment (assignmentFailure), and never when
- * they name a dropped connection, a refused token or a forge error, which refused nobody.
+ * assignmentFailure reads them as a dropped connection, a refused token or a forge error,
+ * which refused nobody.
  * Words this does not read keep the older rule: kept only when the team's lists went, since
  * a name there is the one thing to correct before asking again; a second call says
  * nothing about what the first one refused - a network error even differs in its local

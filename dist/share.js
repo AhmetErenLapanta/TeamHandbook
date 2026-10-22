@@ -830,17 +830,31 @@ function forgeFailure(tool, err) {
   const e = err;
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
   const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const banner = tool === "glab" ? lines.indexOf("ERROR") : -1;
+  if (banner >= 0) {
+    const message = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ");
+    const joined = message.replace(/\s+/g, " ");
+    if (joined) return joined.length > 160 ? `\u2026${joined.slice(-159)}` : joined;
+  }
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
 }
+var FAULT_WORDS = [
+  /\b(?:read|write|dial) (?:tcp|udp)\b/,
+  /connection (?:reset|refused)/i,
+  /no such host/i,
+  /i\/o timeout/i,
+  /tls handshake/i,
+  /: EOF\b/,
+  /error connecting to|check your internet connection/,
+  /Try authenticating with/,
+  /\bHTTP (?:401|50[0234])\b/,
+  /: (?:401|50[0234]) \{/
+];
 function assignmentFailure(reason) {
   if (/could not assign user/i.test(reason)) return "assignee";
   if (/failed to find user by name|could not request reviewer|could not add label/i.test(reason)) return "lists";
-  if (/\b(?:read|write|dial) (?:tcp|udp)\b|connection (?:reset|refused)|no such host|i\/o timeout|tls handshake|\b(?:401|50[0234])\b|unauthorized|bad credentials/i.test(
-    reason
-  )) {
-    return "fault";
-  }
+  if (FAULT_WORDS.some((words) => words.test(reason))) return "fault";
   return null;
 }
 function outputOf(err) {

@@ -941,6 +941,12 @@ const TEMPLATE_SKIPPED =
 /** The start of what a GitLab request still to be opened by hand says. */
 const BY_HAND = "When you open the request, assign yourself on it if the project's template does not";
 
+/** What gh 2.100.0 prints when github.com refuses a reviewer after the request exists: its own
+ * prefix (create.go:1150) around its GraphQL error form (api/client_test.go:74). The
+ * server's message itself was not measured here. */
+const updateRefused = (login: string) =>
+  `pull request update failed: GraphQL: Could not resolve to a User with the login of '${login}'. (requestReviewsByLogin)`;
+
 /** The team file as a repository records it, with whatever reviewers and labels a case needs. */
 function teamFile(extra: Record<string, unknown>): Record<string, string> {
   return { [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix: "", ...extra }, null, 2) + "\n" };
@@ -1238,7 +1244,7 @@ describe("a request carries what the team file says when it is opened", () => {
         creates.push(args);
         throw Object.assign(new Error("Command failed"), {
           stdout: "https://github.com/acme/skills/pull/4\n",
-          stderr: "pull request update failed: could not request reviewer: 'adaa' not found\n",
+          stderr: `${updateRefused("adaa")}\n`,
         });
       }
       return forge(tool, args, cwd);
@@ -1248,9 +1254,11 @@ describe("a request carries what the team file says when it is opened", () => {
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/4" });
     expect(creates).toHaveLength(1);
-    expect(formatUpgradeResult(result)).toContain(
-      "The request was opened, and then its assignment (reviewers @adaa; assignee you) was refused (pull request update failed:",
-    );
+    expect(result.requestNotes).toEqual([
+      `The request was opened, and then its assignment (reviewers @adaa; assignee you) was refused (${updateRefused("adaa")}). ` +
+        `Check what of it is on the request and set the rest by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, ` +
+        "correct it with /handbook:init --upgrade --reviewers or --labels.",
+    ]);
   });
 
   it("given a scaffold request with no CLI to open it, when init is shown, then the reviewers to add are printed", () => {
@@ -1622,6 +1630,31 @@ describe("a first attempt the forge did not refuse", () => {
       commitMessage: APPROVED,
       branch: "TEAM-12",
     });
+  const openedThenFailed = (stderr: string): ForgeRunner => (_tool, args) => {
+    if (args[0] === "auth") return "Logged in";
+    throw Object.assign(new Error("Command failed"), { stdout: "https://github.com/acme/skills/pull/7\n", stderr });
+  };
+
+  it("given lists and gh losing the connection after it opened the request, when the result is shown, then part of the assignment is said to have failed and the team file is not named", () => {
+    const result = shareTo(GITHUB, bareHandbook(teamFile({ reviewers: ["ada"] })), openedThenFailed("pull request update failed: read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer\n"));
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/7" });
+    expect(result.requestNotes).toEqual([
+      "The request was opened, and then its assignment (reviewers @ada; assignee you) failed " +
+        "(pull request update failed: read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer). " +
+        "Check what of it is on the request and set the rest by hand.",
+    ]);
+  });
+
+  it("given lists and github.com refusing a login that holds a status number after the request opened, when the result is shown, then it is called a refusal and the team file is named", () => {
+    const result = shareTo(GITHUB, bareHandbook(teamFile({ reviewers: ["qa-503"] })), openedThenFailed(`${updateRefused("qa-503")}\n`));
+
+    expect(result.requestNotes).toEqual([
+      `The request was opened, and then its assignment (reviewers @qa-503; assignee you) was refused (${updateRefused("qa-503")}). ` +
+        `Check what of it is on the request and set the rest by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, ` +
+        "correct it with /handbook:init --upgrade --reviewers or --labels.",
+    ]);
+  });
 
   it("given lists and a first attempt lost to the network, when the retry opens the request, then it is not called a refusal and the team file is not named", () => {
     let creates = 0;

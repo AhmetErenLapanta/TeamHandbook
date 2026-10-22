@@ -351,8 +351,9 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * and what it carries is not claimed either way: this run did not set it. A refusal counts
  * the assignee with the lists, because openPr asks for every request to be assigned to the
  * person opening it; only a name from the lists is one to correct in the team file, so the
- * team file is not named when the forge's words say it refused the assignee, or when they
- * say a connection dropped or a token was refused, which is also never called a refusal.
+ * team file is not named when the forge's words say it refused the assignee, or when
+ * assignmentFailure reads them as a dropped connection, a refused token or a forge error,
+ * which is not called a refusal either.
  * A request gh opened before its assignment failed is not said to lack all of it: gh sets
  * the assignment after it creates the request, so some of it may already be there.
  *
