@@ -268,7 +268,10 @@ These, and only these:
      sets the pusher as assignee on every request it creates, and an `/assign` in the
      template replaces that assignee when the request is created. That rule is in GitLab's
      code, not its documentation, and was read there; the handler has set the pusher since
-     its first release, GitLab 11.10. TeamHandbook sends no assignee with the push, because
+     its first release, GitLab 11.10. If a request for the branch is already open, GitLab
+     opens none and updates that one instead: it takes the push's title and labels and
+     changes no assignee. GitLab answers both pushes with the same line, so the result
+     names both outcomes. TeamHandbook sends no assignee with the push, because
      `merge_request.assign` takes a username or a numeric ID and, without `glab`, nothing
      here knows either of yours.
      The one push that does not ask is the first `/handbook:init`: it pushes the scaffold
