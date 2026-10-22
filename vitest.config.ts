@@ -15,6 +15,6 @@ export default defineConfig({
   test: {
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    setupFiles: ["./src/test-setup.ts"],
+    setupFiles: ["./src/test-setup.ts", "./src/test-forge-cli.ts"],
   },
 });

@@ -353,6 +353,24 @@ recorder; that they are switched off the same way is inferred from the same vari
 being read by the same programs, not measured. A CLI version that renames or ignores these
 variables is not switched off by them.
 
+glab still writes its own configuration file, and the switches above do not stop it. Before
+a push, and on the `/handbook:share` and `/handbook:doctor` screens, TeamHandbook checks that
+a request can be opened by asking `auth status`; for a team repository whose address does not
+name GitHub that is glab, so `/handbook:doctor`, `/handbook:share`, `/handbook:init`,
+`/handbook:init --upgrade` and `/handbook:review` approving to the team all run it. Measured
+against a local stand-in for the forge, with every other connection refused, glab 1.123.0
+wrote that file in three situations:
+
+- holding an OAuth2 token past its expiry, it renewed the token with the forge that issued
+  it and wrote the new token and expiry into the file: 3 of 3 runs with the product's
+  environment and 6 of 6 without it;
+- with no configuration at all, it created its configuration directory and file: 3 of 3;
+- with a valid token it renewed nothing, and wrote only its own version into a file that did
+  not yet record it: 3 of 3, and nothing at all in 3 of 3 runs on a file that did.
+
+The token was kept in the file for these runs; a token kept in the operating system's keyring
+was not measured. gh's own writes to its configuration were not measured.
+
 ## What `/handbook:mine` reads and sends
 
 `/handbook:mine` with no arguments reads git history and nothing else. It walks the
