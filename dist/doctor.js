@@ -656,7 +656,7 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync6, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/lib/counters.ts
@@ -707,7 +707,7 @@ function readCounters(home = handbookHome()) {
 }
 
 // src/lib/init.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync6, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname3, join as join7 } from "node:path";
 
@@ -1260,12 +1260,12 @@ function marketplacesRoot() {
 }
 
 // src/lib/upgrade.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync8, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5, join as join9 } from "node:path";
 
 // src/lib/publish.ts
 init_session_state();
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync4, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname4, join as join8, relative } from "node:path";
 init_skill_files();
 init_queue();
@@ -1837,7 +1837,7 @@ function checkHomeWritable(home) {
   try {
     mkdirSync6(home, { recursive: true });
     writeFileSync5(probe, "ok");
-    rmSync5(probe, { force: true });
+    rmSync6(probe, { force: true });
     return ok("state dir", `${displayPath(home)} writable`);
   } catch (err) {
     return fail("state dir", `cannot write ${displayPath(home)}: ${String(err instanceof Error ? err.message : err)}`);
@@ -1893,7 +1893,7 @@ function remoteDistributionState(team, run) {
   } catch {
     return null;
   } finally {
-    rmSync5(dir, { recursive: true, force: true });
+    rmSync6(dir, { recursive: true, force: true });
   }
 }
 function gitHead(dir, run) {
