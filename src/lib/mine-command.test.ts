@@ -110,7 +110,8 @@ describe("listing the work a repository repeats", () => {
       const screen = out.lines.join("\n");
       expect(code).toBe(1);
       expect(screen).toContain(`Could not read the history of ${clone}`);
-      expect(screen).toMatch(/so it is left out: fatal: /);
+      // git's own reason follows, in whatever language git speaks on this machine
+      expect(screen).toMatch(/so it is left out: \S/);
       expect(screen).not.toContain("No repeating work found");
       rmSync(join(clone, ".."), { recursive: true, force: true });
     });

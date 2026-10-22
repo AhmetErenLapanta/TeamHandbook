@@ -360,10 +360,13 @@ clone left on its remote, and git fetches each one it lacks from that remote and
 into the repository's `.git`. Measured on a local clone missing 6 blobs: 3 fetches and 0
 blobs missing afterwards, against no fetch on a full clone of the same history. Those
 fetches run in the environment of this product's other remote calls, measured carrying
-`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`. A shallow clone (`--depth`) fetched nothing.
-When a partial clone's remote cannot be reached, git cannot read its history at all: the
-listing names that repository with git's reason and leaves it out, and when no repository
-was readable it says so and exits with an error rather than reporting that nothing repeats.
+`GLAB_SEND_TELEMETRY=0` and `GH_TELEMETRY=0`. A shallow clone without `--filter` fetched
+nothing. When a partial clone's remote cannot be reached and the history read needs a file
+content the clone does not hold yet, git cannot read that history: the listing names that
+repository with git's reason and leaves it out, and when no repository was readable it says
+so and exits with an error rather than reporting that nothing repeats. A clone whose contents
+an earlier read already fetched reads offline as a full clone does: measured, the same work
+was listed offline as online, 3 of 3.
 
 Asking for a draft is what sends anything. Picking a workflow sends the screened
 evidence for that one workflow to `claude -p`, exactly as any other Claude Code prompt
@@ -536,8 +539,8 @@ written by the hook rather than by this report: beside the name, running count a
 the last call it already kept, how many calls fell on each of the last 30 days, and never
 the call's arguments.
 
-**What leaves your machine.** Nothing of yours. On a partial clone the history read asks
-that repository's own remote for the file contents it lacks, as above. The team repository's
+**What leaves your machine.** Nothing but, on a partial clone, a request to that
+repository's own remote for the file contents the clone lacks, as above. The team repository's
 skills are read from the clone already on disk, so the overlap warning makes no request.
 
 ## Removing your data
