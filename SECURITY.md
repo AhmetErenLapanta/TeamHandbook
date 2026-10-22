@@ -327,13 +327,6 @@ Every call this product makes to either CLI, and every git call it makes that re
 remote, carries `GLAB_SEND_TELEMETRY=0`, `GLAB_CHECK_UPDATE=false` and `GH_TELEMETRY=0` in
 its environment, and that is all it changes: TeamHandbook neither reads nor writes your gh
 and glab configuration, so the same CLI run from your own terminal keeps your setting.
-The CLI still writes it on its own account. Asked `auth status`, the sign-in check this
-product runs, glab 1.123.0 holding an OAuth2 token past its expiry renews it with the forge
-that issued it and writes the new token and expiry into its config file, exactly as the
-same command does from your terminal: measured against a local stand-in for that forge, 4
-of 4 runs with an expired token sent the renewal and rewrote the file, none of 3 with a
-valid one did, and the switches above did not change that. The token was kept in the file
-for the measurement; a token kept in the operating system's keyring was not measured.
 Measured against a local recording server with every other connection refused, five runs
 per case: glab's usage event and its release check each went from 5 of 5 to 0, including
 with `telemetry: true` and `check_update: true` in its config file; with gh's sampling
@@ -350,6 +343,24 @@ The two that open a request, `gh pr create` and `glab mr create`, were not run a
 recorder; that they are switched off the same way is inferred from the same variables
 being read by the same programs, not measured. A CLI version that renames or ignores these
 variables is not switched off by them.
+
+glab still writes its own configuration file, and the switches above do not stop it. Before
+a push, and on the `/handbook:share` and `/handbook:doctor` screens, TeamHandbook checks that
+a request can be opened by asking `auth status`; for a team repository whose address does not
+name GitHub that is glab, so `/handbook:doctor`, `/handbook:share`, `/handbook:init`,
+`/handbook:init --upgrade` and `/handbook:review` approving to the team all run it. Measured
+against a local stand-in for the forge, with every other connection refused, glab 1.123.0
+wrote that file in three situations:
+
+- holding an OAuth2 token past its expiry, it renewed the token with the forge that issued
+  it and wrote the new token and expiry into the file: 3 of 3 runs with the product's
+  environment and 6 of 6 without it;
+- with no configuration at all, it created its configuration directory and file: 3 of 3;
+- with a valid token it renewed nothing, and wrote only its own version into a file that did
+  not yet record it: 3 of 3, and nothing at all in 3 of 3 runs on a file that did.
+
+The token was kept in the file for these runs; a token kept in the operating system's keyring
+was not measured. gh's own writes to its configuration were not measured.
 
 ## What `/handbook:mine` reads and sends
 
