@@ -136,6 +136,26 @@ re-init. That loses the repository. Refresh it in place instead:
    whether or not it is named. It is used for that run only and saved nowhere. It is
    refused on a repository that runs the version-bump job, and on one already versioned by
    commit.
+   **When the user asks how an existing repository moves over**, give them these steps in
+   this order, and do not run the switch before the first two are done. A repository that
+   runs the version-bump job (`scripts/bump-version.mjs`) is refused at step 3: the job and
+   its script come out of the repository first, and its README does not carry these steps.
+   1. Everyone who shares to the repository updates TeamHandbook to 0.31.0 or later:
+      `/plugin marketplace update teamhandbook`, then `/reload-plugins`. An older copy
+      raises a version on every share and puts the line back. A copy older than 0.29.0 also does not read `scaffoldVersion`:
+      the newer-scaffold refusal above only happens between copies at 0.29.0 or later, and an
+      older one's plan, after the switch, offers to put `"version": "0.1.0"` back and to
+      delete that record.
+   2. Requests already open that raise the version are merged or closed. Whichever of a
+      bump and the switch is merged second conflicts in `.claude-plugin/plugin.json`;
+      requests that leave that file alone are not affected.
+   3. The plan and the run with `--commit-versioning`, as above.
+   4. After the merge, teammates whose marketplace does not auto-update run
+      `/plugin marketplace update <name>` and `/reload-plugins`.
+   A conflict in `.claude-plugin/plugin.json` after the switch is resolved by keeping the
+   side without the version line; tell the user that keeping the other side puts the
+   repository back on raising a version. In a repository without the version-bump job the
+   team's README carries the same steps once it is refreshed.
 5. A `NOT OFFERED` line is not a file to argue with, and naming it anyway is refused. Its
    reason says which case it is. A symbolic link on that path, or a value in
    `.teamhandbook.json` that cannot be carried across, is fixed in the repository or

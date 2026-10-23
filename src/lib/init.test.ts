@@ -206,6 +206,49 @@ describe("skeletonFiles", () => {
     expect(files["README.md"]).not.toContain("--with-ci");
   });
 
+  it("given a repository that raises a version, when its README is generated, then it walks the move to versioning by commit in order", () => {
+    // when
+    const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", false, undefined, {}, undefined, "0.1.5")["README.md"]!;
+
+    // then the steps come in the order the measurements require
+    const steps = [
+      "### Moving to versioning by commit",
+      "1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later\n   first: `/plugin marketplace update teamhandbook`, then `/reload-plugins`.",
+      "A copy older than 0.29.0 also does not read",
+      "2. Merge or close the open requests that raise the version.",
+      "whichever of the two is merged second conflicts in",
+      "3. Run `/handbook:init --upgrade --commit-versioning`",
+      "4. Once it is merged",
+      "resolved by keeping the side without\nthe version line",
+    ];
+    const at = steps.map((step) => readme.indexOf(step));
+    expect(at.every((index) => index >= 0), JSON.stringify(at)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(readme).not.toContain("### Keeping it versioned by commit");
+  });
+
+  it("given a repository versioned by commit, when its README is generated, then it says what puts the line back and which copies the record stops", () => {
+    // when
+    const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;
+
+    // then
+    expect(readme).toContain("### Keeping it versioned by commit");
+    expect(readme).toContain("Take that line out of the request before merging it.");
+    expect(readme).toContain("A TeamHandbook older than 0.29.0\ndoes not read `scaffoldVersion`");
+    expect(readme).not.toContain("### Moving to versioning by commit");
+  });
+
+  it("given either README, when it is read, then no sentence hedges with may, might or could", () => {
+    // given the README a repository versioned by commit gets, and the one a versioned repository gets
+    for (const version of [undefined, "0.1.5"]) {
+      // when
+      const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", false, undefined, {}, undefined, version)["README.md"]!;
+
+      // then
+      expect(readme, String(version)).not.toMatch(/\b(may|might|could)\b/i);
+    }
+  });
+
   it("given a repository that runs the version-bump job, when its README is generated, then it does not offer the switch the job refuses", () => {
     // when
     const readme = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", true)["README.md"]!;

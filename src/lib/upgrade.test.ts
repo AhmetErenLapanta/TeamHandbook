@@ -1008,7 +1008,13 @@ describe("switching a repository to versioning by commit", () => {
     expect(text).toContain("Open requests that raise the version conflict with this commit");
     expect(text).toContain("/plugin marketplace update acme-skills");
     expect(text).toContain("/reload-plugins");
-    expect(text).toContain("update TeamHandbook first");
+    expect(text).toContain("update to 0.31.0 or later first (`/plugin marketplace update\nteamhandbook`, then `/reload-plugins`)");
+    // the record line names the copies it stops, which agrees with the sentence above it
+    const flat = text.replace(/\n/g, " ");
+    expect(flat).toContain("so an older copy at 0.29.0 or later refuses to refresh it back; one older than 0.29.0 does not read the record.");
+    expect(flat).not.toContain("so an older copy refuses to refresh it back.");
+    expect(text).toContain("keep the side without the\nversion line");
+    expect(text).toContain('One older than 0.29.0 also\ndoes not read "scaffoldVersion" in .teamhandbook.json');
     expect(text).toContain(`--file ${PLUGIN_MANIFEST}`);
     expect(text).toContain("--commit-versioning");
     expect(text).not.toContain("raises the plugin version");

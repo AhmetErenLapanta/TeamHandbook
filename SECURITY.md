@@ -303,7 +303,9 @@ These, and only these:
    not write is carried across as it stands. Setup, and every refresh that can write that
    file, records there as `scaffoldVersion` the TeamHandbook release that wrote the
    scaffold - a version number and nothing else - and a copy older than the release
-   recorded refuses to refresh at all. When a refresh cannot write the file (the repository
+   recorded refuses to refresh at all. The record is read from 0.29.0 on: a copy at 0.28.0
+   or older does not know it, refreshes as it always did, and offers to delete it. When a
+   refresh cannot write the file (the repository
    has none and it was not sent, or it is not offered), the plan and the result say that
    nothing recorded the release. A
    commit-message prefix given to `--upgrade` with `--commit-prefix` goes into the files

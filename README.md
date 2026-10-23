@@ -66,7 +66,10 @@ Everything that goes to the team repository travels as a merge request, and the 
 what makes every teammate's copy refresh: the repository's `.claude-plugin/plugin.json`
 carries no version, so Claude Code versions the plugin by the commit it installs. A team
 repository set up by an earlier TeamHandbook still carries one and raises it in every
-request instead, until `/handbook:init --upgrade --commit-versioning` takes the line out. A draft added to its own
+request instead, until `/handbook:init --upgrade --commit-versioning` takes the line out; in a
+repository without the version-bump job, the team README, once refreshed, lists the order the
+switch needs (copies updated to 0.31.0 first, open requests that raise the version merged or
+closed). A draft added to its own
 project travels the way the code does: commit, push, pull.
 
 Nothing else is automated, and the repository is an ordinary plugin repo: agents and

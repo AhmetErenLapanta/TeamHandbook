@@ -1457,13 +1457,14 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     lines.push(
       "",
       `Sending ${TEAM_PREFIX_FILE} also records there that TeamHandbook ${stamp.release} wrote this scaffold, so an`,
-      "older copy refuses to refresh it back. Without that file nothing records it.",
+      "older copy at 0.29.0 or later refuses to refresh it back; one older than 0.29.0 does not read the record.",
+      "Without that file nothing records it.",
     );
   } else if (stamp) {
     lines.push(
       "",
       `It also records in ${TEAM_PREFIX_FILE} that TeamHandbook ${stamp.release} wrote this scaffold, so an older`,
-      "copy refuses to refresh it back.",
+      "copy at 0.29.0 or later refuses to refresh it back; one older than 0.29.0 does not read the record.",
     );
   }
   if (plan.ignored?.length) {
@@ -1524,13 +1525,16 @@ function commitVersioningSwitch(current: string, marketplace: string, open: stri
     `${PLUGIN_MANIFEST}, nothing raises a version after it, and every merge reaches teammates' copies when`,
     "their marketplace updates.",
     "Open requests that raise the version conflict with this commit - they change the line it deletes - so",
-    "merge or close them first.",
+    "merge or close them first. One merged after it conflicts in plugin.json: keep the side without the",
+    "version line.",
     ...(open.length ? [`Open now: ${open.join(", ")}.`] : []),
     "Once this is merged, each teammate moves to the new scheme with:",
     `  /plugin marketplace update ${marketplace}`,
     "  /reload-plugins",
-    "A TeamHandbook older than this one still raises a version when it shares, which puts the line back:",
-    "have everyone who shares to this repository update TeamHandbook first.",
+    "A TeamHandbook older than 0.31.0 still raises a version when it shares, which puts the line back:",
+    "have everyone who shares to this repository update to 0.31.0 or later first (`/plugin marketplace update",
+    "teamhandbook`, then `/reload-plugins`). One older than 0.29.0 also",
+    `does not read "scaffoldVersion" in ${TEAM_PREFIX_FILE}, so nothing stops it refreshing this scaffold back.`,
   ];
 }
 

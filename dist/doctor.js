@@ -998,6 +998,36 @@ var SWITCH_POINTER = `
 which every merge reaches teammates without raising anything.`;
 var README_BEGIN = "<!-- teamhandbook:begin -->";
 var README_END = "<!-- teamhandbook:end -->";
+var SWITCH_TO_COMMIT = `### Moving to versioning by commit
+
+Taking the version line out ends the bump: no request raises anything, two requests
+cannot claim the same number, and a commit made here by hand reaches teammates like
+any other merge. In order:
+
+1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later
+   first: \`/plugin marketplace update teamhandbook\`, then \`/reload-plugins\`. An older
+   copy raises a version on every share, which puts the line back. A copy older than 0.29.0 also does not read
+   \`scaffoldVersion\` in \`.teamhandbook.json\`, the record that stops an older copy
+   from refreshing this scaffold back, so after the switch its \`--upgrade\` offers to
+   put \`"version": "0.1.0"\` back and delete that record.
+2. Merge or close the open requests that raise the version. Each one changes the line
+   the switch deletes, so whichever of the two is merged second conflicts in
+   \`.claude-plugin/plugin.json\`. Requests that leave that file alone merge as they are.
+3. Run \`/handbook:init --upgrade --commit-versioning\`, read the plan, and send it.
+4. Once it is merged, every teammate whose marketplace does not auto-update runs the
+   two commands above.
+
+A request that still conflicts after the switch is resolved by keeping the side without
+the version line. Keeping the other side puts the repository back on the bump.`;
+var KEEP_BY_COMMIT = `### Keeping it versioned by commit
+
+\`.claude-plugin/plugin.json\` stays without a \`version\` line. A request that adds one
+back - a share from a TeamHandbook whose \`/handbook:init --upgrade\` does not know
+\`--commit-versioning\`, or an older request merged with its side of a conflict kept -
+puts the repository back on the bump, where a merge that raises nothing reaches nobody.
+Take that line out of the request before merging it. A TeamHandbook older than 0.29.0
+does not read \`scaffoldVersion\` in \`.teamhandbook.json\`, so it is not stopped from
+refreshing this scaffold back: everyone who works on this repository runs 0.31.0 or later.`;
 function readmeFor(name, url, byCommit, withCi) {
   return `# ${name}
 
@@ -1052,7 +1082,11 @@ If auto-update is off for this marketplace, a merge reaches you only after these
 To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
 menu. When you announce a merge to the team, include these two commands.
 
-### Who reviews a request
+${byCommit ? `${KEEP_BY_COMMIT}
+
+` : withCi ? "" : `${SWITCH_TO_COMMIT}
+
+`}### Who reviews a request
 
 The requests TeamHandbook opens here carry the reviewers and labels listed in
 \`.teamhandbook.json\`, and none while it lists none. To change them, run
