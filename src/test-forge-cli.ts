@@ -10,8 +10,11 @@ import { afterAll } from "vitest";
 // developer is signed in to, so a case could pass on one machine and fail on another. These
 // stand-ins refuse the way a CLI that is not signed in does; a test that needs a forge to
 // answer installs its own ahead of them on PATH.
+// `claude` for the same reason: a test that runs a shipped bundle puts its own stand-in first,
+// and when that one cannot execute (a noexec tmpdir, a restrictive umask) Node runs the next
+// `claude` on PATH, which would hand the test's prompt to the developer's real model.
 const floor = mkdtempSync(join(tmpdir(), "handbook-suite-forge-"));
-for (const tool of ["gh", "glab"]) {
+for (const tool of ["gh", "glab", "claude"]) {
   const stub = join(floor, tool);
   writeFileSync(stub, `#!/bin/sh\necho "${tool} is not reachable from the test suite" >&2\nexit 1\n`);
   chmodSync(stub, 0o755);
