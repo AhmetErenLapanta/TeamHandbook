@@ -112,12 +112,14 @@ function failureText(err: unknown): string {
     .join("\n");
 }
 
-/** The CLI's own first sentence about a failure: the first line it wrote to stderr, else to
- * stdout, else the error's own. The message alone always began "Command failed: claude -p",
- * which named the command and none of the reason. */
+/** The CLI's own first sentence about a failure: the first line it wrote to stdout, else to
+ * stderr, else the error's own. The message alone always began "Command failed: claude -p",
+ * which named the command and none of the reason. Stdout comes first because that is where the
+ * CLI writes its failures, measured; read stderr-first, a Node DeprecationWarning there hid the
+ * proxy's 407 on stdout. */
 function failureLine(err: unknown): string {
   const failed = err as { stdout?: unknown; stderr?: unknown } | null;
-  const said = [failed?.stderr, failed?.stdout, err instanceof Error ? err.message : String(err)];
+  const said = [failed?.stdout, failed?.stderr, err instanceof Error ? err.message : String(err)];
   for (const part of said) {
     const line = typeof part === "string" ? part.split("\n").find((text) => text.trim()) : undefined;
     if (line) return line.trim();
@@ -125,11 +127,15 @@ function failureLine(err: unknown): string {
   return "";
 }
 
-// What a logged-out CLI says: the measured "Not logged in · Please run /login", and the API's
-// `authentication_error`. A bare "auth", and then a bare "authentication", also matched a
-// proxy's 407 and a cloud provider's credential failures - a machine that is logged in, told to
-// run /login. "/login" alone matched any sign-in URL in an error.
-const SIGNED_OUT = /not logged in|please run \/login|logged out|authentication_error/i;
+// What a logged-out CLI says: the measured "Not logged in · Please run /login", the API's
+// `authentication_error`, and the headless call's expired or revoked login, measured as "Failed
+// to authenticate: OAuth session expired ..." and "Failed to authenticate. API Error: 401 OAuth
+// access token is invalid." That prefix stays tied to OAuth on its own line: bare, it is a
+// sentence other credential paths can share. A bare "auth", and then a bare "authentication",
+// also matched a proxy's 407 and a cloud provider's credential failures - a machine that is
+// logged in, told to run /login. "/login" alone matched any sign-in URL in an error, and
+// "logged out" matched Azure's "It may have been deleted or logged out" behind Foundry.
+const SIGNED_OUT = /not logged in|please run \/login|authentication_error|failed to authenticate[.:][^\n]*\boauth\b/i;
 
 /**
  * The CLI check and the isolation check come out of ONE probe, on purpose. Two probes would

@@ -521,6 +521,65 @@ describe("doctor auth + git identity checks", () => {
     expect(check.detail).not.toContain("NOT logged in");
   });
 
+  const azureBrokerLine =
+    "Microsoft Foundry authentication failed · The requested account is not available in the native broker. It may have been deleted or logged out. Please sign-in again using an interactive API.";
+
+  it.each([
+    ["on the first line", `${azureBrokerLine}\n`],
+    ["on the second line", `Error: request failed\n${azureBrokerLine}\n`],
+  ])("given Azure saying the account was logged out %s, when diagnosed, then it is not called a missing login", (_where, stdout) => {
+    // given a machine logged in to Claude whose Foundry credential chain failed
+    const runner = failingProbe({ stdout });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.level).toBe("fail");
+    expect(check.detail).not.toContain("NOT logged in");
+  });
+
+  it.each([
+    ["an expired session", "Failed to authenticate: OAuth session expired and could not be refreshed\n"],
+    ["a rejected token", "Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"],
+  ])("given the headless call reporting %s on stdout, when diagnosed, then it reports NOT logged in", (_case, stdout) => {
+    // given the measured sentences of a login that lapsed
+    const runner = failingProbe({ stdout });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.detail).toContain("installed but NOT logged in");
+  });
+
+  it("given a failed authentication that does not name OAuth, when diagnosed, then it is not called a missing login", () => {
+    // given
+    const runner = failingProbe({ stdout: "Failed to authenticate: the gateway refused the configured API key\n" });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.detail).not.toContain("NOT logged in");
+    expect(check.detail).toContain("the gateway refused the configured API key");
+  });
+
+  it("given a warning on stderr and the failure on stdout, when diagnosed, then the evidence is the stdout line", () => {
+    // given
+    const runner = failingProbe({
+      stdout: "API Error: 407 Proxy Authentication Required\n",
+      stderr: "(node:123) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.\n",
+    });
+
+    // when
+    const check = byName(runDoctor(home, runner), "claude CLI");
+
+    // then
+    expect(check.detail).toContain("API Error: 407 Proxy Authentication Required");
+    expect(check.detail).not.toContain("DeprecationWarning");
+  });
+
   it("given a probe that times out, when diagnosed, then it says installed and does not claim a login", () => {
     // given --version answering proves nothing about the session
     const runner = failingProbe({ code: "ETIMEDOUT" });

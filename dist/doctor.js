@@ -1725,14 +1725,14 @@ function failureText(err) {
 }
 function failureLine(err) {
   const failed = err;
-  const said = [failed?.stderr, failed?.stdout, err instanceof Error ? err.message : String(err)];
+  const said = [failed?.stdout, failed?.stderr, err instanceof Error ? err.message : String(err)];
   for (const part of said) {
     const line = typeof part === "string" ? part.split("\n").find((text) => text.trim()) : void 0;
     if (line) return line.trim();
   }
   return "";
 }
-var SIGNED_OUT = /not logged in|please run \/login|logged out|authentication_error/i;
+var SIGNED_OUT = /not logged in|please run \/login|authentication_error|failed to authenticate[.:][^\n]*\boauth\b/i;
 function checkClaudeCli(run, home) {
   const unknownIsolation = warn(
     "model call isolation",
