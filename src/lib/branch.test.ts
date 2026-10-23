@@ -446,7 +446,7 @@ describe("opening the request without the forge CLI", () => {
     expect(result).toMatchObject({ ok: true, branch: "TEAM-12", prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain("merge request: https://gitlab.com/acme/skills/-/merge_requests/12");
-    expect(text).toContain("a push cannot carry its description. Paste this into it:");
+    expect(text.split("\n")).toContain("GitLab reported the request for the push, and a push cannot carry its description. Paste this into it:");
     expect(text).toContain("This skill was written by hand");
   });
 
