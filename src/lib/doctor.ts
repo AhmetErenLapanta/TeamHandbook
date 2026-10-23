@@ -100,6 +100,44 @@ function checkNode(): DoctorCheck {
 const PROBE_TIMEOUT_MS = 60_000;
 
 /**
+ * Everything a failed call said: the error's message, and its stdout and stderr. Node puts only
+ * stderr into the message, and a logged-out `claude -p` writes "Not logged in · Please run
+ * /login" to stdout with stderr empty, measured - read from the message alone, the one sign
+ * that it was logged out never reached the check.
+ */
+function failureText(err: unknown): string {
+  const failed = err as { stdout?: unknown; stderr?: unknown } | null;
+  return [err instanceof Error ? err.message : String(err), failed?.stdout, failed?.stderr]
+    .filter((part): part is string => typeof part === "string")
+    .join("\n");
+}
+
+/** The CLI's own first sentence about a failure: the first line it wrote to stdout, else to
+ * stderr, else the error's own. The message alone always began "Command failed: claude -p",
+ * which named the command and none of the reason. Stdout comes first because that is where the
+ * CLI writes its failures, measured; read stderr-first, a Node DeprecationWarning there hid the
+ * proxy's 407 on stdout. */
+function failureLine(err: unknown): string {
+  const failed = err as { stdout?: unknown; stderr?: unknown } | null;
+  const said = [failed?.stdout, failed?.stderr, err instanceof Error ? err.message : String(err)];
+  for (const part of said) {
+    const line = typeof part === "string" ? part.split("\n").find((text) => text.trim()) : undefined;
+    if (line) return line.trim();
+  }
+  return "";
+}
+
+// What a logged-out CLI says: the measured "Not logged in · Please run /login", the API's
+// `authentication_error`, and the headless call's expired or revoked login, measured as "Failed
+// to authenticate: OAuth session expired ..." and "Failed to authenticate. API Error: 401 OAuth
+// access token is invalid." That prefix stays tied to OAuth on its own line: bare, it is a
+// sentence other credential paths can share. A bare "auth", and then a bare "authentication",
+// also matched a proxy's 407 and a cloud provider's credential failures - a machine that is
+// logged in, told to run /login. "/login" alone matched any sign-in URL in an error, and
+// "logged out" matched Azure's "It may have been deleted or logged out" behind Foundry.
+const SIGNED_OUT = /not logged in|please run \/login|authentication_error|failed to authenticate[.:][^\n]*\boauth\b/i;
+
+/**
  * The CLI check and the isolation check come out of ONE probe, on purpose. Two probes would
  * be two calls to pay for, and - worse - the isolation line would be free to say "ok"
  * about an argument list and an environment that no successful call had ever used. What
@@ -176,7 +214,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
-      if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
+      if (SIGNED_OUT.test(failureText(err))) {
         return [
           fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then"),
           unknownIsolation,
@@ -189,7 +227,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
         return [
           warn(
             "claude CLI",
-            `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
+            `installed, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1000}s - usually a cold start; re-run this check`,
           ),
           unknownIsolation,
         ];
@@ -197,7 +235,7 @@ function checkClaudeCli(run: CommandRunner, home: string): DoctorCheck[] {
       return [
         fail(
           "claude CLI",
-          `logged in, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`,
+          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${failureLine(err).slice(0, 120)}`,
         ),
         unknownIsolation,
       ];

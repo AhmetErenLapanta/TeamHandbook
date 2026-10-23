@@ -1827,6 +1827,20 @@ function checkNode() {
   return major >= 22 ? ok("node", `${process.version} (\u2265 22 required)`) : fail("node", `${process.version} - TeamHandbook needs Node \u2265 22`);
 }
 var PROBE_TIMEOUT_MS = 6e4;
+function failureText(err) {
+  const failed = err;
+  return [err instanceof Error ? err.message : String(err), failed?.stdout, failed?.stderr].filter((part) => typeof part === "string").join("\n");
+}
+function failureLine(err) {
+  const failed = err;
+  const said = [failed?.stdout, failed?.stderr, err instanceof Error ? err.message : String(err)];
+  for (const part of said) {
+    const line = typeof part === "string" ? part.split("\n").find((text) => text.trim()) : void 0;
+    if (line) return line.trim();
+  }
+  return "";
+}
+var SIGNED_OUT = /not logged in|please run \/login|authentication_error|failed to authenticate[.:][^\n]*\boauth\b/i;
 function checkClaudeCli(run, home) {
   const unknownIsolation = warn(
     "model call isolation",
@@ -1887,7 +1901,7 @@ function checkClaudeCli(run, home) {
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
       const lower = message.toLowerCase();
-      if (lower.includes("login") || lower.includes("auth") || lower.includes("logged")) {
+      if (SIGNED_OUT.test(failureText(err))) {
         return [
           fail("claude CLI", "installed but NOT logged in - run `claude` and /login; the gate cannot score until then"),
           unknownIsolation
@@ -1897,7 +1911,7 @@ function checkClaudeCli(run, home) {
         return [
           warn(
             "claude CLI",
-            `installed and logged in, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s - usually a cold start; re-run this check`
+            `installed, but the probe with model "${model}" did not answer within ${PROBE_TIMEOUT_MS / 1e3}s - usually a cold start; re-run this check`
           ),
           unknownIsolation
         ];
@@ -1905,7 +1919,7 @@ function checkClaudeCli(run, home) {
       return [
         fail(
           "claude CLI",
-          `logged in, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${(message.split("\n")[0] ?? "").slice(0, 80)}`
+          `installed, but \`claude -p --model ${model}\` failed${isolated ? " with the restricted invocation the harvest uses" : ""} - is that model valid, and does it authenticate from the environment the call is given? (config.json harvest.model/gate.model/distill.model): ${failureLine(err).slice(0, 120)}`
         ),
         unknownIsolation
       ];
