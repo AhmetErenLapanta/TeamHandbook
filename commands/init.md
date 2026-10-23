@@ -60,8 +60,9 @@ exactly what the rule is.
    `.teamhandbook.json`, and the scaffold's request and every later one take them as far as
    the way it is opened allows: `gh` and `glab` send both, a push GitLab opens a request
    from carries the labels and prints the reviewers to add, and a link leaves both to be
-   added by hand, the result naming them. Do not ask for them otherwise, and never take the
-   names from the git history or the member list.
+   added by hand, the result naming them. The scaffold's own request is opened by `gh` or
+   `glab`, or left to a link; only later requests are opened from a push. Do not ask for
+   them otherwise, and never take the names from the git history or the member list.
 
 Never create or push to a repository the user has not explicitly confirmed.
 

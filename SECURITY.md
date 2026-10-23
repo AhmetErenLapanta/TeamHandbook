@@ -295,7 +295,8 @@ These, and only these:
    TeamHandbook opens to that repository reads them back from its clone: `gh` and `glab`
    send both as the request's reviewers and labels, a push GitLab opens a request from
    carries the labels alone, and a request left to a link carries neither - the result
-   lists what is still to add. A key in that file this version does
+   lists what is still to add. The setup's own request is never asked of the push: `gh` or
+   `glab` opens it, or it is left to a link. A key in that file this version does
    not write is carried across as it stands. Setup, and every refresh that can write that
    file, records there as `scaffoldVersion` the TeamHandbook release that wrote the
    scaffold - a version number and nothing else - and a copy older than the release
@@ -709,7 +710,8 @@ The reviewer and label lists in the same file are not read by `/handbook:join`; 
 read from the clone each time a request to that repository is opened, and go to `gh` or
 `glab` as that request's `--reviewer` and `--label`; on GitLab without `glab`, the labels
 go as `merge_request.label` push options instead and the reviewers are printed for you to
-add, and where no request is opened for you - a server that takes no push options, GitHub
+add - except for the first `/handbook:init`, whose request is never asked of the push - and
+where no request is opened for you - a server that takes no push options, GitHub
 without `gh` - neither goes and both are printed to add when you open it. That is a command
 line, so an entry travels only when it is at most 100 characters,
 carries no control character and nothing the secret detector flags, and has the shape of a
