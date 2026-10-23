@@ -1281,7 +1281,7 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
         // Which TeamHandbook release wrote the scaffold, so an older copy refuses to refresh
         // it back rather than undoing what a newer one wrote (upgrade.ts).
         ...scaffoldVersion ? { scaffoldVersion } : {},
-        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. reviewers and labels, when present, are added to every request TeamHandbook opens here; an empty list adds none."
+        comment: "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. reviewers and labels, when present, go with the requests TeamHandbook opens here as far as the way each is opened allows: gh and glab send both, a request GitLab opens from a push takes the labels, and a request left to a link takes neither; the result names what is left to add. An empty list adds none."
       },
       null,
       2

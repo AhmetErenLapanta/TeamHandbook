@@ -340,6 +340,23 @@ describe("the one question, as the screen prints it", () => {
     );
   });
 
+  it("given the texts that say what a request carries, when they are read, then none says every request takes the team's lists and each names the routes that take less", () => {
+    const root = join(dirname(new URL(import.meta.url).pathname), "..", "..");
+    const read = (file: string) => readFileSync(join(root, file), "utf8").replace(/\s+/g, " ");
+    const comment = JSON.parse(skeletonFiles("s", "git@gitlab.com:a/s.git", "gitlab.com")[TEAM_PREFIX_FILE]!).comment as string;
+
+    expect(read("SECURITY.md")).not.toContain("sends them to the forge as the request's reviewers and labels");
+    expect(read("SECURITY.md")).toContain("a push GitLab opens a request from carries the labels alone, and a request left to a link carries neither");
+    expect(read("SECURITY.md")).toContain("except for the first `/handbook:init`, whose request is never asked of the push");
+    expect(read("commands/init.md")).not.toContain("every later one carry them");
+    expect(read("commands/init.md")).not.toContain("afterwards carries them");
+    expect(read("commands/init.md")).toContain("and a link leaves both to be added by hand");
+    expect(read("commands/init.md")).toContain("The scaffold's own request is opened by `gh` or `glab`, or left to a link");
+    expect(read("commands/share.md")).toContain("opened it, or updated the one already open for the branch");
+    expect(comment).not.toContain("added to every request");
+    expect(comment).toContain("a request left to a link takes neither");
+  });
+
   it("given the three command files, when they describe the push, then each tells the agent to relay that one line", () => {
     const commands = join(dirname(new URL(import.meta.url).pathname), "..", "..", "commands");
     for (const file of ["share.md", "review.md", "init.md"]) {
@@ -741,7 +758,9 @@ describe("the example branch a team records", () => {
             comment:
               "Written by TeamHandbook. commitPrefix is what this project's forge requires at the front of a commit " +
               "message; /handbook:join reads it, so a teammate's first share satisfies that rule instead of being refused by it. " +
-              "reviewers and labels, when present, are added to every request TeamHandbook opens here; an empty list adds none.",
+              "reviewers and labels, when present, go with the requests TeamHandbook opens here as far as the way each is " +
+              "opened allows: gh and glab send both, a request GitLab opens from a push takes the labels, and a request " +
+              "left to a link takes neither; the result names what is left to add. An empty list adds none.",
           },
           null,
           2,
@@ -1728,5 +1747,58 @@ describe("the template GitLab does not apply to a request glab opens", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(formatInitSuccess(result).includes(TEMPLATE_SKIPPED)).toBe(said);
+  });
+});
+
+describe("what each way of opening a request carries and says, for one team file", () => {
+  // One table for every route, so a sentence that differs between two of them is a row that
+  // differs, not two tests in two corners of this file.
+  const TEAM = { reviewers: ["ada"], labels: ["skills"] };
+  const share = (url: string, forge: ForgeRunner, git: GitRunner) =>
+    publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(url), git, forge, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+  const refusingOptions = (bare: string): GitRunner => (args, cwd) => {
+    if (args[0] === "push" && args.includes("-o")) throw new Error("git push failed: fatal: the receiving end does not support push options");
+    return gitAs(args.map((a) => (a === GITLAB ? bare : a)), cwd);
+  };
+
+  it.each([
+    ["gh opens it", GITHUB, "https://github.com/acme/skills/pull/1\n"],
+    ["glab opens it", GITLAB, "https://gitlab.com/acme/skills/-/merge_requests/1\n"],
+  ])("given %s, when the share runs, then the reviewers, the labels and the assignee go on the command and nothing is left to add", (_name, url, reply) => {
+    const { forge, creates } = recordingForge(reply);
+
+    const result = share(url, forge, hostedAt(url, bareHandbook(teamFile(TEAM))));
+
+    expect(creates[0]).toEqual(expect.arrayContaining(["--assignee=@me", "--reviewer=ada", "--label=skills"]));
+    expect(result.requestNotes).toBeUndefined();
+  });
+
+  it("given GitLab opening it from the push, when the share runs, then the labels go as a push option and only the reviewers are left to add", () => {
+    const pushes: string[][] = [];
+
+    const result = share(GITLAB, noForge, hostedAt(GITLAB, bareHandbook(teamFile(TEAM)), (args) => {
+      pushes.push(args);
+      return OPENED;
+    }));
+
+    expect(pushes[0]).toEqual(expect.arrayContaining(["-o", "merge_request.label=skills"]));
+    expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign") || arg.startsWith("merge_request.description"))).toBe(false);
+    expect(result.requestNotes).toHaveLength(1);
+    expect(result.requestNotes![0]).toMatch(/; no push option sets reviewers, so add reviewers @ada by hand\.$/);
+  });
+
+  it.each([
+    ["a GitLab server that takes no push options", GITLAB, "When you open the request, assign yourself on it if the project's template does not, and add reviewers @ada; labels skills."],
+    ["GitHub without gh", GITHUB, "When you open the request, assign yourself on it, and add reviewers @ada; labels skills."],
+  ])("given %s, when the request is left to a link, then neither list goes and both are named to add", (_name, url, said) => {
+    const bare = bareHandbook(teamFile(TEAM));
+
+    const result = share(url, noForge, url === GITLAB ? refusingOptions(bare) : hostedAt(url, bare));
+
+    expect(result.prUrl).toBeUndefined();
+    expect(result.requestNotes).toEqual([said]);
   });
 });

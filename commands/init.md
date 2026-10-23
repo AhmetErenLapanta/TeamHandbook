@@ -57,8 +57,12 @@ exactly what the rule is.
    starts the repository at a version instead, and that job raises it on every merge.
 9. **If the user says who should review the team's requests, or how they are labelled**, add
    `--reviewers <a,b>` and `--labels <a,b>` to the run. They are recorded in
-   `.teamhandbook.json`, and the scaffold's request and every later one carry them. Do not
-   ask for them otherwise, and never take the names from the git history or the member list.
+   `.teamhandbook.json`, and the scaffold's request and every later one take them as far as
+   the way it is opened allows: `gh` and `glab` send both, a push GitLab opens a request
+   from carries the labels and prints the reviewers to add, and a link leaves both to be
+   added by hand, the result naming them. The scaffold's own request is opened by `gh` or
+   `glab`, or left to a link; only later requests are opened from a push. Do not ask for
+   them otherwise, and never take the names from the git history or the member list.
 
 Never create or push to a repository the user has not explicitly confirmed.
 
@@ -114,7 +118,9 @@ re-init. That loses the repository. Refresh it in place instead:
    **If the user wants the team's requests to arrive assigned**, the reviewers and labels
    they name go on a run as `--reviewers <a,b>` and `--labels <a,b>` (`--reviewers ""`
    records that there are none). They are written into `.teamhandbook.json` in that
-   request, and every request TeamHandbook opens to the repository afterwards carries them.
+   request, and every request TeamHandbook opens to the repository afterwards takes them
+   as far as the way it is opened allows: `gh` and `glab` send both, a push GitLab opens a
+   request from carries the labels, and a link leaves both to be added by hand.
    The names are the user's: never take them from the git history or the member list.
    There is no assignee to record: each request TeamHandbook opens with `gh` or `glab` asks
    to be assigned to whoever opens it, and the result says when that did not happen.
