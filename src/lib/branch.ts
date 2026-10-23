@@ -363,10 +363,12 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * file says nothing about reviewers is told on each such request how to record them, or
  * how to record that the template sets none. A team that recorded them, `[]` included,
  * has already answered.
- * A request still to be opened by hand gets the assignee in the same words a push gives it,
- * on the two forges whose new-request page is known: GitHub's assigns nobody, and GitLab's
- * template may. forgeTool sends every other host to glab, and a Bitbucket or Gitea page
- * follows neither rule, so there the note asks only for the lists.
+ * A request still to be opened by hand asks its opener to assign themselves, on the two
+ * forges whose new-request page is known: GitHub's assigns nobody, and GitLab's template
+ * may. A push is not asked to: GitLab assigns what it opens from one to the account that
+ * pushed, unless the project's default template assigns someone else. forgeTool sends
+ * every other host to glab, and a Bitbucket or Gitea page follows neither rule, so there
+ * the note asks only for the lists.
  */
 export function requestNotes(
   dropped: string | null,
@@ -471,6 +473,24 @@ export function readPluginVersion(repoDir: string): string | undefined {
     return typeof version === "string" ? version : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether the team's plugin.json parses and carries no version at all.
+ *
+ * With no version in plugin.json or in the marketplace entry, Claude Code versions a
+ * git-sourced plugin by the commit it installs: measured on 2.1.306, a merge that raised
+ * nothing still reached the installed copy, and the commit that took the line out moved a
+ * copy at 0.1.5 onto that commit. So a missing version is how the repository is versioned,
+ * not a gap to fill in. A manifest that is absent or unreadable says nothing either way.
+ */
+export function versionedByCommit(repoDir: string): boolean {
+  try {
+    const plugin = JSON.parse(readFileSync(join(repoDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof plugin === "object" && plugin !== null && !Array.isArray(plugin) && plugin.version === undefined;
+  } catch {
+    return false;
   }
 }
 
@@ -851,12 +871,27 @@ export function openRequest(
     // reviewers, which no push option sets, are printed for a person to add. No assignee
     // rides either: `merge_request.assign` takes a username or an ID, and without glab
     // nothing here knows the forge's name for this person - the git identity is not it, and
-    // a guess could assign someone else. The template GitLab applies to a request opened
-    // without a description may assign it, so the note asks only for what it did not.
+    // a guess could assign someone else; `@me` is no username there and assigns nobody.
+    // None is needed: GitLab assigns every request it creates from a push to the account
+    // that pushed (push_options_handler_service.rb, create_params, read at b1883a02ab44 and
+    // there since the handler's first release, 11.10), which is the person opening it, the
+    // assignee every other path asks for. GitLab's documentation does not say so; the rule
+    // is its code. A project's default template can still replace it: the push fills an
+    // empty description from that template, and creating the request runs the template's
+    // quick actions before its assignees (issuable_base_service.rb:221, :227), so an
+    // `/assign` there sets the assignees in place of the pusher. The note says so rather
+    // than naming an assignee this run did not see. And a branch whose request is already
+    // open gets no new one: the handler updates that request instead
+    // (push_options_handler_service.rb:113-121, :150-163), taking the push's title and
+    // labels and leaving its assignees as they were. GitLab answers both pushes with the
+    // same "View merge request" line (internal_post_receive/response.rb:30-37), so the note
+    // names both outcomes rather than guess which one this push had.
     const notes = [
       ...(dropped ? [dropped] : []),
-      `GitLab opened the request from the push, which names no assignee${reviewers ? " and cannot set reviewers" : ""}: ` +
-        `assign yourself on it if the project's template did not${reviewers ? `, and add ${reviewers} by hand` : ""}.`,
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee" +
+        `${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`,
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
   }
@@ -897,7 +932,7 @@ export function unattachedDescriptionLines(description: string | undefined): str
   if (!description) return [];
   return [
     "",
-    "GitLab opened the request from the push, and a push cannot carry its description. Paste this into it:",
+    "GitLab reported the request for the push, and a push cannot carry its description. Paste this into it:",
     "",
     ...description.split("\n").map((line) => (line ? `    ${line}` : "")),
   ];

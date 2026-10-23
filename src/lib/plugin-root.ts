@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
  * The installed plugin's version, for support/bug reports. The bundle runs from
  * <plugin-root>/dist and the source tests from <root>/src/lib, so walk up a
  * couple of levels looking for .claude-plugin/plugin.json.
+ *
+ * A manifest without a version line falls back to the release in package.json: measured,
+ * a copy whose plugin.json carried none printed "vunknown" in both status and doctor, and
+ * the check for a newer release went silent with it.
  */
-export function pluginVersion(): string {
-  const root = pluginRoot();
+export function pluginVersion(root: string | null = pluginRoot()): string {
   if (!root) return "unknown";
   try {
     const parsed = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8"));
@@ -16,7 +19,7 @@ export function pluginVersion(): string {
   } catch {
     // unreadable after all
   }
-  return "unknown";
+  return productVersion(root) ?? "unknown";
 }
 
 /** The directory the running plugin was installed into: the one holding its manifest.

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { forgeNotice, hostFromUrl, runForge } from "./forge.js";
 import type { ForgeRunner } from "./forge.js";
@@ -15,7 +15,7 @@ import {
   skeletonFiles,
   TEAM_PREFIX_FILE,
 } from "./init.js";
-import type { CommitMessageChoice, GitRunner, TeamConfig } from "./init.js";
+import type { CommitMessageChoice, CommitPrefixSource, GitRunner, TeamConfig } from "./init.js";
 import { bumpPluginVersion, commitPrefixForPush, symlinkOnPath } from "./publish.js";
 import {
   requestNoteLines,
@@ -29,16 +29,18 @@ import {
   pushBranch,
   pushFailure,
   pushQuestion,
+  readPluginVersion,
   readRecordedAssignment,
   readTeamAssignment,
   readTeamBranchExample,
   requestPushOptions,
   unattachedDescriptionLines,
   versionClaimProblem,
+  versionedByCommit,
   versionPast,
 } from "./branch.js";
 import type { BranchProposal, PushChoice, Pushed, RecordedAssignment, VersionClaim } from "./branch.js";
-import { handbookWorkdir } from "./session-state.js";
+import { handbookWorkdir, removeWorkdir } from "./session-state.js";
 import { productVersion } from "./plugin-root.js";
 
 // Refreshing the scaffold a team received when they ran /handbook:init, in place.
@@ -49,8 +51,8 @@ import { productVersion } from "./plugin-root.js";
 // second init, which means a second repository. Every adopter reaches that wall on
 // their first plugin upgrade.
 //
-// The version in the team's plugin.json is the TEAM plugin's version, not TeamHandbook's:
-// every share raises it, so it says nothing about who wrote the scaffold. Which TeamHandbook
+// The version in the team's plugin.json, where it carries one, is the TEAM plugin's version,
+// not TeamHandbook's: every share raises it, so it says nothing about who wrote the scaffold. Which TeamHandbook
 // release last refreshed the scaffold is recorded on its own, as `scaffoldVersion` in the
 // team file, and it decides one thing only: a copy older than that refuses to refresh.
 // Its skeleton is the past, and a byte comparison against the past offers to undo the
@@ -111,24 +113,29 @@ function parseObject(text: string): Record<string, unknown> | null {
 
 /**
  * The plugin manifest to write: today's fields over the repository's own, with the
- * version left exactly as the team has it.
+ * version left exactly as the team has it - including having none.
  *
- * That number is the team's refresh signal - Claude Code re-reads a marketplace when the
- * version moves - so regenerating the manifest wholesale would reset a repository at
- * 0.3.4 back to 0.1.0 and stop every teammate's copy updating. The merge direction also
- * keeps fields the skeleton never wrote: a team that added `author` or `homepage` keeps
- * them, because a refresh of the scaffold is not a licence to delete what they put there.
+ * Where there is a number it is the team's refresh signal - Claude Code re-reads a
+ * marketplace when the version moves - so regenerating the manifest wholesale would reset a
+ * repository at 0.3.4 back to 0.1.0 and stop every teammate's copy updating. Where there is
+ * none the repository is versioned by commit, and a version taken from the skeleton put
+ * one back, measured, freezing every copy at it. So the version only ever comes from the
+ * repository, and leaves only when `byCommit` - the refresh that switches it - says so.
+ * The merge direction also keeps fields the skeleton never wrote: a team that added
+ * `author` or `homepage` keeps them, because a refresh of the scaffold is not a licence to
+ * delete what they put there.
  *
  * Returns null when the existing manifest cannot be parsed. There is no version to carry
  * across in that case, and guessing one is the failure this function exists to prevent.
  */
-export function mergePluginManifest(existing: string | null, fresh: string): string | null {
+export function mergePluginManifest(existing: string | null, fresh: string, byCommit = false): string | null {
   if (existing === null) return fresh;
   const current = parseObject(existing);
   if (!current) return null;
   const next = JSON.parse(fresh) as Record<string, unknown>;
+  delete next.version;
   const merged = { ...current, ...next };
-  if (typeof current.version === "string") merged.version = current.version;
+  if (byCommit) delete merged.version;
   return JSON.stringify(merged, null, 2) + "\n";
 }
 
@@ -367,7 +374,8 @@ export interface CandidateSet {
  * file as stale, which is what the file being out of date means.
  *
  * `commitPrefix` is one given on this run, which is how a teammate whose machine was never
- * told the prefix can still offer the files that embed it.
+ * told the prefix can still offer the files that embed it. `commitVersioning` is the
+ * refresh that takes the version line out, the one thing that may (see mergePluginManifest).
  */
 export function upgradeCandidates(
   repoDir: string,
@@ -375,6 +383,7 @@ export function upgradeCandidates(
   branchExample?: string,
   assignment: RecordedAssignment = {},
   commitPrefix?: string,
+  commitVersioning = false,
 ): CandidateSet {
   const withCi = existsSync(join(repoDir, CI_MARKER));
   // The example the repository already records is carried across unless a new one was
@@ -412,6 +421,9 @@ export function upgradeCandidates(
       ? null
       : (recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix"));
   const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  // The README says how updates reach teammates, and that depends on whether this
+  // repository raises a version: regenerated for the other kind, it would describe a
+  // delivery the repository does not have.
   const generated = skeletonFiles(
     team.marketplaceName,
     team.repoUrl,
@@ -420,6 +432,8 @@ export function upgradeCandidates(
     withCi,
     example,
     assigned,
+    undefined,
+    commitVersioning ? undefined : readPluginVersion(repoDir),
   );
   const known = commitPrefix !== undefined || recorded !== undefined || commitPrefixIsKnown(team);
   const unknownPrefix = known ? new Set<string>() : prefixDependentPaths(team, withCi);
@@ -474,7 +488,7 @@ export function upgradeCandidates(
     }
     const merged =
       path === PLUGIN_MANIFEST
-        ? mergePluginManifest(readIfPresent(join(repoDir, path)), content)
+        ? mergePluginManifest(readIfPresent(join(repoDir, path)), content, commitVersioning)
         : path === MARKETPLACE_MANIFEST
           ? mergeMarketplaceManifest(readIfPresent(join(repoDir, path)), content)
           : path === TEAM_PREFIX_FILE
@@ -505,8 +519,10 @@ export interface SkeletonFileState {
 export interface VersionPlan {
   current?: string;
   next?: string;
-  /** Why no raise is possible, when none is. */
+  /** Why no raise is possible, when one would be needed. */
   blocked?: string;
+  /** The manifest carries no version - or this refresh takes it out - so there is none to raise. */
+  byCommit?: boolean;
 }
 
 /** What the refresh commit proposes to say. Hoisted out of applyUpgrade so the plan can
@@ -543,12 +559,18 @@ export interface UpgradePlan {
   forgeProblem?: string;
   /** Unmerged branches already claiming the version this refresh would raise to. */
   versionClaim?: string;
+  /** Unmerged branches raising the version, named on a switch that deletes the line they change. */
+  openRaises?: string[];
   /** Set when the repository records no example branch name, so the plan can ask once. */
   asksBranchExample?: boolean;
   /** The commit-message prefix given on this run, which the run that sends has to repeat. */
   commitPrefix?: string;
   /** What the refresh records about the release that wrote it. */
   stamp?: ScaffoldStamp;
+  /** Set when this refresh takes the version line out, which the run that sends has to repeat. */
+  commitVersioning?: boolean;
+  /** The team's marketplace, named in the commands teammates run after that switch. */
+  marketplaceName?: string;
 }
 
 /** What a refresh needs decided beyond its files and its message. */
@@ -561,6 +583,8 @@ export interface UpgradeChoice extends PushChoice {
   labels?: string[];
   /** The team's commit-message prefix, for this run only: never saved on this machine. */
   commitPrefix?: string;
+  /** Take the version line out of plugin.json, for this run only: never saved on this machine. */
+  commitVersioning?: boolean;
 }
 
 /** What a refresh was asked to record in the team file beyond its scaffold files. */
@@ -584,6 +608,10 @@ export interface UpgradeResult {
   version?: string;
   /** Set when the merge request could not raise the plugin version, with the reason. */
   versionNotRaised?: string;
+  /** Set when the repository is versioned by commit after this request, so nothing needed raising. */
+  versionedByCommit?: boolean;
+  /** Set when this request is the one that takes the version line out. */
+  versionLineRemoved?: boolean;
   /** Set when nothing could record which release wrote the scaffold, with the reason. */
   scaffoldNotRecorded?: string;
   prUrl?: string;
@@ -638,28 +666,39 @@ function unreadableManifests(repoDir: string, candidates: CandidateSet): string[
  * `bumpPluginVersion` raises the patch of a three-part number and returns null for
  * anything else, which meant a repository at `1.2.3-beta` was told "it is raised, never
  * reset" while no raise happened at all: a merge request merged, no teammate's copy
- * refreshed, and no line anywhere saying why. A repository with no version field was told
- * nothing and had `0.1.1` invented and committed into a file the reader may not have
- * chosen. The plan and the commit now agree because both read this.
+ * refreshed, and no line anywhere saying why. The plan and the commit agree because both
+ * read this.
+ *
+ * A manifest with no version field is not blocked: it is versioned by commit, and every
+ * merge reaches teammates without one. This used to warn that no teammate's copy would pick
+ * the refresh up, which measured false - the copies took it by commit - and to promise that
+ * refreshing the file would put a version there, which is what stopped them.
  */
-export function versionPlan(repoDir: string): VersionPlan {
+export function versionPlan(repoDir: string, toCommit = false): VersionPlan {
   const raw = readIfPresent(join(repoDir, PLUGIN_MANIFEST));
-  const manifest = raw === null ? null : parseObject(raw);
-  const current = manifest && typeof manifest.version === "string" ? manifest.version : undefined;
-  if (!current) {
+  if (raw === null) {
+    // The version-bump job cannot run on a manifest without a version, so the skeleton gives
+    // that repository one (skeletonFiles), and the sentence has to say which it will be.
     return {
-      blocked:
-        `${PLUGIN_MANIFEST} in this repository declares no version this can read, so the refresh cannot ` +
-        "raise one and no teammate's copy will pick it up. Refreshing that file itself puts a version " +
-        "there, and every refresh after it raises that.",
+      blocked: existsSync(join(repoDir, CI_MARKER))
+        ? `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds ` +
+          "it at 0.1.0, the version the repository's version-bump job raises from."
+        : `the repository has no ${PLUGIN_MANIFEST}, so there is no version to raise. Sending that file adds ` +
+          "it without one, and from then on the repository is versioned by commit.",
     };
   }
-  const parts = current.split(".").map(Number);
-  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+  const manifest = parseObject(raw);
+  if (!manifest) {
+    return { blocked: `${PLUGIN_MANIFEST} in this repository is not valid JSON, so the refresh cannot read a version there or raise one.` };
+  }
+  const current = typeof manifest.version === "string" ? manifest.version : undefined;
+  if (manifest.version === undefined || toCommit) return { ...(current ? { current } : {}), byCommit: true };
+  const parts = (current ?? "").split(".").map(Number);
+  if (!current || parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
     return {
-      current,
+      ...(current ? { current } : {}),
       blocked:
-        `the plugin version "${current}" is not a three-part MAJOR.MINOR.PATCH number, so it cannot be ` +
+        `the plugin version ${JSON.stringify(manifest.version)} is not a three-part MAJOR.MINOR.PATCH number, so it cannot be ` +
         "raised - and without a raise, no teammate's copy refreshes for this. Set a three-part version in " +
         `${PLUGIN_MANIFEST} by hand first.`,
     };
@@ -813,20 +852,29 @@ export function planUpgrade(
     if ("error" in running) return { ok: false, error: running.error };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
+    const versioningError = commitVersioningError(choice, repoDir);
+    if (versioningError) return { ok: false, error: versioningError };
     const candidates = upgradeCandidates(
       repoDir,
       team,
       choice.branchExample,
       assignmentAsked(choice),
       choice.commitPrefix,
+      choice.commitVersioning,
     );
     const files = classify(repoDir, candidates.files);
     const paths = refreshable(files);
     const unreadable = unreadableManifests(repoDir, candidates);
     // The same preview the refresh run decides from, so the branch, the forge route and
-    // the version in the way are shown here exactly as that run will meet them.
-    const preview = previewPush(git, forge, repoDir, team, REFRESH_SLUG, choice.hints);
-    const versionClaim = versionClaimProblem(preview, "run the refresh again");
+    // the version in the way are shown here exactly as that run will meet them - and from
+    // the same config, so the branch is proposed from the prefix the message carries.
+    const pushPrefix = refreshPushPrefix(team, choice, repoDir);
+    const proposedMessage = commitSubject(pushPrefix.prefix, REFRESH_COMMIT_TITLE);
+    const preview = previewPush(git, forge, repoDir, pushPrefix.team, REFRESH_SLUG, choice.hints);
+    // A switch raises no version, so no number of its own can collide with theirs: the
+    // branches are named in the switch paragraph instead, which is what they conflict with.
+    const versionClaim = choice.commitVersioning ? null : versionClaimProblem(preview, "run the refresh again");
+    const openRaises = choice.commitVersioning ? preview.claims.map((claim) => `"${claim.branch}" (${claim.version})`) : [];
     // The same sieve the refresh run applies, so a given name carrying a trace is not
     // printed back on the plan either; a name that can go out is shown as given.
     const answer = branchAnswer(choice, preview, git, repoDir, "run the refresh again");
@@ -837,15 +885,17 @@ export function planUpgrade(
       url: team.repoUrl,
       files,
       withCi: existsSync(join(repoDir, CI_MARKER)),
-      version: versionPlan(repoDir),
-      proposedMessage: commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE),
-      proposalHash: proposalFingerprint(commitSubject(refreshPushPrefix(team, choice, repoDir).prefix, REFRESH_COMMIT_TITLE)),
+      version: versionPlan(repoDir, choice.commitVersioning),
+      proposedMessage,
+      proposalHash: proposalFingerprint(proposedMessage),
       stamp: scaffoldStamp(repoDir, candidates, running.release),
       ...(choice.commitPrefix !== undefined ? { commitPrefix: choice.commitPrefix.trim() } : {}),
+      ...(choice.commitVersioning ? { commitVersioning: true, marketplaceName: team.marketplaceName } : {}),
       ...(branch ? { branch } : {}),
       ...(branchProblem ? { branchProblem } : {}),
       ...(preview.forgeProblem ? { forgeProblem: preview.forgeProblem } : {}),
       ...(versionClaim ? { versionClaim } : {}),
+      ...(openRaises.length ? { openRaises } : {}),
       ...(!choice.branchExample && !readTeamBranchExample(repoDir).example ? { asksBranchExample: true } : {}),
       ...(candidates.linked.length ? { linked: candidates.linked } : {}),
       ...(candidates.withheld.length ? { withheld: candidates.withheld } : {}),
@@ -876,7 +926,7 @@ export function planUpgrade(
     }
     return plan;
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 
@@ -890,15 +940,20 @@ export function planUpgrade(
  * repository's here had the refresh and the share commit to one repository under two
  * prefixes, and the refusal then sent the reader to a config the commit had not used.
  */
-function refreshPushPrefix(team: TeamConfig, choice: UpgradeChoice, repoDir: string): { team: TeamConfig; prefix: string } {
+function refreshPushPrefix(
+  team: TeamConfig,
+  choice: UpgradeChoice,
+  repoDir: string,
+): { team: TeamConfig; prefix: string; source: CommitPrefixSource } {
   if (choice.commitPrefix === undefined) return commitPrefixForPush(team, repoDir);
   const given = choice.commitPrefix.trim();
-  return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given) };
+  return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given), source: "flag" };
 }
 
-// Every character a double-quoted shell word still acts on. The plan prints the prefix
-// inside one, on a line the reader - or an agent - copies whole into a terminal.
-const SHELL_ACTIVE = /["`$\\]/;
+// Every character a double-quoted shell word still acts on in an interactive bash or zsh,
+// `!` included: history expansion turned a pasted "TE!AM" into "event not found". The plan
+// prints the prefix inside one, on a line the reader - or an agent - copies whole into a terminal.
+const SHELL_ACTIVE = /["`$\\!]/;
 
 /** Why the commit-message prefix given on this run cannot be used, or null. Held to the
  * same checks as the one join reads out of the repository, since it is written there. */
@@ -909,7 +964,7 @@ function commitPrefixFlagError(prefix: string | undefined): string | null {
   }
   const problem =
     commitPrefixProblem(prefix.trim()) ??
-    (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign or a backslash" : null);
+    (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign, a backslash or an exclamation mark" : null);
   return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 
@@ -922,6 +977,39 @@ function branchExampleError(example: string | undefined, git: GitRunner, repoDir
   // A traced example is described, never quoted, for the reason branchTrace gives.
   const named = branchTrace(example) ? "that example" : `"${example}"`;
   return `${named} cannot be recorded as the example branch name: ${problem}. Nothing was changed.`;
+}
+
+/**
+ * Why this repository cannot be switched to versioning by commit, or null when it can or
+ * was not asked to be.
+ *
+ * Asked for, never assumed: taking the version line out rewrites what the team has, and a
+ * refresh does not do that to a repository on its own. A repository running the
+ * version-bump job is refused because that job raises the version on every merge and
+ * fails on a manifest without one.
+ */
+function commitVersioningError(choice: UpgradeChoice, repoDir: string): string | null {
+  if (!choice.commitVersioning) return null;
+  if (existsSync(join(repoDir, CI_MARKER))) {
+    return (
+      `--commit-versioning cannot be used while this repository runs the version-bump job: ${CI_MARKER} ` +
+      "raises the version on every merge and fails on a manifest without one. Take the job and that " +
+      "script out of the repository first. Nothing was changed."
+    );
+  }
+  if (versionedByCommit(repoDir)) {
+    return (
+      `this repository is already versioned by commit: ${PLUGIN_MANIFEST} carries no version, so ` +
+      "--commit-versioning has nothing to take out. Nothing was changed."
+    );
+  }
+  if (versionPlan(repoDir).current === undefined) {
+    return (
+      `--commit-versioning takes the version line out of ${PLUGIN_MANIFEST}, and this repository has no ` +
+      "such file with a version this can read. Nothing was changed."
+    );
+  }
+  return null;
 }
 
 /**
@@ -945,7 +1033,7 @@ export function applyUpgrade(
   commitMessage: CommitMessageChoice = {},
   choice: UpgradeChoice = {},
 ): UpgradeResult {
-  if (!paths.length && !recordsAsked(choice)) {
+  if (!paths.length && !recordsAsked(choice) && !choice.commitVersioning) {
     return { ok: false, error: "no file was named, so nothing was refreshed and nothing was pushed" };
   }
   const assignmentProblem = assignmentRecordProblem(assignmentAsked(choice));
@@ -978,20 +1066,25 @@ export function applyUpgrade(
     if ("error" in running) return { ok: false, error: running.error };
     const exampleError = branchExampleError(choice.branchExample, git, repoDir);
     if (exampleError) return { ok: false, error: exampleError };
+    const versioningError = commitVersioningError(choice, repoDir);
+    if (versioningError) return { ok: false, error: versioningError };
     const candidates = upgradeCandidates(
       repoDir,
       team,
       choice.branchExample,
       assignmentAsked(choice),
       choice.commitPrefix,
+      choice.commitVersioning,
     );
     const states = new Map(classify(repoDir, candidates.files).map((file) => [file.path, file.state]));
     // Giving the example, the reviewers or the labels is the approval of the one file they
     // are written into, so that file joins the request without being named twice - unless
-    // it already says exactly that.
+    // it already says exactly that. Asking for versioning by commit is the approval of the
+    // manifest it takes the line out of, the same way.
     if (recordsAsked(choice) && !paths.includes(TEAM_PREFIX_FILE) && states.get(TEAM_PREFIX_FILE) !== "current") {
       paths = [...paths, TEAM_PREFIX_FILE];
     }
+    if (choice.commitVersioning && !paths.includes(PLUGIN_MANIFEST)) paths = [...paths, PLUGIN_MANIFEST];
     if (!paths.length) {
       return { ok: false, error: `${TEAM_PREFIX_FILE} already records that, so nothing was changed.` };
     }
@@ -1017,7 +1110,7 @@ export function applyUpgrade(
     }
     // Read before anything is written, so the commit raises the version exactly when the
     // plan said it would and stays silent when the plan said it could not.
-    const version = versionPlan(repoDir);
+    const version = versionPlan(repoDir, choice.commitVersioning);
     const stamp = scaffoldStamp(repoDir, candidates, running.release);
     const stamps = !stamp.blocked && (!stamp.ifSent || paths.includes(TEAM_PREFIX_FILE));
     const title = REFRESH_COMMIT_TITLE;
@@ -1030,9 +1123,10 @@ export function applyUpgrade(
       git,
       forge,
       repoDir,
-      team,
+      team: pushPrefix.team,
       slug: REFRESH_SLUG,
-      choice,
+      // The switch raises nothing, so an open branch's number is not one it can collide with.
+      choice: choice.commitVersioning ? { ...choice, versionAfterOpen: true } : choice,
       message: commitMessage,
       proposedMessage: commitSubject(messagePrefix, title),
       messagePrefix,
@@ -1042,6 +1136,7 @@ export function applyUpgrade(
     const { branch } = decided;
     let pushed: Pushed;
     let raised: string | null = null;
+    let byCommit = false;
     let written = paths;
     try {
       git(["checkout", "-b", branch], repoDir);
@@ -1056,6 +1151,9 @@ export function applyUpgrade(
       // have been building on is preserved and advanced, never reset - and when it cannot
       // be raised, nothing is invented and the result says so instead.
       if (version.next) raised = bumpPluginVersion(repoDir, decided.claims);
+      // Read off what is about to be committed, so the result reports the manifest this
+      // request leaves behind rather than the one the plan expected.
+      byCommit = versionedByCommit(repoDir);
       const { missing } = stage(git, repoDir, written);
       // Before the commit, so a refresh that cannot carry everything it was asked for
       // carries none of it rather than reporting a file it quietly dropped.
@@ -1078,11 +1176,13 @@ export function applyUpgrade(
           "run the refresh again",
           // The one route that works on this run whoever recorded what: a refresh takes the
           // prefix the forge requires as a flag, and the files it writes record it.
-          `${teamCommitPrefixFix(pushPrefix.team, "run this again")} Or run the refresh again with ` +
+          `${teamCommitPrefixFix(pushPrefix.team, "run this again", pushPrefix.source)} ` +
+            `${pushPrefix.source === "flag" ? "Run" : "Or run"} the refresh again with ` +
             '--commit-prefix "<the prefix the rule requires>", which this commit and the files it refreshes carry.',
         ),
       };
     }
+    const removed = byCommit && version.current !== undefined;
     const request = openRequest(
       team.repoUrl,
       branch,
@@ -1090,8 +1190,20 @@ export function applyUpgrade(
       [
         "Refreshes the scaffold files this repository received from `/handbook:init` to the version",
         "TeamHandbook ships today. Nothing under `skills/`, `commands/`, `agents/` or `.mcp.json` is",
-        "touched; in the two manifests the team's own entries are carried across, and the plugin",
-        "version is raised rather than reset, so teammates' copies pick this up.",
+        "touched; in the two manifests the team's own entries are carried across.",
+        "",
+        ...(raised
+          ? ["The plugin version is raised rather than reset, so teammates' copies pick this up."]
+          : removed
+            ? [
+                "This takes the version line out of `.claude-plugin/plugin.json`: from this merge on the",
+                "repository is versioned by commit, and every merge reaches teammates' copies when their",
+                "marketplace updates. Open requests that raise the version conflict with this one; merge or",
+                "close them first.",
+              ]
+            : byCommit
+              ? ["The repository is versioned by commit, so this merge is what teammates' copies update to."]
+              : ["The plugin version is not raised: " + (version.blocked ?? "nothing here can raise it.")]),
         "",
         "Files in this request:",
         ...written.map((path) => `- \`${path}\``),
@@ -1110,12 +1222,14 @@ export function applyUpgrade(
       branch,
       commitMessage: decided.subject,
       ...(raised ? { version: raised } : {}),
-      ...(raised ? {} : version.blocked ? { versionNotRaised: version.blocked } : {}),
+      ...(removed ? { versionLineRemoved: true } : {}),
+      ...(byCommit ? { versionedByCommit: true } : {}),
+      ...(raised || byCommit ? {} : version.blocked ? { versionNotRaised: version.blocked } : {}),
       ...(stamps ? {} : { scaffoldNotRecorded: stampMissing(stamp) }),
       ...request,
     };
   } finally {
-    rmSync(workdir, { recursive: true, force: true });
+    removeWorkdir(workdir);
   }
 }
 
@@ -1145,6 +1259,7 @@ export function refreshAudience(plan: UpgradePlan): string {
     ...(paths.includes(TEAM_PREFIX_FILE) ? ["teammates who join after you"] : []),
     ...(paths.some((path) => path.startsWith("hooks/")) ? ["the notice teammates see when new skills arrive"] : []),
     ...(paths.includes("README.md") ? ["people reading the repository's README"] : []),
+    ...(plan.commitVersioning ? ["how every merge reaches teammates' copies"] : []),
     ...(paths.some((path) => path.startsWith(".claude-plugin/")) ? ["how the plugin is described in teammates' plugin list"] : []),
     ...(paths.some((path) => path === CI_MARKER || path.endsWith(".yml")) ? ["the repository's version-bump job"] : []),
   ];
@@ -1180,7 +1295,7 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "",
     "The team's own content is never part of this: skills/, commands/, agents/ and .mcp.json are",
     "not offered and cannot be written, and inside the two manifests the team's own entries - the",
-    "plugin version, any extra plugins, the marketplace owner - are carried across, not replaced.",
+    `${plan.commitVersioning || plan.version?.byCommit ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`,
   );
   // The version is stated on its own line with the real numbers, because it is not one of
   // the files above and moves whether or not the manifest is chosen: a reader who declined
@@ -1188,7 +1303,15 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
   // it CANNOT move, that is the line that matters most - it is the difference between a
   // merge that reaches the team and one that reaches nobody.
   const version = plan.version ?? {};
-  if (version.next) {
+  if (plan.commitVersioning && version.current !== undefined) {
+    lines.push("", ...commitVersioningSwitch(version.current, plan.marketplaceName ?? "<marketplace>", plan.openRaises ?? []));
+  } else if (version.byCommit) {
+    lines.push(
+      "",
+      `This repository is versioned by commit: ${PLUGIN_MANIFEST} carries no version, so there is none to raise,`,
+      "and the merge itself is what teammates' copies update to when their marketplace updates.",
+    );
+  } else if (version.next) {
     lines.push(
       "",
       `The merge request also raises the plugin version, ${version.current} -> ${version.next}, the way every share does.`,
@@ -1226,11 +1349,15 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "each file you want:",
     "",
     `  ${paths.map((path) => `--file ${path}`).join(" ")}` +
-      (plan.commitPrefix !== undefined ? ` --commit-prefix "${plan.commitPrefix}"` : ""),
+      (plan.commitPrefix !== undefined ? ` --commit-prefix "${plan.commitPrefix}"` : "") +
+      (plan.commitVersioning ? " --commit-versioning" : ""),
     // Given once, used once: nothing on this machine remembers it, so the run that sends
     // has to carry it again or the files it unlocked are withheld again.
     ...(plan.commitPrefix !== undefined
       ? ["", "--commit-prefix is used for this run only and saved nowhere, so it goes on that run too."]
+      : []),
+    ...(plan.commitVersioning
+      ? ["", "--commit-versioning is used for this run only and saved nowhere, so it goes on that run too."]
       : []),
   );
   // The branch and the message are part of what is being asked for, not details of how it
@@ -1253,6 +1380,30 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
   if (plan.versionClaim) lines.push("", `WARNING: ${plan.versionClaim}`);
   lines.push(...branchExampleQuestion(plan));
   return lines.join("\n");
+}
+
+/**
+ * What switching to versioning by commit means for the people around the repository, said
+ * on the plan that proposes it. Each sentence is something the switch does to them: a
+ * request that raises the version changes the line this commit deletes, which git reports
+ * as a conflict; a copy installed at a version moves only when its marketplace updates; and
+ * a TeamHandbook older than this one still raises a version on every share - measured, a
+ * share into a manifest with no version wrote "0.1.1" - which puts the line back.
+ */
+function commitVersioningSwitch(current: string, marketplace: string, open: string[]): string[] {
+  return [
+    `This request switches the repository to versioning by commit: it takes "version": "${current}" out of`,
+    `${PLUGIN_MANIFEST}, nothing raises a version after it, and every merge reaches teammates' copies when`,
+    "their marketplace updates.",
+    "Open requests that raise the version conflict with this commit - they change the line it deletes - so",
+    "merge or close them first.",
+    ...(open.length ? [`Open now: ${open.join(", ")}.`] : []),
+    "Once this is merged, each teammate moves to the new scheme with:",
+    `  /plugin marketplace update ${marketplace}`,
+    "  /reload-plugins",
+    "A TeamHandbook older than this one still raises a version when it shares, which puts the line back:",
+    "have everyone who shares to this repository update TeamHandbook first.",
+  ];
 }
 
 /**
@@ -1280,6 +1431,11 @@ export function formatUpgradeResult(result: UpgradeResult): string {
     `  branch:      ${result.branch}`,
     ...(result.commitMessage ? [`  commit:      ${result.commitMessage}`] : []),
     ...(result.version ? [`  version:     raised to ${result.version}`] : []),
+    ...(result.versionLineRemoved
+      ? ["  version:     line taken out - once this is merged, the repository is versioned by commit"]
+      : result.versionedByCommit
+        ? ["  version:     none to raise - the repository is versioned by commit, so the merge is what teammates update to"]
+        : []),
     ...(result.versionNotRaised ? [`  version:     NOT raised. ${result.versionNotRaised}`] : []),
     ...(result.scaffoldNotRecorded ? [`  scaffold:    ${result.scaffoldNotRecorded}`] : []),
     result.prUrl

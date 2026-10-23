@@ -11,7 +11,7 @@ function usage(): never {
       "[--with-ci] [--message <commit message>] [--delegate-message <fingerprint>] [--reviewers <a,b>] [--labels <a,b>]\n" +
       "       init.js --upgrade [--file <scaffold-path>]... [--message <commit message>] [--delegate-message <fingerprint>] " +
       "[--branch <name>] [--branch-hint <name>] [--version-after-open] [--branch-example <branch name>] " +
-      "[--reviewers <a,b>] [--labels <a,b>] [--commit-prefix <prefix>]",
+      "[--reviewers <a,b>] [--labels <a,b>] [--commit-prefix <prefix>] [--commit-versioning]",
   );
   process.exit(2);
 }
@@ -92,10 +92,13 @@ function upgrade(args: string[]): void {
     ...(branchExample !== undefined ? { branchExample } : {}),
     ...assignment,
     ...(args.includes("--version-after-open") ? { versionAfterOpen: true } : {}),
+    // Taking the version line out is a choice made for this run, never a default and never
+    // saved: a refresh does not rewrite what the team has unless asked to.
+    ...(args.includes("--commit-versioning") ? { commitVersioning: true } : {}),
     hints: branchHints(process.cwd(), runGit, hint),
   };
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--upgrade" || args[i] === "--version-after-open") continue;
+    if (["--upgrade", "--version-after-open", "--commit-versioning"].includes(args[i]!)) continue;
     // Each takes a value, which is read above: stepping over it here is what keeps the
     // fingerprint or a branch name from being read as a --file path.
     const valued = [

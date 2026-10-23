@@ -558,8 +558,8 @@ describe("what the first screen says about the request", () => {
 describe("a version an unmerged branch already claims", () => {
   /** The case that was missed by a hair: an abandoned branch already carrying the raise a
    * second, unrelated request was about to make. */
-  function withOpenRaise(version: string, branch = "TEAM-9-old"): string {
-    const bare = bareHandbook();
+  function withOpenRaise(version: string, branch = "TEAM-9-old", main: Record<string, string> = {}): string {
+    const bare = bareHandbook(main);
     const work = temp("handbook-open-");
     execFileSync("git", ["clone", bare, join(work, "repo")], { stdio: "ignore" });
     const repo = join(work, "repo");
@@ -616,6 +616,46 @@ describe("a version an unmerged branch already claims", () => {
     const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge));
 
     expect(text).toContain('WARNING: the team repository has a branch that is not merged and already raises the plugin past 0.1.0: "TEAM-9-old" (0.1.1)');
+  });
+
+  it("given a default branch versioned by commit and an open branch still carrying a version, when a share and a refresh plan run, then neither claims a version or warns", () => {
+    // given a request opened before the switch, still raising the line the switch took out
+    const versionless = { ".claude-plugin/plugin.json": JSON.stringify({ name: "acme-skills" }, null, 2) + "\n" };
+    const bare = withOpenRaise("0.1.1", "TEAM-9-old", versionless);
+
+    // when
+    const result = share(bare);
+    const past = share(withOpenRaise("0.1.1", "TEAM-9-old", versionless), true);
+    const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge));
+
+    // then
+    expect(result).toMatchObject({ ok: true, versionedByCommit: true });
+    expect(result.version).toBeUndefined();
+    expect(past).toMatchObject({ ok: true, versionedByCommit: true });
+    const manifest = execFileSync("git", ["-C", bare, "show", "TEAM-12:.claude-plugin/plugin.json"], { encoding: "utf8" });
+    expect(manifest).toBe(versionless[".claude-plugin/plugin.json"]);
+    expect(text).not.toContain("WARNING");
+    expect(text).not.toContain("TEAM-9-old");
+  });
+
+  it("given an open branch raising the version, when the repository is switched to versioning by commit, then the switch names it instead of offering a number", () => {
+    // given the field's case: a request opened at 0.1.0 that raises to 0.1.1, still open
+    const bare = withOpenRaise("0.1.1");
+
+    // when
+    const text = formatUpgradePlan(planUpgrade(teamFor(bare), gitAs, noForge, { commitVersioning: true }));
+    const result = applyUpgrade(teamFor(bare), ["README.md"], gitAs, noForge, APPROVED, {
+      commitVersioning: true,
+      branch: "TEAM-12-refresh",
+    });
+
+    // then no version is raised by the switch, so no number can collide and none is offered
+    expect(text).not.toContain("--version-after-open");
+    expect(text).not.toContain("send this one as");
+    expect(text).toContain('Open now: "TEAM-9-old" (0.1.1)');
+    expect(result).toMatchObject({ ok: true, versionLineRemoved: true });
+    const manifest = execFileSync("git", ["-C", bare, "show", "TEAM-12-refresh:.claude-plugin/plugin.json"], { encoding: "utf8" });
+    expect(JSON.parse(manifest)).not.toHaveProperty("version");
   });
 });
 
@@ -1373,15 +1413,17 @@ describe("the reviewers and labels without the forge CLI", () => {
     );
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(
-      "GitLab opened the request from the push, which names no assignee and cannot set reviewers: " +
-        "assign yourself on it if the project's template did not, and add reviewers @ada, @grace by hand.",
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee; " +
+        "no push option sets reviewers, so add reviewers @ada, @grace by hand.",
     );
     expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign"))).toBe(false);
     expect(text).not.toContain("labels skills");
     expect(text).toContain("Paste this into it:");
   });
 
-  it("given GitLab and no glab and no reviewers, when GitLab opens the request from the push, then no assignee is guessed and the reader is told", () => {
+  it("given GitLab and no glab and no reviewers, when GitLab opens the request from the push, then no assignee is sent and the reader is told who GitLab assigned", () => {
     const bare = bareHandbook(teamFile({}));
     const pushes: string[][] = [];
 
@@ -1398,8 +1440,26 @@ describe("the reviewers and labels without the forge CLI", () => {
 
     expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign"))).toBe(false);
     expect(result.requestNotes).toEqual([
-      "GitLab opened the request from the push, which names no assignee: assign yourself on it if the project's template did not.",
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee.",
     ]);
+  });
+
+  it.each([
+    ["records reviewers", { reviewers: ["ada"] }],
+    ["records none", {}],
+  ])("given a team file that %s and no glab, when GitLab opens the request from the push, then the reader is not asked to assign themselves", (_name, extra) => {
+    const result = publishTeamSelection(
+      { skills: [{ name: "my-skill", dir: localSkill("my-skill") }] },
+      teamFor(GITLAB),
+      hostedAt(GITLAB, bareHandbook(teamFile(extra)), () => OPENED),
+      noForge,
+      { commitMessage: APPROVED, branch: "TEAM-12" },
+    );
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
+    expect(formatShareResult({ team: result, refused: [] })).not.toMatch(/assign yourself/i);
   });
 
   it("given a server that refuses push options, when the push goes plain, then the labels are among what to add by hand", () => {
@@ -1587,11 +1647,13 @@ describe("the template GitLab does not apply to a request glab opens", () => {
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
     expect(result.requestNotes).toEqual([
-      "GitLab opened the request from the push, which names no assignee: assign yourself on it if the project's template did not.",
+      "GitLab opened the request from the push and assigned it to the account that pushed, " +
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee.",
     ]);
   });
 
-  it("given no glab, when the request is left to a link rather than opened by the push, then the assignee is asked for on the same condition", () => {
+  it("given no glab, when the request is left to a link rather than opened by the push, then the assignee is asked for, which the push leaves to GitLab", () => {
     const linked = shareTo(GITLAB, bareHandbook(teamFile({})), noForge);
 
     expect(linked).toMatchObject({ ok: true, manualUrl: "https://gitlab.com/acme/skills/-/merge_requests/new?merge_request%5Bsource_branch%5D=TEAM-12" });
