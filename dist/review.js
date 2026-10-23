@@ -1467,7 +1467,11 @@ function forgeFailure(tool, err) {
   if (banner >= 0) {
     const message = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ");
     const joined = message.replace(/\s+/g, " ");
-    if (joined) return joined.length > 160 ? `\u2026${joined.slice(-159)}` : joined;
+    if (joined.length > 160) {
+      const tail = joined.slice(-159);
+      return `\u2026${tail.slice(tail.indexOf(" ") + 1)}`;
+    }
+    if (joined) return joined;
   }
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
@@ -1496,8 +1500,8 @@ function outputOf(err) {
 ${typeof e?.stderr === "string" ? e.stderr : ""}`;
 }
 function existingRequest(tool, repoUrl, err) {
-  const output = outputOf(err);
-  if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
+  const output = outputOf(err).replace(/\s+/g, " ");
+  if (!/(?:pull request for branch ".*?" into branch ".*?"|merge request) already exists/i.test(output)) return null;
   const web = webAddress(repoUrl);
   const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : void 0;
   const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);

@@ -10,6 +10,19 @@ const GITHUB = "git@github.com:acme/skills.git";
 const MR = "https://gitlab.com/acme/skills/-/merge_requests/12";
 const PR = "https://github.com/acme/skills/pull/12";
 const ASSIGNED: RequestAssignment = { reviewers: ["ada", "grace"], labels: ["skills", "type::docs"] };
+/** GitLab's refusal of a second request as glab 1.123.0 prints it: an ERROR banner, then the
+ * message wrapped at 118 columns. Where the break falls depends on the project's path; these
+ * are the three breaks captured against a local endpoint, host and path renamed. */
+const glabRefusal = (first: string, second: string) => ({
+  stderr: `          \n   ERROR  \n          \n  ${first}  \n  ${second}          \n\n`,
+});
+const POST_409 = "Post https://gitlab.com/api/v4/projects/acme%2Fskills/merge_requests: 409 {message:";
+const GLAB_EXISTS_BREAKS: [string, { stderr: string }][] = [
+  ['between "request" and "already"', glabRefusal(`${POST_409} [Another open merge request`, "already exists for this source branch: !12]}.")],
+  ['between "merge" and "request"', glabRefusal(`${POST_409} [Another open merge`, "request already exists for this source branch: !12]}.")],
+  ["before the sentence", glabRefusal(POST_409, "[Another open merge request already exists for this source branch: !12]}.")],
+];
+const GLAB_EXISTS_WRAPPED = GLAB_EXISTS_BREAKS[0]![1];
 /** What gh 2.100.0 prints when github.com refuses the assignment after the request exists:
  * its own prefix (create.go:1150) around its GraphQL error form, "GraphQL: <message>
  * (<path>)" (api/client_test.go:74). The server's message itself was not measured here. */
@@ -146,7 +159,7 @@ describe("the request is assigned to whoever opens it", () => {
   it("given no lists, a first attempt lost to the network and a retry told the request is open, when it is over, then no third request is asked for and nothing is said to be refused", () => {
     const { forge, calls } = scripted(
       { stderr: "read tcp [::1]:58906->[::1]:443: read: connection reset by peer.\n" },
-      { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" },
+      GLAB_EXISTS_WRAPPED,
     );
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, NONE);
@@ -282,10 +295,8 @@ describe("a request already open for the branch", () => {
     expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge)).toEqual({ url: PR, existing: true });
   });
 
-  const gitlabConflict = { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" };
-
-  it("given GitLab's refusal, which names the request only as !12, when the request is opened, then its address is built from that and the repository", () => {
-    const { forge, calls } = scripted(gitlabConflict);
+  it.each(GLAB_EXISTS_BREAKS)("given GitLab's refusal broken %s, which names the request only as !12, when the request is opened, then it is read as the request already open and its address is built from that", (_name, refusal) => {
+    const { forge, calls } = scripted(refusal);
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
@@ -294,13 +305,12 @@ describe("a request already open for the branch", () => {
   });
 
   it("given that refusal on a repository with no web address, when the request is opened, then the forge's own sentence is kept with its !12", () => {
-    const { forge } = scripted(gitlabConflict);
+    const { forge } = scripted(GLAB_EXISTS_WRAPPED);
 
     expect(openPr("/srv/git/skills.git", "TEAM-12", "t", "b", "/repo", forge, ASSIGNED)).toEqual({
       url: null,
       existing: true,
-      error:
-        "a request for this branch is already open (409 Conflict {message: [Another open merge request already exists for this source branch: !12]})",
+      error: `a request for this branch is already open (${POST_409} [Another open merge request already exists for this source branch: !12]}.)`,
     });
   });
 
@@ -401,7 +411,7 @@ describe("the forge CLI's own reporting", () => {
 });
 
 describe("what a failed open's words say about its assignment", () => {
-  const GLAB_EXISTS = { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" };
+  const GLAB_EXISTS = GLAB_EXISTS_WRAPPED;
   const RESET = (port: number) => ({ stderr: `read tcp [::1]:5890${port}->[::1]:443: read: connection reset by peer\n` });
 
   // One row per pattern, each matching that pattern alone, so removing any one turns a row red.
@@ -410,6 +420,7 @@ describe("what a failed open's words say about its assignment", () => {
     ["gh on GitHub Enterprise refusing the assignee", "could not assign user: 'dev' not found", "assignee"],
     ["gh on GitHub Enterprise refusing a reviewer", "could not request reviewer: 'adaa' not found", "lists"],
     ["gh on GitHub Enterprise refusing a label", "could not add label: 'skills' not found", "lists"],
+    ["a read that times out", "read tcp 10.0.0.2:51234->10.0.0.9:443: read: operation timed out", "fault"],
     ["a write on a dropped connection", "write tcp 10.0.0.2:51234->10.0.0.9:443: write: broken pipe", "fault"],
     ["a dial that fails", "dial udp 10.0.0.1:53: connect: network is unreachable", "fault"],
     ["a reset connection", "connection reset by peer", "fault"],
@@ -463,14 +474,16 @@ describe("what a failed open's words say about its assignment", () => {
     expect(assignmentFailure(reason)).toBe("fault");
   });
 
-  it("given glab printing a message longer than a reason holds, when the open fails, then its end is kept, where the cause is", () => {
+  it("given glab printing a message longer than a reason holds, when the open fails, then its end is kept from the start of a word, where the cause is", () => {
     const path = "deep/".repeat(30);
     const { forge } = scripted({ stderr: `   ERROR  \n  Post "http://gitlab.example/${path}merge_requests": dial tcp 10.0.0.9:443: connect: connection refused.\n` });
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
 
-    expect(opened.error).toHaveLength(160);
-    expect(opened.error).toMatch(/^…/);
+    expect(opened.error!.length).toBeLessThanOrEqual(160);
+    expect(opened.error).toMatch(/^…\S/);
+    const whole = `Post "http://gitlab.example/${path}merge_requests": dial tcp 10.0.0.9:443: connect: connection refused.`;
+    expect(whole.endsWith(` ${opened.error!.slice(1)}`)).toBe(true);
     expect(opened.error).toMatch(/: connect: connection refused\.$/);
   });
 

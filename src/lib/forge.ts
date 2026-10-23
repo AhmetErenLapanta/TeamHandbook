@@ -155,7 +155,8 @@ function assignmentFlags(assignment: RequestAssignment): string[] {
 // message to the terminal's width and closes a list of errors with a line holding only
 // "." - its last line is a fragment or a lone ".", so its message is read whole: what
 // follows the banner, the punctuation-only lines dropped and the wrapped lines joined. A
-// long one keeps its end rather than its start: a Go error chain names its cause last.
+// long one keeps its end rather than its start: a Go error chain names its cause last; the
+// end starts at a word, so a reason never opens on half of one.
 function forgeFailure(tool: "gh" | "glab", err: unknown): string {
   const e = err as { code?: string; stderr?: string; message?: string };
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
@@ -164,7 +165,11 @@ function forgeFailure(tool: "gh" | "glab", err: unknown): string {
   if (banner >= 0) {
     const message = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ");
     const joined = message.replace(/\s+/g, " ");
-    if (joined) return joined.length > 160 ? `…${joined.slice(-159)}` : joined;
+    if (joined.length > 160) {
+      const tail = joined.slice(-159);
+      return `…${tail.slice(tail.indexOf(" ") + 1)}`;
+    }
+    if (joined) return joined;
   }
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
@@ -182,12 +187,14 @@ function forgeFailure(tool: "gh" | "glab", err: unknown): string {
  * team's lists.
  *
  * A dropped connection, a refused token or a forge's own error refuses nobody, and is told
- * apart in the words the two CLIs were measured printing for it: Go's network errors as
- * both pass them on (`dial tcp`, `connection refused`, `no such host`, `: EOF`), gh's own
- * sentences for an unresolvable host and a refused token, and a status code only where an
- * HTTP status stands - "HTTP 500" from gh, ": 401 {message" from glab - because a bare
- * number also appears in a username such as `qa-503`, and reading it as a fault would hide
- * that name's refusal from the team that has to correct it.
+ * apart by its words. Measured against local endpoints: `dial tcp`, `connection refused`,
+ * `no such host`, `: EOF`, `TLS handshake timeout`, gh's own sentences for an unresolvable
+ * host and a refused token, "HTTP 401/500/502/503" from gh and ": 401/500/502/503 {" from
+ * glab. Not seen from either CLI here, kept as the same Go network errors in their other
+ * forms: `read tcp`, `write tcp`, `udp`, `connection reset`, `i/o timeout` and 504. A status
+ * code counts only where an HTTP status stands, because a bare number also appears in a
+ * username such as `qa-503`, and reading it as a fault would hide that name's refusal from
+ * the team that has to correct it.
  */
 const FAULT_WORDS: RegExp[] = [
   /\b(?:read|write|dial) (?:tcp|udp)\b/,
@@ -223,10 +230,18 @@ function outputOf(err: unknown): string {
  * known here: the first attempt may have opened it without reporting it, or a run before
  * this one did. The same result whatever the team file holds. With no address to be had,
  * the forge's own sentence is kept, so the reader can still tell which request it means.
+ *
+ * The sentence is read with its lines joined. glab 1.123.0 wraps its message at 118
+ * columns, and where the break falls depends on the length of the project's path: measured
+ * on four paths, it split the sentence between "merge" and "request", between "request"
+ * and "already", and before "[Another". Read line by line, a request already open was
+ * missed and a second one asked for. The two sentences are the CLIs' own: gh's
+ * `a pull request for branch %q into branch %q already exists` (create.go:526) and GitLab's
+ * `Another open merge request already exists for this source branch: !<iid>`.
  */
 function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { url: string | null; existing: true; error?: string } | null {
-  const output = outputOf(err);
-  if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
+  const output = outputOf(err).replace(/\s+/g, " ");
+  if (!/(?:pull request for branch ".*?" into branch ".*?"|merge request) already exists/i.test(output)) return null;
   const web = webAddress(repoUrl);
   const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : undefined;
   const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);

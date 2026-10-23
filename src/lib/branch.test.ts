@@ -1621,7 +1621,9 @@ describe("the template GitLab does not apply to a request glab opens", () => {
     const forge: ForgeRunner = (_tool, args) => {
       if (args[0] === "auth") return "Logged in";
       throw Object.assign(new Error("Command failed"), {
-        stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n",
+        stderr:
+          '          \n   ERROR  \n          \n  Post https://gitlab.com/api/v4/projects/acme%2Fskills/merge_requests: 409 {message: [Another open merge request  \n' +
+          "  already exists for this source branch: !12]}.          \n\n",
       });
     };
 
@@ -1726,11 +1728,11 @@ describe("a first attempt the forge did not refuse", () => {
       return "https://gitlab.com/acme/skills/-/merge_requests/3\n";
     };
 
-    const result = shareTo(GITLAB, bareHandbook(teamFile({ reviewers: ["ada"] })), forge);
+    const result = shareTo(GITLAB, bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] })), forge);
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/3" });
     expect(result.requestNotes).toEqual([
-      "The request was opened without its assignment (reviewers @ada; assignee you): the first attempt failed " +
+      "The request was opened without its assignment (reviewers @ada; labels skills; assignee you): the first attempt failed " +
         "(read tcp [::1]:58901->[::1]:443: read: connection reset by peer) and the second was sent without it. Set it on the request by hand.",
     ]);
   });

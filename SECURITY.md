@@ -719,7 +719,10 @@ rather than refused. If the forge refuses the assignment itself, the request is 
 once more without it - unless the failed call already reported a request it opened, or
 the forge answered that a request for the branch already exists. The assignee, `@me`, rides
 on every request, so every failed open is asked for that second time, never a third; both
-forges refuse a second open request for a branch, in the sentence read above. When the
+forges refuse a second open request for a branch, in the sentence read above. That sentence
+is read with its lines joined, because `glab` 1.123.0 wraps its message at 118 columns and
+was measured breaking it inside "merge request already exists" on three project paths of
+four. When the
 second attempt fails too or finds the request already open, the first failure is named as
 a refusal of the assignment when its own words say so (`glab`, and `gh` on GitHub
 Enterprise, name the user or label they could not find), and not when they are the words
