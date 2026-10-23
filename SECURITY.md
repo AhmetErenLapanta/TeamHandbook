@@ -264,7 +264,8 @@ These, and only these:
      the project's own merge request template, because GitLab does not apply that template
      to a request opened through its API, so nothing its quick actions set reaches it; when
      `.teamhandbook.json` has no `reviewers` key or no `labels` key, the result says so,
-     names only the missing one, and says how to record it.
+     names the key or keys that are missing and no other, and gives the one command that
+     records them.
      A request GitLab opens from a push is assigned by GitLab to the account that pushed,
      unless the project's default template assigns someone else: the push-option handler
      sets the pusher as assignee on every request it creates, and an `/assign` in the

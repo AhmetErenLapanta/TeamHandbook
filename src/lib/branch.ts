@@ -381,7 +381,7 @@ export function requestNotes(
     unrecorded.length === 2
       ? skipped +
         "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
-        'and if it sets none, record that with /handbook:init --upgrade --reviewers "".'
+        'and if it sets none, record that with /handbook:init --upgrade --reviewers "" --labels "".'
       : unrecorded.length === 1
         ? skipped +
           `if that template sets ${unrecorded[0]}, record them with /handbook:init --upgrade --${unrecorded[0]} ${unrecorded[0] === "reviewers" ? "<a,b>" : "<x>"}, ` +
