@@ -90,7 +90,7 @@ describe("listing the work a repository repeats", () => {
 
   describe("a blobless clone whose remote is out of reach", () => {
     // A history read needs file contents a blobless clone left on its remote, so with the remote
-    // gone git cannot read the history at all.
+    // gone git cannot read the history unless an earlier read already fetched them.
     function offlineBloblessClone(source: string): string {
       const scratch = mkdtempSync(join(tmpdir(), "handbook-mine-offline-"));
       const origin = join(scratch, "origin.git");

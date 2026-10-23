@@ -570,7 +570,7 @@ written by the hook rather than by this report: beside the name, running count a
 the last call it already kept, how many calls fell on each of the last 30 days, and never
 the call's arguments.
 
-**What leaves your machine.** Nothing but, on a partial clone, a request to that
+**What leaves your machine.** Nothing but, on a partial clone, requests to that
 repository's own remote for the file contents the clone lacks, as above. The team repository's
 skills are read from the clone already on disk, so the overlap warning makes no request.
 
