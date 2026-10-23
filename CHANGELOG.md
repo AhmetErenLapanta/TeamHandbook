@@ -4,6 +4,67 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.32.0] - 2026-10-23
+
+### Added
+
+- **A team's own text in the team repository's README now survives a refresh.** The README
+  `/handbook:init` writes carries `<!-- teamhandbook:begin -->` and
+  `<!-- teamhandbook:end -->`, and `/handbook:init --upgrade` rewrites only what is between
+  them, keeping every line outside them as it was. A README without the markers, such as
+  one set up by an earlier release, is still replaced whole. Either way the plan lists,
+  before anything is picked, every line of the current README the new one does not keep.
+  A TeamHandbook older than 0.32.0 does not know the markers and still replaces the whole
+  file.
+- **The team README walks a repository onto versioning by commit and keeps it there.** In a
+  repository that carries a version, a "Moving to versioning by commit" section gives the
+  order that a conflict cannot undo: everyone updates to 0.31.0 or later first, the open
+  requests that raise the version are merged or closed, then the switch runs. In one
+  versioned by commit, "Keeping it versioned by commit" says how a version line comes back
+  and to take it out before merging. A repository that runs the version-bump job gets
+  neither. The `--commit-versioning` plan names 0.31.0 as the copy to update to and how.
+
+### Changed
+
+- **A request `glab` opens to a GitLab team repository whose `.teamhandbook.json` records
+  reviewers and no labels, or labels and no reviewers, now names only the list it left out**
+  and the command that records it. A team that recorded both, an empty list included, is
+  told nothing.
+- **When the team file records neither list, the note's command for a template that sets
+  none is now `/handbook:init --upgrade --reviewers "" --labels ""`.** It records both, so
+  the next request is silent. A team that followed the old advice and recorded only
+  `"reviewers": []` now sees a labels note on each `glab` request until it runs
+  `/handbook:init --upgrade --labels ""`.
+- **SECURITY.md, the init and share commands and the comment `/handbook:init` writes into
+  the team's `.teamhandbook.json` no longer say every request carries the team's reviewers
+  and labels.** `gh` and `glab` send both, a request GitLab opens from a push carries the
+  labels and the result names the reviewers to add, and a request left to a link carries
+  neither, with both named in the result. The setup's own request is opened by `gh` or
+  `glab` or left to a link, never from a push. The team README's "Who reviews a request"
+  section says the same.
+- **A refresh offers `README.md` and `.teamhandbook.json` on a repository set up by an
+  earlier release,** for the new README and the corrected comment.
+- **SECURITY.md now lists the handbook home's `tmp/` directory,** where team commands make
+  their scratch clones and where a killed run leaves one, and says a partial clone makes a
+  request per missing file content rather than one.
+
+### Fixed
+
+- **Sharing again to a GitLab branch that already has a merge request now finds that
+  request.** `glab` wraps GitLab's "already exists" answer across lines. That answer went
+  unread, so another request was asked for and a link to open one was printed. The result
+  now names the open request.
+- **A dropped connection, an unreachable host, a refused token or a GitLab server error is
+  no longer reported as a refusal of the request's reviewers or labels.** The team file is
+  not blamed for it, and the reason shown is `glab`'s whole message rather than a lone ".".
+- **`/handbook:doctor` no longer calls a signed-out `claude` logged in.** The CLI says "Not
+  logged in" on its standard output, which the doctor did not read, so it reported "logged
+  in, but `claude -p` failed" and asked whether the model was valid. It now reads "installed
+  but NOT logged in". A lapsed or revoked OAuth login reads the same way, while an Azure
+  account reported as logged out behind Foundry stays a credential failure of the provider.
+  When the call fails, the line shown is the first one the CLI wrote to its standard output,
+  so a Node warning on stderr no longer hides the reason.
+
 ## [0.31.2] - 2026-10-22
 
 ### Fixed

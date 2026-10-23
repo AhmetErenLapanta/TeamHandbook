@@ -126,8 +126,9 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   one behind: a file the system refuses to delete, which keeps its directory (measured for
   every command above), and a command killed while it runs (measured for `/handbook:review`
   only: SIGTERM and SIGINT both left the whole clone with its local commit).
-  Only `/handbook:init` names what it left, and only when it succeeded; the other commands
-  say nothing. A `handbook-*` directory under `tmp/` is such a leftover and is safe to
+  Only `/handbook:init`, when it sets a repository up, names what it left, and only when it
+  succeeded; the other commands, `/handbook:init --upgrade` included, say nothing. A
+  `handbook-*` directory under `tmp/` is such a leftover and is safe to
   delete. When `tmp/` cannot be created, the clone goes under the system's temporary
   directory instead and is removed from there the same way.
 
