@@ -297,13 +297,15 @@ export function readRecordedAssignment(repoDir: string): { recorded: RecordedAss
  * changes its list reaches every teammate's next request without anyone joining again.
  * A value that fails a check is left out and the request still goes, and every one left
  * out is counted by its reason in `dropped`, so nothing is lost without the user being told.
- * `reviewersRecorded` keeps what the empty list loses: whether the team said anything about
- * reviewers at all, `[]` and a value left out included, or left the key out and said nothing.
+ * `reviewersRecorded` and `labelsRecorded` keep what the empty list loses: whether the team
+ * said anything about that list at all, `[]` and a value left out included, or left the key
+ * out and said nothing.
  */
 export function readTeamAssignment(repoDir: string): {
   assignment: RequestAssignment;
   dropped: string | null;
   reviewersRecorded: boolean;
+  labelsRecorded: boolean;
 } {
   const raw = readTeamFile(repoDir);
   const assignment: RequestAssignment = { reviewers: [], labels: [] };
@@ -331,6 +333,7 @@ export function readTeamAssignment(repoDir: string): {
     assignment,
     dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null,
     reviewersRecorded: raw.reviewers !== undefined,
+    labelsRecorded: raw.labels !== undefined,
   };
 }
 
@@ -354,9 +357,10 @@ function assignmentList(assignment: RequestAssignment): string | null {
  * GitLab fills its default template in through one service, which skips it when a
  * description is given and which the API glab opens a request through never reaches. So a
  * request glab opened lacks whatever the template's quick actions set, and a team whose
- * file says nothing about reviewers is told on each such request how to record them, or
- * how to record that the template sets none. A team that recorded them, `[]` included,
- * has already answered.
+ * file says nothing about reviewers or about labels is told on each such request how to
+ * record the ones it left out, or how to record that the template sets none - only those,
+ * so a team that recorded its reviewers is not sent back to them. A list the team recorded,
+ * `[]` included, has already answered.
  * A request still to be opened by hand asks its opener to assign themselves, on the two
  * forges whose new-request page is known: GitHub's assigns nobody, and GitLab's template
  * may. A push is not asked to: GitLab assigns what it opens from one to the account that
@@ -368,9 +372,21 @@ export function requestNotes(
   dropped: string | null,
   assignment: RequestAssignment,
   pr: { url: string | null; unassigned?: string; existing?: true },
-  team: { repoUrl: string; reviewersRecorded: boolean },
+  team: { repoUrl: string; reviewersRecorded: boolean; labelsRecorded: boolean },
 ): string[] {
   const list = assignmentList(assignment);
+  const unrecorded = [...(team.reviewersRecorded ? [] : ["reviewers"]), ...(team.labelsRecorded ? [] : ["labels"])];
+  const skipped = "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: ";
+  const template =
+    unrecorded.length === 2
+      ? skipped +
+        "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
+        'and if it sets none, record that with /handbook:init --upgrade --reviewers "" --labels "".'
+      : unrecorded.length === 1
+        ? skipped +
+          `if that template sets ${unrecorded[0]}, record them with /handbook:init --upgrade --${unrecorded[0]} ${unrecorded[0] === "reviewers" ? "<a,b>" : "<x>"}, ` +
+          `and if it sets none, record that with /handbook:init --upgrade --${unrecorded[0]} "".`
+        : null;
   const host = hostFromUrl(team.repoUrl) ?? "";
   const assignYourself = host.includes("github")
     ? "assign yourself on it"
@@ -400,13 +416,7 @@ export function requestNotes(
       ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`]
       : []),
     ...(list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : []),
-    ...(opened && forgeTool(team.repoUrl) === "glab" && !team.reviewersRecorded
-      ? [
-          "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
-            "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
-            'and if it sets none, record that with /handbook:init --upgrade --reviewers "".',
-        ]
-      : []),
+    ...(opened && forgeTool(team.repoUrl) === "glab" && template ? [template] : []),
     ...(byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []),
   ];
 }
@@ -836,8 +846,8 @@ export function openRequest(
   pushed: Pushed,
 ): RequestOutcome {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? undefined;
-  const { assignment, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-  const team = { repoUrl, reviewersRecorded };
+  const { assignment, dropped, reviewersRecorded, labelsRecorded } = readTeamAssignment(repoDir);
+  const team = { repoUrl, reviewersRecorded, labelsRecorded };
   const withNotes = (outcome: RequestOutcome, notes: string[]): RequestOutcome =>
     notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {

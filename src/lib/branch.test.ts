@@ -973,13 +973,18 @@ describe("the refresh plan and a branch the user gave", () => {
   });
 });
 
-/** What a request glab opened says when the team file records no reviewers. */
+/** What a request glab opened says when the team file records neither reviewers nor labels. */
 const TEMPLATE_SKIPPED =
   "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
   "if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, " +
-  'and if it sets none, record that with /handbook:init --upgrade --reviewers "".';
+  'and if it sets none, record that with /handbook:init --upgrade --reviewers "" --labels "".';
 /** The start of what a GitLab request still to be opened by hand says. */
 const BY_HAND = "When you open the request, assign yourself on it if the project's template does not";
+/** What a request glab opened says when the team file records one list and not the other. */
+const ONLY_SKIPPED = (kind: "reviewers" | "labels") =>
+  "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: " +
+  `if that template sets ${kind}, record them with /handbook:init --upgrade --${kind} ${kind === "reviewers" ? "<a,b>" : "<x>"}, ` +
+  `and if it sets none, record that with /handbook:init --upgrade --${kind} "".`;
 
 /** The team file as a repository records it, with whatever reviewers and labels a case needs. */
 function teamFile(extra: Record<string, unknown>): Record<string, string> {
@@ -1019,6 +1024,7 @@ describe("the reviewers and labels a team file holds", () => {
       assignment: { reviewers: [], labels: [] },
       dropped: null,
       reviewersRecorded: false,
+      labelsRecorded: false,
     });
   });
 
@@ -1027,11 +1033,28 @@ describe("the reviewers and labels a team file holds", () => {
       assignment: { reviewers: [], labels: [] },
       dropped: null,
       reviewersRecorded: true,
+      labelsRecorded: true,
     });
   });
 
   it("given labels alone, when the request reads them, then no reviewers are recorded", () => {
     expect(readTeamAssignment(teamFileIn({ labels: ["skills"] })).reviewersRecorded).toBe(false);
+    expect(readTeamAssignment(teamFileIn({ labels: ["skills"] })).labelsRecorded).toBe(true);
+  });
+
+  it.each([
+    ["not a list", "skills"],
+    ["null", null],
+  ])("given labels that are %s, when the request reads them, then the team said something about labels and no template note asks for them", (_name, labels) => {
+    const read = readTeamAssignment(teamFileIn({ reviewers: ["ada"], labels }));
+
+    expect(read.labelsRecorded).toBe(true);
+    expect(read.dropped).toBe(`${TEAM_PREFIX_FILE} holds values this request left out (labels is not a list).`);
+  });
+
+  it("given reviewers alone, when the request reads them, then no labels are recorded", () => {
+    expect(readTeamAssignment(teamFileIn({ reviewers: ["ada"] })).labelsRecorded).toBe(false);
+    expect(readTeamAssignment(teamFileIn({ reviewers: ["ada"], labels: [] })).labelsRecorded).toBe(true);
   });
 
   it("given names the way people type them, when the request reads them, then the @ is dropped and scoped or local labels are kept", () => {
@@ -1041,6 +1064,7 @@ describe("the reviewers and labels a team file holds", () => {
       assignment: { reviewers: ["ada.lovelace", "grace_hopper"], labels: ["type::docs", "équipe"] },
       dropped: null,
       reviewersRecorded: true,
+      labelsRecorded: true,
     });
   });
 
@@ -1586,26 +1610,55 @@ describe("the template GitLab does not apply to a request glab opens", () => {
     });
 
   it.each([
-    ["records no key at all", {}],
-    ["records labels and no reviewers", { labels: ["skills"] }],
-  ])("given a team file that %s, when glab opens the request, then the reader is told once how to record the template's lists", (_name, extra) => {
+    ["records no key at all", {}, [TEMPLATE_SKIPPED]],
+    ["records reviewers and no labels", { reviewers: ["ada"] }, [ONLY_SKIPPED("labels")]],
+    ["records nobody to review on purpose and no labels", { reviewers: [] }, [ONLY_SKIPPED("labels")]],
+    ["records labels and no reviewers", { labels: ["skills"] }, [ONLY_SKIPPED("reviewers")]],
+    ["records both", { reviewers: ["ada"], labels: ["skills"] }, undefined],
+    ["records both as nobody and nothing on purpose", { reviewers: [], labels: [] }, undefined],
+  ])("given a team file that %s, when glab opens the request, then only the list it left out is asked for", (_name, extra, notes) => {
     const { forge } = recordingForge();
 
     const result = shareTo(GITLAB, bareHandbook(teamFile(extra)), forge);
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/1" });
-    expect(result.requestNotes).toEqual([TEMPLATE_SKIPPED]);
+    expect(result.requestNotes).toEqual(notes);
   });
 
   it.each([
-    ["records reviewers", { reviewers: ["ada"] }],
-    ["records nobody on purpose", { reviewers: [] }],
-  ])("given a team file that %s, when glab opens the request, then nothing is said about the template", (_name, extra) => {
-    const { forge } = recordingForge();
+    ["records no key at all", {}],
+    ["records reviewers and no labels", { reviewers: ["ada"] }],
+    ["records labels and no reviewers", { labels: ["skills"] }],
+  ])("given a team file that %s, when the note's command for a template that sets none is run and merged, then the next request glab opens says nothing about the template", (_name, extra) => {
+    const bare = bareHandbook(teamFile(extra));
+    const shareOn = (branch: string) =>
+      publishTeamSelection({ skills: [{ name: `skill-${branch.toLowerCase()}`, dir: localSkill(`skill-${branch.toLowerCase()}`) }] }, teamFor(GITLAB), hostedAt(GITLAB, bare), recordingForge().forge, {
+        commitMessage: APPROVED,
+        branch,
+      });
+    const note = shareOn("TEAM-12").requestNotes!.find((line) => line.includes("if it sets none"))!;
+    // The command is read off the sentence itself, so a sentence and a command that drift apart fail here.
+    const command = /if it sets none, record that with \/handbook:init --upgrade (.+)\.$/.exec(note)![1]!;
+    const lists = Object.fromEntries([...command.matchAll(/--(reviewers|labels) ""/g)].map(([, kind]) => [kind!, []]));
+    execFileSync("git", ["-C", bare, "update-ref", "refs/heads/main", "refs/heads/TEAM-12"]);
 
-    const result = shareTo(GITLAB, bareHandbook(teamFile(extra)), forge);
+    const refresh = applyUpgrade(teamFor(bare), [], gitAs, noForge, APPROVED, { branch: "TEAM-13-none", ...lists });
+    expect(refresh).toMatchObject({ ok: true, refreshed: [TEAM_PREFIX_FILE] });
+    execFileSync("git", ["-C", bare, "update-ref", "refs/heads/main", "refs/heads/TEAM-13-none"]);
 
-    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/1" });
+    expect(command.replace(/--(reviewers|labels) ""/g, "").trim()).toBe("");
+    expect(shareOn("TEAM-14").requestNotes).toBeUndefined();
+  });
+
+  it.each([
+    ["records reviewers and no labels", { reviewers: ["ada"] }],
+    ["records no key at all", {}],
+  ])("given a GitHub team file that %s, when gh opens the request, then nothing is said about a template", (_name, extra) => {
+    const { forge } = recordingForge("https://github.com/acme/skills/pull/1\n");
+
+    const result = shareTo(GITHUB, bareHandbook(teamFile(extra)), forge);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/1" });
     expect(result.requestNotes).toBeUndefined();
   });
 

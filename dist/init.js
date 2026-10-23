@@ -725,7 +725,8 @@ function readTeamAssignment(repoDir) {
   return {
     assignment,
     dropped: said.length ? `${TEAM_PREFIX_FILE} holds values this request left out (${said.join("; ")}).` : null,
-    reviewersRecorded: raw.reviewers !== void 0
+    reviewersRecorded: raw.reviewers !== void 0,
+    labelsRecorded: raw.labels !== void 0
   };
 }
 function assignmentList(assignment) {
@@ -737,6 +738,9 @@ function assignmentList(assignment) {
 }
 function requestNotes(dropped, assignment, pr, team) {
   const list = assignmentList(assignment);
+  const unrecorded = [...team.reviewersRecorded ? [] : ["reviewers"], ...team.labelsRecorded ? [] : ["labels"]];
+  const skipped = "GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: ";
+  const template = unrecorded.length === 2 ? skipped + 'if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, and if it sets none, record that with /handbook:init --upgrade --reviewers "" --labels "".' : unrecorded.length === 1 ? skipped + `if that template sets ${unrecorded[0]}, record them with /handbook:init --upgrade --${unrecorded[0]} ${unrecorded[0] === "reviewers" ? "<a,b>" : "<x>"}, and if it sets none, record that with /handbook:init --upgrade --${unrecorded[0]} "".` : null;
   const host = hostFromUrl(team.repoUrl) ?? "";
   const assignYourself = host.includes("github") ? "assign yourself on it" : host.includes("gitlab") ? "assign yourself on it if the project's template does not" : null;
   const byHand = [...assignYourself ? [assignYourself] : [], ...list ? [`add ${list}`] : []].join(", and ");
@@ -752,9 +756,7 @@ function requestNotes(dropped, assignment, pr, team) {
     ...refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : [],
     ...refused && !pr.url && !pr.existing ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
     ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
-    ...opened && forgeTool(team.repoUrl) === "glab" && !team.reviewersRecorded ? [
-      `GitLab does not apply the project's merge request template to a request opened through its API, which is how glab opens one: if that template sets reviewers or labels, record them with /handbook:init --upgrade --reviewers <a,b> --labels <x>, and if it sets none, record that with /handbook:init --upgrade --reviewers "".`
-    ] : [],
+    ...opened && forgeTool(team.repoUrl) === "glab" && template ? [template] : [],
     ...byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []
   ];
 }
@@ -955,8 +957,8 @@ function pushBranch(git, repoDir, ref, options = []) {
 }
 function openRequest(repoUrl, branch, title, body, repoDir, forge, forgeProblem, pushed) {
   const manualUrl = manualPrUrl(repoUrl, branch) ?? void 0;
-  const { assignment, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
-  const team = { repoUrl, reviewersRecorded };
+  const { assignment, dropped, reviewersRecorded, labelsRecorded } = readTeamAssignment(repoDir);
+  const team = { repoUrl, reviewersRecorded, labelsRecorded };
   const withNotes = (outcome, notes) => notes.length ? { ...outcome, requestNotes: notes } : outcome;
   if (!forgeProblem) {
     const pr = openPr(repoUrl, branch, title, body, repoDir, forge, assignment);
@@ -1341,12 +1343,16 @@ ${byCommit ? `${KEEP_BY_COMMIT}
 
 `}### Who reviews a request
 
-The requests TeamHandbook opens here carry the reviewers and labels listed in
-\`.teamhandbook.json\`, and none while it lists none. To change them, run
+TeamHandbook adds the reviewers and labels listed in \`.teamhandbook.json\` to the
+requests it opens here, and adds none while it lists none. \`glab\` and \`gh\` send both
+with the request. A request GitLab opens from a push takes the labels; no push option
+sets reviewers, so those are printed for you to add. A request you open from the printed
+link takes neither until you add them, and the result lists them. To change them, run
 \`/handbook:init --upgrade --reviewers <a,b> --labels <x>\`. GitLab does not apply the
 project's merge request template to a request opened through its API, which is how
 \`glab\` opens one, so reviewers or labels that template sets reach the requests
-\`glab\` opens only once they are listed here.
+\`glab\` opens only once they are listed here. A request GitLab opens from a push, or
+one you open on its web page, does get that template.
 
 This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
 "N new skills/servers/commands" notice; it records what it has already shown you under
@@ -1810,7 +1816,7 @@ function initTeamRepo(url, name, home = handbookHome(), git = runGit, now = (/* 
     let notes = [];
     let alreadyOpen = false;
     if (!direct) {
-      const { assignment: assigned, dropped, reviewersRecorded } = readTeamAssignment(repoDir);
+      const { assignment: assigned, dropped, reviewersRecorded, labelsRecorded } = readTeamAssignment(repoDir);
       const opened = openPr(
         url,
         scaffoldBranch,
@@ -1825,7 +1831,7 @@ Opened by TeamHandbook.`,
       prUrl = opened.url;
       prError = opened.error;
       alreadyOpen = opened.existing === true;
-      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded });
+      notes = requestNotes(dropped, assigned, opened, { repoUrl: url, reviewersRecorded, labelsRecorded });
     }
     saveTeamConfig(
       {
