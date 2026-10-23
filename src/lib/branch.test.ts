@@ -1406,7 +1406,8 @@ describe("the reviewers and labels without the forge CLI", () => {
     const text = formatShareResult({ team: result, refused: [] });
     expect(text).toContain(
       "GitLab opened the request from the push and assigned it to the account that pushed, " +
-        "unless the project's default template assigns someone else; " +
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee; " +
         "no push option sets reviewers, so add reviewers @ada, @grace by hand.",
     );
     expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign"))).toBe(false);
@@ -1432,7 +1433,8 @@ describe("the reviewers and labels without the forge CLI", () => {
     expect(pushes[0]!.some((arg) => arg.startsWith("merge_request.assign"))).toBe(false);
     expect(result.requestNotes).toEqual([
       "GitLab opened the request from the push and assigned it to the account that pushed, " +
-        "unless the project's default template assigns someone else.",
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee.",
     ]);
   });
 
@@ -1638,7 +1640,8 @@ describe("the template GitLab does not apply to a request glab opens", () => {
     expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/12" });
     expect(result.requestNotes).toEqual([
       "GitLab opened the request from the push and assigned it to the account that pushed, " +
-        "unless the project's default template assigns someone else.",
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee.",
     ]);
   });
 
