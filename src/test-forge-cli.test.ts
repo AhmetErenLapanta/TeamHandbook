@@ -26,8 +26,8 @@ function firstOnPath(tool: string): string | null {
   return null;
 }
 
-describe("the forge CLIs a test can reach", () => {
-  it.each(["gh", "glab"])(
+describe("the forge and model CLIs a test can reach", () => {
+  it.each(["gh", "glab", "claude"])(
     "given a test that spawns %s by name, when PATH is searched, then the suite's own refusing stand-in is found first",
     (tool) => {
       const found = firstOnPath(tool);
