@@ -117,6 +117,19 @@ All state lives under `~/.teamhandbook/` (override with `TEAMHANDBOOK_HOME`):
   as a piece of workflow, the salt their hashes use, and the last `/handbook:mine` run
   they are named against. Field by field in
   [Recognizing a workflow in a session](#recognizing-a-workflow-in-a-session).
+- `tmp/` - a scratch clone of the team repository for each command that reads or changes
+  it: `/handbook:join`, `/handbook:init` (with `--upgrade` too), `/handbook:doctor`,
+  `/handbook:share`, and `/handbook:review` when it sends a skill to the team. Each is a
+  `--depth 1` clone, except the full one `/handbook:init` makes when it sets a repository
+  up, in a directory only your account can open, and it is removed when the command
+  finishes, whether it succeeded or stopped; `tmp/` itself stays, empty. Two things leave
+  one behind: a file the system refuses to delete, which keeps its directory (measured for
+  every command above), and a command killed while it runs (measured for `/handbook:review`
+  only: SIGTERM and SIGINT both left the whole clone with its local commit).
+  Only `/handbook:init` names what it left, and only when it succeeded; the other commands
+  say nothing. A `handbook-*` directory under `tmp/` is such a leftover and is safe to
+  delete. When `tmp/` cannot be created, the clone goes under the system's temporary
+  directory instead and is removed from there the same way.
 
 Approved skills are written **outside** `~/.teamhandbook/`, where Claude Code loads
 them: `~/.claude/skills/<slug>/` (personal), the repo's `.claude/skills/<slug>/`
@@ -583,7 +596,7 @@ written by the hook rather than by this report: beside the name, running count a
 the last call it already kept, how many calls fell on each of the last 30 days, and never
 the call's arguments.
 
-**What leaves your machine.** Nothing but, on a partial clone, a request to that
+**What leaves your machine.** Nothing but, on a partial clone, requests to that
 repository's own remote for the file contents the clone lacks, as above. The team repository's
 skills are read from the clone already on disk, so the overlap warning makes no request.
 
