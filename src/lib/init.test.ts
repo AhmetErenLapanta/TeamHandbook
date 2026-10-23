@@ -24,6 +24,8 @@ import {
   decideCommitSubject,
   proposalFingerprint,
   summarizeGitStderr,
+  README_BEGIN,
+  README_END,
 } from "./init.js";
 
 /**
@@ -159,6 +161,21 @@ describe("skeletonFiles", () => {
   it("guards the GitLab CI job on the token so it skips instead of failing", () => {
     const gitlab = skeletonFiles("s", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com", "", true);
     expect(gitlab[".gitlab-ci.yml"]).toContain("$TEAMHANDBOOK_CI_TOKEN");
+  });
+
+  it("given a new scaffold, when its README is generated, then TeamHandbook's part is fenced once and the team's title and opening line sit above it", () => {
+    // when
+    const readme = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", "gitlab.acme.com")["README.md"]!;
+
+    // then
+    expect(readme.split(README_BEGIN)).toHaveLength(2);
+    expect(readme.split(README_END)).toHaveLength(2);
+    const above = readme.slice(0, readme.indexOf(README_BEGIN));
+    expect(above).toBe(
+      "# acme-skills\n\nYour team's shared setup: skills, MCP servers, and slash commands your team has\napproved through TeamHandbook.\n\n",
+    );
+    expect(readme).toContain(`${README_BEGIN}\n<!-- Edit outside these markers; TeamHandbook 0.32.0 or newer rewrites only what is between them, an older one replaces the whole file when it refreshes it. -->`);
+    expect(readme.trimEnd().endsWith(README_END)).toBe(true);
   });
 
   it("given a new scaffold, when it is generated, then neither manifest carries a version", () => {

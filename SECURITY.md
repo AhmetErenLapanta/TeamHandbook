@@ -287,7 +287,13 @@ These, and only these:
    `skills/`, `commands/`, `agents/` or `.mcp.json`, and inside the two `.claude-plugin`
    manifests it carries the team's own entries across rather than replacing them - the
    plugin version included, or its absence. Only `--commit-versioning`, given on that run,
-   takes the version line out of `plugin.json`, and nothing saves that choice. An
+   takes the version line out of `plugin.json`, and nothing saves that choice. In the
+   team's `README.md` it rewrites only what is between `<!-- teamhandbook:begin -->` and
+   `<!-- teamhandbook:end -->`, each on a line of its own, once and in order. A README without
+   them in that form is replaced whole. Either way the plan lists, before anything is picked,
+   every non-blank line of the current README the new one does not keep in order: all of them
+   for a whole replacement, the ones between the markers otherwise. TeamHandbook before 0.32.0
+   does not know the markers and replaces the whole file when it refreshes it. An
    example branch name you give it with `--branch-example` is screened like a branch and
    written into the team's `.teamhandbook.json` in that same request, for teammates who
    join afterwards to read. Reviewer and label names given with `--reviewers` and

@@ -9,6 +9,8 @@ import {
   commitSubject,
   proposalFingerprint,
   gitIdentityArgs,
+  README_BEGIN,
+  README_END,
   readTeamCommitPrefix,
   teamCommitPrefixFix,
   runGit,
@@ -360,6 +362,107 @@ export interface CandidateSet {
   linked: WithheldFile[];
   /** Left out because a value the skeleton needs is not knowable on this machine. */
   withheld: WithheldFile[];
+  /** Set when the README is replaced whole rather than between its markers. */
+  readmeWhole?: ReadmeWhole;
+  /** The lines that go from between the README's markers, when it has them. */
+  readmeInside?: string[];
+}
+
+/** Why the README is replaced whole, and the lines of the current one the new one lacks. */
+export interface ReadmeWhole {
+  reason: "unmarked" | "broken";
+  lost: string[];
+}
+
+/**
+ * Where TeamHandbook's part of a README begins and ends, as line indexes, or null unless each
+ * marker stands on a line of its own exactly once and in order. A marker quoted inside a
+ * sentence is the team's text, not a marker: counting it turned a README whose team wrote
+ * about the markers into one replaced whole.
+ */
+function productSection(lines: string[]): { begin: number; end: number } | null {
+  const at = (marker: string) => lines.flatMap((line, index) => (line.trim() === marker ? [index] : []));
+  const begins = at(README_BEGIN);
+  const ends = at(README_END);
+  if (begins.length !== 1 || ends.length !== 1 || ends[0]! < begins[0]!) return null;
+  return { begin: begins[0]!, end: ends[0]! };
+}
+
+/** A comment line that names TeamHandbook: a marker as written, or one a team changed. */
+const MARKER_LIKE = /^<!--.*teamhandbook/i;
+
+/**
+ * The non-blank lines of `before` that `after` does not keep, in order.
+ *
+ * A longest common subsequence rather than a set: a set let a line through whenever its text
+ * appeared anywhere in the new file, so a team's "## Access" or the fences of its code block
+ * went unlisted while they were deleted, measured.
+ */
+export function linesThatGo(before: string[], after: string[]): string[] {
+  const kept = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1));
+  for (let i = before.length - 1; i >= 0; i--) {
+    for (let j = after.length - 1; j >= 0; j--) {
+      kept[i]![j] = before[i] === after[j] ? kept[i + 1]![j + 1]! + 1 : Math.max(kept[i + 1]![j]!, kept[i]![j + 1]!);
+    }
+  }
+  const gone: string[] = [];
+  for (let i = 0, j = 0; i < before.length; ) {
+    if (j < after.length && before[i] === after[j]) {
+      i++;
+      j++;
+    } else if (j < after.length && kept[i]![j + 1]! >= kept[i + 1]![j]!) {
+      j++;
+    } else {
+      if (before[i]!.trim()) gone.push(before[i]!);
+      i++;
+    }
+  }
+  return gone;
+}
+
+/**
+ * The README to write: today's product section between the repository's own markers, and
+ * the team's text around them exactly as it stands, each line with the ending it already
+ * had. Only the section takes the file's prevailing ending: a CRLF README came back half
+ * CRLF and half LF, measured, and joining every line with one ending turned an LF file
+ * with a single CRLF line outside the markers into a CRLF file.
+ *
+ * A README without the markers - every one written before they existed, or one whose
+ * markers a team removed, changed, or wrote twice - is replaced whole, because nothing says
+ * where the product's text ends and the team's begins: an unedited old scaffold and a
+ * team's own README look the same from here. The lines that would go are returned so the
+ * plan names them instead of leaving the reader to find them in a diff, and the reader can
+ * leave the file out. With the markers, the lines that go from between them are returned
+ * too: a team that wrote inside the section loses that line on the refresh.
+ */
+export function mergeReadme(
+  existing: string | null,
+  fresh: string,
+): { content: string; whole?: ReadmeWhole; inside?: string[] } {
+  if (existing === null) return { content: fresh };
+  // Every other piece is a line, every odd one the ending that followed it.
+  const pieces = existing.split(/(\r?\n)/);
+  const lines = pieces.filter((_, index) => index % 2 === 0);
+  const ends = pieces.filter((_, index) => index % 2 === 1);
+  const crlf = ends.filter((end) => end === "\r\n").length;
+  const eol = crlf > ends.length - crlf ? "\r\n" : "\n";
+  const next = fresh.split("\n");
+  const theirs = productSection(lines);
+  const ours = productSection(next);
+  if (theirs && ours) {
+    const section = next.slice(ours.begin, ours.end + 1);
+    const inside = linesThatGo(lines.slice(theirs.begin, theirs.end + 1), section);
+    const kept = (from: number, to: number) => lines.slice(from, to).map((line, at) => line + (ends[from + at] ?? "")).join("");
+    // The section's last line keeps the ending the old end marker had, so the line after it
+    // starts exactly where it did.
+    const written = section.map((line, at) => line + (at < section.length - 1 ? eol : (ends[theirs.end] ?? ""))).join("");
+    return {
+      content: kept(0, theirs.begin) + written + kept(theirs.end + 1, lines.length),
+      ...(inside.length ? { inside } : {}),
+    };
+  }
+  const marked = lines.some((line) => MARKER_LIKE.test(line.trim()));
+  return { content: next.join(eol), whole: { reason: marked ? "broken" : "unmarked", lost: linesThatGo(lines, next) } };
 }
 
 /**
@@ -440,6 +543,8 @@ export function upgradeCandidates(
   const files: Record<string, string> = {};
   const linked: WithheldFile[] = [];
   const withheld: WithheldFile[] = [];
+  let readmeWhole: ReadmeWhole | undefined;
+  let readmeInside: string[] | undefined;
   for (const [path, content] of Object.entries(generated)) {
     if (isTeamOwned(path)) continue;
     const link = symlinkOnPath(repoDir, path);
@@ -486,6 +591,13 @@ export function upgradeCandidates(
       });
       continue;
     }
+    if (path === "README.md") {
+      const readme = mergeReadme(readIfPresent(join(repoDir, path)), content);
+      files[path] = readme.content;
+      if (readme.whole) readmeWhole = readme.whole;
+      if (readme.inside) readmeInside = readme.inside;
+      continue;
+    }
     const merged =
       path === PLUGIN_MANIFEST
         ? mergePluginManifest(readIfPresent(join(repoDir, path)), content, commitVersioning)
@@ -496,7 +608,7 @@ export function upgradeCandidates(
             : content;
     if (merged !== null) files[path] = merged;
   }
-  return { files, linked, withheld };
+  return { files, linked, withheld, ...(readmeWhole ? { readmeWhole } : {}), ...(readmeInside ? { readmeInside } : {}) };
 }
 
 /**
@@ -571,6 +683,10 @@ export interface UpgradePlan {
   commitVersioning?: boolean;
   /** The team's marketplace, named in the commands teammates run after that switch. */
   marketplaceName?: string;
+  /** Set when the README on offer replaces the repository's whole, with the lines that go. */
+  readmeWhole?: ReadmeWhole;
+  /** The lines that go from between the README's markers, when it keeps them. */
+  readmeInside?: string[];
 }
 
 /** What a refresh needs decided beyond its files and its message. */
@@ -900,6 +1016,8 @@ export function planUpgrade(
       ...(candidates.linked.length ? { linked: candidates.linked } : {}),
       ...(candidates.withheld.length ? { withheld: candidates.withheld } : {}),
       ...(unreadable.length ? { unreadable } : {}),
+      ...(candidates.readmeWhole && paths.includes("README.md") ? { readmeWhole: candidates.readmeWhole } : {}),
+      ...(candidates.readmeInside && paths.includes("README.md") ? { readmeInside: candidates.readmeInside } : {}),
     };
     if (!paths.length) return plan;
     try {
@@ -1018,9 +1136,10 @@ function commitVersioningError(choice: UpgradeChoice, repoDir: string): string |
  * `paths` is the approval, and it is the approval in code rather than in an instruction
  * to be careful: an empty selection writes nothing and makes no network call, and a path
  * the skeleton did not produce is refused by name before the clone is touched. Selecting
- * per file is the requirement, not a convenience - `hooks/notice.mjs` is the file a team
- * is most likely to have edited, and replacing the set wholesale would take that edit
- * with it.
+ * per file is the requirement, not a convenience: the README is where a team writes its
+ * own text, and replacing the set wholesale would take that text with it. `hooks/notice.mjs`
+ * is the product's own script - in the one field repository measured it was byte for byte
+ * the scaffold's - so selecting it is about the refresh, not about protecting an edit.
  *
  * All of it or none of it: the selected files travel in one commit on one branch, so a
  * push that is refused leaves the repository exactly as it was.
@@ -1297,6 +1416,15 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     "not offered and cannot be written, and inside the two manifests the team's own entries - the",
     `${plan.commitVersioning || plan.version?.byCommit ? "fields the team added" : "plugin version"}, any extra plugins, the marketplace owner - are carried across, not replaced.`,
   );
+  if (plan.readmeWhole) lines.push("", ...readmeWholeLines(plan.readmeWhole));
+  if (plan.readmeInside) {
+    lines.push(
+      "",
+      "Leave README.md out to keep it as it is. Between its TeamHandbook markers these lines are not in the",
+      "refreshed section and go - an older product line or one the team wrote there; outside them nothing changes:",
+      ...plan.readmeInside.map((line) => `  - ${line}`),
+    );
+  }
   // The version is stated on its own line with the real numbers, because it is not one of
   // the files above and moves whether or not the manifest is chosen: a reader who declined
   // that file would otherwise find it changed anyway with nothing having said so. And when
@@ -1403,6 +1531,25 @@ function commitVersioningSwitch(current: string, marketplace: string, open: stri
     "  /reload-plugins",
     "A TeamHandbook older than this one still raises a version when it shares, which puts the line back:",
     "have everyone who shares to this repository update TeamHandbook first.",
+  ];
+}
+
+/**
+ * What replacing the README whole costs, said before the reader picks the file: each
+ * non-blank line of the current README the new one does not keep, and the two ways to keep them.
+ */
+function readmeWholeLines(whole: ReadmeWhole): string[] {
+  const why =
+    whole.reason === "broken"
+      ? "README.md's TeamHandbook markers are not each on a line of their own, once and in order, so a refresh replaces it whole."
+      : "README.md carries no TeamHandbook markers, so a refresh replaces it whole.";
+  return [
+    why,
+    "Leave README.md out to keep the file as it is.",
+    ...(whole.lost.length ? ["These lines go:", ...whole.lost.map((line) => `  - ${line}`)] : ["No line of the current file goes."]),
+    whole.reason === "broken"
+      ? `With ${README_BEGIN} and ${README_END} each once, on lines of their own, around TeamHandbook's part, a refresh rewrites only what is between them.`
+      : "Once the refresh that adds the markers is merged, a refresh rewrites only what is between them and everything outside stays.",
   ];
 }
 

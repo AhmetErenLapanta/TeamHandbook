@@ -368,12 +368,26 @@ const SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
 which every merge reaches teammates without raising anything.`;
 
+/**
+ * The two lines that fence TeamHandbook's own part of the team README. A refresh rewrites
+ * only what is between them, so what a team writes above or below them stays: before the
+ * fence, a refresh replaced the README whole, and accepting it deleted a section a team had
+ * added, measured. HTML comments, so a forge renders nothing for them.
+ */
+export const README_BEGIN = "<!-- teamhandbook:begin -->";
+export const README_END = "<!-- teamhandbook:end -->";
+
 function readmeFor(name: string, url: string, byCommit: boolean, withCi: boolean): string {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
-approved through TeamHandbook. This repository is a Claude Code plugin marketplace;
-every merge reaches each subscribed teammate when their marketplace updates.
+approved through TeamHandbook.
+
+${README_BEGIN}
+<!-- Edit outside these markers; TeamHandbook 0.32.0 or newer rewrites only what is between them, an older one replaces the whole file when it refreshes it. -->
+
+This repository is a Claude Code plugin marketplace; every merge reaches each
+subscribed teammate when their marketplace updates.
 
 ## Access
 
@@ -431,6 +445,8 @@ This plugin ships a tiny dependency-free SessionStart hook that shows consumers 
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
 It makes no network calls and needs no TeamHandbook engine, so it reads only the copy
 already installed: the notice appears after an update, it does not cause one.
+
+${README_END}
 `;
 }
 

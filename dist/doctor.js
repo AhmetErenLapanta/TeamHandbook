@@ -996,12 +996,19 @@ anything committed here by hand reaches nobody unless it raises the version too.
 var SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
 which every merge reaches teammates without raising anything.`;
+var README_BEGIN = "<!-- teamhandbook:begin -->";
+var README_END = "<!-- teamhandbook:end -->";
 function readmeFor(name, url, byCommit, withCi) {
   return `# ${name}
 
 Your team's shared setup: skills, MCP servers, and slash commands your team has
-approved through TeamHandbook. This repository is a Claude Code plugin marketplace;
-every merge reaches each subscribed teammate when their marketplace updates.
+approved through TeamHandbook.
+
+${README_BEGIN}
+<!-- Edit outside these markers; TeamHandbook 0.32.0 or newer rewrites only what is between them, an older one replaces the whole file when it refreshes it. -->
+
+This repository is a Claude Code plugin marketplace; every merge reaches each
+subscribed teammate when their marketplace updates.
 
 ## Access
 
@@ -1059,6 +1066,8 @@ This plugin ships a tiny dependency-free SessionStart hook that shows consumers 
 \`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
 It makes no network calls and needs no TeamHandbook engine, so it reads only the copy
 already installed: the notice appears after an update, it does not cause one.
+
+${README_END}
 `;
 }
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
@@ -1382,6 +1391,58 @@ function prefixDependentPaths(team, withCi) {
   const probed = skeletonFiles(team.marketplaceName, team.repoUrl, host, PREFIX_PROBE, withCi);
   return new Set(Object.keys(plain).filter((path) => plain[path] !== probed[path]));
 }
+function productSection(lines) {
+  const at = (marker) => lines.flatMap((line, index) => line.trim() === marker ? [index] : []);
+  const begins = at(README_BEGIN);
+  const ends = at(README_END);
+  if (begins.length !== 1 || ends.length !== 1 || ends[0] < begins[0]) return null;
+  return { begin: begins[0], end: ends[0] };
+}
+var MARKER_LIKE = /^<!--.*teamhandbook/i;
+function linesThatGo(before, after) {
+  const kept = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1));
+  for (let i = before.length - 1; i >= 0; i--) {
+    for (let j = after.length - 1; j >= 0; j--) {
+      kept[i][j] = before[i] === after[j] ? kept[i + 1][j + 1] + 1 : Math.max(kept[i + 1][j], kept[i][j + 1]);
+    }
+  }
+  const gone = [];
+  for (let i = 0, j = 0; i < before.length; ) {
+    if (j < after.length && before[i] === after[j]) {
+      i++;
+      j++;
+    } else if (j < after.length && kept[i][j + 1] >= kept[i + 1][j]) {
+      j++;
+    } else {
+      if (before[i].trim()) gone.push(before[i]);
+      i++;
+    }
+  }
+  return gone;
+}
+function mergeReadme(existing, fresh) {
+  if (existing === null) return { content: fresh };
+  const pieces = existing.split(/(\r?\n)/);
+  const lines = pieces.filter((_, index) => index % 2 === 0);
+  const ends = pieces.filter((_, index) => index % 2 === 1);
+  const crlf = ends.filter((end) => end === "\r\n").length;
+  const eol = crlf > ends.length - crlf ? "\r\n" : "\n";
+  const next = fresh.split("\n");
+  const theirs = productSection(lines);
+  const ours = productSection(next);
+  if (theirs && ours) {
+    const section = next.slice(ours.begin, ours.end + 1);
+    const inside = linesThatGo(lines.slice(theirs.begin, theirs.end + 1), section);
+    const kept = (from, to) => lines.slice(from, to).map((line, at) => line + (ends[from + at] ?? "")).join("");
+    const written = section.map((line, at) => line + (at < section.length - 1 ? eol : ends[theirs.end] ?? "")).join("");
+    return {
+      content: kept(0, theirs.begin) + written + kept(theirs.end + 1, lines.length),
+      ...inside.length ? { inside } : {}
+    };
+  }
+  const marked = lines.some((line) => MARKER_LIKE.test(line.trim()));
+  return { content: next.join(eol), whole: { reason: marked ? "broken" : "unmarked", lost: linesThatGo(lines, next) } };
+}
 function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commitPrefix, commitVersioning = false) {
   const withCi = existsSync4(join9(repoDir, CI_MARKER));
   const recordedExample = readTeamBranchExample(repoDir);
@@ -1412,6 +1473,8 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
   const files = {};
   const linked = [];
   const withheld = [];
+  let readmeWhole;
+  let readmeInside;
   for (const [path, content] of Object.entries(generated)) {
     if (isTeamOwned(path)) continue;
     const link = symlinkOnPath(repoDir, path);
@@ -1447,10 +1510,17 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
       });
       continue;
     }
+    if (path === "README.md") {
+      const readme = mergeReadme(readIfPresent(join9(repoDir, path)), content);
+      files[path] = readme.content;
+      if (readme.whole) readmeWhole = readme.whole;
+      if (readme.inside) readmeInside = readme.inside;
+      continue;
+    }
     const merged = path === PLUGIN_MANIFEST ? mergePluginManifest(readIfPresent(join9(repoDir, path)), content, commitVersioning) : path === MARKETPLACE_MANIFEST ? mergeMarketplaceManifest(readIfPresent(join9(repoDir, path)), content) : path === TEAM_PREFIX_FILE ? mergeTeamFile(readIfPresent(join9(repoDir, path)), content) : content;
     if (merged !== null) files[path] = merged;
   }
-  return { files, linked, withheld };
+  return { files, linked, withheld, ...readmeWhole ? { readmeWhole } : {}, ...readmeInside ? { readmeInside } : {} };
 }
 function classify(repoDir, candidates) {
   return Object.entries(candidates).map(([path, content]) => {

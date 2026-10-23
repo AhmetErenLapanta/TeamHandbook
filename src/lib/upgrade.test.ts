@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
+import { README_BEGIN, README_END, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { productVersion } from "./plugin-root.js";
 import { createGitLabRepo } from "./gitlab-fixture.js";
@@ -18,6 +18,7 @@ import {
   formatUpgradePlan,
   isTeamOwned,
   mergePluginManifest,
+  mergeReadme,
   planUpgrade,
   refreshable,
   upgradeCandidates,
@@ -1610,3 +1611,317 @@ describe("the copy's own root", () => {
     expect(out).toContain("that TeamHandbook 9.9.9 wrote this scaffold");
   });
 });
+
+/** The README every repository scaffolded by 0.12 to 0.24 received, unmarked: the shape the
+ * one field repository measured still carries, byte for byte. */
+function oldScaffoldReadme(name: string, url: string): string {
+  return `# ${name}
+
+Your team's shared setup: skills, MCP servers, and slash commands your team has
+approved through TeamHandbook. This repository is a Claude Code plugin marketplace;
+every merge reaches all subscribed teammates automatically.
+
+## Access
+
+If this repository is private, each teammate needs two separate things: access to the
+repository (ask whoever set it up), and git credentials on their own machine. The second
+is a one-time interactive sign-in they run themselves, for example
+\`brew install gh && gh auth login\` for GitHub over HTTPS, or an SSH key registered with
+the forge. Without it the commands below fail with a bare git error, because a plugin
+can never stop to ask for a password.
+
+## Consume the handbook (no TeamHandbook needed)
+
+\`\`\`
+/plugin marketplace add ${url}
+/plugin install ${name}@${name}
+\`\`\`
+
+## Produce for the handbook (TeamHandbook engine required)
+
+\`\`\`
+/handbook:join ${url}
+\`\`\`
+
+## How updates flow
+
+Every skill arrives as a merge request that also raises the version in
+\`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
+moved: merge the request and each teammate's marketplace copy refreshes on its own.
+Skills live under \`skills/\`, one directory per skill (\`SKILL.md\` plus the
+\`grounded-case.json\` evidence it was distilled from).
+
+Nothing here needs CI, an access token, or the right to push to a protected branch. If
+skills also arrive by hand in this repository, \`/handbook:init --with-ci\` scaffolds a
+job that bumps the version on merge instead, together with the script it runs.
+
+This plugin ships a tiny dependency-free SessionStart hook that shows consumers a
+"N new skills/servers/commands" notice; it records what it has already shown you under
+\`~/.teamhandbook-consumer\` (remove it any time with \`rm -rf ~/.teamhandbook-consumer\`).
+It makes no network calls and needs no TeamHandbook engine.
+`;
+}
+
+/** The product sentences that README carries and today's does not. */
+const OLD_PRODUCT_LINES = [
+  "approved through TeamHandbook. This repository is a Claude Code plugin marketplace;",
+  "every merge reaches all subscribed teammates automatically.",
+  "moved: merge the request and each teammate's marketplace copy refreshes on its own.",
+  "Nothing here needs CI, an access token, or the right to push to a protected branch. If",
+  "skills also arrive by hand in this repository, `/handbook:init --with-ci` scaffolds a",
+  "job that bumps the version on merge instead, together with the script it runs.",
+  "It makes no network calls and needs no TeamHandbook engine.",
+];
+
+const TEAM_SECTION = "\n## Our conventions\n\nAsk in #platform before adding a skill.\n";
+
+describe("the team README and its markers", () => {
+  /** A repository at 0.1.5 whose README is the one given, everything else today's scaffold. */
+  function repoWithReadme(readme: (remote: string) => string): string {
+    return handbookRepo((remote) => ({
+      ...skeletonFiles("acme-skills", remote, null, "", false, undefined, {}, undefined, "0.1.5"),
+      "README.md": readme(remote),
+      ...TEAM_CONTENT,
+    }));
+  }
+
+  it("given a README whose team text sits outside the markers, when it is merged with today's, then that text is kept byte for byte", () => {
+    // given
+    const fresh = skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", null)["README.md"]!;
+    const existing = `# acme-skills\n\nOurs, above.\n\n${README_BEGIN}\nan older product section\n${README_END}\n${TEAM_SECTION}`;
+
+    // when
+    const merged = mergeReadme(existing, fresh);
+
+    // then
+    expect(merged.whole).toBeUndefined();
+    expect(merged.content.startsWith("# acme-skills\n\nOurs, above.\n\n")).toBe(true);
+    expect(merged.content.endsWith(`${README_END}\n${TEAM_SECTION}`)).toBe(true);
+    expect(merged.content).not.toContain("an older product section");
+    const section = fresh.slice(fresh.indexOf(README_BEGIN), fresh.indexOf(README_END) + README_END.length);
+    expect(merged.content).toContain(section);
+  });
+
+  it("given the README every old scaffold wrote, when the refresh is planned, then the plan lists the old product lines that go", () => {
+    // given the field's shape: an unedited, unmarked scaffold README
+    const remote = repoWithReadme((url) => oldScaffoldReadme("acme-skills", url));
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.readmeWhole).toEqual({ reason: "unmarked", lost: OLD_PRODUCT_LINES });
+    const text = formatUpgradePlan(plan);
+    expect(text).toContain("README.md carries no TeamHandbook markers, so a refresh replaces it whole.");
+    // the way to skip comes before a list that can be long
+    expect(text).toContain(
+      "README.md carries no TeamHandbook markers, so a refresh replaces it whole.\nLeave README.md out to keep the file as it is.\nThese lines go:\n  - approved through TeamHandbook.",
+    );
+  });
+
+  it("given a team section added to that README, when the refresh is planned, then the plan lists it among the lines that go", () => {
+    // given
+    const remote = repoWithReadme((url) => oldScaffoldReadme("acme-skills", url) + TEAM_SECTION);
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.readmeWhole?.lost).toEqual([...OLD_PRODUCT_LINES, "## Our conventions", "Ask in #platform before adding a skill."]);
+  });
+
+  it("given a README the team wrote before init, when the refresh is planned, then every one of its lines is listed", () => {
+    // given init kept a README the repository already had
+    const remote = repoWithReadme(() => "# Platform skills\n\nOwned by the platform guild. See the wiki.\n");
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.readmeWhole).toEqual({
+      reason: "unmarked",
+      lost: ["# Platform skills", "Owned by the platform guild. See the wiki."],
+    });
+  });
+
+  it("given a team that deleted the end marker, when the refresh is planned, then it falls back to replacing the file whole and says why", () => {
+    // given
+    const remote = repoWithReadme((url) => {
+      const today = skeletonFiles("acme-skills", url, null, "", false, undefined, {}, undefined, "0.1.5")["README.md"]!;
+      return today.replace(README_END, "") + TEAM_SECTION;
+    });
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.readmeWhole?.reason).toBe("broken");
+    expect(plan.readmeWhole?.lost).toEqual(["## Our conventions", "Ask in #platform before adding a skill."]);
+    expect(formatUpgradePlan(plan)).toContain("README.md's TeamHandbook markers are not each on a line of their own, once and in order");
+  });
+
+  it("given a marked README with team text outside and an older product section, when the refresh is sent, then only the section changes", () => {
+    // given
+    const remote = repoWithReadme((url) => {
+      const today = skeletonFiles("acme-skills", url, null, "", false, undefined, {}, undefined, "0.1.5")["README.md"]!;
+      const older = today.replace("## Access", "## Access (older)");
+      return older.replace("approved through TeamHandbook.\n", "approved through TeamHandbook.\nMaintained by the platform guild.\n") + TEAM_SECTION;
+    });
+    const before = show(remote, "main", "README.md");
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+    const result = applyUpgrade(teamFor(remote), ["README.md"], gitWithIdentity, noForge);
+
+    // then
+    expect(plan.files!.find((file) => file.path === "README.md")?.state).toBe("differs");
+    expect(plan.readmeWhole).toBeUndefined();
+    const after = show(remote, result.branch!, "README.md");
+    expect(after.slice(0, after.indexOf(README_BEGIN))).toBe(before.slice(0, before.indexOf(README_BEGIN)));
+    expect(after.slice(after.indexOf(README_END))).toBe(before.slice(before.indexOf(README_END)));
+    expect(after).toContain("## Access\n");
+    expect(after).not.toContain("## Access (older)");
+  });
+
+  /** Today's README for a stand-in repository, the input every case below changes. */
+  const today = () => skeletonFiles("acme-skills", "git@gitlab.acme.com:team/skills.git", null)["README.md"]!;
+
+  it("given a team README sharing one heading with the new one, when it is replaced whole, then every line the new one does not keep in order is listed", () => {
+    // given the README a team wrote before init: its heading "## Access" is also today's, in the same order
+    const existing = "# Platform skills\n\nOwned by the platform guild.\n\n## Access\n\nAsk in #platform.\n\n## Access\n";
+
+    // when
+    const merged = mergeReadme(existing, today());
+
+    // then the heading the new file keeps in place is not listed, its second copy is: a set
+    // let both through because the text appears somewhere in the new file
+    expect(merged.whole?.lost).toEqual(["# Platform skills", "Owned by the platform guild.", "Ask in #platform.", "## Access"]);
+  });
+
+  it("given a team section with a code block, when the README is replaced whole, then both fences are listed", () => {
+    // given
+    const existing = oldScaffoldReadme("acme-skills", "git@gitlab.acme.com:team/skills.git") + "\n## Lint\n\n```\nnpm run lint\n```\n";
+
+    // when
+    const merged = mergeReadme(existing, today());
+
+    // then
+    expect(merged.whole?.lost.slice(-4)).toEqual(["## Lint", "```", "npm run lint", "```"]);
+  });
+
+  it("given a line the team wrote between the markers, when the README is merged, then it is returned among the lines that go and the outside is kept", () => {
+    // given
+    const fresh = today();
+    const existing = "# acme-skills\n\nOurs.\n\n" + fresh.slice(fresh.indexOf(README_BEGIN)).replace("## Access\n", "## Access\n\nVPN required for this repo.\n");
+
+    // when
+    const merged = mergeReadme(existing, fresh);
+
+    // then
+    expect(merged.whole).toBeUndefined();
+    expect(merged.inside).toEqual(["VPN required for this repo."]);
+    expect(merged.content.startsWith("# acme-skills\n\nOurs.\n\n")).toBe(true);
+    expect(merged.content).not.toContain("VPN required");
+  });
+
+  it("given a marked README with a team line inside, when the refresh is planned, then the plan names that line", () => {
+    // given
+    const remote = repoWithReadme((url) =>
+      skeletonFiles("acme-skills", url, null, "", false, undefined, {}, undefined, "0.1.5")["README.md"]!.replace(
+        "## Access\n",
+        "## Access\n\nVPN required for this repo.\n",
+      ),
+    );
+
+    // when
+    const plan = planUpgrade(teamFor(remote));
+
+    // then
+    expect(plan.readmeInside).toEqual(["VPN required for this repo."]);
+    expect(formatUpgradePlan(plan)).toContain(
+      "Leave README.md out to keep it as it is. Between its TeamHandbook markers these lines are not in the\n" +
+        "refreshed section and go - an older product line or one the team wrote there; outside them nothing changes:\n" +
+        "  - VPN required for this repo.",
+    );
+  });
+
+  it("given marker lines a team changed, when the README is merged, then it is named broken rather than unmarked", () => {
+    // given
+    const existing = today().replace(README_BEGIN, "<!-- teamhandbook:begin  -->").replace(README_END, "<!-- teamhandbook: end -->");
+
+    // when
+    const merged = mergeReadme(existing, today());
+
+    // then
+    expect(merged.whole?.reason).toBe("broken");
+  });
+
+  it("given a team sentence that quotes a marker, when the README is merged, then only the marker lines count and the team text stays", () => {
+    // given
+    const quote = `We keep TeamHandbook text between \`${README_BEGIN}\` and \`${README_END}\`.`;
+    const existing = `# acme-skills\n\n${quote}\n\n` + today().slice(today().indexOf(README_BEGIN));
+
+    // when
+    const merged = mergeReadme(existing, today());
+
+    // then
+    expect(merged.whole).toBeUndefined();
+    expect(merged.content).toContain(quote);
+  });
+
+  it("given a README with CRLF line endings, when its section is refreshed, then every line ends in CRLF", () => {
+    // given
+    const fresh = today();
+    const existing = ("# acme-skills\n\nOurs.\n\n" + fresh.slice(fresh.indexOf(README_BEGIN)).replace("## Access", "## Access (older)")).replace(/\n/g, "\r\n");
+
+    // when
+    const merged = mergeReadme(existing, fresh);
+
+    // then
+    expect(merged.content).not.toMatch(/[^\r]\n/);
+    expect(merged.content).toContain("## Access\r\n");
+  });
+
+  it("given an LF README with one CRLF line outside the markers, when its section is refreshed, then that line alone keeps CRLF", () => {
+    // given
+    const fresh = today();
+    const existing = "# acme-skills\r\n\nOurs.\n\n" + fresh.slice(fresh.indexOf(README_BEGIN)).replace("## Access", "## Access (older)") + TEAM_SECTION;
+
+    // when
+    const merged = mergeReadme(existing, fresh);
+
+    // then the team's lines are byte for byte as they were, and the section takes the file's LF
+    expect(merged.content.match(/\r\n/g)).toHaveLength(1);
+    expect(merged.content.startsWith("# acme-skills\r\n\nOurs.\n\n")).toBe(true);
+    expect(merged.content.endsWith(`${README_END}\n${TEAM_SECTION}`)).toBe(true);
+    expect(merged.content).toContain("## Access\n");
+  });
+
+  it("given a README with the begin marker twice, when it is merged, then it is broken and replaced whole rather than cut at the first", () => {
+    // given a team note quoting the marker on a line of its own above the real section
+    const existing = `# acme-skills\n\n${README_BEGIN}\n## Team notes\n\nOn-call: platform guild.\n\n` + today().slice(today().indexOf(README_BEGIN));
+
+    // when
+    const merged = mergeReadme(existing, today());
+
+    // then
+    expect(merged.whole?.reason).toBe("broken");
+    expect(merged.content).toBe(today());
+    expect(merged.whole?.lost).toEqual(expect.arrayContaining(["## Team notes", "On-call: platform guild."]));
+  });
+
+  it("given a README whose markers are in reverse order, when it is merged, then it is broken and the product text is not written twice", () => {
+    // given
+    const fresh = today();
+    const existing = fresh.replace(README_BEGIN, "@@BEGIN@@").replace(README_END, README_BEGIN).replace("@@BEGIN@@", README_END);
+
+    // when
+    const merged = mergeReadme(existing, fresh);
+
+    // then
+    expect(merged.whole?.reason).toBe("broken");
+    expect(merged.content).toBe(fresh);
+    expect(merged.content.split("## Access")).toHaveLength(2);
+  });
+});
+

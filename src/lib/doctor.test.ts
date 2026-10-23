@@ -915,7 +915,28 @@ describe("doctor team plugin copy check", () => {
     expect(check.detail).toContain("`/handbook:init --upgrade --commit-versioning`");
     expect(check.detail).toContain(`commit ${local.slice(0, 12)}, the team repo ${remoteHead.slice(0, 12)}`);
     expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(check.detail).toContain("`/reload-plugins`");
     expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
+    rmSync(seed, { recursive: true, force: true });
+  });
+
+  it("given a copy without a version on the same commit as a team repo that carries one, when diagnosed, then it warns about the line and prints no update commands", () => {
+    // given a copy on the team repo's own commit whose manifest has no version line
+    const { seed, commit } = teamRepoByCommit();
+    commit({ ".claude-plugin/plugin.json": JSON.stringify({ name: "t", version: "0.1.1" }) });
+    subscribed();
+    writeFileSync(join(marketRoot, "t", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "t" }));
+    saveTeamConfig({ repoUrl: bare, marketplaceName: "t" }, home);
+
+    // when
+    const check = byName(runDoctor(home, recordingRunner([]), marketRoot), "team plugin copy");
+
+    // then nothing is behind, so there is nothing to update
+    expect(check.level).toBe("warn");
+    expect(check.detail).toContain("the team repo carries a version line again (v0.1.1)");
+    expect(check.detail).not.toContain("behind");
+    expect(check.detail).not.toContain("/plugin marketplace update");
+    expect(check.detail).not.toContain("/reload-plugins");
     rmSync(seed, { recursive: true, force: true });
   });
 

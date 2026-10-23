@@ -81,9 +81,18 @@ re-init. That loses the repository. Refresh it in place instead:
    older copy from undoing a newer refresh.
 2. **Relay the plan's first line before anything else.** It says who the refresh reaches
    and whether sharing waits on it; usually it does not, and the user may stop right there.
-   Then relay the plan and the diff, and ask which files to refresh. A `DIFFERS` file may
-   be an old scaffold or an edit the team made on purpose - `hooks/notice.mjs` and
-   `README.md` are the likely ones - and nothing records which. Never pick on their behalf.
+   Then relay the plan and the diff, and ask which files to refresh. A `DIFFERS` file is an
+   old scaffold or an edit the team made on purpose, and nothing records which. Never pick
+   on their behalf. In `README.md` a refresh rewrites only what is between
+   `<!-- teamhandbook:begin -->` and `<!-- teamhandbook:end -->` (each on a line of its own,
+   once and in order) and keeps the text outside them. Lines between the markers that the
+   refreshed section does not carry go - older product lines, and any line the team wrote
+   there - and the plan lists them after "Between its TeamHandbook markers these lines are
+   not in the refreshed section". A README without the markers in that form is replaced whole, and the plan lists the
+   lines that go under "These lines go:". Read whichever list the plan prints back before the
+   user picks the file, and tell them leaving it out keeps the README as it is.
+   `hooks/notice.mjs` is the product's own script and is refreshed whole; nothing records
+   whether a `DIFFERS` there is an older copy or an edit.
 3. Send only what they chose, on the branch and with the message they chose. The plan
    printed one question for both,
    ``Branch `<name>` · message `<text>` - confirm or change either.``:
