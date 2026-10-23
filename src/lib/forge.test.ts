@@ -295,6 +295,27 @@ describe("a request already open for the branch", () => {
     expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge)).toEqual({ url: PR, existing: true });
   });
 
+  // GitHub's own answer when the request appears between gh's check and the create; its
+  // wording is GitHub's and was not captured here.
+  const GH_RACE = "pull request create failed: GraphQL: A pull request already exists for acme:TEAM-12. (createPullRequest)";
+
+  it("given lists and GitHub answering that a pull request already exists, when the request is opened, then it is read as the request already open and nothing is retried or blamed", () => {
+    const { forge, calls } = scripted({ stderr: `${GH_RACE}\n` });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(1);
+    expect(opened).toEqual({ url: null, existing: true, error: `a request for this branch is already open (${GH_RACE})` });
+  });
+
+  it("given glab printing two unrelated lines without its banner, when one names a merge request and the next says already exists, then they are not read as one sentence", () => {
+    const { forge } = scripted({ stderr: "Failed to create merge request\nalready exists: refs/heads/TEAM-12\n" });
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
+
+    expect(opened).toEqual({ url: null, error: "already exists: refs/heads/TEAM-12" });
+  });
+
   it.each(GLAB_EXISTS_BREAKS)("given GitLab's refusal broken %s, which names the request only as !12, when the request is opened, then it is read as the request already open and its address is built from that", (_name, refusal) => {
     const { forge, calls } = scripted(refusal);
 

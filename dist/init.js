@@ -513,20 +513,27 @@ function assignmentFlags(assignment) {
     ...assignment.labels.length ? [`--label=${assignment.labels.join(",")}`] : []
   ];
 }
+function stderrLines(err) {
+  const stderr = err?.stderr;
+  return (typeof stderr === "string" ? stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
+function glabMessage(err) {
+  const lines = stderrLines(err);
+  const banner = lines.indexOf("ERROR");
+  if (banner < 0) return null;
+  const joined = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ").replace(/\s+/g, " ");
+  return joined || null;
+}
 function forgeFailure(tool, err) {
   const e = err;
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
-  const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
-  const banner = tool === "glab" ? lines.indexOf("ERROR") : -1;
-  if (banner >= 0) {
-    const message = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ");
-    const joined = message.replace(/\s+/g, " ");
-    if (joined.length > 160) {
-      const tail = joined.slice(-159);
-      return `\u2026${tail.slice(tail.indexOf(" ") + 1)}`;
-    }
-    if (joined) return joined;
+  const message = tool === "glab" ? glabMessage(err) : null;
+  if (message && message.length > 160) {
+    const tail = message.slice(-159);
+    return `\u2026${tail.slice(tail.indexOf(" ") + 1)}`;
   }
+  if (message) return message;
+  const lines = stderrLines(err);
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
 }
@@ -554,8 +561,9 @@ function outputOf(err) {
 ${typeof e?.stderr === "string" ? e.stderr : ""}`;
 }
 function existingRequest(tool, repoUrl, err) {
-  const output = outputOf(err).replace(/\s+/g, " ");
-  if (!/(?:pull request for branch ".*?" into branch ".*?"|merge request) already exists/i.test(output)) return null;
+  const output = outputOf(err);
+  const read = [...output.split("\n"), ...tool === "glab" ? [glabMessage(err) ?? ""] : []];
+  if (!read.some((line) => /(?:pull|merge) request.*already exists/i.test(line))) return null;
   const web = webAddress(repoUrl);
   const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : void 0;
   const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);
