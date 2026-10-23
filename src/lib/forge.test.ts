@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { forgeSignInProblem, openedRequestUrl, openPr, runForge } from "./forge.js";
+import { assignmentFailure, forgeSignInProblem, openedRequestUrl, openPr, runForge } from "./forge.js";
 import type { ForgeRunner, RequestAssignment } from "./forge.js";
 
 const GITLAB = "git@gitlab.com:acme/skills.git";
@@ -10,6 +10,24 @@ const GITHUB = "git@github.com:acme/skills.git";
 const MR = "https://gitlab.com/acme/skills/-/merge_requests/12";
 const PR = "https://github.com/acme/skills/pull/12";
 const ASSIGNED: RequestAssignment = { reviewers: ["ada", "grace"], labels: ["skills", "type::docs"] };
+/** GitLab's refusal of a second request as glab 1.123.0 prints it: an ERROR banner, then the
+ * message wrapped at 118 columns. Where the break falls depends on the project's path; these
+ * are the three breaks captured against a local endpoint, host and path renamed. */
+const glabRefusal = (first: string, second: string) => ({
+  stderr: `          \n   ERROR  \n          \n  ${first}  \n  ${second}          \n\n`,
+});
+const POST_409 = "Post https://gitlab.com/api/v4/projects/acme%2Fskills/merge_requests: 409 {message:";
+const GLAB_EXISTS_BREAKS: [string, { stderr: string }][] = [
+  ['between "request" and "already"', glabRefusal(`${POST_409} [Another open merge request`, "already exists for this source branch: !12]}.")],
+  ['between "merge" and "request"', glabRefusal(`${POST_409} [Another open merge`, "request already exists for this source branch: !12]}.")],
+  ["before the sentence", glabRefusal(POST_409, "[Another open merge request already exists for this source branch: !12]}.")],
+];
+const GLAB_EXISTS_WRAPPED = GLAB_EXISTS_BREAKS[0]![1];
+/** What gh 2.100.0 prints when github.com refuses the assignment after the request exists:
+ * its own prefix (create.go:1150) around its GraphQL error form, "GraphQL: <message>
+ * (<path>)" (api/client_test.go:74). The server's message itself was not measured here. */
+const UPDATE_REFUSED = (login: string, path: string) =>
+  `pull request update failed: GraphQL: Could not resolve to a User with the login of '${login}'. (${path})`;
 
 /** A forge that answers each call in turn with the next reply: a string is what the CLI
  * printed, an object is the failure execFileSync throws, stdout and stderr included. */
@@ -129,19 +147,19 @@ describe("the request is assigned to whoever opens it", () => {
   it("given gh opening the request before the assignee is refused, when it fails, then nothing is retried and that request is the result", () => {
     const { forge, calls } = scripted({
       stdout: `${PR}\n`,
-      stderr: "pull request update failed: could not assign user: 'me' not found\n",
+      stderr: `${UPDATE_REFUSED("dev", "replaceActorsForAssignable")}\n`,
     });
 
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, NONE);
 
     expect(calls).toHaveLength(1);
-    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not assign user: 'me' not found" });
+    expect(opened).toEqual({ url: PR, unassigned: UPDATE_REFUSED("dev", "replaceActorsForAssignable"), partial: true });
   });
 
   it("given no lists, a first attempt lost to the network and a retry told the request is open, when it is over, then no third request is asked for and nothing is said to be refused", () => {
     const { forge, calls } = scripted(
       { stderr: "read tcp [::1]:58906->[::1]:443: read: connection reset by peer.\n" },
-      { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" },
+      GLAB_EXISTS_WRAPPED,
     );
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, NONE);
@@ -191,13 +209,13 @@ describe("an assignment the forge refuses", () => {
     // gh creates the pull request, prints it, then fails requesting the reviewers
     const { forge, calls } = scripted({
       stdout: `${PR}\n`,
-      stderr: "pull request update failed: could not request reviewer: 'adaa' not found\n",
+      stderr: `${UPDATE_REFUSED("adaa", "requestReviewsByLogin")}\n`,
     });
 
     const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
     expect(calls).toHaveLength(1);
-    expect(opened).toEqual({ url: PR, unassigned: "pull request update failed: could not request reviewer: 'adaa' not found" });
+    expect(opened).toEqual({ url: PR, unassigned: UPDATE_REFUSED("adaa", "requestReviewsByLogin"), partial: true });
   });
 
   it("given a retry the forge answers with the request already open, when it fails, then nothing more is asked and that request is the result", () => {
@@ -277,10 +295,29 @@ describe("a request already open for the branch", () => {
     expect(openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge)).toEqual({ url: PR, existing: true });
   });
 
-  const gitlabConflict = { stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n" };
+  // GitHub's own answer when the request appears between gh's check and the create; its
+  // wording is GitHub's and was not captured here.
+  const GH_RACE = "pull request create failed: GraphQL: A pull request already exists for acme:TEAM-12. (createPullRequest)";
 
-  it("given GitLab's refusal, which names the request only as !12, when the request is opened, then its address is built from that and the repository", () => {
-    const { forge, calls } = scripted(gitlabConflict);
+  it("given lists and GitHub answering that a pull request already exists, when the request is opened, then it is read as the request already open and nothing is retried or blamed", () => {
+    const { forge, calls } = scripted({ stderr: `${GH_RACE}\n` });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(1);
+    expect(opened).toEqual({ url: null, existing: true, error: `a request for this branch is already open (${GH_RACE})` });
+  });
+
+  it("given glab printing two unrelated lines without its banner, when one names a merge request and the next says already exists, then they are not read as one sentence", () => {
+    const { forge } = scripted({ stderr: "Failed to create merge request\nalready exists: refs/heads/TEAM-12\n" });
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
+
+    expect(opened).toEqual({ url: null, error: "already exists: refs/heads/TEAM-12" });
+  });
+
+  it.each(GLAB_EXISTS_BREAKS)("given GitLab's refusal broken %s, which names the request only as !12, when the request is opened, then it is read as the request already open and its address is built from that", (_name, refusal) => {
+    const { forge, calls } = scripted(refusal);
 
     const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
 
@@ -289,13 +326,12 @@ describe("a request already open for the branch", () => {
   });
 
   it("given that refusal on a repository with no web address, when the request is opened, then the forge's own sentence is kept with its !12", () => {
-    const { forge } = scripted(gitlabConflict);
+    const { forge } = scripted(GLAB_EXISTS_WRAPPED);
 
     expect(openPr("/srv/git/skills.git", "TEAM-12", "t", "b", "/repo", forge, ASSIGNED)).toEqual({
       url: null,
       existing: true,
-      error:
-        "a request for this branch is already open (409 Conflict {message: [Another open merge request already exists for this source branch: !12]})",
+      error: `a request for this branch is already open (${POST_409} [Another open merge request already exists for this source branch: !12]}.)`,
     });
   });
 
@@ -392,5 +428,131 @@ describe("the forge CLI's own reporting", () => {
     const calls = readFileSync(join(seen, "calls"), "utf8").trim().split("\n");
     expect(new Set(calls.map((call) => call.split(" ")[0]))).toEqual(new Set(["gh", "glab"]));
     for (const call of calls) expect(call).toMatch(/\|GH_TELEMETRY=0\|GLAB_SEND_TELEMETRY=0\|GLAB_CHECK_UPDATE=false$/);
+  });
+});
+
+describe("what a failed open's words say about its assignment", () => {
+  const GLAB_EXISTS = GLAB_EXISTS_WRAPPED;
+  const RESET = (port: number) => ({ stderr: `read tcp [::1]:5890${port}->[::1]:443: read: connection reset by peer\n` });
+
+  // One row per pattern, each matching that pattern alone, so removing any one turns a row red.
+  it.each<[string, string, ReturnType<typeof assignmentFailure>]>([
+    ["glab refusing a name, as its error handler prints it", "Failed to find user by name: adaa.", "lists"],
+    ["gh on GitHub Enterprise refusing the assignee", "could not assign user: 'dev' not found", "assignee"],
+    ["gh on GitHub Enterprise refusing a reviewer", "could not request reviewer: 'adaa' not found", "lists"],
+    ["gh on GitHub Enterprise refusing a label", "could not add label: 'skills' not found", "lists"],
+    ["a read that times out", "read tcp 10.0.0.2:51234->10.0.0.9:443: read: operation timed out", "fault"],
+    ["a write on a dropped connection", "write tcp 10.0.0.2:51234->10.0.0.9:443: write: broken pipe", "fault"],
+    ["a dial that fails", "dial udp 10.0.0.1:53: connect: network is unreachable", "fault"],
+    ["a reset connection", "connection reset by peer", "fault"],
+    ["a refused connection", "connect: connection refused", "fault"],
+    ["a host that does not resolve", "lookup gitlab.invalid: no such host", "fault"],
+    ["a stalled read", "net/http: request canceled: i/o timeout", "fault"],
+    ["a stalled handshake", "net/http: TLS handshake timeout", "fault"],
+    ["glab losing the connection mid-request", 'Post "https://gitlab.com/api/v4/projects/o%2Fr/merge_requests": EOF.', "fault"],
+    ["gh naming a host it cannot reach", "error connecting to api.github.com", "fault"],
+    ["gh's advice for a host it cannot reach", "check your internet connection or https://githubstatus.com", "fault"],
+    ["gh's advice for a refused token", "Try authenticating with:  gh auth login", "fault"],
+    ...["401", "500", "502", "503", "504"].flatMap((code): [string, string, "fault"][] => [
+      [`gh reporting HTTP ${code}`, `HTTP ${code}: forge said no (https://api.github.com/graphql)`, "fault"],
+      [`glab reporting ${code}`, `Get https://gitlab.com/api/v4/projects/o%2Fr: ${code} {message: forge said no}`, "fault"],
+    ]),
+    ["github.com refusing a login that holds a status number", UPDATE_REFUSED("qa-503", "requestReviewsByLogin"), null],
+    ["glab refusing a login that holds a status number", "Failed to find user by name: ops-500.", "lists"],
+    ["a status number outside an HTTP status", "label release-502 not found", null],
+    ["words this does not read", "pull request update failed: GraphQL: something went sideways", null],
+  ])("given %s, when it is read, then it is taken for what it says", (_name, reason, kind) => {
+    expect(assignmentFailure(reason)).toBe(kind);
+  });
+
+  // glab 1.123.0's stderr as it was captured against a local endpoint, host renamed: an
+  // ERROR banner, the message wrapped to the terminal's width with trailing spaces.
+  const GLAB_WRAPPED = {
+    stderr:
+      '          \n   ERROR  \n          \n  Get "http://gitlab.example/api/v4/projects/o%2Fr/merge_requests": dial tcp 10.0.0.9:443:        \n' +
+      "  connect: connection refused.                                                         \n\n",
+  };
+  // The list of errors glab's remote resolution builds (glrepo/resolver.go:52), which its
+  // handler closes with a line holding only "." - the shape measured on mr create.
+  const GLAB_LIST = {
+    stderr:
+      "          \n   ERROR  \n          \n  1 error occurred:                    \n" +
+      "  \t* o/r: Get http://gitlab.example/api/v4/projects/o%2Fr: 401 {message: 401 Unauthorized}\n          \n  .        \n\n",
+  };
+  const GLAB_EOF = {
+    stderr: '          \n   ERROR  \n          \n  Post "http://gitlab.example/api/v4/projects/o%2Fr/merge_requests": EOF.          \n\n',
+  };
+
+  it.each([
+    ["a message wrapped to the terminal", GLAB_WRAPPED, 'Get "http://gitlab.example/api/v4/projects/o%2Fr/merge_requests": dial tcp 10.0.0.9:443: connect: connection refused.'],
+    ["a list of errors closed by a lone dot", GLAB_LIST, "1 error occurred: * o/r: Get http://gitlab.example/api/v4/projects/o%2Fr: 401 {message: 401 Unauthorized}"],
+  ])("given glab printing %s, when the open fails, then the reason is its whole message and is read as a fault", (_name, failure, reason) => {
+    const { forge } = scripted(failure);
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
+
+    expect(opened).toEqual({ url: null, error: reason });
+    expect(assignmentFailure(reason)).toBe("fault");
+  });
+
+  it("given glab printing a message longer than a reason holds, when the open fails, then its end is kept from the start of a word, where the cause is", () => {
+    const path = "deep/".repeat(30);
+    const { forge } = scripted({ stderr: `   ERROR  \n  Post "http://gitlab.example/${path}merge_requests": dial tcp 10.0.0.9:443: connect: connection refused.\n` });
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, { reviewers: [], labels: [] }, "");
+
+    expect(opened.error!.length).toBeLessThanOrEqual(160);
+    expect(opened.error).toMatch(/^…\S/);
+    const whole = `Post "http://gitlab.example/${path}merge_requests": dial tcp 10.0.0.9:443: connect: connection refused.`;
+    expect(whole.endsWith(` ${opened.error!.slice(1)}`)).toBe(true);
+    expect(opened.error).toMatch(/: connect: connection refused\.$/);
+  });
+
+  it("given lists and glab losing the connection as it opens the request, when the retry finds it open, then the team file is not blamed", () => {
+    const { forge, calls } = scripted(GLAB_EOF, GLAB_EXISTS);
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: MR, existing: true });
+  });
+
+  it("given lists and a first attempt lost to the network, when the retry finds the request open, then the team file is not blamed", () => {
+    const { forge, calls } = scripted(RESET(1), GLAB_EXISTS);
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: MR, existing: true });
+  });
+
+  it("given lists and a first attempt lost to the network, when the retry is lost too, then nothing is said to be refused", () => {
+    const { forge, calls } = scripted(RESET(1), RESET(2));
+
+    const opened = openPr(GITLAB, "TEAM-12", "t", "b", "/repo", forge, ASSIGNED);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: null, error: "read tcp [::1]:58902->[::1]:443: read: connection reset by peer" });
+  });
+
+  it("given no lists and the assignee refused in words gh uses, when the retry finds the request open, then the refusal is kept", () => {
+    const { forge, calls } = scripted(
+      { stderr: "could not assign user: 'dev' not found\n" },
+      { stderr: `a pull request for branch "TEAM-12" into branch "main" already exists:\n${PR}\n` },
+    );
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: PR, existing: true, unassigned: "could not assign user: 'dev' not found" });
+  });
+
+  it("given no lists and the assignee refused in words gh uses, when the retry fails for another reason, then both reasons are kept", () => {
+    const { forge, calls } = scripted({ stderr: "could not assign user: 'dev' not found\n" }, { stderr: "500 Internal Server Error\n" });
+
+    const opened = openPr(GITHUB, "TEAM-12", "t", "b", "/repo", forge);
+
+    expect(calls).toHaveLength(2);
+    expect(opened).toEqual({ url: null, error: "500 Internal Server Error", unassigned: "could not assign user: 'dev' not found" });
   });
 });

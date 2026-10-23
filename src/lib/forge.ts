@@ -149,14 +149,81 @@ function assignmentFlags(assignment: RequestAssignment): string[] {
   ];
 }
 
+function stderrLines(err: unknown): string[] {
+  const stderr = (err as { stderr?: unknown })?.stderr;
+  return (typeof stderr === "string" ? stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+// glab 1.123.0 prints through an error handler that puts an "ERROR" banner first, wraps the
+// message to the terminal's width and closes a list of errors with a line holding only "." -
+// its last line is a fragment or a lone ".", so its message is what follows the banner, the
+// punctuation-only lines dropped and the wrapped lines joined. Null without the banner.
+function glabMessage(err: unknown): string | null {
+  const lines = stderrLines(err);
+  const banner = lines.indexOf("ERROR");
+  if (banner < 0) return null;
+  const joined = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ").replace(/\s+/g, " ");
+  return joined || null;
+}
+
 // The last line a failing CLI wrote, except one that is only a URL: gh ends its refusal of a
-// second request with the address of the first, and that address is not a reason.
+// second request with the address of the first, and that address is not a reason. glab's
+// message is read whole (glabMessage). A long one keeps its end rather than its start: a Go
+// error chain names its cause last; the end starts at a word, so a reason never opens on half
+// of one.
 function forgeFailure(tool: "gh" | "glab", err: unknown): string {
-  const e = err as { code?: string; stderr?: string; message?: string };
+  const e = err as { code?: string; message?: string };
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
-  const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const message = tool === "glab" ? glabMessage(err) : null;
+  if (message && message.length > 160) {
+    const tail = message.slice(-159);
+    return `…${tail.slice(tail.indexOf(" ") + 1)}`;
+  }
+  if (message) return message;
+  const lines = stderrLines(err);
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
+}
+
+/**
+ * What a failed open's own words say about the assignment it carried, or null when they
+ * say nothing this reads. Taken from the CLIs' sources at glab 1.123.0 and gh 2.100.0: glab
+ * resolves every name before it creates anything and refuses one with "failed to find user
+ * by name"; gh on GitHub Enterprise resolves them first too and refuses with "could not
+ * assign user", "could not request reviewer" or "could not add label". On github.com gh
+ * creates the request first and passes on the server's own words when the assignment
+ * after it fails, which this does not read. The assignee is always the person opening the
+ * request, so only gh's assignee refusal is about them; the rest name someone from the
+ * team's lists.
+ *
+ * A dropped connection, a refused token or a forge's own error refuses nobody, and is told
+ * apart by its words. Measured against local endpoints: `dial tcp`, `connection refused`,
+ * `no such host`, `: EOF`, `TLS handshake timeout`, gh's own sentences for an unresolvable
+ * host and a refused token, "HTTP 401/500/502/503" from gh and ": 401/500/502/503 {" from
+ * glab. Not seen from either CLI here, kept as the same Go network errors in their other
+ * forms: `read tcp`, `write tcp`, `udp`, `connection reset`, `i/o timeout` and 504. A status
+ * code counts only where an HTTP status stands, because a bare number also appears in a
+ * username such as `qa-503`, and reading it as a fault would hide that name's refusal from
+ * the team that has to correct it.
+ */
+const FAULT_WORDS: RegExp[] = [
+  /\b(?:read|write|dial) (?:tcp|udp)\b/,
+  /connection (?:reset|refused)/i,
+  /no such host/i,
+  /i\/o timeout/i,
+  /tls handshake/i,
+  /: EOF\b/,
+  /error connecting to|check your internet connection/,
+  /Try authenticating with/,
+  /\bHTTP (?:401|50[0234])\b/,
+  /: (?:401|50[0234]) \{/,
+];
+
+export function assignmentFailure(reason: string): "assignee" | "lists" | "fault" | null {
+  if (/could not assign user/i.test(reason)) return "assignee";
+  if (/failed to find user by name|could not request reviewer|could not add label/i.test(reason)) return "lists";
+  if (FAULT_WORDS.some((words) => words.test(reason))) return "fault";
+  return null;
 }
 
 function outputOf(err: unknown): string {
@@ -173,10 +240,20 @@ function outputOf(err: unknown): string {
  * known here: the first attempt may have opened it without reporting it, or a run before
  * this one did. The same result whatever the team file holds. With no address to be had,
  * the forge's own sentence is kept, so the reader can still tell which request it means.
+ *
+ * Each line is read on its own, as gh prints each sentence on one: its own check's
+ * `a pull request for branch %q into branch %q already exists` (create.go:526) and GitHub's
+ * `A pull request already exists for <head>` when the request appears between that check
+ * and the create. glab's message is read whole as well (glabMessage), because glab 1.123.0
+ * wraps it at 118 columns and was measured breaking GitLab's `Another open merge request
+ * already exists for this source branch: !<iid>` across lines, at a place that depends on
+ * the project's path. Joining only within that one message keeps two unrelated lines from
+ * being read as one sentence.
  */
 function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { url: string | null; existing: true; error?: string } | null {
   const output = outputOf(err);
-  if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
+  const read = [...output.split("\n"), ...(tool === "glab" ? [glabMessage(err) ?? ""] : [])];
+  if (!read.some((line) => /(?:pull|merge) request.*already exists/i.test(line))) return null;
   const web = webAddress(repoUrl);
   const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : undefined;
   const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);
@@ -196,12 +273,19 @@ function existingRequest(tool: "gh" | "glab", repoUrl: string, err: unknown): { 
  * blind retry would open a second request. The failed call's own output is read for an
  * opened request before anything is retried, and a forge that answers either call with the
  * request already open for the branch is not asked again. A timeout is never retried:
- * whether the request exists is exactly what it leaves unknown. When the retry fails too,
- * or finds the request already open, `unassigned` is kept only when the team's lists went:
- * a name there is the one thing to correct before asking again. Without them the first
- * failure is not said to be a refusal, because a second call says nothing about what the
- * first one refused - a network error even differs in its local port each time. And a
- * retry that fails exactly as the first did shows the assignment was not what was refused.
+ * whether the request exists is exactly what it leaves unknown. A request gh reports
+ * having opened before it failed is `partial`: gh creates it first and sets its assignment
+ * after, so some of it may already be on it.
+ *
+ * When the retry fails too, or finds the request already open, `unassigned` is kept when
+ * the first failure's own words name the assignment (assignmentFailure), and never when
+ * assignmentFailure reads them as a dropped connection, a refused token or a forge error,
+ * which refused nobody.
+ * Words this does not read keep the older rule: kept only when the team's lists went, since
+ * a name there is the one thing to correct before asking again; a second call says
+ * nothing about what the first one refused - a network error even differs in its local
+ * port each time. And a retry that fails exactly as the first did shows the assignment was
+ * not what was refused.
  */
 export function openPr(
   repoUrl: string,
@@ -212,7 +296,7 @@ export function openPr(
   forge: ForgeRunner,
   assignment: RequestAssignment = { reviewers: [], labels: [] },
   assignee: string = SELF_ASSIGNEE,
-): { url: string | null; error?: string; unassigned?: string; existing?: true } {
+): { url: string | null; error?: string; unassigned?: string; partial?: true; existing?: true } {
   const tool = forgeTool(repoUrl);
   const create = (extra: string[]) =>
     extractUrl(
@@ -238,14 +322,16 @@ export function openPr(
     const code = (err as { code?: string })?.code;
     if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
     const opened = openedRequestUrl(outputOf(err), repoUrl);
-    if (opened) return { url: opened, unassigned: reason };
+    if (opened) return { url: opened, unassigned: reason, partial: true };
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
+      const failure = assignmentFailure(reason);
+      const named = failure === "assignee" || failure === "lists" || (failure === null && listed.length > 0);
       const existing = existingRequest(tool, repoUrl, retryErr);
-      if (existing) return { ...existing, ...(listed.length ? { unassigned: reason } : {}) };
+      if (existing) return { ...existing, ...(named ? { unassigned: reason } : {}) };
       const error = forgeFailure(tool, retryErr);
-      return { url: null, error, ...(listed.length && error !== reason ? { unassigned: reason } : {}) };
+      return { url: null, error, ...(named && error !== reason ? { unassigned: reason } : {}) };
     }
   }
 }

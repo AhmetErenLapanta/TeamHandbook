@@ -834,12 +834,47 @@ function assignmentFlags(assignment) {
     ...assignment.labels.length ? [`--label=${assignment.labels.join(",")}`] : []
   ];
 }
+function stderrLines(err) {
+  const stderr = err?.stderr;
+  return (typeof stderr === "string" ? stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
+function glabMessage(err) {
+  const lines = stderrLines(err);
+  const banner = lines.indexOf("ERROR");
+  if (banner < 0) return null;
+  const joined = lines.slice(banner + 1).filter((line) => /[\p{L}\p{N}]/u.test(line)).join(" ").replace(/\s+/g, " ");
+  return joined || null;
+}
 function forgeFailure(tool, err) {
   const e = err;
   if (e?.code === "ENOENT") return `the ${tool} CLI is not installed`;
-  const lines = (typeof e?.stderr === "string" ? e.stderr : "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const message = tool === "glab" ? glabMessage(err) : null;
+  if (message && message.length > 160) {
+    const tail = message.slice(-159);
+    return `\u2026${tail.slice(tail.indexOf(" ") + 1)}`;
+  }
+  if (message) return message;
+  const lines = stderrLines(err);
   const said = lines.filter((line) => !/^https?:\/\/\S+$/.test(line)).at(-1) ?? lines.at(-1);
   return (said ?? String(e?.message ?? err)).slice(0, 160);
+}
+var FAULT_WORDS = [
+  /\b(?:read|write|dial) (?:tcp|udp)\b/,
+  /connection (?:reset|refused)/i,
+  /no such host/i,
+  /i\/o timeout/i,
+  /tls handshake/i,
+  /: EOF\b/,
+  /error connecting to|check your internet connection/,
+  /Try authenticating with/,
+  /\bHTTP (?:401|50[0234])\b/,
+  /: (?:401|50[0234]) \{/
+];
+function assignmentFailure(reason) {
+  if (/could not assign user/i.test(reason)) return "assignee";
+  if (/failed to find user by name|could not request reviewer|could not add label/i.test(reason)) return "lists";
+  if (FAULT_WORDS.some((words) => words.test(reason))) return "fault";
+  return null;
 }
 function outputOf(err) {
   const e = err;
@@ -848,7 +883,8 @@ ${typeof e?.stderr === "string" ? e.stderr : ""}`;
 }
 function existingRequest(tool, repoUrl, err) {
   const output = outputOf(err);
-  if (!/(?:pull|merge) request[^\n]*already exists/i.test(output)) return null;
+  const read = [...output.split("\n"), ...tool === "glab" ? [glabMessage(err) ?? ""] : []];
+  if (!read.some((line) => /(?:pull|merge) request.*already exists/i.test(line))) return null;
   const web = webAddress(repoUrl);
   const number = tool === "glab" ? output.match(/!(\d+)/)?.[1] : void 0;
   const url = openedRequestUrl(output, repoUrl) ?? (web && number ? `https://${web}/-/merge_requests/${number}` : null);
@@ -874,14 +910,16 @@ function openPr(repoUrl, branch, title, body, repoDir, forge, assignment = { rev
     const code = err?.code;
     if (!flags.length || code === "ENOENT" || code === "ETIMEDOUT") return { url: null, error: reason };
     const opened = openedRequestUrl(outputOf(err), repoUrl);
-    if (opened) return { url: opened, unassigned: reason };
+    if (opened) return { url: opened, unassigned: reason, partial: true };
     try {
       return { url: create([]), unassigned: reason };
     } catch (retryErr) {
+      const failure = assignmentFailure(reason);
+      const named = failure === "assignee" || failure === "lists" || failure === null && listed.length > 0;
       const existing2 = existingRequest(tool, repoUrl, retryErr);
-      if (existing2) return { ...existing2, ...listed.length ? { unassigned: reason } : {} };
+      if (existing2) return { ...existing2, ...named ? { unassigned: reason } : {} };
       const error = forgeFailure(tool, retryErr);
-      return { url: null, error, ...listed.length && error !== reason ? { unassigned: reason } : {} };
+      return { url: null, error, ...named && error !== reason ? { unassigned: reason } : {} };
     }
   }
 }
@@ -1042,16 +1080,18 @@ function requestNotes(dropped, assignment, pr, team) {
   const assignYourself = host.includes("github") ? "assign yourself on it" : host.includes("gitlab") ? "assign yourself on it if the project's template does not" : null;
   const byHand = [...assignYourself ? [assignYourself] : [], ...list ? [`add ${list}`] : []].join(", and ");
   const asked = [...list ? [list] : [], "assignee you"].join("; ");
+  const failure = pr.unassigned ? assignmentFailure(pr.unassigned) : null;
   const refused = pr.unassigned ? `the forge refused it (${pr.unassigned})` : null;
   const correct = `if a name in ${TEAM_PREFIX_FILE} is wrong, correct it with /handbook:init --upgrade --reviewers or --labels.`;
   const opened = pr.url && !pr.existing;
-  const fix = list ? `, and ${correct}` : ".";
+  const fix = list && failure !== "assignee" && failure !== "fault" ? `, and ${correct}` : ".";
+  const openedLine = pr.partial ? `The request was opened, and then its assignment (${asked}) ${failure === "fault" ? "failed" : "was refused"} (${pr.unassigned}). Check what of it is on the request and set the rest by hand${fix}` : failure === "fault" ? `The request was opened without its assignment (${asked}): the first attempt failed (${pr.unassigned}) and the second was sent without it. Set it on the request by hand.` : `The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`;
   return [
     ...pr.existing ? ["The forge reported a request already open for this branch, so none was opened: the push is on that one."] : [],
     ...dropped ? [dropped] : [],
-    ...refused && opened ? [`The request was opened without its assignment (${asked}): ${refused}. Set it on the request by hand${fix}`] : [],
+    ...refused && opened ? [openedLine] : [],
     ...refused && pr.existing ? [`The assignment (${asked}) did not go: ${refused}. Set it on the open request if it lacks it${fix}`] : [],
-    ...refused && !pr.url && !pr.existing ? [`The assignment (${asked}) did not go: ${refused}.${list ? ` Before it is asked for again, ${correct}` : ""}`] : [],
+    ...refused && !pr.url && !pr.existing ? [`The assignment (${asked}) did not go: ${refused}.${fix === "." ? "" : ` Before it is asked for again, ${correct}`}`] : [],
     ...list && pr.existing && !refused ? [`This run did not change who reviews it: add ${list} on it if it lacks them.`] : [],
     ...opened && forgeTool(team.repoUrl) === "glab" && template ? [template] : [],
     ...byHand && !pr.url && !pr.existing ? [`When you open the request, ${byHand}.`] : []

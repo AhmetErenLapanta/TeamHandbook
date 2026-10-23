@@ -748,10 +748,20 @@ rather than refused. If the forge refuses the assignment itself, the request is 
 once more without it - unless the failed call already reported a request it opened, or
 the forge answered that a request for the branch already exists. The assignee, `@me`, rides
 on every request, so every failed open is asked for that second time, never a third; both
-forges refuse a second open request for a branch, in the sentence read above. When the
-second attempt fails too or finds the request already open, the assignment is named only
-if the team's lists went with it, a name there being the one thing to correct, and not
-when the second attempt failed exactly as the first did.
+forges refuse a second open request for a branch, in the sentence read above. `glab`'s
+message is read with its lines joined, because `glab` 1.123.0 wraps it at 118 columns and
+was measured breaking that sentence across lines at a place that depends on the project's
+path. When the
+second attempt fails too or finds the request already open, the first failure is named as
+a refusal of the assignment when its own words say so (`glab`, and `gh` on GitHub
+Enterprise, name the user or label they could not find), and not when they are the words
+`glab` 1.123.0 and `gh` 2.100.0 were measured printing for a dropped connection, a host
+that does not resolve, a refused token or a forge error; any other words are named only if
+the team's lists went with the request, a name there being the one thing to correct. A
+second attempt that failed exactly as the first did names nothing. The team file is not
+named as the thing to correct for a refused assignee, or for a failure in those measured
+words. A request `gh` opened before its assignment failed is said to lack part of it, not
+all of it, because `gh` sets the assignment after it creates the request.
 
 The name, the prefix and the example are what `/handbook:join` itself reads. A repository you have joined also ships
 skills, and a skill's **name** is read from its frontmatter wherever the plugin lists what

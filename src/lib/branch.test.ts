@@ -1008,6 +1008,12 @@ const ONLY_SKIPPED = (kind: "reviewers" | "labels") =>
   `if that template sets ${kind}, record them with /handbook:init --upgrade --${kind} ${kind === "reviewers" ? "<a,b>" : "<x>"}, ` +
   `and if it sets none, record that with /handbook:init --upgrade --${kind} "".`;
 
+/** What gh 2.100.0 prints when github.com refuses a reviewer after the request exists: its own
+ * prefix (create.go:1150) around its GraphQL error form (api/client_test.go:74). The
+ * server's message itself was not measured here. */
+const updateRefused = (login: string) =>
+  `pull request update failed: GraphQL: Could not resolve to a User with the login of '${login}'. (requestReviewsByLogin)`;
+
 /** The team file as a repository records it, with whatever reviewers and labels a case needs. */
 function teamFile(extra: Record<string, unknown>): Record<string, string> {
   return { [TEAM_PREFIX_FILE]: JSON.stringify({ commitPrefix: "", ...extra }, null, 2) + "\n" };
@@ -1317,14 +1323,15 @@ describe("a request carries what the team file says when it is opened", () => {
   });
 
   it("given a refresh whose reviewers the forge refused after opening it, when the result is shown, then the request stands and the note is printed", () => {
-    const bare = bareHandbook(teamFile({ reviewers: ["adaa"] }));
+    // Both lists recorded, so this reads the same whichever of the template note's branches it merges with.
+    const bare = bareHandbook(teamFile({ reviewers: ["adaa"], labels: ["skills"] }));
     const { forge, creates } = recordingForge();
     const refusing: ForgeRunner = (tool, args, cwd) => {
       if (args[0] !== "auth" && assignmentFlagsOf(args).length) {
         creates.push(args);
         throw Object.assign(new Error("Command failed"), {
           stdout: "https://github.com/acme/skills/pull/4\n",
-          stderr: "pull request update failed: could not request reviewer: 'adaa' not found\n",
+          stderr: `${updateRefused("adaa")}\n`,
         });
       }
       return forge(tool, args, cwd);
@@ -1334,9 +1341,11 @@ describe("a request carries what the team file says when it is opened", () => {
 
     expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/4" });
     expect(creates).toHaveLength(1);
-    expect(formatUpgradeResult(result)).toContain(
-      "The request was opened without its assignment (reviewers @adaa; assignee you): the forge refused it (pull request update failed:",
-    );
+    expect(result.requestNotes).toEqual([
+      `The request was opened, and then its assignment (reviewers @adaa; labels skills; assignee you) was refused (${updateRefused("adaa")}). ` +
+        `Check what of it is on the request and set the rest by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, ` +
+        "correct it with /handbook:init --upgrade --reviewers or --labels.",
+    ]);
   });
 
   it("given a scaffold request with no CLI to open it, when init is shown, then the reviewers to add are printed", () => {
@@ -1688,7 +1697,9 @@ describe("the template GitLab does not apply to a request glab opens", () => {
     const forge: ForgeRunner = (_tool, args) => {
       if (args[0] === "auth") return "Logged in";
       throw Object.assign(new Error("Command failed"), {
-        stderr: "409 Conflict {message: [Another open merge request already exists for this source branch: !12]}\n",
+        stderr:
+          '          \n   ERROR  \n          \n  Post https://gitlab.com/api/v4/projects/acme%2Fskills/merge_requests: 409 {message: [Another open merge request  \n' +
+          "  already exists for this source branch: !12]}.          \n\n",
       });
     };
 
@@ -1803,5 +1814,88 @@ describe("what each way of opening a request carries and says, for one team file
 
     expect(result.prUrl).toBeUndefined();
     expect(result.requestNotes).toEqual([said]);
+  });
+});
+
+describe("a first attempt the forge did not refuse", () => {
+  const shareTo = (url: string, bare: string, forge: ForgeRunner) =>
+    publishTeamSelection({ skills: [{ name: "my-skill", dir: localSkill("my-skill") }] }, teamFor(url), hostedAt(url, bare), forge, {
+      commitMessage: APPROVED,
+      branch: "TEAM-12",
+    });
+  const openedThenFailed = (stderr: string): ForgeRunner => (_tool, args) => {
+    if (args[0] === "auth") return "Logged in";
+    throw Object.assign(new Error("Command failed"), { stdout: "https://github.com/acme/skills/pull/7\n", stderr });
+  };
+
+  it("given lists and GitHub answering that a pull request already exists, when the result is shown, then no link to open another is given and the team file is not named", () => {
+    const race = "pull request create failed: GraphQL: A pull request already exists for acme:TEAM-12. (createPullRequest)";
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      throw Object.assign(new Error("Command failed"), { stderr: `${race}\n` });
+    };
+
+    const result = shareTo(GITHUB, bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] })), forge);
+
+    expect(result).toMatchObject({ ok: true, prError: `a request for this branch is already open (${race})` });
+    expect(result.manualUrl).toBeUndefined();
+    expect(result.requestNotes).toEqual([
+      "The forge reported a request already open for this branch, so none was opened: the push is on that one.",
+      "This run did not change who reviews it: add reviewers @ada; labels skills on it if it lacks them.",
+    ]);
+  });
+
+  it("given lists and gh losing the connection after it opened the request, when the result is shown, then part of the assignment is said to have failed and the team file is not named", () => {
+    const result = shareTo(GITHUB, bareHandbook(teamFile({ reviewers: ["ada"] })), openedThenFailed("pull request update failed: read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer\n"));
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://github.com/acme/skills/pull/7" });
+    expect(result.requestNotes).toEqual([
+      "The request was opened, and then its assignment (reviewers @ada; assignee you) failed " +
+        "(pull request update failed: read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer). " +
+        "Check what of it is on the request and set the rest by hand.",
+    ]);
+  });
+
+  it("given lists and github.com refusing a login that holds a status number after the request opened, when the result is shown, then it is called a refusal and the team file is named", () => {
+    const result = shareTo(GITHUB, bareHandbook(teamFile({ reviewers: ["qa-503"] })), openedThenFailed(`${updateRefused("qa-503")}\n`));
+
+    expect(result.requestNotes).toEqual([
+      `The request was opened, and then its assignment (reviewers @qa-503; assignee you) was refused (${updateRefused("qa-503")}). ` +
+        `Check what of it is on the request and set the rest by hand, and if a name in ${TEAM_PREFIX_FILE} is wrong, ` +
+        "correct it with /handbook:init --upgrade --reviewers or --labels.",
+    ]);
+  });
+
+  it("given lists and a first attempt lost to the network, when the retry opens the request, then it is not called a refusal and the team file is not named", () => {
+    let creates = 0;
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      if (++creates === 1) throw Object.assign(new Error("Command failed"), { stderr: "read tcp [::1]:58901->[::1]:443: read: connection reset by peer\n" });
+      return "https://gitlab.com/acme/skills/-/merge_requests/3\n";
+    };
+
+    const result = shareTo(GITLAB, bareHandbook(teamFile({ reviewers: ["ada"], labels: ["skills"] })), forge);
+
+    expect(result).toMatchObject({ ok: true, prUrl: "https://gitlab.com/acme/skills/-/merge_requests/3" });
+    expect(result.requestNotes).toEqual([
+      "The request was opened without its assignment (reviewers @ada; labels skills; assignee you): the first attempt failed " +
+        "(read tcp [::1]:58901->[::1]:443: read: connection reset by peer) and the second was sent without it. Set it on the request by hand.",
+    ]);
+  });
+
+  it("given lists and GitHub Enterprise refusing the assignee, when the retry opens the request, then the team file is not named for it", () => {
+    let creates = 0;
+    const forge: ForgeRunner = (_tool, args) => {
+      if (args[0] === "auth") return "Logged in";
+      if (++creates === 1) throw Object.assign(new Error("Command failed"), { stderr: "could not assign user: 'dev' not found\n" });
+      return "https://github.com/acme/skills/pull/3\n";
+    };
+
+    const result = shareTo(GITHUB, bareHandbook(teamFile({ reviewers: ["ada"] })), forge);
+
+    expect(result.requestNotes).toEqual([
+      "The request was opened without its assignment (reviewers @ada; assignee you): the forge refused it " +
+        "(could not assign user: 'dev' not found). Set it on the request by hand.",
+    ]);
   });
 });
