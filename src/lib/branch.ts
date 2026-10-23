@@ -876,11 +876,17 @@ export function openRequest(
     // empty description from that template, and creating the request runs the template's
     // quick actions before its assignees (issuable_base_service.rb:221, :227), so an
     // `/assign` there sets the assignees in place of the pusher. The note says so rather
-    // than naming an assignee this run did not see.
+    // than naming an assignee this run did not see. And a branch whose request is already
+    // open gets no new one: the handler updates that request instead
+    // (push_options_handler_service.rb:113-121, :150-163), taking the push's title and
+    // labels and leaving its assignees as they were. GitLab answers both pushes with the
+    // same "View merge request" line (internal_post_receive/response.rb:30-37), so the note
+    // names both outcomes rather than guess which one this push had.
     const notes = [
       ...(dropped ? [dropped] : []),
       "GitLab opened the request from the push and assigned it to the account that pushed, " +
-        "unless the project's default template assigns someone else" +
+        "unless the project's default template assigns someone else; if a request for this branch was already open, " +
+        "GitLab updated that one instead, set its title from this push and changed no assignee" +
         `${reviewers ? `; no push option sets reviewers, so add ${reviewers} by hand` : ""}.`,
     ];
     return withNotes({ prUrl: url, unattachedDescription: body }, notes);
@@ -922,7 +928,7 @@ export function unattachedDescriptionLines(description: string | undefined): str
   if (!description) return [];
   return [
     "",
-    "GitLab opened the request from the push, and a push cannot carry its description. Paste this into it:",
+    "GitLab reported the request for the push, and a push cannot carry its description. Paste this into it:",
     "",
     ...description.split("\n").map((line) => (line ? `    ${line}` : "")),
   ];
