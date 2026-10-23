@@ -2202,7 +2202,7 @@ function checkRelease(version, run, marketRoot, root) {
   return newer ? warn("version", newerReleaseLine(version, newer)) : null;
 }
 function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketplacesRoot(), root = pluginRoot()) {
-  const version = pluginVersion();
+  const version = pluginVersion(root);
   const release = checkRelease(version, run, marketRoot, root);
   const checks = [
     ...release ? [release] : [],

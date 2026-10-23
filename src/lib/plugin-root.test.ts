@@ -1,7 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { pluginVersion } from "./plugin-root.js";
 
 let roots: string[] = [];
@@ -55,3 +57,39 @@ describe("pluginVersion", () => {
     expect(version).toBe("unknown");
   });
 });
+
+describe("the shipped bundles and the root they read", () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+  it.each(["status.js", "doctor.js"])(
+    "given %s installed under a root carrying its own version, when it runs, then its header names that version",
+    (bundle) => {
+      // given the bundle where Claude Code puts it: <root>/dist, beside that root's manifest
+      const root = copyWith({ name: "teamhandbook", version: "7.7.7" }, { version: "7.7.7", type: "module" });
+      mkdirSync(join(root, "dist"));
+      copyFileSync(join(repoRoot, "dist", bundle), join(root, "dist", bundle));
+      const home = mkdtempSync(join(tmpdir(), "handbook-home-"));
+      roots.push(home);
+      // An empty PATH and none of the parent's environment: the doctor probes `claude -p`, and
+      // node's own directory on PATH is where the real claude is installed beside it, so the
+      // probe reached the developer's signed-in CLI and its keys.
+      const noTools = mkdtempSync(join(tmpdir(), "handbook-path-"));
+      roots.push(noTools);
+
+      // when
+      let out: string;
+      try {
+        out = execFileSync(process.execPath, [join(root, "dist", bundle)], {
+          encoding: "utf8",
+          env: { HOME: home, TEAMHANDBOOK_HOME: home, PATH: noTools },
+        });
+      } catch (err) {
+        out = String((err as { stdout?: unknown }).stdout ?? "");
+      }
+
+      // then the default root is the bundle's own, not the repository the test runs in
+      expect(out.split("\n")[0]).toContain("(v7.7.7");
+    },
+  );
+});
+
