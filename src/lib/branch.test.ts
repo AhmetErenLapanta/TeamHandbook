@@ -822,8 +822,8 @@ describe("a newer release than the one installed", () => {
     expect(formatStatus(report).split("\n").filter((l) => l.includes("a newer version is available (99.0.0)"))).toHaveLength(1);
     expect(formatStatus(gatherStatus(home, () => null))).not.toContain("newer version");
 
-    // The doctor reads the running version, so the release it is shown is one no version
-    // of this repository will reach.
+    // The doctor reads the 0.12.0 the installed copy carries, so a remote tag above it is the
+    // newer release it reports.
     const run: CommandRunner = (cmd, args) => {
       if (cmd === "git" && args[0] === "ls-remote" && args[1] === "--tags") return `${TAGS}d4\trefs/tags/v99.0.0\n`;
       if (cmd === "claude") return args[0] === "-p" ? "OK" : "2.1.0";
