@@ -56,13 +56,15 @@ This document states exactly what it reads, what it writes, and where data goes.
   this file: it belongs to the running client, and sharing a server does not remove your
   own. A server definition holding a literal value in `headers` or `env` is refused rather
   than carried, because only a plain `${VAR}` reference proves the credential itself stays
-  on this machine. That rule is structural and absolute for those two fields. It is not a
-  promise about the whole definition: the whole definition, `args` included, is scanned by
-  the same pattern detector as everything else, and a URL is additionally scanned for an
-  embedded token, but both scans are heuristics that can miss a credential in a shape they
-  do not know, such as a short or word-shaped one. The merge request prints
-  the endpoint and the full command so a person reads them before the server reaches
-  anyone.
+  on this machine. That rule is structural and absolute for those two fields, and for no
+  other. The rest of the definition, `args` included, goes through the same pattern
+  detector as everything else that is shared, and that detector misses a credential in
+  `args` whenever the flag and its value are separate arguments, as in
+  `"--api-key", "<token>"`: it catches a token with a recognized prefix and a `key=value`
+  argument such as `--api-key=<token>`, and a longer or more random value does not change
+  the outcome. The scan for a token embedded in a URL covers the `url` field only, not a
+  URL handed to a stdio command in its `args`. The merge request prints the endpoint and
+  the full command so a person reads them before the server reaches anyone.
 - **The team plugin's copy on this machine, read-only, and only when you run
   `/handbook:share`:** the skills, commands and `.mcp.json` under
   `~/.claude/plugins/marketplaces/<team>`, compared by content with your own copies so the
