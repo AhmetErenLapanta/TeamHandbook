@@ -44,18 +44,27 @@ This document states exactly what it reads, what it writes, and where data goes.
   skill never reaches a clone. If you hand it a skill directory by path (`--skill-path`,
   for a skill you are writing somewhere the client does not load from) it reads that
   directory too, and only that one: it is screened exactly like a listed skill.
+- **Your slash commands, read-only, and only when you run `/handbook:share`:** the files
+  under `~/.claude/commands` and this project's `.claude/commands`, so the list can say
+  which of them could travel. Nothing there is modified, moved or deleted, and the files
+  are read in order to screen them: a command carrying a recognized credential or a trace
+  of this machine (its home path, account name or an email address) is refused rather than
+  shared.
 - **`~/.claude.json`, read-only, and only when you run `/handbook:share`:** the MCP
   servers Claude Code has configured for your user and for
   the current project, so they can be offered to your team. TeamHandbook never writes to
   this file: it belongs to the running client, and sharing a server does not remove your
   own. A server definition holding a literal value in `headers` or `env` is refused rather
   than carried, because only a plain `${VAR}` reference proves the credential itself stays
-  on this machine. That rule is structural and absolute for those two fields. It is not a
-  promise about the whole definition: a URL is additionally scanned for an embedded token,
-  but that scan is a heuristic that can miss a short or word-shaped one, and a credential
-  passed through a stdio server's `args` is not checked at all. The merge request prints
-  the endpoint and the full command so a person reads them before the server reaches
-  anyone.
+  on this machine. That rule is structural and absolute for those two fields, and for no
+  other. The rest of the definition, `args` included, goes through the same pattern
+  detector as everything else that is shared, and that detector misses a credential in
+  `args` whenever the flag and its value are separate arguments, as in
+  `"--api-key", "<token>"`: it catches a token with a recognized prefix and a `key=value`
+  argument such as `--api-key=<token>`, and a longer or more random value does not change
+  the outcome. The scan for a token embedded in a URL covers the `url` field only, not a
+  URL handed to a stdio command in its `args`. The merge request prints the endpoint and
+  the full command so a person reads them before the server reaches anyone.
 - **The team plugin's copy on this machine, read-only, and only when you run
   `/handbook:share`:** the skills, commands and `.mcp.json` under
   `~/.claude/plugins/marketplaces/<team>`, compared by content with your own copies so the
