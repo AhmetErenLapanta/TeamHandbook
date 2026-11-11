@@ -2,6 +2,97 @@
 
 [![CI](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AhmetErenLapanta/TeamHandbook/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Node: >= 22](https://img.shields.io/badge/node-%3E%3D%2022-brightgreen)](package.json)
 
+## Hand your sprint to agents that already know how your team works.
+
+- **TeamHandbook Orchestrator**: in the browser. Your tickets are done by your own Claude Code, and you review the change.
+- **TeamHandbook plugin**: inside Claude Code. It turns the work your team repeats into skills and gets them to everyone.
+
+Install both:
+
+```sh
+claude plugin marketplace add AhmetErenLapanta/TeamHandbook && claude plugin install handbook@teamhandbook && npx teamhandbook-orchestrator
+```
+
+<details>
+<summary>Just one of them, or other ways</summary>
+
+Only the orchestrator:
+
+```sh
+npx teamhandbook-orchestrator
+```
+
+Only the plugin, inside Claude Code:
+
+```
+/plugin marketplace add AhmetErenLapanta/TeamHandbook
+/plugin install handbook@teamhandbook
+```
+
+The orchestrator with the installer instead of npx:
+
+```sh
+curl -fsSL https://github.com/AhmetErenLapanta/TeamHandbook/releases/download/handbook-orchestrator-latest/install.sh | sh && handbook-orchestrator
+```
+
+On macOS use the curl line rather than downloading the archive in a browser, which Gatekeeper stops.
+Windows runs the orchestrator through WSL.
+
+</details>
+
+- Connect Jira in one click. Your boards and sprints show up as they are.
+- Pick a ticket and press Start. Your own Claude Code does it, with your team's skills and MCP servers.
+- Watch it work, then review the change. Nothing merges, and nothing is written to Jira, without you.
+
+A real ticket became a reviewed 8-file change in 3 min 37 s.
+
+![Work: a sprint board, with the agent working on one card](orchestrator/docs/screenshots/7-work.png)
+
+![A live task: the agent's sentences and tool calls, with a box to tell it something while it works](orchestrator/docs/screenshots/7-live.png)
+
+![Review: each file's change, with Keep these changes](orchestrator/docs/screenshots/7-review.png)
+
+A task in the orchestrator can leave a lesson; the plugin's review keeps it as a skill in your own skills folder, and your next task starts with it.
+
+[TeamHandbook Orchestrator](#teamhandbook-orchestrator) · [TeamHandbook plugin](#teamhandbook-plugin) ·
+[Development](#development)
+
+## TeamHandbook Orchestrator
+
+**Your own Claude Code, on a ticket or a folder, with every change waiting for you.**
+
+On one machine, no account and no server:
+
+- **Work** shows your Jira board, a GitLab project or a GitHub repository. Connect each in one click:
+  **Sign in with Atlassian**, or **Sign in with GitHub** / **GitLab** through your own `gh` or `glab`.
+  Pick an issue, press **Start**, watch the agent live, read **Changes**, press **Keep**.
+- Or name a folder and write what should change. The Claude Code signed in on this machine does it
+  with your own settings, skills and MCP servers, behind a guard that keeps it inside the folder.
+- Jira is read, and nothing moves there unless you turn that on. Nothing is pushed to GitLab or
+  GitHub until you press **Open a merge request** (or pull request). In a Git repository the task ends
+  in a request on its own branch, and nothing reaches the repository until you merge it.
+- Checks (your tests, or the ones the folder names) run before and after, inside your machine's
+  sandbox; a failing change gets two repair rounds before it is marked broken.
+- **Your turn** and **The agents' turn** list what needs you across tasks in flight.
+- What you said while a task ran (a follow-up, a denied call, an undo reason) can become a draft
+  skill, yours to keep or reject.
+
+### The first five minutes
+
+1. Run `npx teamhandbook-orchestrator`. The browser opens on **New task**. With a folder you used before, it is one
+   click and one field; otherwise a **Which folder** question takes its path.
+2. Describe the change and press **Start**, or open **Work**, connect Jira, GitLab or GitHub, and pick an issue.
+3. Open the task, read **Changes**, and keep or undo them.
+
+Needs Node 22.16 or later, git, and Claude Code (or OpenCode) signed in; no env file, no Docker.
+It answers this machine only, and its data is one folder you can delete.
+
+**Coming next:** a team's orchestrator (shared skills, members, policies), connected machines, and a cloud service.
+
+More: [orchestrator/README.md](orchestrator/README.md) and [the three-minute demo](orchestrator/docs/user/demo.md).
+
+## TeamHandbook plugin
+
 **The work your repository keeps repeating, written down as skills your whole team has.**
 TeamHandbook reads your git history, finds the jobs that change the same files the same way
 time after time, and drafts a skill for the one you pick. One person approves it in review,
@@ -14,7 +105,9 @@ they pull the project or their copy of the plugin updates.
 
 <img src="docs/handbook-one-to-team.svg" alt="The work your repository keeps repeating, drafted as a skill, or an MCP server or a command already on your machine, drawn as three boxes above a single figure who approves one of them. A line carries that approval down into one repository. From there, lines fan out to the rest of the team, and each of them has it once their copy of the plugin updates, with nothing to install by hand." width="880">
 
-## The first day
+Lessons from Orchestrator tasks arrive in the same `/handbook:review` queue.
+
+### The first day
 
 One person sets up the team's repository, once, with `/handbook:init`. Everyone else keeps
 working where they already work.
@@ -30,7 +123,7 @@ have approved the commit message; push it like any other commit, and everyone wh
 has it at their next session. Sharing it with the team opens a merge request on the team's
 repository instead.
 
-## What a draft is
+### What a draft is
 
 A draft is not a finished skill, and it does not pretend to be one. It carries:
 
@@ -43,7 +136,7 @@ A draft is not a finished skill, and it does not pretend to be one. It carries:
 shows the first two on real work ([where it came from](docs/examples/README.md)).
 `/handbook:demo` walks the whole path on a scratch repository without calling a model.
 
-## What reaches your team
+### What reaches your team
 
 TeamHandbook is a Claude Code plugin, and besides the drafts it writes from history it
 makes one git repository your team's shared setup: the skills, MCP servers and slash
@@ -82,12 +175,12 @@ still carries a version, that holds only when the same commit raises it.
 If your team drops TeamHandbook tomorrow, the repository and its distribution keep
 working: there is no lock-in.
 
-## Install
+### Install
 
 **Requires** Claude Code >= 2.1 and Node.js >= 22. Versioning a team repository by commit was
 measured with Claude Code 2.1.306; earlier 2.1 releases were not measured.
 
-### Setting it up for your team
+#### Setting it up for your team
 
 One person, once.
 
@@ -117,7 +210,7 @@ use, and a confirmation before it writes. More if it creates the repo, and a bra
 commit prefix if the forge rejects either. Its output ends with your team's message; read
 it first: each teammate needs repo access and git credentials they set up themselves.
 
-### Joining one your team already has
+#### Joining one your team already has
 
 ```
 /plugin marketplace add AhmetErenLapanta/TeamHandbook
@@ -143,7 +236,7 @@ Five commands and a restart. Those last two are what brings merged skills to thi
 machine. Stop after `/handbook:join` and you can still share your own work; you just will
 not receive anyone else's.
 
-### Only receiving the handbook
+#### Only receiving the handbook
 
 If you want the team's skills and never intend to contribute your own, you do not need
 this plugin at all:
@@ -157,18 +250,18 @@ Two commands, and whoever set the repository up can send them to you already fil
 `/handbook:init` prints that message for them. The team's own plugin carries a small hook
 that tells you when new skills, servers, or commands have landed.
 
-### Check the install
+#### Check the install
 
 `/handbook:doctor` reports node, the `claude` CLI TeamHandbook shells out to, whether the
 hooks are firing, your git identity, the config, and the team repo, with a fix for each
 failure it finds. Run it before the restart and it reports the hooks as not firing,
 correctly: they are not, yet.
 
-## Nothing ships until you say so
+### Nothing ships until you say so
 
 Two decisions hide behind that sentence, and each one belongs to the person it affects.
 
-### What leaves your machine
+#### What leaves your machine
 
 `/handbook:review` shows each draft with what it was written from - for a draft from
 history, its file map and the questions it could not answer - and then asks where it goes:
@@ -195,7 +288,7 @@ agree on your own machine by naming that address in `~/.teamhandbook/config.json
 both are yes, nothing is sent; after, only a team skill's name and the hour it was used
 are. [SECURITY.md](SECURITY.md) has the details.
 
-### What arrives on your machine
+#### What arrives on your machine
 
 Nobody can put anything on your machine from the handbook repo. You subscribe yourself,
 with the two `/plugin` commands above. Whoever set the repository up cannot do it for
@@ -219,7 +312,7 @@ are plain directories you can read in the repo and copy. `/plugin marketplace re
 <team-plugin-name>` ends a subscription you already have. `/handbook:leave` is a separate
 thing: it drops the contribution target and leaves the subscription alone.
 
-## Why you might not want this
+### Why you might not want this
 
 - **You are working alone.** It runs solo, and approved skills land in `~/.claude/skills`
   or the project with no team repo involved. The payoff is other people: a draft approved
@@ -246,7 +339,7 @@ thing: it drops the contribution target and leaves the subscription alone.
 - **State is per-machine.** `~/.teamhandbook/` does not sync; team approvals travel
   through the merged request.
 
-## How it works
+### How it works
 
 <img src="docs/handbook-loop.svg" alt="A skill, an MCP server, or a slash command that is already set up on your machine reaches the team repository by one route: you pick it, and everything you picked travels together in a single merge request. Picking it is the approval, so there is no second verdict to give; the one thing that does not start here is a draft TeamHandbook wrote, which waits for your verdict in /handbook:review. Somebody on the team reviews the request and merges it. That repository is a Claude Code plugin marketplace whose plugin.json carries no version, so Claude Code versions the plugin by commit and the merge itself is its signal that the plugin moved. Each teammate's copy picks the merge up when their plugin updates and reports what landed, with nothing installed or configured by hand." width="880">
 
@@ -275,7 +368,7 @@ thing: it drops the contribution target and leaves the subscription alone.
   `~/.claude`; you subscribe yourself with `/plugin`, and the team plugin's own hook says
   what arrived instead of letting it land in silence.
 
-### Where the skills come from
+#### Where the skills come from
 
 The servers and commands you share are already on your machine, and so are the skills you
 wrote yourself. The rest come from your repository's history: `/handbook:mine` reads it
@@ -293,6 +386,8 @@ The output is a spec-compliant [Agent Skill](https://agentskills.io). Delete
 TeamHandbook tomorrow and your skills keep working, in any tool that reads `SKILL.md`.
 
 ## Commands
+
+The plugin's commands, inside Claude Code:
 
 | Command | What it does |
 |---|---|
@@ -334,14 +429,20 @@ how often that happens; `{ "sessions": { "detect": false } }` turns it off. Secr
 is written or sent, though detection is pattern matching - read a draft before
 approving it.
 
+
 ## Development
 
 ```
+git clone https://github.com/AhmetErenLapanta/TeamHandbook.git && cd TeamHandbook
 npm install
 npm run build       # bundle the hooks into dist/
 npm test
 npm run typecheck
 ```
+
+To run the orchestrator from the clone, `npm start`; no `npm install` at the root is needed for that.
+
+The orchestrator has its own package: `cd orchestrator && npm run dev` starts the server and the screens with live reload (see [orchestrator/README.md](orchestrator/README.md)).
 
 `dist/` is committed on purpose: the plugin is installed by git clone, so the built
 hooks must be present.
