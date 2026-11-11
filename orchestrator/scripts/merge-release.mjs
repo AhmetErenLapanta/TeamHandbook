@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The release workflow's build matrix.
-const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
+const PLATFORMS = ["darwin-arm64", "linux-arm64", "linux-x64"];
 
 const orchestratorDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(orchestratorDir, "package.json"), "utf8")).version;
