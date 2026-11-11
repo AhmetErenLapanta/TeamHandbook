@@ -43,10 +43,9 @@ docker compose logs orchestrator | grep "setup code"
 | Layer | Screen |
 |---|---|
 | Signing in | [docs/screenshots/0-sign-in.png](../screenshots/0-sign-in.png) |
-| What a team has | [docs/screenshots/1-inventory.png](../screenshots/1-inventory.png) |
-| A change prepared as a request | [docs/screenshots/2-editing.png](../screenshots/2-editing.png), [docs/screenshots/2-requests.png](../screenshots/2-requests.png) |
-| Which skills are used | [docs/screenshots/3-usage.png](../screenshots/3-usage.png) |
-| A task run by an agent | [docs/screenshots/4-tasks.png](../screenshots/4-tasks.png), [docs/screenshots/4-task.png](../screenshots/4-task.png) |
+| What needs you | [docs/screenshots/4-tasks.png](../screenshots/4-tasks.png) |
+| A task run by an agent | [docs/screenshots/4-task.png](../screenshots/4-task.png) |
+| Setting the team up | [docs/screenshots/5-team.png](../screenshots/5-team.png) |
 
 With Postgres instead of SQLite:
 
