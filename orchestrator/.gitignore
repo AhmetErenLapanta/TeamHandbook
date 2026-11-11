@@ -1,0 +1,22 @@
+node_modules/
+dist/
+data/
+demo-data/
+test-results/
+playwright-report/
+
+# The repository ignores lockfiles for the plugin, which ships no runtime dependencies. The
+# orchestrator does, and its image is built with npm ci from this exact tree.
+!package-lock.json
+
+# A file of LAB_EXTRA_ORGS kept next to the lab; it names repositories of your own and never enters the repository.
+lab/*.local.json
+
+# A deploy's env files, secrets and state stay with the operator; only the .example files are the repository's.
+deploy/.env.*
+!deploy/.env.*.example
+deploy/secrets/
+deploy/state/
+
+# The npm package build:package packs; it is published by hand, never from here.
+package-out/
