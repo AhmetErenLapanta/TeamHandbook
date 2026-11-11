@@ -120,7 +120,7 @@ else
 fi
 
 expected=$(grep "  $archive\$" "$work/SHA256SUMS" | cut -d' ' -f1)
-[ -n "$expected" ] || die "release $version has no build for $platform"
+[ -n "$expected" ] || die "release $version has no build for $platform; npx teamhandbook-orchestrator@latest runs on any system with Node 22.16 or newer"
 fetch "$base" "$archive" "could not download $archive from $base"
 actual=$(sha256 "$work/$archive")
 [ "$actual" = "$expected" ] || die "$archive does not match its checksum in SHA256SUMS; nothing was installed"

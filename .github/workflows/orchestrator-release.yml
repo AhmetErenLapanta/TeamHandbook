@@ -42,11 +42,15 @@ jobs:
   build:
     needs: version
     strategy:
-      fail-fast: true
+      # Each platform reports on its own: one that fails says why without hiding the others' results.
+      fail-fast: false
       matrix:
         include:
-          - { runner: macos-14, platform: darwin-arm64 }
-          - { runner: macos-15-intel, platform: darwin-x64 }
+          - { runner: macos-15, platform: darwin-arm64 }
+          # darwin-x64 is out of this release: its executable failed the build's --version check with no
+          # output and no status, and why is not known yet. Intel Macs take npx (install.sh says so); bring the line back with the
+          # diagnostics step below, which names the signature and the system's log, and darwin-x64 in
+          # scripts/merge-release.mjs.
           - { runner: ubuntu-24.04, platform: linux-x64 }
           - { runner: ubuntu-24.04-arm, platform: linux-arm64 }
     runs-on: ${{ matrix.runner }}
@@ -69,6 +73,21 @@ jobs:
 
       - run: npm run build:release
         working-directory: orchestrator
+
+      # When the build refuses its executable, what macOS itself says about that file: its
+      # signature, its architecture and what the system logged when it was stopped.
+      - name: What macOS says about the executable
+        if: failure() && runner.os == 'macOS'
+        working-directory: orchestrator/package-out/release
+        run: |
+          binary="handbook-orchestrator-$VERSION-$PLATFORM/handbook-orchestrator"
+          uname -m
+          file "$binary" || true
+          lipo -archs "$binary" || true
+          codesign -dvvv "$binary" 2>&1 || true
+          codesign --verify --strict --verbose=4 "$binary" 2>&1 || true
+          ls -la "$HOME/Library/Logs/DiagnosticReports" 2>&1 | head -20 || true
+          log show --last 5m --style compact --predicate 'process == "amfid" OR process == "kernel" OR eventMessage CONTAINS "handbook-orchestrator"' 2>&1 | grep -i -E 'handbook-orchestrator|amfid|code signature|taskgated' | tail -40 || true
 
       - name: The archive is this runner's platform
         run: test -f "orchestrator/package-out/release/handbook-orchestrator-$VERSION-$PLATFORM.tar.gz"

@@ -122,6 +122,7 @@ describe("install.sh", () => {
 
     expect(done.code).toBe(1);
     expect(done.out).toContain(`release 1.0.0 has no build for ${PLATFORM}`);
+    expect(done.out).toContain("npx teamhandbook-orchestrator@latest");
     expect(existsSync(join(home, ".handbook-orchestrator", "current"))).toBe(false);
   });
 
