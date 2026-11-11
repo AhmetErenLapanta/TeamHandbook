@@ -1,0 +1,25 @@
+# Optional and off by default: runs every task's agent in a container of its own.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.container-tasks.yml up --build
+#
+# This mounts the host's Docker socket into the orchestrator. Whoever controls that socket controls
+# the host as root, so an orchestrator started this way is as trusted as root on this machine: a flaw
+# in the orchestrator, or a sign-in an attacker obtains, reaches the whole host. Use it only where the
+# orchestrator runs on a machine of its own.
+services:
+  orchestrator:
+    image: orchestrator-container-tasks
+    build:
+      target: container-tasks
+    environment:
+      ORCHESTRATOR_TASK_ISOLATION: container
+      # The image agents run in: it needs the agent CLIs (claude, opencode) and the team's tools.
+      # This file's own image serves for the stand-in agent.
+      ORCHESTRATOR_TASK_IMAGE: "${ORCHESTRATOR_TASK_IMAGE:-orchestrator-container-tasks}"
+      # Each task container mounts only its own directory out of this volume.
+      ORCHESTRATOR_TASK_VOLUME: "${COMPOSE_PROJECT_NAME:-orchestrator}_orchestrator-data"
+      ORCHESTRATOR_TASK_NETWORK: "${ORCHESTRATOR_TASK_NETWORK:-open}"
+    group_add:
+      - "${DOCKER_GID:-0}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

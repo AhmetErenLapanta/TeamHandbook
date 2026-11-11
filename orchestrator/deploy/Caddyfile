@@ -1,0 +1,32 @@
+{
+	# On the container's own loopback only: a release reloads the Caddyfile through it, without a restart.
+	admin localhost:2019
+	skip_install_trust
+	auto_https disable_redirects
+	acme_ca {$ORCHESTRATOR_ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$ORCHESTRATOR_DOMAIN} {
+	encode zstd gzip
+	# Metrics are scraped on the internal network; the token alone is not the only thing kept from the internet.
+	respond /metrics 404
+	reverse_proxy orchestrator:8080 {
+		# A release stops the old orchestrator before the new one holds the database, so a request
+		# that arrives in between waits here for the new one instead of failing.
+		lb_try_duration {$ORCHESTRATOR_PROXY_HOLD:30s}
+		lb_try_interval 250ms
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Plain http, whatever host it was asked by, goes to the orchestrator's own https address, path and query
+# kept: a link to http://127.0.0.1:<port>/signup lands on the page a browser signs up on.
+:80 {
+	redir https://{$ORCHESTRATOR_DOMAIN}{$ORCHESTRATOR_PUBLIC_PORT}{uri} 302
+}

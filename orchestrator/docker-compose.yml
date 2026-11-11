@@ -1,0 +1,51 @@
+services:
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_HOST_PORT:-8080}:8080"
+    environment:
+      ORCHESTRATOR_DEMO: "${ORCHESTRATOR_DEMO:-1}"
+      # Tasks run on this server, in the orchestrator's process or its containers: the self-hosted
+      # choice. Without it a task waits for the machine of the person who started it.
+      ORCHESTRATOR_SERVER_TASKS: "1"
+      # The demo runs with one built-in admin, and the port is bound to 127.0.0.1 so that
+      # admin is reachable from this machine only. ORCHESTRATOR_AUTH=local turns on accounts: the
+      # first admin is created with the setup code the orchestrator prints, or ORCHESTRATOR_SETUP_TOKEN.
+      ORCHESTRATOR_AUTH: "${ORCHESTRATOR_AUTH:-dev-admin}"
+      # The _FILE forms read a secret from a mounted file (a compose `secrets:` entry, for one)
+      # and keep it out of the environment, `docker inspect` and process listings. Under process
+      # isolation a task's agent runs as the orchestrator's user and can still read the file; run
+      # untrusted work in container isolation.
+      ORCHESTRATOR_SETUP_TOKEN: "${ORCHESTRATOR_SETUP_TOKEN:-}"
+      ORCHESTRATOR_SETUP_TOKEN_FILE: "${ORCHESTRATOR_SETUP_TOKEN_FILE:-}"
+      ORCHESTRATOR_SECRET_KEY: "${ORCHESTRATOR_SECRET_KEY:-}"
+      ORCHESTRATOR_SECRET_KEY_FILE: "${ORCHESTRATOR_SECRET_KEY_FILE:-}"
+      ORCHESTRATOR_PUBLIC_URL: "${ORCHESTRATOR_PUBLIC_URL:-}"
+      # Empty keeps the SQLite database in the volume. With the postgres profile:
+      #   ORCHESTRATOR_DATABASE_URL=postgres://orchestrator:orchestrator@postgres:5432/orchestrator docker compose --profile postgres up
+      ORCHESTRATOR_DATABASE_URL: "${ORCHESTRATOR_DATABASE_URL:-}"
+    volumes:
+      - orchestrator-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+  postgres:
+    image: postgres:16.10-alpine
+    profiles: [postgres]
+    environment:
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: "${ORCHESTRATOR_PG_PASSWORD:-orchestrator}"
+      POSTGRES_DB: orchestrator
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator -d orchestrator"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - orchestrator-pg:/var/lib/postgresql/data
+volumes:
+  orchestrator-data:
+  orchestrator-pg:

@@ -1,0 +1,31 @@
+# The compose services' log lines (Caddy, the orchestrator, Postgres, the backup job), sent by Docker's
+# fluentd driver, one JSON object a line, into one file a day in the orchestrator-logs volume. The
+# orchestrator's own lines are JSON already (ORCHESTRATOR_LOG_FORMAT=json) and redacted before they are
+# written; Caddy's leave out the Authorization and Cookie headers. Task containers send nothing.
+# To send them on instead, replace the file sink with one for your store (loki, elasticsearch,
+# aws_s3, http): https://vector.dev/docs/reference/configuration/sinks/
+data_dir: /var/lib/vector
+
+sources:
+  services:
+    type: fluent
+    address: 0.0.0.0:24224
+
+transforms:
+  lines:
+    type: remap
+    inputs: [services]
+    source: |
+      line = string(.log) ?? ""
+      service = string(.container_name) ?? ""
+      inner, err = parse_json(line)
+      . = if err == null && is_object(inner) { object!(inner) } else { {"msg": strip_whitespace(line)} }
+      .service = replace(service, r'^/', "")
+
+sinks:
+  daily_file:
+    type: file
+    inputs: [lines]
+    path: /var/log/orchestrator/%Y-%m-%d.log
+    encoding:
+      codec: json

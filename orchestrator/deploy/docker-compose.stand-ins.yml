@@ -1,0 +1,19 @@
+# deploy:local only: the lab's stand-in Google, GitHub and Microsoft, so sign-up runs end to end
+# on this machine. They share the orchestrator's network, so the browser and the orchestrator reach them at
+# the same http://127.0.0.1 address, the only plain http a sign-in provider is allowed on; the
+# port is published from the orchestrator's container.
+services:
+  orchestrator:
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_STAND_INS_PORT:?set ORCHESTRATOR_STAND_INS_PORT}:${ORCHESTRATOR_STAND_INS_PORT}"
+    environment:
+      # The smoke flow signs the same stand-in person up again on every run.
+      ORCHESTRATOR_ORGS_PER_IDENTITY_DAY: "100"
+
+  sign-in:
+    image: "${ORCHESTRATOR_IMAGE:-teamhandbook-orchestrator}:${ORCHESTRATOR_IMAGE_TAG}"
+    restart: unless-stopped
+    network_mode: "service:orchestrator"
+    entrypoint: ["node", "/lab/lab.mjs", "sign-in", "/lab/sign-in.json"]
+    volumes:
+      - ./stand-ins:/lab
