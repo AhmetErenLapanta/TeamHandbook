@@ -19,6 +19,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "start": "node orchestrator/scripts/run.mjs start",
+    "dev": "node orchestrator/scripts/run.mjs dev",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -30,5 +32,9 @@
   },
   "overrides": {
     "vite": "^6.4.3"
+  },
+  "allowScripts": {
+    "esbuild": false,
+    "fsevents": false
   }
 }
