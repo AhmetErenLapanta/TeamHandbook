@@ -1,0 +1,18 @@
+{
+  "files": {
+    "lab/clean-machine.ts": "the clean machine's packed check looks for paths and settings that still carry the old name",
+    "lab/tests/solo.spec.ts": "asserts that the packed tarball has no path or setting with the old name",
+    "server/old-settings.ts": "names each old CONSOLE_ setting so a start that still sets one stops and says the new name",
+    "server/old-settings.test.ts": "the guard's own test, which sets old names on purpose",
+    "deploy/deploy.sh": "refuses an env file that still names settings by the old CONSOLE_ prefix and says the new name"
+  },
+  "lines": [
+    { "file": "server/store.ts", "pattern": "console_events_guard", "reason": "the function a shipped migration created; a migration's SQL never changes" },
+    { "file": "lab/fixtures/postgres/schema-32.sql", "pattern": "console_events_guard", "reason": "that function as pg_dump writes out a database migration 3 made; a dump keeps the database as it is" },
+    { "file": "server/docker-proxy.ts", "pattern": "\\bConsoleSize\\b", "reason": "a field of the Docker Engine API's container create body; the proxy checks it under Docker's own name" },
+    { "file": "server/docker-proxy.test.ts", "pattern": "\\bConsoleSize\\b", "reason": "the same Docker Engine API field, sent the way Docker names it" }
+  ],
+  "anywhere": [
+    { "pattern": "claude\\.ai console|aws console|browser console|developer console", "reason": "another product's own name for its screen" }
+  ]
+}
