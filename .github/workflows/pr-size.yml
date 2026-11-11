@@ -1,0 +1,35 @@
+name: PR size
+
+# Labels a pull request by the lines it changes and marks a maintainer's own; the thresholds
+# are the ones CONTRIBUTING.md names. pull_request_target lets a fork's pull request be
+# labelled; the job reads the file list through the API and never checks out its code.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+            const counted = files.filter((f) => !f.filename.startsWith("dist/") && !/(^|\/)package-lock\.json$/.test(f.filename));
+            const lines = counted.reduce((n, f) => n + f.additions + f.deletions, 0);
+            const size = lines < 10 ? "XS" : lines < 50 ? "S" : lines < 200 ? "M" : lines < 500 ? "L" : "XL";
+            const wanted = [`size/${size}`];
+            if (["OWNER", "MEMBER", "COLLABORATOR"].includes(pr.author_association)) wanted.push("maintainer");
+            for (const label of pr.labels.map((l) => l.name)) {
+              if (label.startsWith("size/") && !wanted.includes(label)) {
+                await github.rest.issues.removeLabel({ ...context.repo, issue_number: pr.number, name: label });
+              }
+            }
+            await github.rest.issues.addLabels({ ...context.repo, issue_number: pr.number, labels: wanted });
+            core.info(`${lines} changed lines: size/${size}`);

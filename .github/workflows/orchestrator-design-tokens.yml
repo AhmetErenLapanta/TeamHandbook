@@ -1,0 +1,34 @@
+name: Orchestrator design tokens
+
+on:
+  push:
+    branches: [master]
+    paths: ['orchestrator/web/**', '.github/workflows/orchestrator-design-tokens.yml']
+  pull_request:
+    branches: [master]
+    paths: ['orchestrator/web/**', '.github/workflows/orchestrator-design-tokens.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  design-tokens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: orchestrator
+
+      # A screen takes its colours, radii, shadows and font sizes from web/src/design/tokens.css alone; no browser needed.
+      - run: npx vitest run web/src/design/tokens.test.ts
+        working-directory: orchestrator

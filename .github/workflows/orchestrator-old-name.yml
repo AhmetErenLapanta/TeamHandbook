@@ -1,0 +1,34 @@
+name: Orchestrator old name
+
+on:
+  push:
+    branches: [master]
+    paths: ['orchestrator/**', '.github/workflows/orchestrator-old-name.yml']
+  pull_request:
+    branches: [master]
+    paths: ['orchestrator/**', '.github/workflows/orchestrator-old-name.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  old-name:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: orchestrator
+
+      # The renamed product keeps no path, setting, ref or key under its old name; see server/old-name.exceptions.json.
+      - run: npx vitest run server/old-name.test.ts
+        working-directory: orchestrator

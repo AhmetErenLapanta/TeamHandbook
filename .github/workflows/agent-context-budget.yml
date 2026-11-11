@@ -1,0 +1,44 @@
+name: Agent context budget
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths: ['orchestrator/**', '.github/scripts/context-budget.mjs', '.github/workflows/agent-context-budget.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The orchestrator imports a few of the plugin's src/lib modules, so both packages are installed.
+      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+        working-directory: orchestrator
+
+      # The sizes are what the code measures now, not only what the JSON says.
+      - run: npx vitest run server/tasks/context-budget.test.ts
+        working-directory: orchestrator
+
+      - name: Growth needs the context-increase label
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          git show "origin/$BASE_REF:orchestrator/server/tasks/context-budget.json" > "$RUNNER_TEMP/base.json" 2>/dev/null || echo '{}' > "$RUNNER_TEMP/base.json"
+          node .github/scripts/context-budget.mjs "$RUNNER_TEMP/base.json" orchestrator/server/tasks/context-budget.json "$LABELS"

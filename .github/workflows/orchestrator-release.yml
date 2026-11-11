@@ -1,0 +1,179 @@
+name: Orchestrator release
+
+# A tag handbook-orchestrator-v<version> builds the orchestrator's single executable on each
+# platform, signs SHA256SUMS with this workflow's own identity (cosign, keyless), installs the
+# signed release with install.sh as a person would, and only then publishes it. install.sh and
+# `handbook-orchestrator update` check the signature against this file's path and the tag, so the
+# file keeps its name. Nothing but a pushed tag starts it.
+on:
+  push:
+    tags: ['handbook-orchestrator-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A tag that does not name orchestrator's version stops here, before any runner builds.
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: The tag names orchestrator's version
+        id: tag
+        run: |
+          version="${GITHUB_REF_NAME#handbook-orchestrator-v}"
+          declared=$(node -p 'require("./orchestrator/package.json").version')
+          if [ "$version" != "$declared" ]; then
+            echo "::error::$GITHUB_REF_NAME names $version; orchestrator/package.json says $declared"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { runner: macos-14, platform: darwin-arm64 }
+          - { runner: macos-15-intel, platform: darwin-x64 }
+          - { runner: ubuntu-24.04, platform: linux-x64 }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      # node --build-sea, which makes the executable, is tested on this version.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '26.8.1'
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: orchestrator
+
+      - run: npm run build:release
+        working-directory: orchestrator
+
+      - name: The archive is this runner's platform
+        run: test -f "orchestrator/package-out/release/handbook-orchestrator-$VERSION-$PLATFORM.tar.gz"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            orchestrator/package-out/release/*.tar.gz
+            orchestrator/package-out/release/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SIGNER: https://github.com/${{ github.repository }}/.github/workflows/orchestrator-release.yml@${{ github.ref }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '26.8.1'
+
+      # Each platform in a directory of its own: every build writes a manifest.json.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: artifacts
+
+      - name: One release out of the platforms' builds
+        run: node orchestrator/scripts/merge-release.mjs release artifacts/release-*
+
+      # The cosign that signs is pinned: the bundle's format follows cosign's version.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
+
+      - name: Sign SHA256SUMS with this workflow's identity
+        run: cosign sign-blob --yes --bundle release/SHA256SUMS.sigstore.json release/SHA256SUMS
+
+      - name: install.sh installs the signed release, the signature required
+        run: |
+          python3 -m http.server 18080 --bind 127.0.0.1 --directory release >/dev/null 2>&1 &
+          server=$!
+          for _ in 1 2 3 4 5 6 7 8 9 10; do curl -fsS -o /dev/null http://127.0.0.1:18080/manifest.json && break; sleep 1; done
+          HANDBOOK_ORCHESTRATOR_RELEASE_BASE_URL=http://127.0.0.1:18080 \
+          HANDBOOK_ORCHESTRATOR_REQUIRE_SIGNATURE=1 \
+          HANDBOOK_ORCHESTRATOR_HOME="$RUNNER_TEMP/orchestrator" \
+          HANDBOOK_ORCHESTRATOR_BIN_DIR="$RUNNER_TEMP/bin" \
+            sh release/install.sh
+          test "$("$RUNNER_TEMP/bin/handbook-orchestrator" --version)" = "teamhandbook-orchestrator $VERSION"
+          kill "$server"
+
+      - name: Publish the release
+        run: |
+          # A pre-release does not move handbook-orchestrator-latest, so its notes name its own release.
+          case "$VERSION" in
+            *-*) install="curl -fsSL https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME/install.sh | HANDBOOK_ORCHESTRATOR_VERSION=$VERSION sh" ;;
+            *) install="curl -fsSL https://github.com/$GH_REPO/releases/download/handbook-orchestrator-latest/install.sh | sh" ;;
+          esac
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          Install on macOS or Linux, or inside WSL on Windows:
+
+              $install
+
+          SHA256SUMS is signed by this release's workflow run. With cosign installed, install.sh and
+          \`handbook-orchestrator update\` check it; by hand:
+
+              cosign verify-blob --bundle SHA256SUMS.sigstore.json \\
+                --certificate-identity $SIGNER \\
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          EOF
+          prerelease=
+          case "$VERSION" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false $prerelease \
+            --title "handbook-orchestrator $VERSION" --notes-file "$RUNNER_TEMP/notes.md" release/*
+
+      # releases/latest names whichever release of the repository came last, the plugin's included,
+      # so the newest orchestrator is named by a release of its own whose tag is never moved: only its
+      # manifest.json and the install scripts are replaced, and never by an older version.
+      - name: Point handbook-orchestrator-latest at this version
+        run: |
+          case "$VERSION" in *-*) echo "$VERSION is a pre-release; handbook-orchestrator-latest stays"; exit 0 ;; esac
+          if gh release view handbook-orchestrator-latest >/dev/null 2>&1; then
+            # A pointer made by a run that stopped before its upload has no manifest.json yet.
+            current=$(gh release download handbook-orchestrator-latest --pattern manifest.json --output - 2>/dev/null | jq -r .version || true)
+            newest=$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)
+            if [ "$newest" != "$VERSION" ]; then
+              echo "$current is newer than $VERSION; handbook-orchestrator-latest stays"
+              exit 0
+            fi
+          else
+            gh release create handbook-orchestrator-latest --latest=false --target "$GITHUB_SHA" \
+              --title "handbook-orchestrator, newest" \
+              --notes "manifest.json here names the newest handbook-orchestrator; install.sh reads it and takes that version's files from its own release."
+          fi
+          gh release upload handbook-orchestrator-latest release/manifest.json release/install.sh release/install.ps1 --clobber
