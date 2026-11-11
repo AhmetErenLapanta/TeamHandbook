@@ -1,0 +1,17 @@
+{"meta":{"agent":"opencode","cliVersion":"1.18.31","source":"hand"}}
+{"expect_outbound":{"args":["serve","--hostname=127.0.0.1"],"stdin":[]}}
+{"stdin":{"op":"session.promptAsync","args":{"sessionID":"session-1","parts":[{"type":"text","text":"Run the tests and fix what fails."}]}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"message.part.updated","properties":{"part":{"sessionID":"session-1","messageID":"message-1","id":"part-1","type":"text","text":"Running the tests","time":{"start":1}}}}}
+{"emit_inbound":{"type":"message.part.updated","properties":{"part":{"sessionID":"session-1","messageID":"message-1","id":"part-1","type":"text","text":"Running the tests first.","time":{"start":1,"end":2}}}}}
+{"emit_inbound":{"type":"permission.asked","properties":{"id":"permission-1","sessionID":"session-1","permission":"bash","patterns":["npm test"],"always":["npm *"],"metadata":{}}}}
+{"stdin":{"op":"permission.reply","args":{"requestID":"permission-1","reply":"once"}}}
+{"emit_inbound":{"type":"permission.replied","properties":{"sessionID":"session-1","requestID":"permission-1","reply":"once"}}}
+{"emit_inbound":{"type":"message.part.updated","properties":{"part":{"sessionID":"session-1","messageID":"message-1","id":"part-2","type":"tool","callID":"call-1","tool":"bash","state":{"status":"running","input":{"command":"npm test"},"time":{"start":3}}}}}}
+{"emit_inbound":{"type":"message.part.updated","properties":{"part":{"sessionID":"session-1","messageID":"message-1","id":"part-2","type":"tool","callID":"call-1","tool":"bash","state":{"status":"completed","input":{"command":"npm test"},"output":"ok","title":"npm test","metadata":{},"time":{"start":3,"end":4}}}}}}
+{"emit_inbound":{"type":"permission.asked","properties":{"id":"permission-2","sessionID":"session-2","permission":"edit","patterns":["src/a.ts"],"always":[],"metadata":{}}}}
+{"stdin":{"op":"permission.reply","args":{"requestID":"permission-2","reply":"reject"}}}
+{"emit_inbound":{"type":"message.part.updated","properties":{"part":{"sessionID":"session-1","messageID":"message-1","id":"part-3","type":"step-finish","reason":"stop","cost":0.02,"tokens":{"input":120,"output":30,"reasoning":0,"cache":{"read":0,"write":0}}}}}}
+{"emit_inbound":{"type":"message.part.updated","properties":{"part":{"sessionID":"session-1","messageID":"message-1","id":"part-4","type":"text","text":"The tests pass.","time":{"start":5,"end":6}}}}}
+{"emit_inbound":{"type":"session.idle","properties":{"sessionID":"session-1"}}}
+{"exit":0}

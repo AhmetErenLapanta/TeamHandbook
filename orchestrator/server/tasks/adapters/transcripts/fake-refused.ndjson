@@ -1,0 +1,6 @@
+{"meta":{"agent":"fake","cliVersion":"demo","source":"hand"}}
+{"expect_outbound":{"args":["--title","Add an on-call note"],"stdin":["Add an on-call note"]}}
+{"emit_inbound":{"type":"log","text":"reading the task: Add an on-call note"}}
+{"emit_inbound":{"type":"log","text":"wrote skills/add-an-on-call-note/SKILL.md"}}
+{"emit_inbound":{"type":"result","summary":"Added the skill add-an-on-call-note.","denied":[{"tool":"Bash","target":"git status"}]}}
+{"exit":0}

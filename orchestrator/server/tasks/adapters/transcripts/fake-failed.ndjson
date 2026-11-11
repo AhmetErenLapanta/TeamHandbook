@@ -1,0 +1,6 @@
+{"meta":{"agent":"fake","cliVersion":"demo","source":"hand"}}
+{"expect_outbound":{"args":["--title","Add an on-call note"],"stdin":["Add an on-call note"]}}
+{"emit_inbound":{"type":"log","text":"reading the task: Add an on-call note"}}
+{"emit_inbound":"node: an error the stand-in wrote as plain text"}
+{"emit_inbound":{"type":"log","text":"failing, as the task asked"}}
+{"exit":1}

@@ -1,0 +1,12 @@
+{"meta":{"agent":"claude-code","cliVersion":"2.1.316","source":"recorded"}}
+{"expect_outbound":{"args":["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio"],"stdin":[]}}
+{"stdin":{"type":"user","message":{"role":"user","content":"Create a file named hello.txt in the current directory containing the single word hi. Do nothing else."},"parent_tool_use_id":null}}
+{"emit_inbound":{"type":"system","subtype":"init","permissionMode":"default","session_id":"session-1"}}
+{"emit_inbound":{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu-1","name":"Write","input":{"file_path":"/checkout/hello.txt","content":"hi\n"}}]},"session_id":"session-1"}}
+{"emit_inbound":{"type":"control_request","request_id":"request-1","request":{"subtype":"can_use_tool","tool_name":"Write","display_name":"Write","input":{"file_path":"/checkout/hello.txt","content":"hi\n"},"description":"hello.txt","tool_use_id":"toolu-1"}}}
+{"stdin":{"type":"control_response","response":{"subtype":"success","request_id":"request-1","response":{"behavior":"allow","updatedInput":{"file_path":"/checkout/hello.txt","content":"hi\n"}}}}}
+{"emit_inbound":{"type":"user","session_id":"session-1"}}
+{"emit_inbound":{"type":"rate_limit_event","session_id":"session-1"}}
+{"emit_inbound":{"type":"assistant","message":{"content":[{"type":"text","text":"Created `hello.txt` in the current directory containing `hi`."}]},"session_id":"session-1"}}
+{"emit_inbound":{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"Created `hello.txt` in the current directory containing `hi`.","total_cost_usd":0.00425776,"usage":{"input_tokens":4,"cache_creation_input_tokens":19829,"cache_read_input_tokens":19506,"output_tokens":193},"permission_denials":[],"terminal_reason":"completed","session_id":"session-1"}}
+{"exit":0}

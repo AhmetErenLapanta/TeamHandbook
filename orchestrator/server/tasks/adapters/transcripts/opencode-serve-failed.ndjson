@@ -1,0 +1,21 @@
+{"meta":{"agent":"opencode","cliVersion":"1.19.4","source":"recorded"}}
+{"expect_outbound":{"args":["serve","--hostname=127.0.0.1"],"stdin":[]}}
+{"stdin":{"op":"session.promptAsync","args":{"sessionID":"session-1","parts":[{"type":"text","text":"First write a to-do list of two items with your todo tool: write the note, then change it. Then create notes.md containing three lines: alpha, beta, gamma. Then edit notes.md to replace beta with delta. Mark each item done as you finish it. Use no other tools, and end with one sentence."}]}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"retry","attempt":1,"message":"Upstream request failed: Model is unavailable.","next":1793814175914}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"retry","attempt":2,"message":"Upstream request failed: Model is unavailable.","next":1793814181065}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"retry","attempt":3,"message":"Upstream request failed: Model is unavailable.","next":1793814190509}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"retry","attempt":4,"message":"Upstream request failed: Model is unavailable.","next":1793814207786}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"retry","attempt":5,"message":"Upstream request failed: Model is unavailable.","next":1793814244539}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"busy"}}}}
+{"emit_inbound":{"type":"session.error","properties":{"sessionID":"session-1","error":{"name":"APIError","data":{"message":"Upstream request failed: Model is unavailable.","statusCode":400,"isRetryable":false}}}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"idle"}}}}
+{"emit_inbound":{"type":"session.idle","properties":{"sessionID":"session-1"}}}
+{"emit_inbound":{"type":"session.status","properties":{"sessionID":"session-1","status":{"type":"idle"}}}}
+{"emit_inbound":{"type":"session.idle","properties":{"sessionID":"session-1"}}}
+{"exit":0}
