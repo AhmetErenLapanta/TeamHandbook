@@ -693,3 +693,50 @@ describe("the drafts the repository shows to readers", () => {
     }
   });
 });
+
+describe("the checks and pitfalls sections in the team's own language", () => {
+  const skill = (verify: string, pitfalls: string) =>
+    [
+      "---",
+      "name: release-checklist",
+      "description: Use when a release is about to ship. Use when someone asks whether the service is ready.",
+      "---",
+      "",
+      "## 1. Freeze the branch",
+      "",
+      "Stop merging.",
+      "",
+      "## 2. Run the checks",
+      "",
+      "Read every result.",
+      "",
+      "## 3. Tag the release",
+      "",
+      "Tag main.",
+      "",
+      verify,
+      "",
+      "- The tag exists.",
+      "- The dashboard shows the version.",
+      "",
+      pitfalls,
+      "",
+      "- Tagging before the checks pass ships a broken build.",
+      "",
+    ].join("\n");
+  const failed = (text: string) => checkSkillFormat(text).filter((f) => f.required && !f.ok).map((f) => f.rule);
+
+  it.each([
+    ["Turkish, numbered", "## 4. Do\u011frulama", "## 5. S\u0131k hatalar"],
+    ["Turkish, unnumbered", "## Nas\u0131l kontrol edilir", "## Tuzaklar"],
+    ["Turkish, written without its letters", "## Dogrulama", "## Dikkat"],
+    ["English, as people write it", "## How to check", "## Caveats"],
+  ])("given the sections headed in %s, when the skill is checked, then neither is reported missing and the steps still count three", (_label, verify, pitfalls) => {
+    expect(failed(skill(verify, pitfalls))).toEqual([]);
+  });
+
+  it("given a Turkish checks heading with nothing under it, when the skill is checked, then it is still reported, since the heading alone does not pass", () => {
+    const empty = skill("## 4. Do\u011frulama", "## 5. S\u0131k hatalar").replace("- The tag exists.\n- The dashboard shows the version.\n", "");
+    expect(failed(empty)).toContain("verification");
+  });
+});

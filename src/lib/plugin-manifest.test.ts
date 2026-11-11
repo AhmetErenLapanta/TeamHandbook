@@ -113,6 +113,7 @@ function knownEvent(event: string): boolean {
 interface HookEntry {
   type?: string;
   command?: string;
+  timeout?: number;
 }
 
 function readHooksManifest(): Record<string, { hooks?: HookEntry[] }[]> {
@@ -131,6 +132,18 @@ function entrypointNames(dir: string): string[] {
 }
 
 describe("hooks/hooks.json", () => {
+  it("given the hooks that run while a person works, when their limits are read, then capture gives up after ten seconds and the session's start, stop and end keep Claude Code's own limit", () => {
+    // given
+    const manifest = readHooksManifest();
+    const limits = (event: string) => (manifest[event] ?? []).flatMap((entry) => (entry.hooks ?? []).map((hook) => hook.timeout));
+
+    // then
+    // Capture is best-effort: on a loaded machine the prompt or the tool call waited the whole default limit for it.
+    expect([limits("UserPromptSubmit"), limits("PostToolUse"), limits("PostToolUseFailure")]).toEqual([[10], [10], [10]]);
+    expect([limits("Stop"), limits("SessionEnd"), limits("SessionStart"), limits("PreToolUse")]).toEqual([[undefined], [undefined], [undefined], [undefined]]);
+  });
+
+
   it("declares recognized events, and a resolvable file in every command under them", () => {
     // given the root manifest Claude Code reads when the plugin is installed
     const manifest = readHooksManifest();

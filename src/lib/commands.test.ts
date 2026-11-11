@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { auditCommand, commandDescription, commandRefusalMessage, readLocalCommands } from "./commands.js";
+import { auditCommand, auditCommandText, commandDescription, commandNameIsSafe, commandRefusalMessage, readLocalCommands } from "./commands.js";
 
 let userHome: string;
 let project: string;
@@ -106,6 +106,28 @@ describe("commandDescription", () => {
 
   it("given an empty command, when it is read, then it describes itself as nothing rather than throwing", () => {
     expect(commandDescription("")).toBe("");
+  });
+});
+
+describe("commandNameIsSafe", () => {
+  it.each([["con"], ["aux:sync"], ["git:nul"], ["com1"], ["lpt9"], ["prn"], ["a:b:c:d:e"]])("given %j, when it is checked, then it cannot be a command name", (name) => {
+    expect(commandNameIsSafe(name)).toBe(false);
+    expect(auditCommandText(name, "Steps.\n")).toMatchObject({ shareable: false, reason: "unsafe-name" });
+  });
+
+  it.each([["console"], ["conf"], ["nulls"], ["com"], ["git:sync"], ["a:b:c:d"]])("given %j, when it is checked, then it can be a command name", (name) => {
+    expect(commandNameIsSafe(name)).toBe(true);
+  });
+});
+
+describe("auditCommandText", () => {
+  it.each([
+    ["an ordinary command", "git:sync", "---\ndescription: Sync with upstream.\n---\n\nSteps.\n", { shareable: true, description: "Sync with upstream." }],
+    ["a credential in the text", "deploy", "Run: curl -H 'Authorization: Bearer ghp_aaaabbbbccccddddeeeeffff'\n", { shareable: false, reason: "secret", secret: { file: "deploy.md" } }],
+    ["a home directory in the text", "build", "cd /home/someone/work && make\n", { shareable: false, reason: "identity" }],
+    ["a name that climbs out of commands/", "../x", "Steps.\n", { shareable: false, reason: "unsafe-name" }],
+  ])("given %s with no file behind it, when it is audited, then it is judged as the same file would be", (_label, name, content, verdict) => {
+    expect(auditCommandText(name, content)).toMatchObject(verdict);
   });
 });
 

@@ -852,7 +852,7 @@ describe("doctor team plugin copy check", () => {
     expect(check.level).toBe("warn");
     expect(check.detail).toContain("marketplace copy is at v0.3.0");
     expect(check.detail).toContain("v0.4.0");
-    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(check.detail).toContain("`claude plugin update t@t`");
     expect(check.detail).toContain("`/reload-plugins`");
     expect(check.detail).toContain("auto-update");
     expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
@@ -970,7 +970,7 @@ describe("doctor team plugin copy check", () => {
     // then
     expect(check.level).toBe("warn");
     expect(check.detail).toContain(`at commit ${local.slice(0, 12)} but the team repo is at ${remoteHead.slice(0, 12)}`);
-    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(check.detail).toContain("`claude plugin update t@t`");
     expect(check.detail).toContain("`/reload-plugins`");
     expect(check.detail).not.toContain("v0.");
     expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
@@ -1060,7 +1060,7 @@ describe("doctor team plugin copy check", () => {
     expect(check.detail).toContain("A share from a TeamHandbook older than 0.31.0");
     expect(check.detail).toContain("`/handbook:init --upgrade --commit-versioning`");
     expect(check.detail).toContain(`commit ${local.slice(0, 12)}, the team repo ${remoteHead.slice(0, 12)}`);
-    expect(check.detail).toContain("`/plugin marketplace update t`");
+    expect(check.detail).toContain("`claude plugin update t@t`");
     expect(check.detail).toContain("`/reload-plugins`");
     expect(gitCalls.filter((c) => NETWORK_SUBCOMMANDS.has(c))).toEqual(["ls-remote", "clone"]);
     rmSync(seed, { recursive: true, force: true });
@@ -1081,7 +1081,7 @@ describe("doctor team plugin copy check", () => {
     expect(check.level).toBe("warn");
     expect(check.detail).toContain("the team repo carries a version line again (v0.1.1)");
     expect(check.detail).not.toContain("behind");
-    expect(check.detail).not.toContain("/plugin marketplace update");
+    expect(check.detail).not.toContain("claude plugin update");
     expect(check.detail).not.toContain("/reload-plugins");
     rmSync(seed, { recursive: true, force: true });
   });

