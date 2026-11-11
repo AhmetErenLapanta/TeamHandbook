@@ -1,0 +1,10 @@
+{
+  "name": "parcel-pricer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prices a parcel by its weight.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
