@@ -1,0 +1,215 @@
+/*
+ * The orchestrator's design tokens, the decisions in docs/internals/design.md as values. Nothing
+ * outside this file names a colour, radius, shadow or font size (web/src/design/tokens.test.ts).
+ * Neutrals carry the page; one accent says "act here"; green, amber, red and the agent's teal
+ * only ever report a state. Surfaces are told apart by a 1px border, not by shades or shadows.
+ */
+:root {
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 12, 13, 14, 16, 20; the line heights on a 4px grid beside them. */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --leading-xs: 16px;
+  --leading-sm: 20px;
+  --leading: 20px;
+  --leading-md: 24px;
+  --leading-lg: 28px;
+  --leading-tight: 1.25;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  /* Plex is drawn for text sizes; a title at 20px sits a little tighter. */
+  --tracking-tight: -0.01em;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* 4 for a badge or a key, 6 for a control, 8 for a layer or the diff's box. */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --radius-full: 999px;
+
+  --control-height: 32px;
+  --control-height-sm: 26px;
+  --control-pad-x: 12px;
+  --row-height: 36px;
+  --topbar-height: 48px;
+  --content-width: 1180px;
+
+  --duration-fast: 120ms;
+  --duration: 160ms;
+  --duration-slow: 190ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /*
+   * One neutral hue and chroma for every grey; a theme sets only the lightness of each step.
+   * Four surfaces (canvas, surface, sunken, hover), two lines, two text greys.
+   */
+  --neutral-h: 265;
+  --neutral-c: 0.006;
+  --l-canvas: 98.6%;
+  --l-surface: 100%;
+  --l-sunken: 96.6%;
+  --l-hover: 95%;
+  --l-border: 91.5%;
+  /* A field's edge at 3:1 on the surface, as a control's boundary has to be. */
+  --l-border-field: 62%;
+  --l-border-strong: 84%;
+  --l-text: 20%;
+  --l-muted: 46%;
+
+  --accent: oklch(51% 0.19 263);
+  --accent-hover: oklch(45% 0.19 263);
+  --accent-soft: oklch(95.5% 0.03 263);
+  --on-accent: oklch(100% 0 0);
+  --working: oklch(48% 0.09 200);
+  --working-soft: oklch(95.5% 0.03 200);
+  --hunk: oklch(46% 0.02 265);
+  --ok: oklch(47% 0.12 150);
+  --ok-soft: oklch(95.5% 0.04 150);
+  --warn: oklch(52% 0.12 70);
+  --warn-soft: oklch(95.5% 0.05 80);
+  --danger: oklch(50% 0.18 27);
+  --danger-soft: oklch(95.5% 0.03 27);
+
+  --shadow-layer: 0 12px 32px -12px oklch(20% 0.01 265 / 0.28);
+  --shadow-dialog: 0 24px 64px -24px oklch(20% 0.01 265 / 0.4);
+  --shadow-knob: 0 1px 2px oklch(20% 0.01 265 / 0.25);
+  --scrim: oklch(20% 0.01 265 / 0.4);
+}
+
+/* The system's choice unless someone picked a theme in the account menu. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --l-canvas: 15.5%;
+    --l-surface: 18.5%;
+    --l-sunken: 21%;
+    --l-hover: 23.5%;
+    --l-border: 27.5%;
+    --l-border-field: 52%;
+    --l-border-strong: 34%;
+    --l-text: 93%;
+    --l-muted: 71%;
+    --accent: oklch(74% 0.13 263);
+    --accent-hover: oklch(80% 0.11 263);
+    --accent-soft: oklch(27% 0.05 263);
+    /* White on this lighter accent is under 3:1; the page's own dark is over 6:1. */
+    --on-accent: oklch(15.5% 0.006 265);
+    --working: oklch(76% 0.1 200);
+    --working-soft: oklch(27% 0.04 200);
+    --hunk: oklch(72% 0.02 265);
+    --ok: oklch(75% 0.13 150);
+    --ok-soft: oklch(25% 0.04 150);
+    --warn: oklch(79% 0.12 80);
+    --warn-soft: oklch(26% 0.04 80);
+    --danger: oklch(72% 0.14 27);
+    --danger-soft: oklch(26% 0.05 27);
+    --shadow-layer: 0 16px 40px -14px oklch(0% 0 0 / 0.75);
+    --shadow-dialog: 0 24px 72px -20px oklch(0% 0 0 / 0.85);
+    --shadow-knob: 0 1px 2px oklch(0% 0 0 / 0.4);
+    --scrim: oklch(0% 0 0 / 0.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --l-canvas: 15.5%;
+  --l-surface: 18.5%;
+  --l-sunken: 21%;
+  --l-hover: 23.5%;
+  --l-border: 27.5%;
+  --l-border-field: 52%;
+  --l-border-strong: 34%;
+  --l-text: 93%;
+  --l-muted: 71%;
+  --accent: oklch(74% 0.13 263);
+  --accent-hover: oklch(80% 0.11 263);
+  --accent-soft: oklch(27% 0.05 263);
+  /* White on this lighter accent is under 3:1; the page's own dark is over 6:1. */
+  --on-accent: oklch(15.5% 0.006 265);
+  --working: oklch(76% 0.1 200);
+  --working-soft: oklch(27% 0.04 200);
+  --hunk: oklch(72% 0.02 265);
+  --ok: oklch(75% 0.13 150);
+  --ok-soft: oklch(25% 0.04 150);
+  --warn: oklch(79% 0.12 80);
+  --warn-soft: oklch(26% 0.04 80);
+  --danger: oklch(72% 0.14 27);
+  --danger-soft: oklch(26% 0.05 27);
+  --shadow-layer: 0 16px 40px -14px oklch(0% 0 0 / 0.75);
+  --shadow-dialog: 0 24px 72px -20px oklch(0% 0 0 / 0.85);
+  --shadow-knob: 0 1px 2px oklch(0% 0 0 / 0.4);
+  --scrim: oklch(0% 0 0 / 0.6);
+  color-scheme: dark;
+}
+
+/* The steps themselves, from the one hue and the theme's lightness. */
+:root {
+  --canvas: oklch(var(--l-canvas) var(--neutral-c) var(--neutral-h));
+  --surface: oklch(var(--l-surface) calc(var(--neutral-c) * 0.5) var(--neutral-h));
+  --surface-sunken: oklch(var(--l-sunken) var(--neutral-c) var(--neutral-h));
+  --surface-hover: oklch(var(--l-hover) var(--neutral-c) var(--neutral-h));
+  --border: oklch(var(--l-border) var(--neutral-c) var(--neutral-h));
+  --border-strong: oklch(var(--l-border-strong) var(--neutral-c) var(--neutral-h));
+  --border-field: oklch(var(--l-border-field) var(--neutral-c) var(--neutral-h));
+  --text: oklch(var(--l-text) var(--neutral-c) var(--neutral-h));
+  --text-muted: oklch(var(--l-muted) var(--neutral-c) var(--neutral-h));
+  --focus-ring: var(--accent);
+  --ring-focus: 0 0 0 3px color-mix(in oklch, var(--focus-ring) 28%, transparent);
+  --ring-accent: 0 0 0 1px var(--accent);
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-popover: var(--shadow-layer);
+  --control-highlight: none;
+}
+
+/* A phone's controls are a step taller and their text 16px, under which a phone zooms in on focus. */
+@media (max-width: 639px) {
+  :root {
+    --control-height: 36px;
+    --control-height-sm: 30px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration: 0ms;
+    --duration-slow: 0ms;
+  }
+}
+
+/*
+ * The names the screens were first written against, kept as the tokens they now are, so a screen
+ * moves to the tokens' own names one at a time without any of them changing in the meantime.
+ */
+:root {
+  --bg: var(--canvas);
+  --panel: var(--surface);
+  --fg: var(--text);
+  --muted: var(--text-muted);
+  --line: var(--border);
+  --select: var(--accent-soft);
+  --error: var(--danger);
+  --ok-bg: var(--ok-soft);
+  --warn-bg: var(--warn-soft);
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
+  --text-2xs: var(--text-xs);
+  --text-xl: var(--text-lg);
+  --text-2xl: var(--text-lg);
+  --text-3xl: var(--text-lg);
+  --leading-body: 1.43;
+}
