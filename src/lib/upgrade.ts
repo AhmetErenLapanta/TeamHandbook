@@ -216,8 +216,8 @@ const SCAFFOLD_VERSION_KEY = "scaffoldVersion";
 // The two commands doctor gives for the team's marketplace, pointed at TeamHandbook's own:
 // this copy is a marketplace plugin and is brought forward the same way.
 const UPDATE_THIS_COPY =
-  "Update this copy of TeamHandbook first - run `/plugin marketplace update teamhandbook` and then " +
-  "`/reload-plugins` - and run the refresh again.";
+  "Update this copy of TeamHandbook first - run `claude plugin update handbook@teamhandbook`, then start a " +
+  "new session or run `/reload-plugins` - and run the refresh again.";
 
 function releaseParts(version: string): number[] | null {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
@@ -523,7 +523,11 @@ export function upgradeCandidates(
     commitPrefix !== undefined || rawPrefix === undefined
       ? null
       : (recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix"));
-  const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  const chosen = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  // A prefix this machine's config kept from before the rule narrowed is not written into a
+  // file a CI runner executes; the files that embed it are withheld as for an unknown one.
+  const unusable = commitPrefixProblem(chosen);
+  const prefix = unusable ? "" : chosen;
   // The README says how updates reach teammates, and that depends on whether this
   // repository raises a version: regenerated for the other kind, it would describe a
   // delivery the repository does not have.
@@ -538,7 +542,7 @@ export function upgradeCandidates(
     undefined,
     commitVersioning ? undefined : readPluginVersion(repoDir),
   );
-  const known = commitPrefix !== undefined || recorded !== undefined || commitPrefixIsKnown(team);
+  const known = !unusable && (commitPrefix !== undefined || recorded !== undefined || commitPrefixIsKnown(team));
   const unknownPrefix = known ? new Set<string>() : prefixDependentPaths(team, withCi);
   const files: Record<string, string> = {};
   const linked: WithheldFile[] = [];
@@ -582,8 +586,17 @@ export function upgradeCandidates(
     if (unknownPrefix.has(path)) {
       withheld.push({
         path,
-        reason:
-          "it embeds the team's commit-message prefix, and neither this machine nor the repository " +
+        reason: unusable
+          ? `it embeds the team's commit-message prefix, and the one this machine has is ${unusable}, so it is ` +
+            "not written into a file a CI runner executes. Correct commitPrefix in .teamhandbook.json, or give the " +
+            'prefix with --commit-prefix "<prefix>" on the plan and again on the run that sends it.'
+          : prefixProblem
+            ? `it embeds the team's commit-message prefix, and the one ${TEAM_PREFIX_FILE} records is ${prefixProblem}, so ` +
+              "it is not used, and the file as it stands is left unchanged: a job written before the prefix moved into a " +
+              "variable carries that prefix in a shell line it runs on every merge. Give the prefix the team's forge " +
+              'requires with --commit-prefix "<prefix>" on the plan and again on the run that sends it: that records it ' +
+              "and rewrites the job so no prefix reaches a shell line."
+            : "it embeds the team's commit-message prefix, and neither this machine nor the repository " +
           "records what it is - only the machine that ran /handbook:init was ever told. Regenerating " +
           "it here would write the file with no prefix at all, which is a different answer from the " +
           "team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge " +
@@ -1068,21 +1081,17 @@ function refreshPushPrefix(
   return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given), source: "flag" };
 }
 
-// Every character a double-quoted shell word still acts on in an interactive bash or zsh,
-// `!` included: history expansion turned a pasted "TE!AM" into "event not found". The plan
-// prints the prefix inside one, on a line the reader - or an agent - copies whole into a terminal.
-const SHELL_ACTIVE = /["`$\\!]/;
-
 /** Why the commit-message prefix given on this run cannot be used, or null. Held to the
- * same checks as the one join reads out of the repository, since it is written there. */
+ * same checks as the one join reads out of the repository, since it is written there. The
+ * plan prints the prefix inside a double-quoted shell word, on a line the reader - or an
+ * agent - copies whole into a terminal; the rule lets through no character such a word
+ * still acts on. */
 function commitPrefixFlagError(prefix: string | undefined): string | null {
   if (prefix === undefined) return null;
   if (!prefix.trim()) {
     return "--commit-prefix needs the prefix the team's forge requires; an empty one is not something this records. Nothing was changed.";
   }
-  const problem =
-    commitPrefixProblem(prefix.trim()) ??
-    (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign, a backslash or an exclamation mark" : null);
+  const problem = commitPrefixProblem(prefix.trim());
   return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 
@@ -1317,7 +1326,7 @@ export function applyUpgrade(
             ? [
                 "This takes the version line out of `.claude-plugin/plugin.json`: from this merge on the",
                 "repository is versioned by commit, and every merge reaches teammates' copies when their",
-                "marketplace updates. Open requests that raise the version conflict with this one; merge or",
+                "copy of the plugin updates. Open requests that raise the version conflict with this one; merge or",
                 "close them first.",
               ]
             : byCommit
@@ -1437,7 +1446,7 @@ export function formatUpgradePlan(plan: UpgradePlan): string {
     lines.push(
       "",
       `This repository is versioned by commit: ${PLUGIN_MANIFEST} carries no version, so there is none to raise,`,
-      "and the merge itself is what teammates' copies update to when their marketplace updates.",
+      "and the merge itself is what teammates' copies update to when their copy of the plugin updates.",
     );
   } else if (version.next) {
     lines.push(
@@ -1523,17 +1532,18 @@ function commitVersioningSwitch(current: string, marketplace: string, open: stri
   return [
     `This request switches the repository to versioning by commit: it takes "version": "${current}" out of`,
     `${PLUGIN_MANIFEST}, nothing raises a version after it, and every merge reaches teammates' copies when`,
-    "their marketplace updates.",
+    "their copy of the plugin updates.",
     "Open requests that raise the version conflict with this commit - they change the line it deletes - so",
     "merge or close them first. One merged after it conflicts in plugin.json: keep the side without the",
     "version line.",
     ...(open.length ? [`Open now: ${open.join(", ")}.`] : []),
-    "Once this is merged, each teammate moves to the new scheme with:",
-    `  /plugin marketplace update ${marketplace}`,
-    "  /reload-plugins",
+    "Once this is merged, each teammate moves to the new scheme on its own in their next session if",
+    "auto-update is on for this marketplace, and otherwise with:",
+    `  claude plugin update ${marketplace}@${marketplace}`,
+    "then a new session or /reload-plugins.",
     "A TeamHandbook older than 0.31.0 still raises a version when it shares, which puts the line back:",
-    "have everyone who shares to this repository update to 0.31.0 or later first (`/plugin marketplace update",
-    "teamhandbook`, then `/reload-plugins`). One older than 0.29.0 also",
+    "have everyone who shares to this repository update to 0.31.0 or later first (`claude plugin update",
+    "handbook@teamhandbook`, then a new session or `/reload-plugins`). One older than 0.29.0 also",
     `does not read "scaffoldVersion" in ${TEAM_PREFIX_FILE}, so nothing stops it refreshing this scaffold back.`,
   ];
 }

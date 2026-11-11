@@ -204,6 +204,10 @@ function readHostIdentity(): HostIdentity {
     // same
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+
+export function hostIdentityOf(candidates: readonly (string | null | undefined)[]): HostIdentity {
   const names: string[] = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;

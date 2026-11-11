@@ -2,6 +2,7 @@ import { readStdin, parseHookInput } from "../lib/hook-io.js";
 import { captureBashFailure, captureBashSuccess, captureFileEdit, recordActivity } from "../lib/capture.js";
 import { bumpCounter, maybeDumpPayload } from "../lib/counters.js";
 import { recordSkillCall } from "../lib/usage.js";
+import { queueTeamSkillUse } from "../lib/usage-report.js";
 import { handbookHome, withSessionLock } from "../lib/session-state.js";
 import { recordWorkflowEvent } from "../lib/session-workflow.js";
 
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
   // doing anything; it is not session evidence, so it short-circuits the rest
   if (input.tool_name === "Skill") {
     recordSkillCall(input);
+    queueTeamSkillUse(input);
     return;
   }
   // one hook per tool call, and parallel calls run at once: every write below is to the

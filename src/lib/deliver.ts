@@ -27,7 +27,7 @@ import {
   writeCandidateMeta,
 } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
-import type { IdentityClass } from "./identity.js";
+import type { HostIdentity, IdentityClass } from "./identity.js";
 import { displayPath } from "./display-path.js";
 
 export function soloSkillsDir(projectCwd: string): string {
@@ -192,7 +192,7 @@ export interface DeliverResult {
 
 /** How a reviewer answers a refusal: send it as an update to what is there, or under a
  * different name. Absent on the first attempt, which is why the refusal exists. */
-export type DeliveryOptions = PublishOptions;
+export type DeliveryOptions = PublishOptions & { host?: HostIdentity };
 
 export function approveAndDeliver(
   home: string = handbookHome(),
@@ -371,7 +371,7 @@ function namedAs(
  * would take a working skill away over a trace that is true and useful where it lands.
  */
 function traceInCandidate(dir: string, meta: CandidateMeta, options: DeliveryOptions) {
-  return identityInSkillDir(dir, options.as ?? meta.slug);
+  return identityInSkillDir(dir, options.as ?? meta.slug, undefined, options.host);
 }
 
 function identityRefusal(dir: string, slug: string, trace: { class: IdentityClass; where: string }): string {
@@ -687,7 +687,7 @@ export function formatApproveResult(slug: string, result: DeliverResult): string
       : `Shared "${name}" with the team`;
     if (result.prUrl) {
       lines.push(`${what}: ${result.prUrl}`);
-      lines.push(`Merge that request and each teammate gets it when their marketplace updates.${bump}`);
+      lines.push(`Merge that request and each teammate gets it when their copy of the plugin updates.${bump}`);
     } else {
       lines.push(`${what} on branch ${result.branch}.${bump}`);
       if (result.prError) {

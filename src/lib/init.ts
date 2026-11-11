@@ -309,6 +309,8 @@ writeFileSync(file, JSON.stringify(plugin, null, 2) + "\\n");
 console.log(\`bumped plugin version to \${plugin.version}\`);
 `;
 
+const BUMP_TITLE = "ci: bump plugin version";
+
 const githubWorkflow = (bump: string) => `name: version-bump
 
 # Bumps the plugin version on every merge to main. The version string is Claude Code's
@@ -317,9 +319,11 @@ on:
   push:
     branches: [main]
 
+# The guard matches the fixed phrase the bump commit ends with and the commit message travels in
+# an environment value, so nothing of the team's reaches an expression or a shell line.
 jobs:
   bump:
-    if: "!startsWith(github.event.head_commit.message, '${bump}')"
+    if: "!endsWith(github.event.head_commit.message, '${BUMP_TITLE}')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -332,34 +336,40 @@ jobs:
       - run: |
           git config user.name "handbook-ci"
           git config user.email "handbook-ci@users.noreply.github.com"
-          git commit -am "${bump}"
+          git commit -am "$BUMP_MESSAGE"
           git push
+        env:
+          BUMP_MESSAGE: ${JSON.stringify(bump)}
 `;
 
 const gitlabCi = (bump: string) => `# Bumps the plugin version on every merge to the default branch. The version string is
 # Claude Code's update signal: without a bump, teammates keep serving the cached copy.
 # Requires a project access token with write_repository scope stored in the
 # TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
+# The rule matches the fixed phrase the bump commit ends with and the commit message travels in
+# a variable, so nothing of the team's reaches a rule or a shell line.
 version-bump:
   image: node:22
+  variables:
+    BUMP_MESSAGE: ${JSON.stringify(bump)}
   rules:
     # only run when the CI token exists - otherwise skip (don't fail the pipeline)
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /${BUMP_TITLE}\\s*$/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
     - git config user.name "handbook-ci"
     - git config user.email "handbook-ci@noreply.invalid"
-    - git commit -am "${bump}"
+    - git commit -am "$BUMP_MESSAGE"
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
 
 const UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
 by the commit it installs: everything merged here - a skill, a server, a command, an
-edit to this README - reaches a teammate's copy when their marketplace updates.`;
+edit to this README - reaches a teammate when their copy of the plugin updates.`;
 
 const UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates, so
+moved, but a teammate's copy only picks it up when their copy of the plugin updates, so
 anything committed here by hand reaches nobody unless it raises the version too.`;
 
 // Not in a repository that runs the version-bump job: the flag is refused there, because
@@ -389,7 +399,8 @@ cannot claim the same number, and a commit made here by hand reaches teammates l
 any other merge. In order:
 
 1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later
-   first: \`/plugin marketplace update teamhandbook\`, then \`/reload-plugins\`. An older
+   first: \`claude plugin update handbook@teamhandbook\`, then a new session or
+   \`/reload-plugins\`. An older
    copy raises a version on every share, which puts the line back. A copy older than 0.29.0 also does not read
    \`scaffoldVersion\` in \`.teamhandbook.json\`, the record that stops an older copy
    from refreshing this scaffold back, so after the switch its \`--upgrade\` offers to
@@ -424,7 +435,7 @@ ${README_BEGIN}
 <!-- Edit outside these markers; TeamHandbook 0.32.0 or newer rewrites only what is between them, an older one replaces the whole file when it refreshes it. -->
 
 This repository is a Claude Code plugin marketplace; every merge reaches each
-subscribed teammate when their marketplace updates.
+subscribed teammate when their copy of the plugin updates.
 
 ## Access
 
@@ -458,15 +469,19 @@ Nothing here needs CI, an access token, or the right to push to a protected bran
 
 ### Getting new skills
 
-If auto-update is off for this marketplace, a merge reaches you only after these two:
+With auto-update on for this marketplace, a merge arrives on its own in your next
+session. With it off, update the plugin itself, then start a new session or run
+\`/reload-plugins\`:
 
 \`\`\`
-/plugin marketplace update ${name}
-/reload-plugins
+claude plugin update ${name}@${name}
 \`\`\`
 
-To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
-menu. When you announce a merge to the team, include these two commands.
+From inside Claude Code the same is \`/plugin\` > Marketplaces > Update marketplace.
+Updating the marketplace list alone (\`claude plugin marketplace update\`) leaves the
+installed plugin where it was. To stop doing it by hand, turn auto-update on for this
+marketplace from the \`/plugin\` menu. When you announce a merge to the team, include
+this command.
 
 ${byCommit ? `${KEEP_BY_COMMIT}\n\n` : withCi ? "" : `${SWITCH_TO_COMMIT}\n\n`}### Who reviews a request
 
@@ -622,6 +637,8 @@ export const TEAM_PREFIX_FILE = ".teamhandbook.json";
 // from run to a handful of characters - and short enough that a repository cannot push a
 // wall of text through join's output and into a commit title.
 const COMMIT_PREFIX_MAX = 64;
+const COMMIT_PREFIX_PUNCTUATION = ". , : / [ ] ( ) _ -";
+const COMMIT_PREFIX_CHARACTERS = /^[\p{L}\p{N} .,:/[\]()_-]*$/u;
 
 /**
  * Why this value cannot be used as the team's commit-message prefix, or null when it can.
@@ -639,6 +656,12 @@ export function commitPrefixProblem(value: string): string | null {
   // newlines and ESC, the C1 range, and the bidirectional overrides that reorder a printed
   // line without changing a byte of it.
   if (/\p{C}/u.test(value)) return "carrying a control character";
+  // The CI job's commit message carries the prefix, and that job runs with a token that writes
+  // to the repository. A prefix of `X $(curl ...)` written into its shell line ran the command:
+  // only what ticket keys and commit types are written with is let through, so no quote,
+  // dollar sign, backtick, backslash, `;`, `&`, `|`, `<`, `>`, `#` or `!` reaches any file -
+  // `!` because history expansion turned a pasted "TE!AM" into "event not found".
+  if (!COMMIT_PREFIX_CHARACTERS.test(value)) return `carrying a character other than letters, digits, spaces and ${COMMIT_PREFIX_PUNCTUATION}`;
   return null;
 }
 
@@ -747,7 +770,11 @@ export function skeletonFiles(
     // The script only exists to be run by that job. Shipping it without the job put a
     // file in every team's repository that nothing on earth would ever execute.
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
-    const bump = `${commitMessagePrefix(commitPrefix)}ci: bump plugin version`;
+    // The one place a prefix enters a file a CI runner executes; a prefix the rule refuses is
+    // never written there, whichever caller handed it in.
+    const prefixProblem = commitPrefixProblem(commitPrefix.trim());
+    if (prefixProblem) throw new Error(`the commit prefix cannot go into the CI job: it is ${prefixProblem}`);
+    const bump = `${commitMessagePrefix(commitPrefix)}${BUMP_TITLE}`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
     } else {

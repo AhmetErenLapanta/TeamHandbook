@@ -30,7 +30,7 @@ export interface CandidateMeta {
   deliveredTo?: string;
   deliveredMode?: "solo" | "personal" | "team";
   // how this candidate came to exist and what it is - drives the review wording
-  origin?: "harvest" | "manual" | "recurrence" | "mine";
+  origin?: "harvest" | "manual" | "recurrence" | "mine" | "task";
   // queued by the guided demo for its scratch repository, which is the only project it may
   // ever be delivered into: once that directory is gone, there is none
   demo?: boolean;

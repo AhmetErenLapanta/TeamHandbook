@@ -694,7 +694,11 @@ export function sieveHarvestItems(
 export function harvestFingerprint(item: HarvestItem): string {
   const pairFp = item.source?.match(/^pair:([0-9a-f]{16})$/)?.[1];
   if (pairFp) return pairFp;
-  return createHash("sha256").update(`${item.kind}:${slugifySkillName(item.name) ?? item.name}`).digest("hex").slice(0, 16);
+  return lessonFingerprint(item.kind, item.name);
+}
+
+export function lessonFingerprint(kind: string, name: string): string {
+  return createHash("sha256").update(`${kind}:${slugifySkillName(name) ?? name}`).digest("hex").slice(0, 16);
 }
 
 // ── artifact assembly ───────────────────────────────────────────────────────

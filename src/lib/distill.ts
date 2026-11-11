@@ -202,10 +202,11 @@ function yamlQuote(value: string): string {
 
 /** How the skill's footer describes where it came from. `true`/`false` keep the
  * original two-way behavior for the /handbook:learn path. */
-export type SkillOrigin = boolean | "correction" | "procedure" | "discovery" | "error-fix";
+export type SkillOrigin = boolean | "correction" | "procedure" | "discovery" | "error-fix" | "review";
 
 const ORIGIN_TEXT: Record<string, string> = {
   correction: "correction the developer made during a real session",
+  review: "review the developer gave an agent's task",
   procedure: "completed task",
   discovery: "convention uncovered during real work",
   "error-fix": "error-to-fix session",

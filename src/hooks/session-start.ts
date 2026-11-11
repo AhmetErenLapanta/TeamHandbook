@@ -4,6 +4,8 @@ import { sessionStartNotice } from "../lib/notify.js";
 import { cleanupStaleSessionFiles } from "../lib/session-state.js";
 import { retireDeadSessions } from "../lib/session-workflow.js";
 import { salvageOrphans, spawnPipelineRunner } from "../lib/pipeline.js";
+import { usageNotice } from "../lib/usage-report.js";
+import { policyNotice, teamPolicy } from "../lib/policy.js";
 
 async function main(): Promise<void> {
   const input = parseHookInput(await readStdin());
@@ -15,6 +17,10 @@ async function main(): Promise<void> {
   cleanupStaleSessionFiles();
   const notice = sessionStartNotice(input?.cwd ?? process.cwd());
   if (notice) console.log(notice);
+  const ask = usageNotice();
+  if (ask) console.log(ask);
+  const policy = policyNotice(teamPolicy());
+  if (policy) console.log(policy);
 }
 
 main().then(

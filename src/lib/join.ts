@@ -213,5 +213,7 @@ export function formatJoinSuccess(result: JoinResult): string {
     "",
     `  /plugin marketplace add ${result.url}`,
     `  /plugin install ${result.name}@${result.name}`,
+    "",
+    "Turn auto-update on for this marketplace from the /plugin screen and every merge arrives in your next session.",
   ].join("\n");
 }
