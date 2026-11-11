@@ -1,0 +1,18 @@
+{"meta":{"agent":"opencode","cliVersion":"2.0.28","source":"hand"}}
+{"expect_outbound":{"args":["serve","--hostname=127.0.0.1"],"stdin":[]}}
+{"stdin":{"op":"session.prompt","args":{"sessionID":"session-1","text":"Run the tests and fix what fails."}}}
+{"emit_inbound":{"type":"session.execution.started","data":{"sessionID":"session-1"},"created":1793577600001}}
+{"emit_inbound":{"type":"session.text.delta","data":{"sessionID":"session-1","assistantMessageID":"message-1","ordinal":0,"delta":"Running the tests"},"created":1793577600002}}
+{"emit_inbound":{"type":"session.text.ended","data":{"sessionID":"session-1","assistantMessageID":"message-1","ordinal":0,"text":"Running the tests first."},"created":1793577600003}}
+{"emit_inbound":{"type":"session.tool.input.started","data":{"sessionID":"session-1","id":"call-1","name":"bash"},"created":1793577600004}}
+{"emit_inbound":{"type":"permission.asked","data":{"sessionID":"session-1","id":"permission-1","action":"bash","resources":["npm test"],"save":["npm *"],"source":{"id":"call-1"}},"created":1793577600005}}
+{"stdin":{"op":"permission.reply","args":{"sessionID":"session-1","requestID":"permission-1","decision":"once"}}}
+{"emit_inbound":{"type":"permission.replied","data":{"sessionID":"session-1","requestID":"permission-1","reply":"once"},"created":1793577600006}}
+{"emit_inbound":{"type":"session.tool.called","data":{"sessionID":"session-1","id":"call-1","input":{"command":"npm test"}},"created":1793577600007}}
+{"emit_inbound":{"type":"session.tool.success","data":{"sessionID":"session-1","id":"call-1","content":[{"type":"text","text":"ok"}],"metadata":{}},"created":1793577600008}}
+{"emit_inbound":{"type":"permission.asked","data":{"sessionID":"session-2","id":"permission-2","action":"edit","resources":["src/a.ts"],"save":[]},"created":1793577600009}}
+{"stdin":{"op":"permission.reply","args":{"sessionID":"session-2","requestID":"permission-2","decision":"reject","message":"The person reviewing this task declined this call."}}}
+{"emit_inbound":{"type":"session.step.ended","data":{"sessionID":"session-1","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":30,"write":10}}},"created":1793577600010}}
+{"emit_inbound":{"type":"session.text.ended","data":{"sessionID":"session-1","assistantMessageID":"message-1","ordinal":1,"text":"The tests pass."},"created":1793577600011}}
+{"emit_inbound":{"type":"session.execution.succeeded","data":{"sessionID":"session-1"},"created":1793577600012}}
+{"exit":0}

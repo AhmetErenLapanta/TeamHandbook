@@ -183,6 +183,9 @@ function readHostIdentity() {
   } catch {
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+function hostIdentityOf(candidates) {
   const names = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;
@@ -247,6 +250,11 @@ function isFilePath(value) {
 var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
+}
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
 }
 var SECRET_PATTERNS = [
   // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
@@ -321,7 +329,7 @@ var SECRET_PATTERNS = [
   { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
   // common credential shapes the generic keyword rule misses
   { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
   { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -535,9 +543,12 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
 );
 var TEAM_PREFIX_FILE = ".teamhandbook.json";
 var COMMIT_PREFIX_MAX = 64;
+var COMMIT_PREFIX_PUNCTUATION = ". , : / [ ] ( ) _ -";
+var COMMIT_PREFIX_CHARACTERS = /^[\p{L}\p{N} .,:/[\]()_-]*$/u;
 function commitPrefixProblem(value) {
   if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
   if (/\p{C}/u.test(value)) return "carrying a control character";
+  if (!COMMIT_PREFIX_CHARACTERS.test(value)) return `carrying a character other than letters, digits, spaces and ${COMMIT_PREFIX_PUNCTUATION}`;
   return null;
 }
 function readTeamCommitPrefix(repoDir) {
@@ -717,7 +728,9 @@ function formatJoinSuccess(result) {
     "To finish, connect Claude Code to the team marketplace (built-in commands):",
     "",
     `  /plugin marketplace add ${result.url}`,
-    `  /plugin install ${result.name}@${result.name}`
+    `  /plugin install ${result.name}@${result.name}`,
+    "",
+    "Turn auto-update on for this marketplace from the /plugin screen and every merge arrives in your next session."
   ].join("\n");
 }
 

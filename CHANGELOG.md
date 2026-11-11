@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.33.0] - 2026-11-11
+
+### Added
+
+- **A lesson can come from a task run in the orchestrator.** A follow-up you gave a running
+  task or a tool the orchestrator refused can be offered as a candidate skill, and it goes
+  through the same review as one harvested from a session: nothing is installed or shared
+  before you decide.
+- **A team can see which of its skills get used.** When the team repository names an
+  endpoint and you have said yes to that exact address in your own `config.json`, the name
+  of a team skill and the hour it was used are reported to the team's orchestrator. Either
+  answer missing sends nothing; a personal or project skill, its arguments, a path or a
+  session never leave.
+- **A team can take a capability away from every session that has its copy.** Policies are
+  named groups in the team file and only tighten: there is no `allow` to lift a deny with,
+  and a session without a policy loses nothing.
+- **`npm start` and `npm run dev` run the orchestrator** from a clone of the repository.
+
+### Changed
+
+- **Skill health finds overlapping skills in a large set quickly.** Comparing every pair took
+  7.8 s over 2000 skills; only pairs that can reach the threshold are scored now.
+- **A skill written in Turkish is no longer told to add sections it has.** The headings for
+  how to check and pitfalls are matched in both languages.
+
+### Fixed
+
+- **A URL password that is only a reference to a CI secret is not flagged as a credential.**
+  `https://oauth2:${TOKEN}@host` names where the value comes from; a token pasted between
+  the braces is still caught.
+- **`/handbook:init --upgrade` does not write a stale prefix into a file a CI runner runs.**
+  A prefix kept from before the rule narrowed is withheld like an unknown one.
+
 ## [0.32.0] - 2026-10-23
 
 ### Added

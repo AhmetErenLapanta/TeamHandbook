@@ -1,0 +1,67 @@
+# An example of watching the orchestrator, added to docker-compose.cloud.yml when the env file sets
+# ORCHESTRATOR_OBSERVABILITY=1: Prometheus scrapes /metrics on the internal network with the metrics
+# token, and Vector gathers the services' log lines into one file a day. Swap either for
+# what you already run; the orchestrator only needs its /metrics scraped and its stdout kept.
+x-local: &local
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+# Async, so a service starts and runs while Vector is down; Docker keeps a local copy of the
+# lines as well, which docker compose logs reads.
+x-to-vector: &to-vector
+  driver: fluentd
+  options:
+    fluentd-address: "127.0.0.1:${ORCHESTRATOR_VECTOR_PORT:-24224}"
+    fluentd-async: "true"
+    tag: "{{.Name}}"
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=${ORCHESTRATOR_PROMETHEUS_RETENTION:-15d}"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    secrets: [metrics_token]
+    # Its page on this host's loopback only; reach it from elsewhere with an ssh tunnel.
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_PROMETHEUS_PORT:-9090}:9090"
+    networks: [internal, ops]
+    logging: *local
+
+  vector:
+    image: timberio/vector:0.49.0-alpine
+    restart: unless-stopped
+    # Only the services below send their lines, through Docker's fluentd driver; the containers
+    # the orchestrator starts for tasks keep theirs out, so an agent's raw output and a task's secrets
+    # never reach this file. No Docker socket and no log directory is mounted.
+    volumes:
+      - ./observability/vector.yaml:/etc/vector/vector.yaml:ro
+      - vector-data:/var/lib/vector
+      - orchestrator-logs:/var/log/orchestrator
+    command: ["--config", "/etc/vector/vector.yaml"]
+    # The Docker daemon delivers the lines, so the port is on the host's loopback.
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_VECTOR_PORT:-24224}:24224"
+    networks: [ops]
+    logging: *local
+
+  caddy:
+    logging: *to-vector
+  orchestrator:
+    logging: *to-vector
+  postgres:
+    logging: *to-vector
+  backup:
+    logging: *to-vector
+
+networks:
+  ops:
+
+volumes:
+  prometheus-data:
+  vector-data:
+  orchestrator-logs:

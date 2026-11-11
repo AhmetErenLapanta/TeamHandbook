@@ -137,20 +137,45 @@ export function commandDescription(content: string): string {
  * fails only when they run it.
  */
 export function auditCommand(file: string, name: string = basename(file, ".md")): CommandAudit {
-  // The name becomes a path inside the team repository, so every segment of it is held to
-  // the same rule a skill's directory is: anything else is a file name we would be
-  // constructing a path out of, not a command name.
-  if (!name.split(":").every(isSafeSlug)) return { shareable: false, reason: "unsafe-name", detail: name };
-  // Named by its path under commands/, so git/sync.md is not reported as a sync.md the
-  // author has to go looking for among the top-level ones.
-  const where = commandFile(name);
+  if (!commandNameIsSafe(name)) return { shareable: false, reason: "unsafe-name", detail: name };
   let content: string;
   try {
     content = readFileSync(file, "utf8");
   } catch {
     // unreadable means unscreened, and unscreened must not ship
-    return { shareable: false, reason: "unreadable", detail: where };
+    return { shareable: false, reason: "unreadable", detail: commandFile(name) };
   }
+  return auditCommandText(name, content);
+}
+
+/** How deep a command name goes, `a:b:c:name` at the most; no team nests commands further. */
+const COMMAND_DEPTH = 4;
+
+/** Device names Windows keeps for itself in every folder, with or without an extension: a teammate there cannot check out `commands/con.md`. */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
+
+/**
+ * Whether a name can become a path inside the team repository. Every segment is held to the
+ * same rule a skill's directory is: anything else is a file name we would be constructing a
+ * path out of, not a command name. A segment Windows keeps as a device, or a name nested
+ * deeper than any team writes, would break the checkout of every teammate on Windows or
+ * build a path no one asked for.
+ */
+export function commandNameIsSafe(name: string): boolean {
+  const segments = name.split(":");
+  return segments.length <= COMMAND_DEPTH && segments.every((segment) => isSafeSlug(segment) && !WINDOWS_RESERVED.test(segment));
+}
+
+/**
+ * The same judgement on a command's text where there is no file to read: the TeamHandbook
+ * Orchestrator proposes a command a person wrote on its screen, and holds it to this rule so it
+ * never opens one the plugin's own share would refuse.
+ */
+export function auditCommandText(name: string, content: string): CommandAudit {
+  if (!commandNameIsSafe(name)) return { shareable: false, reason: "unsafe-name", detail: name };
+  // Named by its path under commands/, so git/sync.md is not reported as a sync.md the
+  // author has to go looking for among the top-level ones.
+  const where = commandFile(name);
   const found = locateSecret(content);
   if (found) {
     const secret = { pattern: found.pattern, file: where, line: lineAt(content, found.index) };
@@ -174,7 +199,7 @@ export function auditCommand(file: string, name: string = basename(file, ".md"))
 export function commandRefusalSummary(audit: CommandAudit): string {
   switch (audit.reason) {
     case "unsafe-name":
-      return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes)`;
+      return `"${audit.detail}" cannot be a command name (lowercase letters, digits and dashes, at most four deep, and not a device name Windows keeps, such as con or nul)`;
     case "unreadable":
       return `"${audit.detail}" cannot be read, so it cannot be screened`;
     default:

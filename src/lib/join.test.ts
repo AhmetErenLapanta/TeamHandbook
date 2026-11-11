@@ -369,6 +369,7 @@ describe("formatJoinSuccess", () => {
     const text = formatJoinSuccess({ ok: true, name: "acme-skills", url: "git@x.com:a/b.git", home });
     expect(text).toContain("/plugin marketplace add git@x.com:a/b.git");
     expect(text).toContain("/plugin install acme-skills");
+    expect(text).toContain("Turn auto-update on for this marketplace from the /plugin screen");
   });
 });
 

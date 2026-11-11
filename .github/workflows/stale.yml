@@ -1,0 +1,30 @@
+name: Stale
+
+# Marks issues and pull requests quiet for 60 days and closes them 14 days later, as
+# CONTRIBUTING.md says; security, pinned and maintainer threads are never marked.
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.4.0
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: security,pinned,maintainer
+          exempt-pr-labels: security,pinned,maintainer
+          stale-issue-message: This issue has had no activity for 60 days. It closes in 14 days unless someone comments.
+          stale-pr-message: This pull request has had no activity for 60 days. It closes in 14 days unless someone comments or pushes.
+          close-issue-message: Closed after 74 days without activity. Comment to have it reopened.
+          close-pr-message: Closed after 74 days without activity. Comment to have it reopened.

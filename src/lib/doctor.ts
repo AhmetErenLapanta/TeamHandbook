@@ -19,6 +19,8 @@ import { loadDistillConfig } from "./distill.js";
 import { loadHarvestConfig } from "./harvest.js";
 import { lastPipelineRun, newerRelease, newerReleaseLine, pluginRoot, pluginVersion } from "./status.js";
 import { displayPath } from "./display-path.js";
+import { hookSettingsState } from "./hook-settings.js";
+import type { HookSettingsPaths } from "./hook-settings.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
 
@@ -348,6 +350,25 @@ function checkHooks(home: string): DoctorCheck {
   );
 }
 
+// A managed policy can switch every plugin's hooks off, and then the team policy hook, the
+// capture and the session note all go quiet with nothing on screen saying why. The policies
+// still reach such a machine as managed settings, which the orchestrator exports.
+export function checkHookSettings(paths?: HookSettingsPaths): DoctorCheck {
+  const found = hookSettingsState("handbook", paths);
+  if (found.state === "unknown") {
+    return warn("hook settings", `${displayPath(found.file)} exists but cannot be read (${found.reason}), so its hook settings are not checked`);
+  }
+  if (found.state === "off") {
+    return warn(
+      "hook settings",
+      `${found.setting} in ${displayPath(found.file)} runs no plugin hook here, so the rules that reach teammates' sessions ` +
+        "through the TeamHandbook hook (skills, MCP servers and tool patterns) are not enforced on this machine and nothing is " +
+        "captured; the orchestrator's managed-settings export is the way to enforce them",
+    );
+  }
+  return ok("hook settings", "no managed settings file and no user or project setting turns this plugin's hooks off (a policy delivered by MDM or the claude.ai console is not read here)");
+}
+
 // Reachability alone is not health: the version-bump CI (the one thing that pushes
 // merged skills to teammates) is easy to leave unconfigured, and nothing else warns.
 // Shallow-clone the remote and read plugin.json - merged skills present while the
@@ -480,7 +501,8 @@ function checkTeamCopy(home: string, remote: RemoteState | undefined, marketRoot
   return warn(
     "team plugin copy",
     `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached ` +
-      `this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; ` +
+      `this machine - run \`claude plugin update ${team.marketplaceName}@${team.marketplaceName}\` (or \`/plugin\` > Marketplaces > Update marketplace), ` +
+      "then start a new session or run `/reload-plugins`; " +
       "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
   );
 }
@@ -495,7 +517,7 @@ function checkVersionLineBack(marketplace: string, remote: RemoteState, local: s
   const behind =
     remote.head && local && remote.head !== local
       ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run ` +
-        `\`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.`
+        `\`claude plugin update ${marketplace}@${marketplace}\`, then start a new session or run \`/reload-plugins\`.`
       : "";
   return warn(
     "team plugin copy",
@@ -515,7 +537,8 @@ function checkTeamCopyCommit(marketplace: string, remote: string, local: string 
   return warn(
     "team plugin copy",
     `this machine's marketplace copy is at commit ${short(local)} but the team repo is at ${short(remote)}, so what was merged ` +
-      `since has not reached this machine - run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`; ` +
+      `since has not reached this machine - run \`claude plugin update ${marketplace}@${marketplace}\` (or \`/plugin\` > Marketplaces > Update marketplace), ` +
+      "then start a new session or run `/reload-plugins`; " +
       "if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from `/plugin`",
   );
 }
@@ -721,6 +744,7 @@ export function runDoctor(
     checkHomeWritable(home),
     checkConfig(home),
     checkHooks(home),
+    checkHookSettings(),
   ];
   const teamRepo = checkTeamRepo(home, run);
   checks.push(teamRepo.check);

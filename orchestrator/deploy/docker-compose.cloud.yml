@@ -1,0 +1,194 @@
+# The orchestrator as a service on one host: Caddy in front (TLS), the orchestrator, Postgres and a
+# pg_dump job. deploy/deploy.sh drives it with an env file written from .env.staging.example
+# or .env.prod.example; every secret is a file under ORCHESTRATOR_SECRETS_DIR, never a value here.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    ports:
+      - "${ORCHESTRATOR_BIND:-0.0.0.0}:${ORCHESTRATOR_HTTPS_PORT:-443}:443"
+      - "${ORCHESTRATOR_BIND:-0.0.0.0}:${ORCHESTRATOR_HTTP_PORT:-80}:80"
+    environment:
+      ORCHESTRATOR_DOMAIN: "${ORCHESTRATOR_DOMAIN:?set ORCHESTRATOR_DOMAIN in the env file}"
+      ORCHESTRATOR_ACME_CA: "${ORCHESTRATOR_ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}"
+      ORCHESTRATOR_PROXY_HOLD: "${ORCHESTRATOR_PROXY_HOLD:-30s}"
+      ORCHESTRATOR_PUBLIC_PORT: "${ORCHESTRATOR_PUBLIC_PORT:-}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      edge:
+        # The orchestrator believes X-Forwarded-For from this one address and no other.
+        ipv4_address: "${ORCHESTRATOR_PROXY_IP:-172.31.250.2}"
+    logging: *logging
+
+  orchestrator:
+    image: "${ORCHESTRATOR_IMAGE:-teamhandbook-orchestrator}:${ORCHESTRATOR_IMAGE_TAG:?deploy.sh sets ORCHESTRATOR_IMAGE_TAG}"
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_MODE: cloud
+      ORCHESTRATOR_AUTH: local
+      ORCHESTRATOR_PUBLIC_URL: "https://${ORCHESTRATOR_DOMAIN}${ORCHESTRATOR_PUBLIC_PORT:-}"
+      # The domain for browsers; 127.0.0.1 for the healthcheck inside the container, orchestrator for a scraper on the internal network.
+      ORCHESTRATOR_ALLOWED_HOSTS: "${ORCHESTRATOR_DOMAIN},127.0.0.1,orchestrator"
+      ORCHESTRATOR_TRUSTED_PROXY: "${ORCHESTRATOR_PROXY_IP:-172.31.250.2}"
+      ORCHESTRATOR_DATABASE_URL_FILE: /run/secrets/database_url
+      ORCHESTRATOR_SECRET_KEY_FILE: /run/secrets/secret_key
+      ORCHESTRATOR_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+      ORCHESTRATOR_LOG_FORMAT: json
+      ORCHESTRATOR_BACKUP_HOURS: "${ORCHESTRATOR_BACKUP_HOURS:-24}"
+      ORCHESTRATOR_BACKUP_KEEP: "${ORCHESTRATOR_BACKUP_KEEP:-7}"
+      ORCHESTRATOR_AGENTS: "${ORCHESTRATOR_AGENTS:-claude-code}"
+      # Unset, each task waits for the machine of the person who started it; 1 in the env file runs
+      # tasks here, each in a task container as below.
+      ORCHESTRATOR_SERVER_TASKS: "${ORCHESTRATOR_SERVER_TASKS:-}"
+      # deploy:local only: two stand-in team repositories and an example task for the stand-in agent.
+      ORCHESTRATOR_DEMO: "${ORCHESTRATOR_DEMO:-0}"
+      ORCHESTRATOR_IMAGE_TAG: "${ORCHESTRATOR_IMAGE_TAG}"
+      # Sign-up: the policy and terms pages it links, and each provider set up with its id here
+      # and its secret as a file under secrets/sign-in; a provider left out shows no button.
+      ORCHESTRATOR_PRIVACY_URL: "${ORCHESTRATOR_PRIVACY_URL:-}"
+      ORCHESTRATOR_TERMS_URL: "${ORCHESTRATOR_TERMS_URL:-}"
+      # Where "Stuck? Get help" on the sign-up page goes; left empty, the page shows no such link.
+      ORCHESTRATOR_HELP_URL: "${ORCHESTRATOR_HELP_URL:-}"
+      ORCHESTRATOR_SIGN_IN_GOOGLE_CLIENT_ID: "${ORCHESTRATOR_SIGN_IN_GOOGLE_CLIENT_ID:-}"
+      ORCHESTRATOR_SIGN_IN_GOOGLE_CLIENT_SECRET_FILE: "${ORCHESTRATOR_SIGN_IN_GOOGLE_CLIENT_ID:+/run/secrets/sign-in/google_client_secret}"
+      ORCHESTRATOR_SIGN_IN_GOOGLE_ISSUER: "${ORCHESTRATOR_SIGN_IN_GOOGLE_ISSUER:-}"
+      ORCHESTRATOR_SIGN_IN_GITHUB_CLIENT_ID: "${ORCHESTRATOR_SIGN_IN_GITHUB_CLIENT_ID:-}"
+      ORCHESTRATOR_SIGN_IN_GITHUB_CLIENT_SECRET_FILE: "${ORCHESTRATOR_SIGN_IN_GITHUB_CLIENT_ID:+/run/secrets/sign-in/github_client_secret}"
+      ORCHESTRATOR_SIGN_IN_GITHUB_URL: "${ORCHESTRATOR_SIGN_IN_GITHUB_URL:-}"
+      ORCHESTRATOR_SIGN_IN_GITHUB_API_URL: "${ORCHESTRATOR_SIGN_IN_GITHUB_API_URL:-}"
+      ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_ID: "${ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_ID:-}"
+      ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_SECRET_FILE: "${ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_ID:+/run/secrets/sign-in/microsoft_client_secret}"
+      ORCHESTRATOR_SIGN_IN_MICROSOFT_ISSUER: "${ORCHESTRATOR_SIGN_IN_MICROSOFT_ISSUER:-}"
+      # Each organization's plan limits: a positive whole number or unlimited; a cloud orchestrator refuses to start without them.
+      ORCHESTRATOR_QUOTA_MEMBERS: "${ORCHESTRATOR_QUOTA_MEMBERS:?set ORCHESTRATOR_QUOTA_MEMBERS in the env file}"
+      ORCHESTRATOR_QUOTA_TASKS_PER_MONTH: "${ORCHESTRATOR_QUOTA_TASKS_PER_MONTH:?set ORCHESTRATOR_QUOTA_TASKS_PER_MONTH in the env file}"
+      ORCHESTRATOR_QUOTA_CONCURRENT_TASKS: "${ORCHESTRATOR_QUOTA_CONCURRENT_TASKS:?set ORCHESTRATOR_QUOTA_CONCURRENT_TASKS in the env file}"
+      # Every task runs in a container of its own: no network but the orchestrator's egress proxy,
+      # not root, and only its own directory out of the data volume. A cloud orchestrator refuses
+      # to start on anything weaker.
+      ORCHESTRATOR_TASK_ISOLATION: container
+      # Task containers start through the docker-proxy service's socket, never Docker's own.
+      DOCKER_HOST: unix:///run/docker-proxy/docker.sock
+      ORCHESTRATOR_TASK_NETWORK: none
+      ORCHESTRATOR_TASK_USER: "1000:1000"
+      ORCHESTRATOR_TASK_IMAGE: "${ORCHESTRATOR_TASK_IMAGE:-${ORCHESTRATOR_IMAGE:-teamhandbook-orchestrator}:${ORCHESTRATOR_IMAGE_TAG}}"
+      ORCHESTRATOR_TASK_VOLUME: "${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME in the env file}-orchestrator-data"
+    secrets: [database_url, secret_key, metrics_token]
+    volumes:
+      - orchestrator-data:/data
+      - "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/sign-in:/run/secrets/sign-in:ro"
+      - docker-proxy:/run/docker-proxy
+    networks: [edge, internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health/ready').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    # Over the orchestrator's own eight seconds for finishing writes under way, under what docker waits by default plus a margin.
+    stop_grace_period: 15s
+    logging: *logging
+
+  # The one holder of Docker's socket, which is root on this host. It serves the orchestrator a socket
+  # that creates only task containers with the isolation a task has (the task image, no network,
+  # not root, no capabilities, its own task directory) and touches no other container; it reaches
+  # no network itself.
+  docker-proxy:
+    image: "${ORCHESTRATOR_IMAGE:-teamhandbook-orchestrator}:${ORCHESTRATOR_IMAGE_TAG}"
+    restart: unless-stopped
+    command: ["docker-proxy"]
+    environment:
+      ORCHESTRATOR_DOCKER_PROXY_SOCKET: /run/docker-proxy/docker.sock
+      ORCHESTRATOR_TASK_IMAGE: "${ORCHESTRATOR_TASK_IMAGE:-${ORCHESTRATOR_IMAGE:-teamhandbook-orchestrator}:${ORCHESTRATOR_IMAGE_TAG}}"
+      ORCHESTRATOR_TASK_VOLUME: "${COMPOSE_PROJECT_NAME}-orchestrator-data"
+      ORCHESTRATOR_DATA_DIR: /data
+      ORCHESTRATOR_LOG_FORMAT: json
+    group_add:
+      - "${ORCHESTRATOR_DOCKER_GID:?deploy.sh sets ORCHESTRATOR_DOCKER_GID to the group of the host's Docker socket}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker-proxy:/run/docker-proxy
+    network_mode: none
+    logging: *logging
+
+  postgres:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orchestrator
+      POSTGRES_DB: orchestrator
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator -d orchestrator"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+
+  backup:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    entrypoint: ["sh", "/backup.sh"]
+    command: ["schedule"]
+    environment:
+      PGHOST: postgres
+      PGUSER: orchestrator
+      PGDATABASE: orchestrator
+      ORCHESTRATOR_PG_BACKUP_HOURS: "${ORCHESTRATOR_PG_BACKUP_HOURS:-6}"
+      ORCHESTRATOR_PG_BACKUP_KEEP: "${ORCHESTRATOR_PG_BACKUP_KEEP:-28}"
+    secrets: [pg_password]
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - pg-backups:/backups
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+
+secrets:
+  database_url:
+    file: "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/database_url"
+  secret_key:
+    file: "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/secret_key"
+  metrics_token:
+    file: "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/metrics_token"
+  pg_password:
+    file: "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/pg_password"
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: "${ORCHESTRATOR_EDGE_SUBNET:-172.31.250.0/29}"
+  # No way out: Postgres and the backup job reach nothing but each other and the orchestrator.
+  internal:
+    internal: true
+
+volumes:
+  caddy-data:
+  caddy-config:
+  # Named outright: each task container mounts its own directory out of this volume by name.
+  orchestrator-data:
+    name: "${COMPOSE_PROJECT_NAME}-orchestrator-data"
+  pg-data:
+  pg-backups:
+  docker-proxy:

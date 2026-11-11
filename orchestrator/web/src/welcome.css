@@ -1,0 +1,10 @@
+/* Layout only: colour, borders and the step list come from the design system (design/components.css). */
+.welcome-layout { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.welcome-step { display: grid; gap: var(--space-3); min-width: 0; }
+.welcome-step > *, .welcome-step h2, .welcome-step h3 { margin: 0; }
+.welcome-repos { display: grid; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
+.welcome-own-gitlab { display: grid; gap: var(--space-2); }
+.welcome-own-gitlab code { overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .welcome-layout { grid-template-columns: minmax(0, 1fr); }
+}

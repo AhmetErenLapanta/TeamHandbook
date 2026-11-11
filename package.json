@@ -1,6 +1,6 @@
 {
   "name": "teamhandbook",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Manage your team's Claude Code setup from one git repository: approve a skill, an MCP server, or a slash command once, and every teammate's copy picks it up.",
   "type": "module",
   "private": true,
@@ -19,6 +19,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "start": "node orchestrator/scripts/run.mjs start",
+    "dev": "node orchestrator/scripts/run.mjs dev",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -30,5 +32,9 @@
   },
   "overrides": {
     "vite": "^6.4.3"
+  },
+  "allowScripts": {
+    "esbuild": false,
+    "fsevents": false
   }
 }

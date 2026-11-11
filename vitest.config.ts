@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Vitest's 5s default deadline is thin for this suite. Most files drive real git against
 // real bare repositories, and several that spawn nothing at all still write hundreds of
@@ -16,5 +16,8 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     setupFiles: ["./src/test-setup.ts", "./src/test-forge-cli.ts"],
+    // orchestrator/ is a separate package with its own dependencies, setup and runner; the plugin's
+    // suite collecting its files would run them without either.
+    exclude: [...configDefaults.exclude, "orchestrator/**"],
   },
 });

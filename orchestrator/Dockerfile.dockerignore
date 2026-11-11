@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+orchestrator/data
+orchestrator/demo-data
+orchestrator/test-results
+orchestrator/playwright-report
+.git
+evals
+orchestrator/deploy/.env.*
+orchestrator/deploy/secrets
+orchestrator/deploy/state

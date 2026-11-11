@@ -71,13 +71,19 @@ const TABLE_SEP_RE = new RegExp(
   `^[${SPACE}]*\\|?[${SPACE}]*:?-{3,}:?[${SPACE}]*(\\|[${SPACE}]*:?-{3,}:?[${SPACE}]*)*\\|?[${SPACE}]*$`,
   "u",
 );
-const VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB}test`);
+// A team writes its skills in its own language, and a heading the rule did not know read as a
+// missing section: every Turkish skill was told to add "how to check" and "pitfalls" it already
+// had, and an agent following that duplicated them. The headings are matched in English and in
+// Turkish (as escapes: do\u011frulama is dogrulama with its soft g), and the items under them
+// are still counted, so a heading alone does not pass.
+const VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB}test|${WB}check|do\u011frulama|dogrulama|kontrol`);
 const DELIVERY_HEAD_RE = ci(`deliver|hand-?off|${WB}done${WB}|finish`);
 const COMMAND_RE = ci(
   "```|`[^`\\n]*" + WB + "(run|gradlew|npm|npx|pytest|make|git|python3?|node|mvn|go|cargo|bash|\\./)[^`\\n]*`",
 );
 const PITFALL_HEAD_RE = ci(
-  "pitfall|mistake|gotcha|common (errors|failures|problems)|anti-?pattern|red flags",
+  "pitfall|mistake|gotcha|caveat|watch out|common (errors|failures|problems)|anti-?pattern|red flags|" +
+    "hata|tuzak|dikkat|s\u0131k yap\u0131lan",
 );
 // The two home roots in ONE alternation rather than two spelled-out branches. Same matches, and
 // it keeps this file from carrying a contiguous copy of the path shape it exists to detect -
@@ -389,7 +395,8 @@ function bareTitle(title: string): string {
 
 /** The fixed sections by name, for a heading that carries a number and so has to earn its exemption. */
 const EXEMPT_EXACT_RE = ci(
-  "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$",
+  "^(file map|files? touched|verification|verify|validation|checklist|tests?|how to check|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|caveats|anti-?patterns?|red flags|not visible in( the)? history|" +
+    "do\u011frulama|dogrulama|kontrol|nas\u0131l kontrol edilir|s\u0131k (yap\u0131lan )?hatalar|hatalar|tuzaklar|dikkat( edilecekler)?)$",
 );
 
 /** A table's DATA rows: everything after the separator, header excluded. */

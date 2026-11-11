@@ -350,22 +350,82 @@ export function overlappingSkills(
   others: SkillText[],
   threshold: number = OVERLAP_THRESHOLD,
 ): Map<string, string[]> {
+  const find = overlapIndex(others, threshold);
+  return new Map(named.map((skill) => [skill.name, find(skill)]));
+}
+
+/**
+ * `others` prepared once, and a lookup that answers overlappingSkills for one skill at a time,
+ * so a caller holding thousands can spread the work out. Comparing every pair took 7.8 s over
+ * 2000 skills whose descriptions shared no word, all of it set intersections. Only a pair that
+ * shares a word among each one's rarest few can reach the threshold - the prefix filter of the
+ * standard exact method for set-similarity joins - so only those pairs are scored, with the
+ * same wordOverlap; the answers are the ones comparing every pair gives.
+ */
+export function overlapIndex(others: SkillText[], threshold: number = OVERLAP_THRESHOLD): (skill: SkillText) => string[] {
+  const steps = buildOverlapIndex(others, threshold);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/**
+ * overlapIndex as steps: it yields after each skill it has read or placed, so a caller holding
+ * thousands - an orchestrator serving other requests meanwhile - can resume it a slice at a time.
+ * Run to its end, it is overlapIndex.
+ */
+export function* buildOverlapIndex(others: SkillText[], threshold: number = OVERLAP_THRESHOLD): Generator<void, (skill: SkillText) => string[]> {
   const words = new Map<string, Set<string>>();
   const wordsOf = (skill: SkillText) => {
     let set = words.get(skill.description);
     if (!set) words.set(skill.description, (set = triggerWords(skill.description)));
     return set;
   };
-  const result = new Map<string, string[]>();
-  for (const skill of named) {
-    const hits = others
-      .filter((other) => other.name !== skill.name)
-      .map((other) => ({ name: other.name, score: wordOverlap(wordsOf(skill), wordsOf(other)) }))
-      .filter((hit) => hit.score >= threshold)
-      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-    result.set(skill.name, [...new Set(hits.map((hit) => hit.name))]);
+  const sets: Set<string>[] = [];
+  for (const other of others) {
+    sets.push(wordsOf(other));
+    yield;
   }
-  return result;
+  const ranked = (hits: { name: string; score: number }[]) =>
+    [...new Set(hits.filter((hit) => hit.score >= threshold).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).map((hit) => hit.name))];
+  // At no threshold a pair that shares nothing counts too, which no prefix finds.
+  if (threshold <= 0) {
+    return (skill) => ranked(others.flatMap((other, i) => (other.name === skill.name ? [] : [{ name: other.name, score: wordOverlap(wordsOf(skill), sets[i]!) }])));
+  }
+  const seen = new Map<string, number>();
+  for (const set of sets) {
+    for (const word of set) seen.set(word, (seen.get(word) ?? 0) + 1);
+    yield;
+  }
+  const rarestFirst = (a: string, b: string) => (seen.get(a) ?? 0) - (seen.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0);
+  // wordOverlap rounds to three decimals, so a pair this far below the threshold still reaches it.
+  const floor = threshold - 0.0005;
+  const prefix = (set: Set<string>) => {
+    const sorted = [...set].sort(rarestFirst);
+    return sorted.slice(0, sorted.length - Math.ceil(floor * sorted.length - 1e-9) + 1);
+  };
+  const index = new Map<string, number[]>();
+  for (const [i, set] of sets.entries()) {
+    for (const word of prefix(set)) {
+      const list = index.get(word);
+      if (list) list.push(i);
+      else index.set(word, [i]);
+    }
+    yield;
+  }
+  return (skill) => {
+    const mine = wordsOf(skill);
+    const scored = new Set<number>();
+    const hits: { name: string; score: number }[] = [];
+    for (const word of prefix(mine)) {
+      for (const i of index.get(word) ?? []) {
+        if (scored.has(i) || others[i]!.name === skill.name) continue;
+        scored.add(i);
+        hits.push({ name: others[i]!.name, score: wordOverlap(mine, sets[i]!) });
+      }
+    }
+    return ranked(hits);
+  };
 }
 
 // ---------------------------------------------------------------------------

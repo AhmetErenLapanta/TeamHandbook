@@ -84,5 +84,27 @@ instead of a surprise inside someone else's.
 - Describe the behavior change and, for anything touching capture/gate/secrets,
   the failure case your change prevents.
 
+### Labels and quiet threads
+
+Two workflows keep the queue readable; neither blocks a merge.
+
+- **Size.** Every pull request gets one label for the lines it changes, `dist/` and lockfiles
+  left out: `size/XS` under 10, `size/S` under 50, `size/M` under 200, `size/L` under 500,
+  `size/XL` from 500. A pull request from the repository's owner, a member or a collaborator
+  also gets `maintainer`.
+- **Stale.** An issue or pull request with no activity for 60 days is labelled `stale`, and is
+  closed 14 days later if it stays quiet; any comment or push takes the label off. Threads
+  labelled `security`, `pinned` or `maintainer` are never marked.
+
+### Release notes
+
+Release notes are written by hand from what changed since the last release tag, never generated.
+
+- **The plugin.** `CHANGELOG.md` at the root gets one entry per release, in the Keep a Changelog
+  form it already uses: what a person notices, under Added, Changed, Fixed or Security.
+- **The orchestrator.** A change a person sees on its screens gets an entry at the top of
+  `orchestrator/web/src/whats-new.ts`, with an `id` of its own. The Activity overview shows the
+  newest entry until each person dismisses it; an entry with a new `id` shows again.
+
 By contributing you agree that your contributions are licensed under the project's
 [Apache-2.0](LICENSE) license.

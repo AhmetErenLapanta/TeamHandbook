@@ -355,6 +355,38 @@ describe("overlap", () => {
     expect([...triggerWords("Use when the user asks. Also when it fails. Triggers: \"add endpoints\".")]).toEqual(["user", "fail", "add", "endpoint"]);
   });
 
+  it.each([0, 0.1, 0.25, 0.4, 0.6, 1])("given many skills with words drawn from a small vocabulary, when overlaps are found at threshold %s, then the answer is the one comparing every pair gives", (threshold) => {
+    // given: names repeat and descriptions repeat, as two copies of one skill do
+    let seed = 7;
+    const random = () => ((seed = (seed * 48271) % 2147483647) / 2147483647);
+    const vocabulary = Array.from({ length: 24 }, (_, i) => `subject${String.fromCharCode(97 + i)}`);
+    const skills = Array.from({ length: 80 }, (_, i) => ({
+      name: `skill-${i % 70}`,
+      description: Array.from({ length: 2 + Math.floor(random() * 9) }, () => vocabulary[Math.floor(random() * vocabulary.length)]).join(" "),
+    }));
+    skills.push({ name: "copy-of-0", description: skills[0]!.description }, { name: "silent", description: "the and of" });
+    const everyPair = new Map(
+      skills.map((skill) => [
+        skill.name,
+        [...new Set(
+          skills
+            .filter((other) => other.name !== skill.name)
+            .map((other) => ({ name: other.name, score: wordOverlap(triggerWords(skill.description), triggerWords(other.description)) }))
+            .filter((hit) => hit.score >= threshold)
+            .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+            .map((hit) => hit.name),
+        )],
+      ]),
+    );
+
+    // when
+    const found = overlappingSkills(skills, skills, threshold);
+
+    // then
+    expect(found).toEqual(everyPair);
+    expect([...found.values()].some((names) => names.length)).toBe(true);
+  });
+
   it("given two skills with the same description, when compared, then they are reported as overlapping each other", () => {
     const description = "Exposes a new route through the gateway. Use when a ticket opens an endpoint. Triggers: \"open an endpoint\".";
     const found = overlappingSkills(

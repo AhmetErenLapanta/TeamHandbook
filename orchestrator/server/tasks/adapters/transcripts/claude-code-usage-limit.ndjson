@@ -1,0 +1,7 @@
+{"meta":{"agent":"claude-code","cliVersion":"2.1.316","source":"hand"}}
+{"expect_outbound":{"args":["-p","--output-format","stream-json","--verbose"],"stdin":["Task: "]}}
+{"emit_inbound":{"type":"system","subtype":"init","permissionMode":"default","session_id":"session-1"}}
+{"emit_inbound":{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793674800,"rateLimitType":"five_hour"},"session_id":"session-1"}}
+{"emit_inbound":{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You've hit your limit · resets 3am"}]},"session_id":"session-1"}}
+{"emit_inbound":{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"terminal_reason":"api_error","num_turns":1,"result":"You've hit your limit · resets 3am","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"permission_denials":[],"session_id":"session-1"}}
+{"exit":1}

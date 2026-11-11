@@ -194,6 +194,9 @@ function readHostIdentity() {
   } catch {
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+function hostIdentityOf(candidates) {
   const names = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;
@@ -258,6 +261,11 @@ function isFilePath(value) {
 var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
+}
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
 }
 var SECRET_PATTERNS = [
   // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
@@ -332,7 +340,7 @@ var SECRET_PATTERNS = [
   { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
   // common credential shapes the generic keyword rule misses
   { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
   { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -1239,6 +1247,7 @@ plugin.version = parts.join(".");
 writeFileSync(file, JSON.stringify(plugin, null, 2) + "\\n");
 console.log(\`bumped plugin version to \${plugin.version}\`);
 `;
+var BUMP_TITLE = "ci: bump plugin version";
 var githubWorkflow = (bump) => `name: version-bump
 
 # Bumps the plugin version on every merge to main. The version string is Claude Code's
@@ -1247,9 +1256,11 @@ on:
   push:
     branches: [main]
 
+# The guard matches the fixed phrase the bump commit ends with and the commit message travels in
+# an environment value, so nothing of the team's reaches an expression or a shell line.
 jobs:
   bump:
-    if: "!startsWith(github.event.head_commit.message, '${bump}')"
+    if: "!endsWith(github.event.head_commit.message, '${BUMP_TITLE}')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -1262,31 +1273,37 @@ jobs:
       - run: |
           git config user.name "handbook-ci"
           git config user.email "handbook-ci@users.noreply.github.com"
-          git commit -am "${bump}"
+          git commit -am "$BUMP_MESSAGE"
           git push
+        env:
+          BUMP_MESSAGE: ${JSON.stringify(bump)}
 `;
 var gitlabCi = (bump) => `# Bumps the plugin version on every merge to the default branch. The version string is
 # Claude Code's update signal: without a bump, teammates keep serving the cached copy.
 # Requires a project access token with write_repository scope stored in the
 # TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
+# The rule matches the fixed phrase the bump commit ends with and the commit message travels in
+# a variable, so nothing of the team's reaches a rule or a shell line.
 version-bump:
   image: node:22
+  variables:
+    BUMP_MESSAGE: ${JSON.stringify(bump)}
   rules:
     # only run when the CI token exists - otherwise skip (don't fail the pipeline)
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /${BUMP_TITLE}\\s*$/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
     - git config user.name "handbook-ci"
     - git config user.email "handbook-ci@noreply.invalid"
-    - git commit -am "${bump}"
+    - git commit -am "$BUMP_MESSAGE"
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
 var UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
 by the commit it installs: everything merged here - a skill, a server, a command, an
-edit to this README - reaches a teammate's copy when their marketplace updates.`;
+edit to this README - reaches a teammate when their copy of the plugin updates.`;
 var UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates, so
+moved, but a teammate's copy only picks it up when their copy of the plugin updates, so
 anything committed here by hand reaches nobody unless it raises the version too.`;
 var SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
@@ -1300,7 +1317,8 @@ cannot claim the same number, and a commit made here by hand reaches teammates l
 any other merge. In order:
 
 1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later
-   first: \`/plugin marketplace update teamhandbook\`, then \`/reload-plugins\`. An older
+   first: \`claude plugin update handbook@teamhandbook\`, then a new session or
+   \`/reload-plugins\`. An older
    copy raises a version on every share, which puts the line back. A copy older than 0.29.0 also does not read
    \`scaffoldVersion\` in \`.teamhandbook.json\`, the record that stops an older copy
    from refreshing this scaffold back, so after the switch its \`--upgrade\` offers to
@@ -1333,7 +1351,7 @@ ${README_BEGIN}
 <!-- Edit outside these markers; TeamHandbook 0.32.0 or newer rewrites only what is between them, an older one replaces the whole file when it refreshes it. -->
 
 This repository is a Claude Code plugin marketplace; every merge reaches each
-subscribed teammate when their marketplace updates.
+subscribed teammate when their copy of the plugin updates.
 
 ## Access
 
@@ -1367,15 +1385,19 @@ Nothing here needs CI, an access token, or the right to push to a protected bran
 
 ### Getting new skills
 
-If auto-update is off for this marketplace, a merge reaches you only after these two:
+With auto-update on for this marketplace, a merge arrives on its own in your next
+session. With it off, update the plugin itself, then start a new session or run
+\`/reload-plugins\`:
 
 \`\`\`
-/plugin marketplace update ${name}
-/reload-plugins
+claude plugin update ${name}@${name}
 \`\`\`
 
-To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
-menu. When you announce a merge to the team, include these two commands.
+From inside Claude Code the same is \`/plugin\` > Marketplaces > Update marketplace.
+Updating the marketplace list alone (\`claude plugin marketplace update\`) leaves the
+installed plugin where it was. To stop doing it by hand, turn auto-update on for this
+marketplace from the \`/plugin\` menu. When you announce a merge to the team, include
+this command.
 
 ${byCommit ? `${KEEP_BY_COMMIT}
 
@@ -1509,9 +1531,12 @@ process.exit(0);
 `;
 var TEAM_PREFIX_FILE = ".teamhandbook.json";
 var COMMIT_PREFIX_MAX = 64;
+var COMMIT_PREFIX_PUNCTUATION = ". , : / [ ] ( ) _ -";
+var COMMIT_PREFIX_CHARACTERS = /^[\p{L}\p{N} .,:/[\]()_-]*$/u;
 function commitPrefixProblem(value) {
   if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
   if (/\p{C}/u.test(value)) return "carrying a control character";
+  if (!COMMIT_PREFIX_CHARACTERS.test(value)) return `carrying a character other than letters, digits, spaces and ${COMMIT_PREFIX_PUNCTUATION}`;
   return null;
 }
 function readTeamCommitPrefix(repoDir) {
@@ -1584,7 +1609,9 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
   };
   if (withCi) {
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
-    const bump = `${commitMessagePrefix(commitPrefix)}ci: bump plugin version`;
+    const prefixProblem = commitPrefixProblem(commitPrefix.trim());
+    if (prefixProblem) throw new Error(`the commit prefix cannot go into the CI job: it is ${prefixProblem}`);
+    const bump = `${commitMessagePrefix(commitPrefix)}${BUMP_TITLE}`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
     } else {
@@ -2079,7 +2106,7 @@ function readTeamFileObject(repoDir) {
   return text === null ? null : parseObject(text);
 }
 var SCAFFOLD_VERSION_KEY = "scaffoldVersion";
-var UPDATE_THIS_COPY = "Update this copy of TeamHandbook first - run `/plugin marketplace update teamhandbook` and then `/reload-plugins` - and run the refresh again.";
+var UPDATE_THIS_COPY = "Update this copy of TeamHandbook first - run `claude plugin update handbook@teamhandbook`, then start a new session or run `/reload-plugins` - and run the refresh again.";
 function releaseParts(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
   return match ? match.slice(1).map(Number) : null;
@@ -2200,7 +2227,9 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
   const recorded = recordedPrefix.prefix;
   const rawPrefix = readTeamFileObject(repoDir)?.commitPrefix;
   const prefixProblem = commitPrefix !== void 0 || rawPrefix === void 0 ? null : recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix");
-  const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  const chosen = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  const unusable = commitPrefixProblem(chosen);
+  const prefix = unusable ? "" : chosen;
   const generated = skeletonFiles(
     team.marketplaceName,
     team.repoUrl,
@@ -2212,7 +2241,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
     void 0,
     commitVersioning ? void 0 : readPluginVersion(repoDir)
   );
-  const known = commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team);
+  const known = !unusable && (commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team));
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
   const linked = [];
@@ -2250,7 +2279,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
     if (unknownPrefix.has(path)) {
       withheld.push({
         path,
-        reason: `it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge requires can give it with --commit-prefix "<prefix>" on the plan and again on the run that sends it.`
+        reason: unusable ? `it embeds the team's commit-message prefix, and the one this machine has is ${unusable}, so it is not written into a file a CI runner executes. Correct commitPrefix in .teamhandbook.json, or give the prefix with --commit-prefix "<prefix>" on the plan and again on the run that sends it.` : prefixProblem ? `it embeds the team's commit-message prefix, and the one ${TEAM_PREFIX_FILE} records is ${prefixProblem}, so it is not used, and the file as it stands is left unchanged: a job written before the prefix moved into a variable carries that prefix in a shell line it runs on every merge. Give the prefix the team's forge requires with --commit-prefix "<prefix>" on the plan and again on the run that sends it: that records it and rewrites the job so no prefix reaches a shell line.` : `it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge requires can give it with --commit-prefix "<prefix>" on the plan and again on the run that sends it.`
       });
       continue;
     }
@@ -2458,13 +2487,12 @@ function refreshPushPrefix(team, choice, repoDir) {
   const given = choice.commitPrefix.trim();
   return { team: { ...team, commitPrefix: given }, prefix: commitMessagePrefix(given), source: "flag" };
 }
-var SHELL_ACTIVE = /["`$\\!]/;
 function commitPrefixFlagError(prefix) {
   if (prefix === void 0) return null;
   if (!prefix.trim()) {
     return "--commit-prefix needs the prefix the team's forge requires; an empty one is not something this records. Nothing was changed.";
   }
-  const problem = commitPrefixProblem(prefix.trim()) ?? (SHELL_ACTIVE.test(prefix) ? "carrying a quote, a backtick, a dollar sign, a backslash or an exclamation mark" : null);
+  const problem = commitPrefixProblem(prefix.trim());
   return problem ? `that commit-message prefix cannot be used: it is ${problem}. Nothing was changed.` : null;
 }
 function branchExampleError(example, git, repoDir) {
@@ -2618,7 +2646,7 @@ function applyUpgrade(team, paths, git = runGit, forge = runForge, commitMessage
         ...raised ? ["The plugin version is raised rather than reset, so teammates' copies pick this up."] : removed ? [
           "This takes the version line out of `.claude-plugin/plugin.json`: from this merge on the",
           "repository is versioned by commit, and every merge reaches teammates' copies when their",
-          "marketplace updates. Open requests that raise the version conflict with this one; merge or",
+          "copy of the plugin updates. Open requests that raise the version conflict with this one; merge or",
           "close them first."
         ] : byCommit ? ["The repository is versioned by commit, so this merge is what teammates' copies update to."] : ["The plugin version is not raised: " + (version.blocked ?? "nothing here can raise it.")],
         "",
@@ -2714,7 +2742,7 @@ function formatUpgradePlan(plan) {
     lines.push(
       "",
       `This repository is versioned by commit: ${PLUGIN_MANIFEST} carries no version, so there is none to raise,`,
-      "and the merge itself is what teammates' copies update to when their marketplace updates."
+      "and the merge itself is what teammates' copies update to when their copy of the plugin updates."
     );
   } else if (version.next) {
     lines.push(
@@ -2774,17 +2802,18 @@ function commitVersioningSwitch(current, marketplace, open) {
   return [
     `This request switches the repository to versioning by commit: it takes "version": "${current}" out of`,
     `${PLUGIN_MANIFEST}, nothing raises a version after it, and every merge reaches teammates' copies when`,
-    "their marketplace updates.",
+    "their copy of the plugin updates.",
     "Open requests that raise the version conflict with this commit - they change the line it deletes - so",
     "merge or close them first. One merged after it conflicts in plugin.json: keep the side without the",
     "version line.",
     ...open.length ? [`Open now: ${open.join(", ")}.`] : [],
-    "Once this is merged, each teammate moves to the new scheme with:",
-    `  /plugin marketplace update ${marketplace}`,
-    "  /reload-plugins",
+    "Once this is merged, each teammate moves to the new scheme on its own in their next session if",
+    "auto-update is on for this marketplace, and otherwise with:",
+    `  claude plugin update ${marketplace}@${marketplace}`,
+    "then a new session or /reload-plugins.",
     "A TeamHandbook older than 0.31.0 still raises a version when it shares, which puts the line back:",
-    "have everyone who shares to this repository update to 0.31.0 or later first (`/plugin marketplace update",
-    "teamhandbook`, then `/reload-plugins`). One older than 0.29.0 also",
+    "have everyone who shares to this repository update to 0.31.0 or later first (`claude plugin update",
+    "handbook@teamhandbook`, then a new session or `/reload-plugins`). One older than 0.29.0 also",
     `does not read "scaffoldVersion" in ${TEAM_PREFIX_FILE}, so nothing stops it refreshing this scaffold back.`
   ];
 }

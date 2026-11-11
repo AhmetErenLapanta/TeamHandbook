@@ -59,6 +59,10 @@ you hit - and offers each one as a personal, project, or team skill. See
   the number is stale until it is rerun, and `evals/tutma/` stays unread while you write one.
 - `dist/` is esbuild output (`scripts/build.mjs`). Edit `src/` and rebuild; an edit made
   directly in `dist/` is overwritten by the next build.
+- Anything under `orchestrator/`: [orchestrator/docs/README.md](orchestrator/docs/README.md) says which file
+  covers it; `orchestrator/docs/internals/` holds the orchestrator's design and its traps, and a
+  review of an orchestrator change reads it there. A change to the orchestrator's screens reads
+  [orchestrator/docs/internals/design.md](orchestrator/docs/internals/design.md) first.
 
 ## Non-negotiable invariants (don't regress these)
 

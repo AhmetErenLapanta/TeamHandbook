@@ -1,0 +1,9 @@
+{"meta":{"agent":"opencode","cliVersion":"1.18.31","source":"hand"}}
+{"expect_outbound":{"args":["run","--format","json"],"stdin":["Task: "]}}
+{"emit_inbound":{"type":"step_start","part":{}}}
+{"emit_inbound":{"type":"tool_use","part":{"tool":"read"}}}
+{"emit_inbound":{"type":"tool_use","part":{"tool":"edit"}}}
+{"emit_inbound":{"type":"text","part":{"text":"Added an on-call step to the release checklist."}}}
+{"emit_inbound":{"type":"step_finish","part":{"cost":0.01,"tokens":{"input":100,"output":20}}}}
+{"emit_inbound":{"type":"step_finish","part":{"cost":0.02,"tokens":{"input":50,"output":10}}}}
+{"exit":0}

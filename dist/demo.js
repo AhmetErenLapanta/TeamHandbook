@@ -23,6 +23,11 @@ function isFilePath(value) {
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
+}
 function detectSecret(text) {
   return locateSecret(text)?.pattern ?? null;
 }
@@ -119,7 +124,7 @@ var init_secrets = __esm({
       { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
       { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
       { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
       // common credential shapes the generic keyword rule misses
       { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
       { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -281,6 +286,9 @@ function readHostIdentity() {
   } catch {
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+function hostIdentityOf(candidates) {
   const names = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;
@@ -1447,13 +1455,13 @@ var init_skill_format = __esm({
       `^[${SPACE}]*\\|?[${SPACE}]*:?-{3,}:?[${SPACE}]*(\\|[${SPACE}]*:?-{3,}:?[${SPACE}]*)*\\|?[${SPACE}]*$`,
       "u"
     );
-    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB}test`);
+    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB}test|${WB}check|do\u011Frulama|dogrulama|kontrol`);
     DELIVERY_HEAD_RE = ci(`deliver|hand-?off|${WB}done${WB}|finish`);
     COMMAND_RE = ci(
       "```|`[^`\\n]*" + WB + "(run|gradlew|npm|npx|pytest|make|git|python3?|node|mvn|go|cargo|bash|\\./)[^`\\n]*`"
     );
     PITFALL_HEAD_RE = ci(
-      "pitfall|mistake|gotcha|common (errors|failures|problems)|anti-?pattern|red flags"
+      "pitfall|mistake|gotcha|caveat|watch out|common (errors|failures|problems)|anti-?pattern|red flags|hata|tuzak|dikkat|s\u0131k yap\u0131lan"
     );
     ABS_PATH_RE = new RegExp(`(/(?:Users|home)/[^/${SPACE}]+|[A-Za-z]:\\\\Users\\\\)`, "u");
     EMAIL_RE = new RegExp(`[${WORD_CHAR}.+-]+@[${WORD_CHAR}-]+\\.[A-Za-z]{2,}`, "u");
@@ -1479,7 +1487,7 @@ var init_skill_format = __esm({
     );
     MAP_HEAD_RE = /file map|files? touched/i;
     EXEMPT_EXACT_RE = ci(
-      "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$"
+      "^(file map|files? touched|verification|verify|validation|checklist|tests?|how to check|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|caveats|anti-?patterns?|red flags|not visible in( the)? history|do\u011Frulama|dogrulama|kontrol|nas\u0131l kontrol edilir|s\u0131k (yap\u0131lan )?hatalar|hatalar|tuzaklar|dikkat( edilecekler)?)$"
     );
     FORMAT_PATTERNS = {
       TRIGGER_RE,

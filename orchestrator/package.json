@@ -1,0 +1,58 @@
+{
+  "name": "teamhandbook-orchestrator",
+  "version": "0.1.0",
+  "description": "A web orchestrator for the team repositories TeamHandbook sets up: what every team has, changes proposed as merge requests, opt-in usage, and agent tasks that end in a request for review.",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.16"
+  },
+  "scripts": {
+    "build": "node build.mjs && vite build",
+    "build:package": "node scripts/build-package.mjs",
+    "build:release": "node scripts/build-release.mjs",
+    "start": "node scripts/start.mjs",
+    "dev": "node scripts/dev.mjs",
+    "demo": "node dist/seed.js",
+    "test": "vitest run",
+    "evals": "vitest run --config evals/vitest.config.ts",
+    "e2e": "playwright test",
+    "test:e2e:cloud": "playwright test -c playwright.cloud.config.ts",
+    "test:e2e:local": "playwright test -c playwright.local.config.ts",
+    "typecheck": "tsc --noEmit",
+    "lab": "sh lab/up.sh",
+    "lab:down": "sh lab/down.sh",
+    "lab:test": "playwright test -c lab/playwright.config.ts",
+    "deploy:local": "bash deploy/local.sh",
+    "deploy:staging": "bash deploy/deploy.sh release staging",
+    "deploy:prod": "bash deploy/deploy.sh release prod",
+    "deploy:rollback": "bash deploy/deploy.sh rollback",
+    "deploy:status": "bash deploy/deploy.sh status"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.17",
+    "hono": "4.13.13",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@playwright/test": "1.64.0",
+    "@types/node": "22.20.4",
+    "@types/pg": "8.23.1",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "esbuild": "0.23.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "5.9.3",
+    "vite": "6.4.4",
+    "vitest": "3.2.7"
+  },
+  "allowScripts": {
+    "esbuild": false,
+    "fsevents": false
+  }
+}

