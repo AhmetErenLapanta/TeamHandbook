@@ -382,6 +382,9 @@ function readHostIdentity() {
   } catch {
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+function hostIdentityOf(candidates) {
   const names = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;
@@ -531,6 +534,11 @@ var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
+}
 var SECRET_PATTERNS = [
   // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
   // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
@@ -604,7 +612,7 @@ var SECRET_PATTERNS = [
   { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
   // common credential shapes the generic keyword rule misses
   { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
   { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -787,6 +795,7 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
 function marketplacesRoot() {
   return join6(homedir3(), ".claude", "plugins", "marketplaces");
 }
@@ -1143,7 +1152,7 @@ function namer(templates, areas) {
 }
 function resolverFrom(mirrors, templates, areas, compiled, filters) {
   const named = namer(templates, areas);
-  const resolve2 = (path) => {
+  const resolve3 = (path) => {
     const segments = path.split("/");
     if (filters) {
       if (TEST.test(path)) return "test";
@@ -1156,11 +1165,11 @@ function resolverFrom(mirrors, templates, areas, compiled, filters) {
     }
     return named(path);
   };
-  resolve2.mirrors = mirrors;
-  resolve2.templates = templates;
-  resolve2.areas = areas;
-  resolve2.compiled = compiled;
-  return resolve2;
+  resolve3.mirrors = mirrors;
+  resolve3.templates = templates;
+  resolve3.areas = areas;
+  resolve3.compiled = compiled;
+  return resolve3;
 }
 var LOCALES = /* @__PURE__ */ new Set([
   "en",
@@ -1619,7 +1628,7 @@ function pendingTeamNudge(home = handbookHome()) {
   const approved = listCandidates(home, "approved").length;
   if (approved < TEAM_NUDGE_APPROVALS) return null;
   writeFileAtomic(teamNudgeMarkerFile(home), (/* @__PURE__ */ new Date()).toISOString() + "\n");
-  return `handbook: ${approved} approved skills live only on this machine - one /handbook:init shares them with your team (teammates get every future merge when their marketplace updates).`;
+  return `handbook: ${approved} approved skills live only on this machine - one /handbook:init shares them with your team (teammates get every future merge when their copy of the plugin updates).`;
 }
 function pendingHarvestCount(home = handbookHome()) {
   let entries;
@@ -1924,6 +1933,233 @@ function spawnPipelineRunner(runnerScript, spawnFn = spawn) {
   child.unref();
 }
 
+// src/lib/usage-report.ts
+import { appendFileSync as appendFileSync4, readdirSync as readdirSync7, readFileSync as readFileSync11, renameSync as renameSync3, rmSync as rmSync4, statSync as statSync4 } from "node:fs";
+import { join as join12 } from "node:path";
+var ENDPOINT_MAX = 256;
+var OUTBOX_MAX_AGE_MS = 31 * 24 * 36e5;
+var CLAIM_STALE_MS = 10 * 6e4;
+var SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+function allowedEndpoint(value) {
+  if (/[\s\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.href !== value || url.username || url.password || url.search || url.hash || value.length > ENDPOINT_MAX) return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+}
+function readJsonObject(file) {
+  try {
+    const parsed = JSON.parse(readFileSync11(file, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function teamUsageRequest(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  if (!team) return null;
+  const copy = join12(root, team.marketplaceName);
+  const usage = readJsonObject(join12(copy, TEAM_PREFIX_FILE))?.usage;
+  const endpoint = usage?.endpoint;
+  if (typeof endpoint !== "string" || !allowedEndpoint(endpoint)) return null;
+  const plugin = readJsonObject(join12(copy, ".claude-plugin", "plugin.json"))?.name;
+  if (typeof plugin !== "string" || !SLUG.test(plugin)) return null;
+  let skills = [];
+  try {
+    skills = readdirSync7(join12(copy, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory() && SLUG.test(entry.name)).map((entry) => entry.name);
+  } catch {
+    return null;
+  }
+  return { endpoint, plugin, skills: new Set(skills) };
+}
+function usageConsent(endpoint, home = handbookHome()) {
+  if (configIsBroken(home)) return "undecided";
+  const share = readConfigFile(home).usage?.shareWith;
+  return share === endpoint ? "agreed" : share === false ? "declined" : "undecided";
+}
+function usageNotice(home = handbookHome(), root = marketplacesRoot()) {
+  if (!sessionDetectEnabled(home)) return null;
+  const request = teamUsageRequest(home, root);
+  if (!request || usageConsent(request.endpoint, home) !== "undecided") return null;
+  return `TeamHandbook: your team asks to see which ${request.plugin} skills get used, by skill name and hour, sent to ${request.endpoint} and nothing else. To agree, add "usage": { "shareWith": ${JSON.stringify(request.endpoint)} } to ${join12(home, "config.json")}; "shareWith": false declines and stops this note.`;
+}
+
+// src/lib/policy.ts
+import { readFileSync as readFileSync12 } from "node:fs";
+import { basename as basename6, isAbsolute, join as join13, resolve as resolve2 } from "node:path";
+var POLICY_ACTIONS = ["mcp.use", "skill.use", "tool.use"];
+var POLICY_TOOLS = {
+  Bash: { tools: ["Bash"], field: "command" },
+  Read: { tools: ["Read"], field: "file_path" },
+  Edit: { tools: ["Edit", "MultiEdit", "Write", "NotebookEdit"], field: "file_path" },
+  Glob: { tools: ["Glob"], field: "path" },
+  Grep: { tools: ["Grep"], field: "path" },
+  WebFetch: { tools: ["WebFetch"], field: "url" },
+  WebSearch: { tools: ["WebSearch"], field: "query" }
+};
+var POLICY_MAX_POLICIES = 50;
+var POLICY_MAX_RULES = 20;
+var POLICY_MAX_RESOURCES = 20;
+var POLICY_MAX_STATEMENTS = POLICY_MAX_RULES * POLICY_MAX_RESOURCES;
+var POLICY_NAME_MAX = 100;
+var POLICY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+var POLICY_REASON_MAX = 200;
+var POLICY_PATTERN_MAX = 200;
+var NAME = /^[A-Za-z0-9_.*-]+$/;
+var SKILL = /^[A-Za-z0-9_.:*-]+$/;
+var KEYS = /* @__PURE__ */ new Set(["action", "resource", "effect", "reason"]);
+function printableProblem(value, max, what) {
+  if (!value.trim()) return `its ${what} is empty`;
+  if (value.length > max) return `its ${what} is longer than ${max} characters`;
+  if (/\p{C}/u.test(value)) return `its ${what} carries a control character`;
+  return null;
+}
+function resourceProblem(action, resource) {
+  const [kind, ...rest] = resource.split(":");
+  const value = rest.join(":");
+  if (action === "mcp.use") {
+    if (kind !== "mcp") return "an mcp.use rule names mcp:<server> or mcp:<server>/<tool>";
+    const [server, tool2, extra] = value.split("/");
+    if (extra !== void 0 || !server || !NAME.test(server) || tool2 !== void 0 && (!tool2 || !NAME.test(tool2))) {
+      return "an mcp.use rule names mcp:<server> or mcp:<server>/<tool>, in letters, digits, _ . - and *";
+    }
+    return null;
+  }
+  if (action === "skill.use") {
+    if (kind !== "skill" || !value || !SKILL.test(value)) return "a skill.use rule names skill:<skill>, in letters, digits, _ . : - and *";
+    return null;
+  }
+  const tool = rest[0];
+  const pattern = rest.slice(1).join(":");
+  if (kind !== "tool" || tool === void 0 || rest.length < 2) return "a tool.use rule names tool:<tool>:<pattern>";
+  if (!Object.hasOwn(POLICY_TOOLS, tool)) return `a tool.use rule names one of ${Object.keys(POLICY_TOOLS).join(", ")}, not ${JSON.stringify(tool)}`;
+  return printableProblem(pattern, POLICY_PATTERN_MAX, "pattern");
+}
+function ruleProblem(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "it is not an object";
+  const rule = raw;
+  const extra = Object.keys(rule).filter((key) => !KEYS.has(key));
+  if (extra.length) return `it has ${extra.map((k) => JSON.stringify(k)).join(", ")}, which a rule does not take`;
+  if (typeof rule.action !== "string" || !POLICY_ACTIONS.includes(rule.action)) return `its action is not one of ${POLICY_ACTIONS.join(", ")}`;
+  if (rule.effect !== "deny") return 'its effect is not "deny": a policy only takes away, and a capability is given by adding it in a reviewed request';
+  if (typeof rule.resource !== "string") return "it has no resource";
+  if (typeof rule.reason !== "string") return "it has no reason";
+  const reason = printableProblem(rule.reason, POLICY_REASON_MAX, "reason");
+  if (reason) return reason;
+  const resource = resourceProblem(rule.action, rule.resource);
+  if (resource) return resource;
+  const secret = detectSecret(`${rule.resource}
+${rule.reason}`);
+  return secret ? `it looks like it contains a secret (${secret})` : null;
+}
+function rulesProblem(value) {
+  if (!Array.isArray(value) || !value.length) return "it has no rules";
+  if (value.length > POLICY_MAX_STATEMENTS) return `it has more than ${POLICY_MAX_STATEMENTS} rules`;
+  for (const [index, rule] of value.entries()) {
+    const problem = ruleProblem(rule);
+    if (problem) return `rule ${index + 1}: ${problem}`;
+  }
+  return null;
+}
+function policiesProblem(value) {
+  if (!Array.isArray(value)) return "policies is not a list";
+  if (value.length > POLICY_MAX_POLICIES) return `policies has more than ${POLICY_MAX_POLICIES} entries`;
+  const ids = /* @__PURE__ */ new Set();
+  for (const [index, raw] of value.entries()) {
+    const at = `policy ${index + 1}`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return `${at} is not an object`;
+    const policy = raw;
+    const extra = Object.keys(policy).filter((key) => !["id", "name", "rules"].includes(key));
+    if (extra.length) return `${at} has ${extra.map((k) => JSON.stringify(k)).join(", ")}, which a policy does not take`;
+    if (typeof policy.id !== "string" || !POLICY_ID.test(policy.id)) return `${at} has no id of letters, digits, _ and -`;
+    if (ids.has(policy.id)) return `${at} repeats the id ${policy.id}`;
+    ids.add(policy.id);
+    const name = typeof policy.name === "string" ? printableProblem(policy.name, POLICY_NAME_MAX, "name") : "its name is missing";
+    if (name) return `${at} (${policy.id}): ${name}`;
+    const rules = rulesProblem(policy.rules);
+    if (rules) return `${at} (${policy.id}): ${rules}`;
+  }
+  return null;
+}
+function policyRules(policies) {
+  return policies.flatMap((p) => p.rules);
+}
+function policyCacheFile(home = handbookHome()) {
+  return join13(home, "policy-cache.json");
+}
+function readCache(home, marketplace) {
+  try {
+    const cache = JSON.parse(readFileSync12(policyCacheFile(home), "utf8"));
+    return cache.marketplace === marketplace && Array.isArray(cache.rules) && cache.rules.every((r) => ruleProblem(r) === null) ? cache : null;
+  } catch {
+    return null;
+  }
+}
+function teamPolicy(home = handbookHome(), root = marketplacesRoot(), now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+  const team = loadTeamConfig(home);
+  if (!team) return { source: "none", rules: [] };
+  const copy = join13(root, team.marketplaceName);
+  let problem;
+  let text = null;
+  try {
+    text = readFileSync12(join13(copy, TEAM_PREFIX_FILE), "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT" && readable(copy)) return { source: "team", rules: [], copy };
+  }
+  if (text === null) {
+    problem = `${TEAM_PREFIX_FILE} in the team's copy cannot be read`;
+  } else {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = void 0;
+    }
+    const value = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.policies : void 0;
+    if (parsed === void 0 || parsed !== null && typeof parsed !== "object" || Array.isArray(parsed)) {
+      problem = `${TEAM_PREFIX_FILE} in the team's copy is not a JSON object`;
+    } else if (value === void 0) {
+      return { source: "team", rules: [], copy };
+    } else {
+      const grammar = policiesProblem(value);
+      if (!grammar) {
+        const rules = policyRules(value);
+        const cached3 = readCache(home, team.marketplaceName);
+        if (!cached3 || JSON.stringify(cached3.rules) !== JSON.stringify(rules)) {
+          try {
+            writeFileAtomic(policyCacheFile(home), JSON.stringify({ marketplace: team.marketplaceName, rules, savedAt: now() }, null, 2) + "\n");
+          } catch {
+          }
+        }
+        return { source: "team", rules, copy };
+      }
+      problem = `the policies in ${TEAM_PREFIX_FILE} are not valid: ${grammar}`;
+    }
+  }
+  const cached2 = readCache(home, team.marketplaceName);
+  return cached2 ? { source: "cache", rules: cached2.rules, problem, savedAt: cached2.savedAt, copy } : { source: "none", rules: [], problem, copy };
+}
+function readable(dir) {
+  try {
+    readFileSync12(join13(dir, ".claude-plugin", "plugin.json"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function policyNotice(policy) {
+  if (!policy.problem) return null;
+  if (policy.source === "cache") {
+    return `TeamHandbook: ${policy.problem}. The team's policy as last read on ${policy.savedAt?.slice(0, 10)} stays in force (${policy.rules.length} rule(s)) until the team's copy carries a valid one.`;
+  }
+  return `TeamHandbook: ${policy.problem}. No valid policy was read on this machine before, so nothing is blocked until the team's copy carries one.`;
+}
+
 // src/hooks/session-start.ts
 async function main() {
   const input = parseHookInput(await readStdin());
@@ -1934,6 +2170,10 @@ async function main() {
   cleanupStaleSessionFiles();
   const notice = sessionStartNotice(input?.cwd ?? process.cwd());
   if (notice) console.log(notice);
+  const ask = usageNotice();
+  if (ask) console.log(ask);
+  const policy = policyNotice(teamPolicy());
+  if (policy) console.log(policy);
 }
 main().then(
   () => process.exit(0),

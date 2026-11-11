@@ -152,6 +152,11 @@ var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
+}
 var SECRET_PATTERNS = [
   // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
   // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
@@ -225,7 +230,7 @@ var SECRET_PATTERNS = [
   { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
   // common credential shapes the generic keyword rule misses
   { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
   { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -425,12 +430,234 @@ function flushResolvedPairs(sessionId, home = handbookHome(), ts = (/* @__PURE__
   return signals;
 }
 
+// src/lib/usage-report.ts
+import { appendFileSync as appendFileSync2, readdirSync as readdirSync3, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync2 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// src/lib/config.ts
+import { existsSync as existsSync2, readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+function configFile(home = handbookHome()) {
+  return join4(home, "config.json");
+}
+function readConfigFile(home = handbookHome()) {
+  try {
+    const parsed = JSON.parse(readFileSync4(configFile(home), "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function configIsBroken(home = handbookHome()) {
+  const file = configFile(home);
+  if (!existsSync2(file)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync4(file, "utf8"));
+    return !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  } catch {
+    return true;
+  }
+}
+
+// src/lib/init.ts
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname3, join as join5 } from "node:path";
+
+// src/lib/score.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+// src/lib/identity.ts
+var HOME_PATH = new RegExp(
+  "(?:\\/(?:Users|home)\\/|[A-Za-z]:\\\\{1,2}(?:Users|home)\\\\{1,2})([A-Za-z0-9._-]{1,40})",
+  "g"
+);
+
+// src/lib/prompt-safety.ts
+var LINE_TERMINATOR_CLASS = "\\n\\r\\u000B\\u000C\\u0085\\u2028\\u2029";
+var LINE_TERMINATORS = new RegExp(`\\r\\n|[${LINE_TERMINATOR_CLASS}]`);
+var LABEL_BREAKS = new RegExp(`[${LINE_TERMINATOR_CLASS}]+`, "g");
+
+// src/lib/score.ts
+var execFileAsync = promisify(execFile);
+
+// src/lib/distill.ts
+function openingsOf(literal) {
+  return [...literal].reduceRight((rest, ch) => `(?:${ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${rest})?`, "");
+}
+var CUT_SCOPE_SENTENCE = new RegExp(
+  `\\s*Applies ONLY in the(?: \\S*${openingsOf(" repository - do not use it elsewhere.")})?$`
+);
+
+// src/lib/init.ts
+function loadTeamConfig(home = handbookHome()) {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
+  }
+  return null;
+}
+var CONSUMER_NOTICE_HOOKS = JSON.stringify(
+  {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs"' }] }
+      ]
+    }
+  },
+  null,
+  2
+);
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+function marketplacesRoot() {
+  return join5(homedir2(), ".claude", "plugins", "marketplaces");
+}
+
+// src/lib/git-log.ts
+var MAX_OUTPUT_BYTES = 1 << 28;
+var MAX_BLOB_BYTES = 1 << 20;
+
+// src/lib/session-workflow.ts
+function sessionDetectEnabled(home = handbookHome()) {
+  const sessions = readConfigFile(home).sessions;
+  return !configIsBroken(home) && sessions?.detect !== false;
+}
+
+// src/lib/usage-report.ts
+var OUTBOX_LIMIT = 500;
+var FLUSH_TIMEOUT_MS = 3e3;
+var ENDPOINT_MAX = 256;
+var OUTBOX_MAX_AGE_MS = 31 * 24 * 36e5;
+var CLAIM_STALE_MS = 10 * 6e4;
+var SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+var HOUR = /^\d{4}-\d{2}-\d{2}T\d{2}$/;
+function allowedEndpoint(value) {
+  if (/[\s\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.href !== value || url.username || url.password || url.search || url.hash || value.length > ENDPOINT_MAX) return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+}
+function readJsonObject(file) {
+  try {
+    const parsed = JSON.parse(readFileSync5(file, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function teamUsageRequest(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  if (!team) return null;
+  const copy = join6(root, team.marketplaceName);
+  const usage = readJsonObject(join6(copy, TEAM_PREFIX_FILE))?.usage;
+  const endpoint = usage?.endpoint;
+  if (typeof endpoint !== "string" || !allowedEndpoint(endpoint)) return null;
+  const plugin = readJsonObject(join6(copy, ".claude-plugin", "plugin.json"))?.name;
+  if (typeof plugin !== "string" || !SLUG.test(plugin)) return null;
+  let skills = [];
+  try {
+    skills = readdirSync3(join6(copy, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory() && SLUG.test(entry.name)).map((entry) => entry.name);
+  } catch {
+    return null;
+  }
+  return { endpoint, plugin, skills: new Set(skills) };
+}
+function usageConsent(endpoint, home = handbookHome()) {
+  if (configIsBroken(home)) return "undecided";
+  const share = readConfigFile(home).usage?.shareWith;
+  return share === endpoint ? "agreed" : share === false ? "declined" : "undecided";
+}
+function reportingRequest(home, root) {
+  if (!sessionDetectEnabled(home)) return null;
+  const request = teamUsageRequest(home, root);
+  return request && usageConsent(request.endpoint, home) === "agreed" ? request : null;
+}
+function outboxFile(home = handbookHome()) {
+  return join6(home, "usage-outbox.jsonl");
+}
+function readQueue(file) {
+  let text;
+  try {
+    text = readFileSync5(file, "utf8");
+  } catch {
+    return [];
+  }
+  return text.split("\n").flatMap((line) => {
+    try {
+      const e = JSON.parse(line);
+      return typeof e?.endpoint === "string" && typeof e.skill === "string" && typeof e.hour === "string" ? [{ endpoint: e.endpoint, skill: e.skill, hour: e.hour }] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+async function postJson(url, body, timeoutMs) {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "error"
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+function recentHour(hour, now) {
+  if (!HOUR.test(hour)) return false;
+  const at = Date.parse(`${hour}:00:00Z`);
+  return Number.isFinite(at) && new Date(at).toISOString().slice(0, 13) === hour && now - at <= OUTBOX_MAX_AGE_MS && at - now <= 36e5;
+}
+function sweepStaleClaims(home, now) {
+  const prefix = `${outboxFile(home).split("/").pop()}.sending-`;
+  let names = [];
+  try {
+    names = readdirSync3(home).filter((name) => name.startsWith(prefix));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    try {
+      if (now - statSync2(join6(home, name)).mtimeMs > CLAIM_STALE_MS) rmSync3(join6(home, name), { force: true });
+    } catch {
+    }
+  }
+}
+async function flushTeamUsage(home = handbookHome(), root = marketplacesRoot(), post = postJson, now = Date.now()) {
+  sweepStaleClaims(home, now);
+  const claimed = `${outboxFile(home)}.sending-${process.pid}-${now}`;
+  try {
+    renameSync2(outboxFile(home), claimed);
+  } catch {
+    return;
+  }
+  try {
+    const request = reportingRequest(home, root);
+    if (!request) return;
+    const sendable = readQueue(claimed).filter((e) => e.endpoint === request.endpoint && request.skills.has(e.skill) && recentHour(e.hour, now)).slice(-OUTBOX_LIMIT).map((e) => ({ skill: e.skill, hour: e.hour }));
+    if (!sendable.length) return;
+    if (await post(request.endpoint, JSON.stringify({ events: sendable }), FLUSH_TIMEOUT_MS)) return;
+    appendFileSync2(outboxFile(home), sendable.map((e) => JSON.stringify({ endpoint: request.endpoint, ...e }) + "\n").join(""));
+  } finally {
+    rmSync3(claimed, { force: true });
+  }
+}
+
 // src/hooks/stop.ts
 async function main() {
   const input = parseHookInput(await readStdin());
   if (!input?.session_id) return;
   const sessionId = input.session_id;
   withSessionLock(sessionId, () => flushResolvedPairs(sessionId));
+  await flushTeamUsage();
 }
 main().then(
   () => process.exit(0),

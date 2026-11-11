@@ -110,6 +110,9 @@ function readHostIdentity() {
   } catch {
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+function hostIdentityOf(candidates) {
   const names = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;
@@ -260,6 +263,11 @@ function isFilePath(value) {
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
+}
 function detectSecret(text) {
   return locateSecret(text)?.pattern ?? null;
 }
@@ -356,7 +364,7 @@ var init_secrets = __esm({
       { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
       { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
       { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
       // common credential shapes the generic keyword rule misses
       { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
       { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -638,13 +646,13 @@ var init_skill_format = __esm({
       `^[${SPACE}]*\\|?[${SPACE}]*:?-{3,}:?[${SPACE}]*(\\|[${SPACE}]*:?-{3,}:?[${SPACE}]*)*\\|?[${SPACE}]*$`,
       "u"
     );
-    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB2}test`);
+    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB2}test|${WB2}check|do\u011Frulama|dogrulama|kontrol`);
     DELIVERY_HEAD_RE = ci(`deliver|hand-?off|${WB2}done${WB2}|finish`);
     COMMAND_RE = ci(
       "```|`[^`\\n]*" + WB2 + "(run|gradlew|npm|npx|pytest|make|git|python3?|node|mvn|go|cargo|bash|\\./)[^`\\n]*`"
     );
     PITFALL_HEAD_RE = ci(
-      "pitfall|mistake|gotcha|common (errors|failures|problems)|anti-?pattern|red flags"
+      "pitfall|mistake|gotcha|caveat|watch out|common (errors|failures|problems)|anti-?pattern|red flags|hata|tuzak|dikkat|s\u0131k yap\u0131lan"
     );
     ABS_PATH_RE = new RegExp(`(/(?:Users|home)/[^/${SPACE}]+|[A-Za-z]:\\\\Users\\\\)`, "u");
     EMAIL_RE = new RegExp(`[${WORD_CHAR}.+-]+@[${WORD_CHAR}-]+\\.[A-Za-z]{2,}`, "u");
@@ -656,7 +664,7 @@ var init_skill_format = __esm({
       "\\?|not (recorded|measured|visible|captured|in the evidence|known)|no commit|nothing (in the )?(history|evidence)|does not (say|record|show)|unknown|unclear|is not stated"
     );
     EXEMPT_EXACT_RE = ci(
-      "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$"
+      "^(file map|files? touched|verification|verify|validation|checklist|tests?|how to check|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|caveats|anti-?patterns?|red flags|not visible in( the)? history|do\u011Frulama|dogrulama|kontrol|nas\u0131l kontrol edilir|s\u0131k (yap\u0131lan )?hatalar|hatalar|tuzaklar|dikkat( edilecekler)?)$"
     );
   }
 });
@@ -664,8 +672,8 @@ var init_skill_format = __esm({
 // src/lib/doctor.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, readFileSync as readFileSync10, realpathSync, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join12 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync6, readdirSync as readdirSync5, readFileSync as readFileSync11, realpathSync, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join13 } from "node:path";
 
 // src/lib/counters.ts
 init_session_state();
@@ -944,6 +952,7 @@ plugin.version = parts.join(".");
 writeFileSync(file, JSON.stringify(plugin, null, 2) + "\\n");
 console.log(\`bumped plugin version to \${plugin.version}\`);
 `;
+var BUMP_TITLE = "ci: bump plugin version";
 var githubWorkflow = (bump) => `name: version-bump
 
 # Bumps the plugin version on every merge to main. The version string is Claude Code's
@@ -952,9 +961,11 @@ on:
   push:
     branches: [main]
 
+# The guard matches the fixed phrase the bump commit ends with and the commit message travels in
+# an environment value, so nothing of the team's reaches an expression or a shell line.
 jobs:
   bump:
-    if: "!startsWith(github.event.head_commit.message, '${bump}')"
+    if: "!endsWith(github.event.head_commit.message, '${BUMP_TITLE}')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -967,31 +978,37 @@ jobs:
       - run: |
           git config user.name "handbook-ci"
           git config user.email "handbook-ci@users.noreply.github.com"
-          git commit -am "${bump}"
+          git commit -am "$BUMP_MESSAGE"
           git push
+        env:
+          BUMP_MESSAGE: ${JSON.stringify(bump)}
 `;
 var gitlabCi = (bump) => `# Bumps the plugin version on every merge to the default branch. The version string is
 # Claude Code's update signal: without a bump, teammates keep serving the cached copy.
 # Requires a project access token with write_repository scope stored in the
 # TEAMHANDBOOK_CI_TOKEN CI/CD variable (Settings > CI/CD > Variables).
+# The rule matches the fixed phrase the bump commit ends with and the commit message travels in
+# a variable, so nothing of the team's reaches a rule or a shell line.
 version-bump:
   image: node:22
+  variables:
+    BUMP_MESSAGE: ${JSON.stringify(bump)}
   rules:
     # only run when the CI token exists - otherwise skip (don't fail the pipeline)
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /^${bump}/ && $TEAMHANDBOOK_CI_TOKEN'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_MESSAGE !~ /${BUMP_TITLE}\\s*$/ && $TEAMHANDBOOK_CI_TOKEN'
   script:
     - node scripts/bump-version.mjs
     - git config user.name "handbook-ci"
     - git config user.email "handbook-ci@noreply.invalid"
-    - git commit -am "${bump}"
+    - git commit -am "$BUMP_MESSAGE"
     - git push "https://oauth2:\${TEAMHANDBOOK_CI_TOKEN}@\${CI_SERVER_HOST}/\${CI_PROJECT_PATH}.git" "HEAD:\${CI_DEFAULT_BRANCH}"
 `;
 var UPDATES_BY_COMMIT = `\`.claude-plugin/plugin.json\` carries no version, so Claude Code versions the plugin
 by the commit it installs: everything merged here - a skill, a server, a command, an
-edit to this README - reaches a teammate's copy when their marketplace updates.`;
+edit to this README - reaches a teammate when their copy of the plugin updates.`;
 var UPDATES_BY_VERSION = `Every skill arrives as a merge request that also raises the version in
 \`.claude-plugin/plugin.json\`. That version is Claude Code's signal that the plugin
-moved, but a teammate's copy only picks it up when their marketplace updates, so
+moved, but a teammate's copy only picks it up when their copy of the plugin updates, so
 anything committed here by hand reaches nobody unless it raises the version too.`;
 var SWITCH_POINTER = `
 \`/handbook:init --upgrade --commit-versioning\` takes the version line out, after
@@ -1005,7 +1022,8 @@ cannot claim the same number, and a commit made here by hand reaches teammates l
 any other merge. In order:
 
 1. Everyone who shares to this repository updates TeamHandbook to 0.31.0 or later
-   first: \`/plugin marketplace update teamhandbook\`, then \`/reload-plugins\`. An older
+   first: \`claude plugin update handbook@teamhandbook\`, then a new session or
+   \`/reload-plugins\`. An older
    copy raises a version on every share, which puts the line back. A copy older than 0.29.0 also does not read
    \`scaffoldVersion\` in \`.teamhandbook.json\`, the record that stops an older copy
    from refreshing this scaffold back, so after the switch its \`--upgrade\` offers to
@@ -1038,7 +1056,7 @@ ${README_BEGIN}
 <!-- Edit outside these markers; TeamHandbook 0.32.0 or newer rewrites only what is between them, an older one replaces the whole file when it refreshes it. -->
 
 This repository is a Claude Code plugin marketplace; every merge reaches each
-subscribed teammate when their marketplace updates.
+subscribed teammate when their copy of the plugin updates.
 
 ## Access
 
@@ -1072,15 +1090,19 @@ Nothing here needs CI, an access token, or the right to push to a protected bran
 
 ### Getting new skills
 
-If auto-update is off for this marketplace, a merge reaches you only after these two:
+With auto-update on for this marketplace, a merge arrives on its own in your next
+session. With it off, update the plugin itself, then start a new session or run
+\`/reload-plugins\`:
 
 \`\`\`
-/plugin marketplace update ${name}
-/reload-plugins
+claude plugin update ${name}@${name}
 \`\`\`
 
-To stop doing it by hand, turn auto-update on for this marketplace from the \`/plugin\`
-menu. When you announce a merge to the team, include these two commands.
+From inside Claude Code the same is \`/plugin\` > Marketplaces > Update marketplace.
+Updating the marketplace list alone (\`claude plugin marketplace update\`) leaves the
+installed plugin where it was. To stop doing it by hand, turn auto-update on for this
+marketplace from the \`/plugin\` menu. When you announce a merge to the team, include
+this command.
 
 ${byCommit ? `${KEEP_BY_COMMIT}
 
@@ -1214,9 +1236,12 @@ process.exit(0);
 `;
 var TEAM_PREFIX_FILE = ".teamhandbook.json";
 var COMMIT_PREFIX_MAX = 64;
+var COMMIT_PREFIX_PUNCTUATION = ". , : / [ ] ( ) _ -";
+var COMMIT_PREFIX_CHARACTERS = /^[\p{L}\p{N} .,:/[\]()_-]*$/u;
 function commitPrefixProblem(value) {
   if (value.length > COMMIT_PREFIX_MAX) return `longer than ${COMMIT_PREFIX_MAX} characters`;
   if (/\p{C}/u.test(value)) return "carrying a control character";
+  if (!COMMIT_PREFIX_CHARACTERS.test(value)) return `carrying a character other than letters, digits, spaces and ${COMMIT_PREFIX_PUNCTUATION}`;
   return null;
 }
 function readTeamCommitPrefix(repoDir) {
@@ -1289,7 +1314,9 @@ function skeletonFiles(name, url, host, commitPrefix = "", withCi = false, branc
   };
   if (withCi) {
     files["scripts/bump-version.mjs"] = BUMP_SCRIPT;
-    const bump = `${commitMessagePrefix(commitPrefix)}ci: bump plugin version`;
+    const prefixProblem = commitPrefixProblem(commitPrefix.trim());
+    if (prefixProblem) throw new Error(`the commit prefix cannot go into the CI job: it is ${prefixProblem}`);
+    const bump = `${commitMessagePrefix(commitPrefix)}${BUMP_TITLE}`;
     if (host && host.includes("github")) {
       files[".github/workflows/version-bump.yml"] = githubWorkflow(bump);
     } else {
@@ -1494,7 +1521,9 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
   const recorded = recordedPrefix.prefix;
   const rawPrefix = readTeamFileObject(repoDir)?.commitPrefix;
   const prefixProblem = commitPrefix !== void 0 || rawPrefix === void 0 ? null : recordedPrefix.problem ?? (typeof rawPrefix === "string" ? null : "not a prefix");
-  const prefix = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  const chosen = commitPrefix?.trim() ?? recorded ?? team.commitPrefix?.trim() ?? "";
+  const unusable = commitPrefixProblem(chosen);
+  const prefix = unusable ? "" : chosen;
   const generated = skeletonFiles(
     team.marketplaceName,
     team.repoUrl,
@@ -1506,7 +1535,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
     void 0,
     commitVersioning ? void 0 : readPluginVersion(repoDir)
   );
-  const known = commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team);
+  const known = !unusable && (commitPrefix !== void 0 || recorded !== void 0 || commitPrefixIsKnown(team));
   const unknownPrefix = known ? /* @__PURE__ */ new Set() : prefixDependentPaths(team, withCi);
   const files = {};
   const linked = [];
@@ -1544,7 +1573,7 @@ function upgradeCandidates(repoDir, team, branchExample, assignment = {}, commit
     if (unknownPrefix.has(path)) {
       withheld.push({
         path,
-        reason: `it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge requires can give it with --commit-prefix "<prefix>" on the plan and again on the run that sends it.`
+        reason: unusable ? `it embeds the team's commit-message prefix, and the one this machine has is ${unusable}, so it is not written into a file a CI runner executes. Correct commitPrefix in .teamhandbook.json, or give the prefix with --commit-prefix "<prefix>" on the plan and again on the run that sends it.` : prefixProblem ? `it embeds the team's commit-message prefix, and the one ${TEAM_PREFIX_FILE} records is ${prefixProblem}, so it is not used, and the file as it stands is left unchanged: a job written before the prefix moved into a variable carries that prefix in a shell line it runs on every merge. Give the prefix the team's forge requires with --commit-prefix "<prefix>" on the plan and again on the run that sends it: that records it and rewrites the job so no prefix reaches a shell line.` : `it embeds the team's commit-message prefix, and neither this machine nor the repository records what it is - only the machine that ran /handbook:init was ever told. Regenerating it here would write the file with no prefix at all, which is a different answer from the team's, so it is not offered on this machine. Anyone who knows the prefix the team's forge requires can give it with --commit-prefix "<prefix>" on the plan and again on the run that sends it.`
       });
       continue;
     }
@@ -1787,6 +1816,92 @@ function lastPipelineRun(home = handbookHome()) {
   return null;
 }
 
+// src/lib/hook-settings.ts
+import { existsSync as existsSync5, readdirSync as readdirSync4, readFileSync as readFileSync10 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join12 } from "node:path";
+function managedSettingsDir(platform = process.platform) {
+  if (platform === "darwin") return "/Library/Application Support/ClaudeCode";
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode";
+  return "/etc/claude-code";
+}
+function defaultHookSettingsPaths() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return { managedDir: managedSettingsDir(), userDir: configDir || join12(homedir5(), ".claude"), projectDir: process.cwd() };
+}
+var Unreadable = class extends Error {
+  constructor(file, reason) {
+    super(reason);
+    this.file = file;
+  }
+};
+function readObject(file) {
+  if (!existsSync5(file)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync10(file, "utf8"));
+  } catch (err) {
+    throw new Unreadable(file, err.code ?? "not valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Unreadable(file, "not a JSON object");
+  return parsed;
+}
+function managedSources(dir) {
+  const sources = [];
+  const main = readObject(join12(dir, "managed-settings.json"));
+  if (main) sources.push({ file: join12(dir, "managed-settings.json"), settings: main });
+  const dropIns = join12(dir, "managed-settings.d");
+  if (existsSync5(dropIns)) {
+    let names;
+    try {
+      names = readdirSync4(dropIns);
+    } catch (err) {
+      throw new Unreadable(dropIns, err.code ?? "not readable");
+    }
+    for (const name of names.filter((n) => n.endsWith(".json") && !n.startsWith(".")).sort()) {
+      const settings = readObject(join12(dropIns, name));
+      if (settings) sources.push({ file: join12(dropIns, name), settings });
+    }
+  }
+  return sources;
+}
+function lastSetting(sources, key) {
+  for (const source of [...sources].reverse()) {
+    if (key in source.settings) return { value: source.settings[key], file: source.file };
+  }
+  return null;
+}
+function forceEnabled(sources, plugin) {
+  let enabled = false;
+  for (const { settings } of sources) {
+    const plugins = settings.enabledPlugins;
+    if (plugins && typeof plugins === "object" && !Array.isArray(plugins)) {
+      for (const [key, value] of Object.entries(plugins)) {
+        if (key.split("@")[0] === plugin) enabled = value === true;
+      }
+    }
+  }
+  return enabled;
+}
+function hookSettingsState(plugin, paths = defaultHookSettingsPaths()) {
+  try {
+    const managed = managedSources(paths.managedDir);
+    const managedOnly = lastSetting(managed, "allowManagedHooksOnly");
+    if (managedOnly?.value === true && !forceEnabled(managed, plugin)) return { state: "off", setting: "allowManagedHooksOnly", file: managedOnly.file };
+    const ladder = [];
+    for (const file of [join12(paths.userDir, "settings.json"), join12(paths.projectDir, ".claude", "settings.json"), join12(paths.projectDir, ".claude", "settings.local.json")]) {
+      const settings = readObject(file);
+      if (settings) ladder.push({ file, settings });
+    }
+    const disabled = lastSetting(managed, "disableAllHooks") ?? lastSetting(ladder, "disableAllHooks");
+    if (disabled?.value === true) return { state: "off", setting: "disableAllHooks", file: disabled.file };
+    return { state: "on" };
+  } catch (err) {
+    if (err instanceof Unreadable) return { state: "unknown", file: err.file, reason: err.message };
+    throw err;
+  }
+}
+
 // src/lib/doctor.ts
 var runCommand = (cmd, args, timeoutMs, options) => {
   try {
@@ -1963,7 +2078,7 @@ function checkGitIdentity(home, run) {
   );
 }
 function checkHomeWritable(home) {
-  const probe = join12(home, `.doctor-probe-${process.pid}`);
+  const probe = join13(home, `.doctor-probe-${process.pid}`);
   try {
     mkdirSync6(home, { recursive: true });
     writeFileSync5(probe, "ok");
@@ -1974,10 +2089,10 @@ function checkHomeWritable(home) {
   }
 }
 function checkConfig(home) {
-  const file = join12(home, "config.json");
-  if (!existsSync5(file)) return ok("config", "no config.json (defaults apply)");
+  const file = join13(home, "config.json");
+  if (!existsSync6(file)) return ok("config", "no config.json (defaults apply)");
   try {
-    const parsed = JSON.parse(readFileSync10(file, "utf8"));
+    const parsed = JSON.parse(readFileSync11(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return fail(
         "config",
@@ -2005,15 +2120,28 @@ function checkHooks(home) {
     `firing - ${counters.postToolUse} tool calls seen, ${counters.bashFailuresCaptured} failures captured, ${counters.pairsResolved} pairs resolved`
   );
 }
+function checkHookSettings(paths) {
+  const found = hookSettingsState("handbook", paths);
+  if (found.state === "unknown") {
+    return warn("hook settings", `${displayPath(found.file)} exists but cannot be read (${found.reason}), so its hook settings are not checked`);
+  }
+  if (found.state === "off") {
+    return warn(
+      "hook settings",
+      `${found.setting} in ${displayPath(found.file)} runs no plugin hook here, so the rules that reach teammates' sessions through the TeamHandbook hook (skills, MCP servers and tool patterns) are not enforced on this machine and nothing is captured; the orchestrator's managed-settings export is the way to enforce them`
+    );
+  }
+  return ok("hook settings", "no managed settings file and no user or project setting turns this plugin's hooks off (a policy delivered by MDM or the claude.ai console is not read here)");
+}
 function remoteDistributionState(team, run) {
   const dir = handbookWorkdir("handbook-doctor-");
   try {
     run("git", ["clone", "--depth", "1", "--single-branch", "--", team.repoUrl, dir], 25e3);
-    const version = JSON.parse(readFileSync10(join12(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version = JSON.parse(readFileSync11(join13(dir, ".claude-plugin", "plugin.json"), "utf8")).version;
     const byCommit = versionedByCommit(dir);
     let skillCount = 0;
     try {
-      skillCount = readdirSync4(join12(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+      skillCount = readdirSync5(join13(dir, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory()).length;
     } catch {
     }
     const behind = countStaleSkeleton(dir, team);
@@ -2065,7 +2193,7 @@ function checkTeamRepo(home, run) {
 function checkTeamCopy(home, remote, marketRoot, run) {
   const team = loadTeamConfig(home);
   if (!team || !remote) return null;
-  const copy = join12(marketRoot, team.marketplaceName);
+  const copy = join13(marketRoot, team.marketplaceName);
   if (!remote.version) return remote.head ? checkTeamCopyCommit(team.marketplaceName, remote.head, gitHead(copy, run)) : null;
   const remoteVersion = remote.version;
   const local = readPluginVersion(copy);
@@ -2077,11 +2205,11 @@ function checkTeamCopy(home, remote, marketRoot, run) {
   }
   return warn(
     "team plugin copy",
-    `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached this machine - run \`/plugin marketplace update ${team.marketplaceName}\` and then \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
+    `this machine's marketplace copy is at v${local} but the team repo is at v${remoteVersion}, so merged skills have not reached this machine - run \`claude plugin update ${team.marketplaceName}@${team.marketplaceName}\` (or \`/plugin\` > Marketplaces > Update marketplace), then start a new session or run \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
   );
 }
 function checkVersionLineBack(marketplace, remote, local) {
-  const behind = remote.head && local && remote.head !== local ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`.` : "";
+  const behind = remote.head && local && remote.head !== local ? ` This copy is also behind it (commit ${local.slice(0, 12)}, the team repo ${remote.head.slice(0, 12)}): run \`claude plugin update ${marketplace}@${marketplace}\`, then start a new session or run \`/reload-plugins\`.` : "";
   return warn(
     "team plugin copy",
     `the team repo carries a version line again (v${remote.version}) while this machine's copy is versioned by commit. A share from a TeamHandbook older than 0.31.0, or a conflict resolved on the side with the version, puts it back. Take it out with \`/handbook:init --upgrade --commit-versioning\`, and have everyone who shares run a current TeamHandbook.` + behind
@@ -2095,7 +2223,7 @@ function checkTeamCopyCommit(marketplace, remote, local) {
   }
   return warn(
     "team plugin copy",
-    `this machine's marketplace copy is at commit ${short(local)} but the team repo is at ${short(remote)}, so what was merged since has not reached this machine - run \`/plugin marketplace update ${marketplace}\` and then \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
+    `this machine's marketplace copy is at commit ${short(local)} but the team repo is at ${short(remote)}, so what was merged since has not reached this machine - run \`claude plugin update ${marketplace}@${marketplace}\` (or \`/plugin\` > Marketplaces > Update marketplace), then start a new session or run \`/reload-plugins\`; if the next merge leaves it behind again after a restart, turn auto-update on for this marketplace from \`/plugin\``
   );
 }
 function checkForge(home, run) {
@@ -2117,7 +2245,7 @@ function isPlainObject(value) {
 function declaredMcpServerNames(mcpFile) {
   let raw;
   try {
-    raw = readFileSync10(mcpFile, "utf8");
+    raw = readFileSync11(mcpFile, "utf8");
   } catch {
     return { error: "unreadable" };
   }
@@ -2148,8 +2276,8 @@ function parseMcpListing(output) {
 function checkTeamMcpServers(home, run, marketRoot = marketplacesRoot()) {
   const team = loadTeamConfig(home);
   if (!team) return null;
-  const mcpFile = join12(marketRoot, team.marketplaceName, ".mcp.json");
-  if (!existsSync5(mcpFile)) {
+  const mcpFile = join13(marketRoot, team.marketplaceName, ".mcp.json");
+  if (!existsSync6(mcpFile)) {
     return ok("team MCP servers", "the team has not shared an MCP server yet");
   }
   const declared = declaredMcpServerNames(mcpFile);
@@ -2198,7 +2326,7 @@ function checkLastRun(home) {
     const why = reason ? ` - ${reason}` : "";
     return warn(
       "gate pipeline",
-      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join12(home, "pipeline.log"))})`
+      `last run had ${last.errored} error(s)${why} (see the claude CLI check above; full log: ${displayPath(join13(home, "pipeline.log"))})`
     );
   }
   return ok("gate pipeline", `last run ${last.ts}: ${last.written.length} written, ${last.rejected} rejected`);
@@ -2208,7 +2336,7 @@ function checkAbandoned(home) {
   if (abandoned === 0) return null;
   return warn(
     "abandoned pairs",
-    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join12(home, "abandoned.jsonl"))} once claude works again`
+    `${abandoned} captured pair(s) were given up after repeated gate failures - recoverable in ${displayPath(join13(home, "abandoned.jsonl"))} once claude works again`
   );
 }
 function checkRelease(version, run, marketRoot, root) {
@@ -2224,7 +2352,8 @@ function runDoctor(home = handbookHome(), run = runCommand, marketRoot = marketp
     ...checkClaudeCli(run, home),
     checkHomeWritable(home),
     checkConfig(home),
-    checkHooks(home)
+    checkHooks(home),
+    checkHookSettings()
   ];
   const teamRepo = checkTeamRepo(home, run);
   checks.push(teamRepo.check);

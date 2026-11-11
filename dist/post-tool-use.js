@@ -38,6 +38,11 @@ var lastToken = (match) => match.trim().split(/[\s=]+/).pop() ?? "";
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
+}
 var SECRET_PATTERNS = [
   // Covers PEM, armored PGP ("… BLOCK-----") and ssh.com/SSH2 ("---- BEGIN SSH2
   // ENCRYPTED PRIVATE KEY ----": four dashes with spaces).
@@ -111,7 +116,7 @@ var SECRET_PATTERNS = [
   { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
   { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
   { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+  { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
   // common credential shapes the generic keyword rule misses
   { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
   { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -657,7 +662,11 @@ function captureBashSuccess(input, home = handbookHome()) {
 
 // src/lib/usage.ts
 import { readFileSync as readFileSync6 } from "node:fs";
-import { basename as basename4, join as join7 } from "node:path";
+import { basename as basename4, join as join8 } from "node:path";
+
+// src/lib/init.ts
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/lib/config.ts
 import { existsSync, readFileSync as readFileSync3 } from "node:fs";
@@ -788,6 +797,9 @@ function readHostIdentity() {
   } catch {
   }
   candidates.push(gitAuthorName());
+  return hostIdentityOf(candidates);
+}
+function hostIdentityOf(candidates) {
   const names = [];
   for (const name of candidates) {
     if (!name || !usableName(name)) continue;
@@ -847,6 +859,13 @@ var CUT_SCOPE_SENTENCE = new RegExp(
 );
 
 // src/lib/init.ts
+function loadTeamConfig(home = handbookHome()) {
+  const team = readConfigFile(home).team;
+  if (team && typeof team.repoUrl === "string" && typeof team.marketplaceName === "string") {
+    return team;
+  }
+  return null;
+}
 var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   {
     hooks: {
@@ -858,19 +877,23 @@ var CONSUMER_NOTICE_HOOKS = JSON.stringify(
   null,
   2
 );
+var TEAM_PREFIX_FILE = ".teamhandbook.json";
+function marketplacesRoot() {
+  return join4(homedir3(), ".claude", "plugins", "marketplaces");
+}
 
 // src/lib/session-workflow.ts
 import { createHash as createHash2, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync5, realpathSync, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { basename as basename3, dirname as dirname3, join as join6, relative, resolve as resolve2, sep } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { basename as basename3, dirname as dirname4, join as join7, relative, resolve as resolve2, sep } from "node:path";
 
 // src/lib/signals.ts
 import { existsSync as existsSync2, appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 function signalsFile(home = handbookHome()) {
-  return join4(home, "signals.jsonl");
+  return join5(home, "signals.jsonl");
 }
 function sessionSignalCount(sessionId, home = handbookHome()) {
   let raw;
@@ -1104,7 +1127,7 @@ function compiledRoles(paths, named, binary) {
 var IGNORED_ROLES = /* @__PURE__ */ new Set(["test", "lock", "mirror", "credits", "compiled"]);
 
 // src/lib/shell-command.ts
-import { basename as basename2, isAbsolute, join as join5, resolve } from "node:path";
+import { basename as basename2, isAbsolute, join as join6, resolve } from "node:path";
 import { statSync as statSync2 } from "node:fs";
 var OPERATORS = ["&&", "||", ";;", ";", "|&", "|", "&", "(", ")"];
 var REDIRECTS = ["&>>", "&>", ">>", ">|", ">&", "<<<", "<<-", "<<", "<&", "<>", ">", "<"];
@@ -1355,7 +1378,7 @@ function copyTargets(args, dir, home) {
   const destination = resolvePath(words[words.length - 1], dir, home);
   if (!destination) return [];
   const sources = words.slice(0, -1);
-  if (sources.length > 1 || isDirectory(destination)) return sources.map((s) => join5(destination, basename2(s)));
+  if (sources.length > 1 || isDirectory(destination)) return sources.map((s) => join6(destination, basename2(s)));
   return [destination];
 }
 function gitInvocation(args, dir, home) {
@@ -1409,10 +1432,10 @@ var MIN_ROLES = 2;
 var MAX_TRAIL_EDITS = 1e3;
 var EDIT_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
 function workflowsFile(home = handbookHome()) {
-  return join6(home, "workflows.jsonl");
+  return join7(home, "workflows.jsonl");
 }
 function minedRecordFile(home = handbookHome()) {
-  return join6(home, "mined-workflows.json");
+  return join7(home, "mined-workflows.json");
 }
 function sessionDetectEnabled(home = handbookHome()) {
   const sessions = readConfigFile(home).sessions;
@@ -1424,7 +1447,7 @@ function isAutonomous(entrypoint) {
 function repositoryOf(dir) {
   let at = resolve2(dir);
   for (; ; ) {
-    const dotgit = join6(at, ".git");
+    const dotgit = join7(at, ".git");
     try {
       const stat = statSync3(dotgit);
       if (stat.isDirectory()) return { repo: realpathSync(at), checkout: at, gitdir: dotgit };
@@ -1439,14 +1462,14 @@ function repositoryOf(dir) {
       }
     } catch {
     }
-    const up = dirname3(at);
+    const up = dirname4(at);
     if (up === at) return null;
     at = up;
   }
 }
 var diskLocator = {
   locate(path) {
-    const found = repositoryOf(dirname3(path));
+    const found = repositoryOf(dirname4(path));
     if (!found) return null;
     const rel = relative(found.checkout, path).split(sep).join("/");
     if (!rel || rel.startsWith("../") || rel === ".git" || rel.startsWith(".git/")) return null;
@@ -1466,7 +1489,7 @@ var diskLocator = {
     const found = repositoryOf(checkout);
     if (!found) return null;
     try {
-      const head = readFileSync5(join6(found.gitdir, "HEAD"), "utf8");
+      const head = readFileSync5(join7(found.gitdir, "HEAD"), "utf8");
       return /^ref:\s*refs\/heads\/(.+)$/m.exec(head)?.[1]?.trim() ?? null;
     } catch {
       return null;
@@ -1576,7 +1599,7 @@ function recordWorkflowEvent(input, home = handbookHome(), deps = {}) {
   if (!input.session_id || !sessionDetectEnabled(home)) return null;
   if (isAutonomous(deps.entrypoint ?? process.env.CLAUDE_CODE_ENTRYPOINT)) return null;
   const locator = deps.locator ?? diskLocator;
-  const userHome = deps.userHome ?? homedir3();
+  const userHome = deps.userHome ?? homedir4();
   const cwd = input.cwd ?? "";
   const steps = [];
   if (EDIT_TOOLS2.has(input.tool_name ?? "")) {
@@ -1698,7 +1721,7 @@ function workKey(files, locator, prefixes) {
   return branch;
 }
 function installSalt(home) {
-  const file = join6(home, "workflow-salt");
+  const file = join7(home, "workflow-salt");
   try {
     return Buffer.from(readFileSync5(file, "utf8").trim(), "hex");
   } catch {
@@ -1719,7 +1742,7 @@ var USAGE_DAYS = 30;
 var DAY = /^\d{4}-\d{2}-\d{2}$/;
 var SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 function usageFile(home = handbookHome()) {
-  return join7(home, "skill-usage.json");
+  return join8(home, "skill-usage.json");
 }
 function readSkillUsage(home = handbookHome()) {
   try {
@@ -1767,6 +1790,75 @@ function recordSkillCall(input, home = handbookHome(), at = (/* @__PURE__ */ new
   recordSkillUse(typeof input.tool_input?.skill === "string" ? input.tool_input.skill : "", home, at);
 }
 
+// src/lib/usage-report.ts
+import { appendFileSync as appendFileSync3, readdirSync as readdirSync3, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4 } from "node:fs";
+import { join as join9 } from "node:path";
+var ENDPOINT_MAX = 256;
+var OUTBOX_MAX_AGE_MS = 31 * 24 * 36e5;
+var CLAIM_STALE_MS = 10 * 6e4;
+var SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+function allowedEndpoint(value) {
+  if (/[\s\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.href !== value || url.username || url.password || url.search || url.hash || value.length > ENDPOINT_MAX) return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+}
+function readJsonObject(file) {
+  try {
+    const parsed = JSON.parse(readFileSync7(file, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function teamUsageRequest(home = handbookHome(), root = marketplacesRoot()) {
+  const team = loadTeamConfig(home);
+  if (!team) return null;
+  const copy = join9(root, team.marketplaceName);
+  const usage = readJsonObject(join9(copy, TEAM_PREFIX_FILE))?.usage;
+  const endpoint = usage?.endpoint;
+  if (typeof endpoint !== "string" || !allowedEndpoint(endpoint)) return null;
+  const plugin = readJsonObject(join9(copy, ".claude-plugin", "plugin.json"))?.name;
+  if (typeof plugin !== "string" || !SLUG.test(plugin)) return null;
+  let skills = [];
+  try {
+    skills = readdirSync3(join9(copy, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory() && SLUG.test(entry.name)).map((entry) => entry.name);
+  } catch {
+    return null;
+  }
+  return { endpoint, plugin, skills: new Set(skills) };
+}
+function usageConsent(endpoint, home = handbookHome()) {
+  if (configIsBroken(home)) return "undecided";
+  const share = readConfigFile(home).usage?.shareWith;
+  return share === endpoint ? "agreed" : share === false ? "declined" : "undecided";
+}
+function reportingRequest(home, root) {
+  if (!sessionDetectEnabled(home)) return null;
+  const request = teamUsageRequest(home, root);
+  return request && usageConsent(request.endpoint, home) === "agreed" ? request : null;
+}
+function outboxFile(home = handbookHome()) {
+  return join9(home, "usage-outbox.jsonl");
+}
+function queueTeamSkillUse(input, home = handbookHome(), root = marketplacesRoot(), at = (/* @__PURE__ */ new Date()).toISOString()) {
+  const called = input.tool_input?.skill;
+  if (typeof called !== "string") return;
+  const request = reportingRequest(home, root);
+  if (!request) return;
+  const prefix = `${request.plugin}:`;
+  if (!called.startsWith(prefix)) return;
+  const slug = called.slice(prefix.length);
+  if (!SLUG.test(slug) || !request.skills.has(slug)) return;
+  appendFileSync3(outboxFile(home), JSON.stringify({ endpoint: request.endpoint, skill: slug, hour: at.slice(0, 13) }) + "\n");
+}
+
 // src/hooks/post-tool-use.ts
 async function main() {
   const raw = await readStdin();
@@ -1776,6 +1868,7 @@ async function main() {
   bumpCounter("postToolUse");
   if (input.tool_name === "Skill") {
     recordSkillCall(input);
+    queueTeamSkillUse(input);
     return;
   }
   withSessionLock(input.session_id, () => {

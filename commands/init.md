@@ -79,8 +79,8 @@ re-init. That loses the repository. Refresh it in place instead:
    this machine: it prints which scaffold files are missing or differ, and the diff.
    **If it refuses because the repository's scaffold was last written by a newer
    TeamHandbook**, the copy on this machine is behind, not the repository. Relay the
-   refusal and tell the user to update the copy - `/plugin marketplace update teamhandbook`
-   and then `/reload-plugins` - and run the plan again. Never suggest editing
+   refusal and tell the user to update the copy - `claude plugin update handbook@teamhandbook`,
+   then a new session or `/reload-plugins` - and run the plan again. Never suggest editing
    `scaffoldVersion` in `.teamhandbook.json` to get past it: that number is what stops an
    older copy from undoing a newer refresh.
 2. **Relay the plan's first line before anything else.** It says who the refresh reaches
@@ -147,7 +147,7 @@ re-init. That loses the repository. Refresh it in place instead:
    runs the version-bump job (`scripts/bump-version.mjs`) is refused at step 3: the job and
    its script come out of the repository first, and its README does not carry these steps.
    1. Everyone who shares to the repository updates TeamHandbook to 0.31.0 or later:
-      `/plugin marketplace update teamhandbook`, then `/reload-plugins`. An older copy
+      `claude plugin update handbook@teamhandbook`, then a new session or `/reload-plugins`. An older copy
       raises a version on every share and puts the line back. A copy older than 0.29.0 also does not read `scaffoldVersion`:
       the newer-scaffold refusal above only happens between copies at 0.29.0 or later, and an
       older one's plan, after the switch, offers to put `"version": "0.1.0"` back and to
@@ -156,8 +156,10 @@ re-init. That loses the repository. Refresh it in place instead:
       bump and the switch is merged second conflicts in `.claude-plugin/plugin.json`;
       requests that leave that file alone are not affected.
    3. The plan and the run with `--commit-versioning`, as above.
-   4. After the merge, teammates whose marketplace does not auto-update run
-      `/plugin marketplace update <name>` and `/reload-plugins`.
+   4. After the merge, a teammate with auto-update on for the marketplace moves in their next
+      session; the others run `claude plugin update <name>@<name>` (or `/plugin` >
+      Marketplaces > Update marketplace), then a new session or `/reload-plugins`. Updating
+      the marketplace alone leaves the installed plugin where it was.
    A conflict in `.claude-plugin/plugin.json` after the switch is resolved by keeping the
    side without the version line; tell the user that keeping the other side puts the
    repository back on raising a version. In a repository without the version-bump job the

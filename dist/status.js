@@ -43,6 +43,11 @@ function isFilePath(value) {
 function isWordsNotToken(match) {
   return !/[A-Z0-9+/=._~]/.test(match.replace(/^\s*bearer\s+/i, ""));
 }
+function isVariableReference(match) {
+  const password = match.slice(match.indexOf(":", match.indexOf("://") + 3) + 1, -1);
+  const name = /^\$\{([^{}]+)\}$/.exec(password)?.[1] ?? /^\$\{\{(?:secrets|env)\.([^{}]+)\}\}$/.exec(password)?.[1];
+  return name !== void 0 && /^[A-Z_][A-Z0-9_]{0,63}$/.test(name) && name.split("_").every((word) => word.length <= 16 && (word.match(/[0-9]/g)?.length ?? 0) <= 2);
+}
 var PLACEHOLDER_VALUE, unquote, lastToken, SECRET_PATTERNS, GLOBAL_TWIN;
 var init_secrets = __esm({
   "src/lib/secrets.ts"() {
@@ -123,7 +128,7 @@ var init_secrets = __esm({
       { name: "azure-sas-signature", re: /[?&]sig=[A-Za-z0-9%]{20,}/ },
       { name: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, reject: isWordsNotToken },
       { name: "basic-auth-header", re: /\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/]{16,}=*/i },
-      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i },
+      { name: "url-credentials", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/i, reject: isVariableReference },
       // common credential shapes the generic keyword rule misses
       { name: "db-password-env", re: /(?:\b|_)(?:PGPASSWORD|MYSQL_PWD|DB_PASS(?:WORD)?|POSTGRES_PASSWORD|REDIS_PASSWORD)\s*=\s*\S+/i },
       { name: "inline-basic-auth", re: /\bcurl\b[^\n]*\s-{1,2}(?:u|user)\s+[^\s:]+:[^\s]+/i },
@@ -600,13 +605,13 @@ var init_skill_format = __esm({
       `^[${SPACE}]*\\|?[${SPACE}]*:?-{3,}:?[${SPACE}]*(\\|[${SPACE}]*:?-{3,}:?[${SPACE}]*)*\\|?[${SPACE}]*$`,
       "u"
     );
-    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB2}test`);
+    VERIFY_HEAD_RE = ci(`verif|validat|checklist|${WB2}test|${WB2}check|do\u011Frulama|dogrulama|kontrol`);
     DELIVERY_HEAD_RE = ci(`deliver|hand-?off|${WB2}done${WB2}|finish`);
     COMMAND_RE = ci(
       "```|`[^`\\n]*" + WB2 + "(run|gradlew|npm|npx|pytest|make|git|python3?|node|mvn|go|cargo|bash|\\./)[^`\\n]*`"
     );
     PITFALL_HEAD_RE = ci(
-      "pitfall|mistake|gotcha|common (errors|failures|problems)|anti-?pattern|red flags"
+      "pitfall|mistake|gotcha|caveat|watch out|common (errors|failures|problems)|anti-?pattern|red flags|hata|tuzak|dikkat|s\u0131k yap\u0131lan"
     );
     ABS_PATH_RE = new RegExp(`(/(?:Users|home)/[^/${SPACE}]+|[A-Za-z]:\\\\Users\\\\)`, "u");
     EMAIL_RE = new RegExp(`[${WORD_CHAR}.+-]+@[${WORD_CHAR}-]+\\.[A-Za-z]{2,}`, "u");
@@ -619,7 +624,7 @@ var init_skill_format = __esm({
     );
     MAP_HEAD_RE = /file map|files? touched/i;
     EXEMPT_EXACT_RE = ci(
-      "^(file map|files? touched|verification|verify|validation|checklist|tests?|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|anti-?patterns?|red flags|not visible in( the)? history)$"
+      "^(file map|files? touched|verification|verify|validation|checklist|tests?|how to check|delivery|deliver|hand-?off|finish(ed)?|done|common mistakes|mistakes|pitfalls?|gotchas?|caveats|anti-?patterns?|red flags|not visible in( the)? history|do\u011Frulama|dogrulama|kontrol|nas\u0131l kontrol edilir|s\u0131k (yap\u0131lan )?hatalar|hatalar|tuzaklar|dikkat( edilecekler)?)$"
     );
   }
 });
@@ -1819,18 +1824,64 @@ function wordOverlap(a, b) {
 }
 var OVERLAP_THRESHOLD = 0.25;
 function overlappingSkills(named, others, threshold = OVERLAP_THRESHOLD) {
+  const find = overlapIndex(others, threshold);
+  return new Map(named.map((skill) => [skill.name, find(skill)]));
+}
+function overlapIndex(others, threshold = OVERLAP_THRESHOLD) {
+  const steps = buildOverlapIndex(others, threshold);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+function* buildOverlapIndex(others, threshold = OVERLAP_THRESHOLD) {
   const words = /* @__PURE__ */ new Map();
   const wordsOf = (skill) => {
     let set = words.get(skill.description);
     if (!set) words.set(skill.description, set = triggerWords(skill.description));
     return set;
   };
-  const result = /* @__PURE__ */ new Map();
-  for (const skill of named) {
-    const hits = others.filter((other) => other.name !== skill.name).map((other) => ({ name: other.name, score: wordOverlap(wordsOf(skill), wordsOf(other)) })).filter((hit) => hit.score >= threshold).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-    result.set(skill.name, [...new Set(hits.map((hit) => hit.name))]);
+  const sets = [];
+  for (const other of others) {
+    sets.push(wordsOf(other));
+    yield;
   }
-  return result;
+  const ranked = (hits) => [...new Set(hits.filter((hit) => hit.score >= threshold).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).map((hit) => hit.name))];
+  if (threshold <= 0) {
+    return (skill) => ranked(others.flatMap((other, i) => other.name === skill.name ? [] : [{ name: other.name, score: wordOverlap(wordsOf(skill), sets[i]) }]));
+  }
+  const seen = /* @__PURE__ */ new Map();
+  for (const set of sets) {
+    for (const word of set) seen.set(word, (seen.get(word) ?? 0) + 1);
+    yield;
+  }
+  const rarestFirst = (a, b) => (seen.get(a) ?? 0) - (seen.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0);
+  const floor = threshold - 5e-4;
+  const prefix = (set) => {
+    const sorted = [...set].sort(rarestFirst);
+    return sorted.slice(0, sorted.length - Math.ceil(floor * sorted.length - 1e-9) + 1);
+  };
+  const index = /* @__PURE__ */ new Map();
+  for (const [i, set] of sets.entries()) {
+    for (const word of prefix(set)) {
+      const list = index.get(word);
+      if (list) list.push(i);
+      else index.set(word, [i]);
+    }
+    yield;
+  }
+  return (skill) => {
+    const mine = wordsOf(skill);
+    const scored = /* @__PURE__ */ new Set();
+    const hits = [];
+    for (const word of prefix(mine)) {
+      for (const i of index.get(word) ?? []) {
+        if (scored.has(i) || others[i].name === skill.name) continue;
+        scored.add(i);
+        hits.push({ name: others[i].name, score: wordOverlap(mine, sets[i]) });
+      }
+    }
+    return ranked(hits);
+  };
 }
 function readSkill(dir) {
   try {
