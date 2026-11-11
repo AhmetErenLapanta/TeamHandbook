@@ -25,7 +25,9 @@ const binary = join(stage, process.platform === "win32" ? "handbook-orchestrator
 function run(command, args, options = {}) {
   const done = spawnSync(command, args, { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", ...options });
   if (done.status !== 0) {
-    console.error(`${command} ${args.join(" ")} failed`);
+    // A process the system stopped has no exit status, only the signal that did it.
+    const how = done.error ? `could not run: ${done.error.message}` : done.signal ? `stopped by ${done.signal}` : `exit ${done.status}`;
+    console.error(`${command} ${args.join(" ")} failed (${how})`);
     process.exit(done.status ?? 1);
   }
   return done.stdout;
