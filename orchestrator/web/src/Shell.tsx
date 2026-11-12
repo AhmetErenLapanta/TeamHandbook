@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { api, auth, identityApi, manages, ONBOARDING_CHANGED, tasksApi } from "./api";
+import { api, auth, identityApi, manages, ONBOARDING_CHANGED, searchApi, tasksApi } from "./api";
 import { AttentionWatcher, NOTIFY_KEY } from "./AttentionWatcher";
 import { CommandPalette } from "./design/CommandPalette";
 import { folderAsk, MOST_A_GROUP } from "./design/palette";
@@ -150,7 +150,10 @@ function OrgPicker({ me, orgs, org, section }: { me: Principal; orgs: Org[]; org
 /** The pages and projects the command palette jumps to; the tasks are read when it opens. */
 function jumpsOf(org: string, repos: RepoRecord[], me: Principal): Jump[] {
   const page = (label: string, detail: string, to: string): Jump => ({ label, detail, to, group: "Pages" });
+  const action = (label: string, detail: string, to: string): Jump => ({ label, detail, to, group: "Actions" });
   return [
+    action("New task", "Say what needs doing", pathIn(org, "tasks", "new")),
+    action("Start agents", "On the issues of the Work board", pathIn(org, "work")),
     page("Work", "Sprint board and backlog", pathIn(org, "work")),
     page("Tasks", me.mode === "local" ? "Agent tasks and your folders" : "Agent tasks and the repositories they run in", pathIn(org, "tasks")),
     page("Team", me.mode === "local" ? "Lessons and what your Claude Code loads" : "People, policies and what the team shares", pathIn(org, "team")),
@@ -175,7 +178,7 @@ function folderJumps(org: string): (query: string) => Promise<Jump[]> {
     const under = ask.under === undefined ? undefined : pastedPath(ask.under, home);
     const read = await projectsRead.folders({ ...(under ? { under } : {}), ...(ask.q ? { q: ask.q } : {}) });
     const prefix = ask.prefix?.toLowerCase() ?? "";
-    const entries = ask.q ? (read.matches ?? read.folders) : read.folders.filter((f) => f.name.toLowerCase().startsWith(prefix));
+    const entries = ask.q ? (read.matches ?? []) : read.folders.filter((f) => f.name.toLowerCase().startsWith(prefix));
     return entries.slice(0, MOST_A_GROUP).map((f): Jump => {
       const shown = homeRelative(f.path, home);
       return { label: shown, detail: f.git === "none" ? "" : "Git", to: `folder:${f.path}`, group: "Folders", inside: `${shown}/`, open: () => projectsRead.open(f.path).then(({ project }) => pathIn(org, "repositories", project.id)) };
@@ -183,10 +186,20 @@ function folderJumps(org: string): (query: string) => Promise<Jump[]> {
   };
 }
 
+/** Tasks the orchestrator finds for what was typed, past the newest page: by issue key, and by a word in what the agent said or ran. */
+function taskFinds(org: string, repos: RepoRecord[]): (query: string) => Promise<Jump[]> {
+  const names = new Map(repos.map((r) => [r.id, r.name]));
+  return async (query) => {
+    const found = await searchApi.tasks(query.trim());
+    const jump = (t: { id: string; title: string; repoId: string }, how: string): Jump => ({ label: t.title, detail: [names.get(t.repoId), how].filter(Boolean).join(", "), to: pathIn(org, "tasks", t.id), group: "Tasks", asked: true });
+    return [...found.tasks.map((t) => jump(t, "")), ...found.inLog.map((t) => jump(t, "in its log"))];
+  };
+}
+
 /** The newest tasks, for the palette to jump to by title. */
 function taskJumps(org: string, repos: RepoRecord[]): Promise<Jump[]> {
   const names = new Map(repos.map((r) => [r.id, r.name]));
-  return tasksApi.page(null).then((p) => p.tasks.map((t): Jump => ({ label: t.title, detail: names.get(t.repoId) ?? "", to: pathIn(org, "tasks", t.id), group: "Tasks" })));
+  return tasksApi.page(null).then((p) => p.tasks.map((t): Jump => ({ label: t.title, detail: [t.issueKey, names.get(t.repoId)].filter(Boolean).join(", "), to: pathIn(org, "tasks", t.id), group: "Tasks" })));
 }
 
 /**
@@ -226,33 +239,6 @@ function NotifySwitch() {
       <label className="check"><input type="checkbox" checked={on} onChange={flip} />Notify me when my tasks need me</label>
       {blocked ? <p className="muted small">This browser blocks notifications from this page; allow them in its site settings.</p> : null}
     </div>
-  );
-}
-
-const ASKED_KEY = "orchestrator.attention.asked";
-
-/**
- * One line above the page until the browser has been asked, or the person said not now: the switch
- * lives in the account menu, where nobody who has not looked for it finds it.
- */
-function NotifyAsk() {
-  const [notify, setNotify] = usePref(NOTIFY_KEY);
-  const [asked, setAsked] = usePref(ASKED_KEY);
-  const [permission, setPermission] = useState(() => ("Notification" in window ? Notification.permission : "denied"));
-  if (permission === "denied" || asked || (notify === "yes" && permission === "granted")) return null;
-  const turnOn = () => {
-    void Notification.requestPermission().then((answer) => {
-      setPermission(answer);
-      if (answer === "granted") setNotify("yes");
-      else if (answer === "denied") setAsked("yes");
-    });
-  };
-  return (
-    <p className="notify-ask" role="region" aria-label="Notifications">
-      Get a notification when a task needs you.
-      <button type="button" className="small" onClick={turnOn}>Turn on notifications</button>
-      <button type="button" className="ghost small" onClick={() => setAsked("yes")}>Not now</button>
-    </p>
   );
 }
 
@@ -307,6 +293,7 @@ export function Shell({ me, orgs, org, section, repos, onSignedOut, children }: 
   const jumps = useMemo(() => jumpsOf(org, repos, me), [org, repos, me]);
   const readTasks = useCallback(() => taskJumps(org, repos), [org, repos]);
   const readFolders = useMemo(() => (me.mode === "local" ? folderJumps(org) : undefined), [org, me.mode]);
+  const findTasks = useMemo(() => taskFinds(org, repos ?? []), [org, repos]);
   const search = useCallback((anywhere: boolean) => {
     const own = anywhere ? null : pageSearch();
     if (own) own.focus();
@@ -337,9 +324,8 @@ export function Shell({ me, orgs, org, section, repos, onSignedOut, children }: 
         </div>
       </header>
       <AttentionWatcher me={me} />
-      <NotifyAsk />
       <Shortcuts org={org} tabs={TABS} onSearch={search} />
-      <CommandPalette open={palette} onClose={() => setPalette(false)} jumps={jumps} more={readTasks} {...(readFolders ? { folders: readFolders } : {})} />
+      <CommandPalette open={palette} onClose={() => setPalette(false)} jumps={jumps} more={readTasks} finds={findTasks} {...(readFolders ? { folders: readFolders } : {})} />
       <main id="content" tabIndex={-1}>{children}</main>
     </div>
   );

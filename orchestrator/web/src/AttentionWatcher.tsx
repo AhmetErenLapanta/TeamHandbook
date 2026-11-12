@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { tasksApi } from "./api";
 import type { Principal } from "./api";
 import { ATTENTION, attentionOf, newCalls } from "./attention";
@@ -129,4 +129,31 @@ export function AttentionWatcher({ me }: { me: Principal }) {
     };
   }, [me.email, notify]);
   return null;
+}
+
+const ASKED_KEY = "orchestrator.attention.asked";
+
+/**
+ * One quiet line on the page of a task that is working for its person, until the browser has been
+ * asked or they said not now: that is when a notification means something. The standing switch is in the account menu.
+ */
+export function NotifyAsk() {
+  const [notify, setNotify] = usePref(NOTIFY_KEY);
+  const [asked, setAsked] = usePref(ASKED_KEY);
+  const [permission, setPermission] = useState(() => ("Notification" in window ? Notification.permission : "denied"));
+  if (permission === "denied" || asked || (notify === "yes" && permission === "granted")) return null;
+  const turnOn = () => {
+    void Notification.requestPermission().then((answer) => {
+      setPermission(answer);
+      if (answer === "granted") setNotify("yes");
+      else if (answer === "denied") setAsked("yes");
+    });
+  };
+  return (
+    <p className="muted small" role="note" aria-label="Notifications">
+      Away from this page when it needs you?{" "}
+      <button type="button" className="link" onClick={turnOn}>Get a notification</button>{" "}
+      <button type="button" className="link" onClick={() => setAsked("yes")}>Not now</button>
+    </p>
+  );
 }
