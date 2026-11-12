@@ -8,6 +8,12 @@ import type { McpAudit } from "./plugin.js";
  */
 
 export const SKILL_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** The name of a skill a Skill call names: a plugin's skill is called `plugin:name`, the name is what a team's repository calls it; null for anything else. */
+export const calledSkill = (target: string | null | undefined): string | null => {
+  const name = target?.split(":").at(-1);
+  return name && SKILL_SLUG.test(name) ? name : null;
+};
 export const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const MAX_SKILL_BYTES = 256 * 1024;
 

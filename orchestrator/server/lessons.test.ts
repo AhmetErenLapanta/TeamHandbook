@@ -303,7 +303,7 @@ describe("lessons from a task's review", () => {
     const twice = await app.request(`/api/tasks/${TASK_ID}/lessons/log-with-the-app-logger/keep`, { method: "POST" });
 
     // then
-    expect(line).toEqual({ skills: { team: ["release-notes"], project: [] }, candidates: [{ slug: "log-with-the-app-logger", description: expect.stringContaining("Use when adding logging"), status: "pending", createdAt: NOW.toISOString(), taskId: task.id }] });
+    expect(line).toEqual({ skills: { team: ["release-notes"], project: [], used: [] }, candidates: [{ slug: "log-with-the-app-logger", description: expect.stringContaining("Use when adding logging"), status: "pending", createdAt: NOW.toISOString(), taskId: task.id }] });
     expect(kept.status).toBe(200);
     expect(readFileSync(join(queue.skillsDir, "log-with-the-app-logger", "SKILL.md"), "utf8")).toContain("name: log-with-the-app-logger");
     expect((await row(ctx)).candidates).toEqual([{ slug: "log-with-the-app-logger", keptAt: expect.any(String) }]);
@@ -500,7 +500,7 @@ describe("lessons from a task's review", () => {
 
     // then
     expect(queueRead.status).toBe(404);
-    expect(line).toEqual({ skills: { team: ["release-notes"], project: [] }, candidates: null });
+    expect(line).toEqual({ skills: { team: ["release-notes"], project: [], used: [] }, candidates: null });
     expect(lessonQueueOf({ ORCHESTRATOR_MODE: "self-hosted", HOME: "/home/someone" }, ["t"])).toBeNull();
   });
 

@@ -243,6 +243,7 @@ export async function sweepLessons(ctx: OrchestratorContext, place: LessonPlace,
         // A task whose person had no machine online is looked at again on the next sweep.
         if (outcome !== "waiting") seen.set(task.id, task.finishedAt);
         if (outcome && outcome !== "waiting") reviewed++;
+        if (outcome === "failed" || outcome === "dropped") console.error(`lessons: task ${task.id}: no lesson was queued (${outcome})`);
       } catch (err) {
         seen.set(task.id, task.finishedAt);
         console.error(`lessons: task ${task.id}: ${(err as Error).message}`);
@@ -255,7 +256,9 @@ export async function sweepLessons(ctx: OrchestratorContext, place: LessonPlace,
 
 // The first sweep runs at start, not a minute later: it marks where lessons begin, and a task that
 // ended in between would otherwise fall before that mark and never be read.
-export function startLessonSweep(ctx: OrchestratorContext, place: LessonPlace, everyMs = 60_000): () => void {
+// Every 15 seconds: a person who just ended a task waits for the lesson on its page, and a pass over
+// tasks already read is one query.
+export function startLessonSweep(ctx: OrchestratorContext, place: LessonPlace, everyMs = 15_000): () => void {
   let running = false;
   const seen = new Map<string, string | null>();
   const sweep = () => {
@@ -297,7 +300,7 @@ export function lessonRoutes(ctx: OrchestratorContext, place: LessonPlace | null
     const user = c.get("user");
     const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
     if (!task || !seesTask(user, task)) return c.json({ error: "unknown task" }, 404);
-    const skills = { team: task.skills ?? [], project: (task.tools?.skills ?? []).map((s) => s.name) };
+    const skills = { team: task.skills ?? [], project: (task.tools?.skills ?? []).map((s) => s.name), used: task.usedSkills ?? [] };
     const startedIt = !user.key && (task.createdBy === user.email || task.createdBy === user.id);
     const candidates =
       queue && (await isOwner(user)) ? taskLessons(queue.home).filter((m) => m.sessionId === task.id).map(shownLesson) : place?.kind === "machine" && startedIt ? await sentLessons(ctx, user, task) : null;

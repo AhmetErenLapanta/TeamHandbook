@@ -67,7 +67,7 @@ async function teamRepoWith(root: string, ctx: OrchestratorContext, skill: strin
 const bucket = (tasks: number, accepted: number, acceptedWithoutRevision: number, rejected: number, rates: { withoutRevision: number | null; rejected: number | null } = { withoutRevision: null, rejected: null }) => ({ tasks, accepted, acceptedWithoutRevision, revisionRoundsMedian: tasks ? 0 : null, rejected, rates });
 
 describe("a skill's tasks before and after it, with it and without it", () => {
-  it("given a team skill added to a mirrored team repository, tasks started with it and without it on its project, around it and elsewhere, when its outcomes are read, then the pivot is the commit that added it, each bucket counts only decided tasks started by a person on that project, revisions are the follow-ups from a person or a watch, and a bucket under five tasks has no rates", async () => {
+  it("given a team skill added to a mirrored team repository, tasks started with it or whose agent called it, and without it on its project, around it and elsewhere, when its outcomes are read, then the pivot is the commit that added it, each bucket counts only decided tasks started by a person on that project, revisions are the follow-ups from a person or a watch, and a bucket under five tasks has no rates", async () => {
     // given
     const { root, store, ctx, max } = await setup();
     await teamRepoWith(root, ctx, "release-notes", at(20));
@@ -76,7 +76,7 @@ describe("a skill's tasks before and after it, with it and without it", () => {
     await seed(store, [
       task("tsk_with1", { ...skill, ...kept }),
       task("tsk_with2", { ...skill, ...kept }),
-      task("tsk_with3", { ...skill, ...kept }),
+      task("tsk_with3", kept),
       task("tsk_with4", { tools: { skills: [{ source: "src_1", name: "release-notes", head: null }], mcpServers: [] }, result: "request", requestNumber: 1 }),
       task("tsk_with5", { ...skill, ...undone }),
       task("tsk_waiting", { ...skill, result: "changes", changes: { files: [], undone: null, kept: null } }),
@@ -88,6 +88,7 @@ describe("a skill's tasks before and after it, with it and without it", () => {
       task("tsk_earlier", { ...kept, createdAt: at(30) }),
       task("tsk_long_ago", { ...kept, createdAt: at(55) }),
     ]);
+    await store.noteUsedSkill(TENANT, "tsk_with3", "release-notes");
     const followUp = (id: string, taskId: string, source: "person" | "watch" | "child") => store.addFollowUp({ tenant: TENANT, id, taskId, source, key: id, text: "also cover the summary", quotes: null, createdAt: at(10), createdBy: max.email });
     for (const [id, taskId, source] of [["fup_1", "tsk_with1", "person"], ["fup_2", "tsk_with1", "person"], ["fup_3", "tsk_with2", "watch"], ["fup_4", "tsk_with2", "child"]] as const) await followUp(id, taskId, source);
     await store.markFollowUpsDelivered(TENANT, ["fup_1", "fup_2", "fup_3", "fup_4"], at(10));
