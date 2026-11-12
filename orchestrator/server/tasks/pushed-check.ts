@@ -6,6 +6,7 @@ import { gitAsync, gitAsyncMaybe, oneAtATime } from "../git.js";
 import { localRepoPath } from "../forge/local.js";
 import { providerFor } from "../propose.js";
 import { compareVersions, detectSecret, PLUGIN_MANIFEST } from "../plugin.js";
+import type { PolicyRule } from "../plugin.js";
 import type { RepoRecord } from "../store.js";
 import { secretsForTask, UnreadTaskSecret } from "../task-secrets.js";
 import { versionRaise } from "../versions.js";
@@ -53,29 +54,21 @@ export interface Checked {
   warnings: string[];
 }
 
-/**
- * One head of a task's branch, read from the mirror, held to the team's rules: the branch must
- * start from the task's base; the commits on it that its target does not have, at most
- * MAX_PUSHED_COMMITS, are each read for a secret, message included; a merge counts only for what
- * it adds itself and only when it merges the target in, so a branch brought up to date with its
- * target is judged on the task's own work; and the change as a whole, against where the branch
- * left its target, meets the team's policy, the task's template and the skills' rules.
- */
-export async function headRefusal(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, branch: string, head: string): Promise<Checked | { refused: string }> {
-  if (!task.baseSha) return { refused: "the task has no base commit on record to hold the branch to" };
-  const mirror = mirrorDir(ctx, repo.id);
-  const read = (args: string[]) => gitAsync(["--git-dir", mirror, ...args], mirror);
-  const maybe = (args: string[]) => gitAsyncMaybe(["--git-dir", mirror, ...args], mirror);
-  if ((await maybe(["merge-base", "--is-ancestor", task.baseSha, head])) === null) {
-    return { refused: `${branch} does not start from the task's base commit ${task.baseSha.slice(0, 7)}` };
-  }
-  // The request's target is the repository's default branch, which every orchestrator request is opened on.
-  const target = (await maybe(["symbolic-ref", "--short", "HEAD"]))?.trim();
-  const targetHead = target ? (await maybe(["rev-parse", "--verify", "--quiet", `refs/heads/${target}^{commit}`]))?.trim() : null;
-  if (!target || !targetHead) return { refused: "the repository's default branch cannot be read" };
-  const commits = (await read(["rev-list", "--reverse", head, "--not", targetHead])).split("\n").filter(Boolean);
-  if (commits.length > MAX_PUSHED_COMMITS) return { refused: `${branch} carries ${commits.length} commits its target does not have, over the ${MAX_PUSHED_COMMITS} one task's branch may` };
+/** What a branch is held to beside its commits: the task secrets its files and messages must not carry, the team's policy, the task's template, and whether a skills repository's version is read. */
+export interface BranchRules {
+  secrets: readonly { name: string; value: string }[];
+  rules: readonly PolicyRule[];
+  template: TaskRecord["template"];
+  /** A skills repository's change is told when it raises no version; a code repository's is not. */
+  versioned: boolean;
+}
 
+/**
+ * The rules a branch of `repo`'s tasks is held to: its task secrets, and the policy a run on the orchestrator holds the
+ * agent to, read where that run reads it. A repository's own policy is read at `base` from `gitDir`, where its commits
+ * are; a skills repository's from that repository's mirror. Either one unread refuses the branch.
+ */
+export async function branchRules(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, base: string, gitDir: string = mirrorDir(ctx, repo.id)): Promise<BranchRules | { refused: string }> {
   let secrets: { name: string; value: string }[];
   try {
     secrets = await secretsForTask(ctx, repo.id, repo.team);
@@ -83,7 +76,31 @@ export async function headRefusal(ctx: OrchestratorContext, task: TaskRecord, re
     if (err instanceof UnreadTaskSecret) return { refused: err.message };
     throw err;
   }
-  const redactor = new Redactor(secrets.map((secret) => secret.value));
+  const code = ctx.tasks?.codeTarget(repo) ?? null;
+  const source = code ? (code.skillsFrom ? await ctx.store.getRepo(ctx.tenant, code.skillsFrom) : null) : null;
+  if (code?.skillsFrom && !source?.head) return { refused: `the skills repository ${code.skillsFrom} has not been read, so the team's policy cannot be checked` };
+  const rules = !code ? await taskPolicy(gitDir, base) : source ? await taskPolicy(mirrorDir(ctx, source.id), source.head!) : [];
+  if ("refused" in rules) return { refused: rules.refused };
+  return { secrets, rules, template: task.template, versioned: !code };
+}
+
+/**
+ * One head of a task's branch, read from `gitDir` alone, held to `held`: the branch must start from `baseSha`; the commits
+ * on it that `target` does not have, at most MAX_PUSHED_COMMITS, are each read for a secret, message included; a merge
+ * counts only for what it adds itself and only when it merges the target in, so a branch brought up to date with its
+ * target is judged on the task's own work; and the change as a whole, against where the branch left its target, meets
+ * the team's policy, the task's template and the skills' rules. The one place these rules are written.
+ */
+export async function branchRefusal(gitDir: string, branch: string, head: string, baseSha: string, target: { name: string; head: string }, held: BranchRules): Promise<Checked | { refused: string }> {
+  const read = (args: string[]) => gitAsync(["--git-dir", gitDir, ...args], gitDir);
+  const maybe = (args: string[]) => gitAsyncMaybe(["--git-dir", gitDir, ...args], gitDir);
+  if ((await maybe(["merge-base", "--is-ancestor", baseSha, head])) === null) {
+    return { refused: `${branch} does not start from the task's base commit ${baseSha.slice(0, 7)}` };
+  }
+  const commits = (await read(["rev-list", "--reverse", head, "--not", target.head])).split("\n").filter(Boolean);
+  if (commits.length > MAX_PUSHED_COMMITS) return { refused: `${branch} carries ${commits.length} commits its target does not have, over the ${MAX_PUSHED_COMMITS} one task's branch may` };
+
+  const redactor = new Redactor(held.secrets.map((secret) => secret.value));
   const carries = (text: string) => redactor.carriesCredential(text);
   for (const commit of commits) {
     // The message is kept by the forge with the commit, so it is read as the files are.
@@ -94,7 +111,7 @@ export async function headRefusal(ctx: OrchestratorContext, task: TaskRecord, re
     if (more.length) return { refused: `commit ${commit.slice(0, 7)} merges more than two branches` };
     let raw: string;
     if (other) {
-      if ((await maybe(["merge-base", "--is-ancestor", other, targetHead])) === null) return { refused: `commit ${commit.slice(0, 7)} merges in a branch other than ${target}` };
+      if ((await maybe(["merge-base", "--is-ancestor", other, target.head])) === null) return { refused: `commit ${commit.slice(0, 7)} merges in a branch other than ${target.name}` };
       // What the merge adds itself: the paths it leaves unlike both its parents, a conflict's
       // resolution or a change squeezed into it; what it takes from either side as it was is not its own.
       raw = mergeOwn(await read(["diff", "--raw", "-z", "--no-renames", "--no-abbrev", first!, commit]), new Set((await read(["diff", "--name-only", "-z", "--no-renames", other, commit])).split("\0").filter(Boolean)));
@@ -105,24 +122,31 @@ export async function headRefusal(ctx: OrchestratorContext, task: TaskRecord, re
     if ("refused" in step) return { refused: `commit ${commit.slice(0, 7)}: ${step.refused}` };
   }
   // The change as a whole is read whatever the commits were: one added and taken out again is caught only one by one, but what stays is read here.
-  const base = (await read(["merge-base", targetHead, head])).trim();
+  const base = (await read(["merge-base", target.head, head])).trim();
   const whole = await rawChanges(await read(["diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head]), read, carries);
   if ("refused" in whole) return whole;
-  if (!whole.files.length) return { refused: `${branch} changes nothing against ${target}` };
+  if (!whole.files.length) return { refused: `${branch} changes nothing against ${target.name}` };
 
-  // The policies a run on the orchestrator holds the agent to, read where that run reads them.
-  const code = ctx.tasks?.codeTarget(repo) ?? null;
-  const source = code ? (code.skillsFrom ? await ctx.store.getRepo(ctx.tenant, code.skillsFrom) : null) : { ...repo, head: task.baseSha };
-  if (code?.skillsFrom && !source?.head) return { refused: `the skills repository ${code.skillsFrom} has not been read, so the team's policy cannot be checked` };
-  const rules = source ? await taskPolicy(mirrorDir(ctx, source.id), source.head!) : [];
-  if ("refused" in rules) return { refused: rules.refused };
-  const held = editRefusal(rules, whole.files.map((f) => f.path), POLICY_ROOT);
-  if (held) return { refused: held };
-  const outside = templateProblem(task.template, whole.files);
+  const kept = editRefusal(held.rules, whole.files.map((f) => f.path), POLICY_ROOT);
+  if (kept) return { refused: kept };
+  const outside = templateProblem(held.template, whole.files);
   if (outside) return { refused: outside };
-  const checked = await checkTaskResult(whole.files, mirror, base);
+  const checked = await checkTaskResult(whole.files, gitDir, base);
   if ("refused" in checked) return { refused: checked.refused };
-  return { head, files: whole.files, warnings: [...checked.warnings, ...(code ? [] : await versionWarning(mirror, base, whole.files))] };
+  return { head, files: whole.files, warnings: [...checked.warnings, ...(held.versioned ? await versionWarning(gitDir, base, whole.files) : [])] };
+}
+
+/** One head of a task's branch, read from `repo`'s mirror and held to the rules its tasks are held to (branchRefusal). */
+export async function headRefusal(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, branch: string, head: string): Promise<Checked | { refused: string }> {
+  if (!task.baseSha) return { refused: "the task has no base commit on record to hold the branch to" };
+  const mirror = mirrorDir(ctx, repo.id);
+  // The request's target is the repository's default branch, which every orchestrator request is opened on.
+  const target = (await gitAsyncMaybe(["--git-dir", mirror, "symbolic-ref", "--short", "HEAD"], mirror))?.trim();
+  const targetHead = target ? (await gitAsyncMaybe(["--git-dir", mirror, "rev-parse", "--verify", "--quiet", `refs/heads/${target}^{commit}`], mirror))?.trim() : null;
+  if (!target || !targetHead) return { refused: "the repository's default branch cannot be read" };
+  const held = await branchRules(ctx, task, repo, task.baseSha);
+  if ("refused" in held) return held;
+  return branchRefusal(mirror, branch, head, task.baseSha, { name: target, head: targetHead }, held);
 }
 
 /** The entries of a `diff --raw -z` whose path is also in `also`. */

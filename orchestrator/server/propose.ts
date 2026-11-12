@@ -258,7 +258,7 @@ export async function reconcileLocalRequests(ctx: OrchestratorContext): Promise<
   const said: string[] = [];
   const work = join(ctx.dataDir, "work");
   for (const name of existsSync(work) ? readdirSync(work) : []) {
-    if (!/^(change|merge)-/.test(name)) continue;
+    if (!/^(change|merge|read)-/.test(name)) continue;
     rmSync(join(work, name), { recursive: true, force: true });
     said.push(`removed the scratch directory ${name} a stopped orchestrator left`);
   }
