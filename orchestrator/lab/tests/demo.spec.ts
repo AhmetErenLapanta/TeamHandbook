@@ -179,6 +179,18 @@ test("given a clean machine and the parcel-pricer repository with a failing test
       expect(spawnSync("git", ["-C", repo, "show", `${branch}:src/price.js`], { env: machine.env, encoding: "utf8" }).stdout).toContain("for (const tier of TIERS)");
       expect(testsPassAt(machine, repo, branch), "the kit's tests after the follow-up").toBe(true);
     });
+    await step("lesson", async () => {
+      const lessons = await until(() => read<{ candidates: { slug: string; status: string }[] | null }>(`/api/tasks/${taskId}/lessons`), (r) => (r.candidates ?? []).some((c) => c.status === "pending"), 90);
+      const candidate = (lessons.candidates ?? []).find((c) => c.status === "pending");
+      if (!candidate) throw new Error(`no lesson candidate waits for its person: ${JSON.stringify(lessons)}`);
+      const slug = candidate.slug;
+      const { csrf } = await read<{ csrf: string }>("/api/me");
+      const res = await page.request.post(`${base}/api/tasks/${taskId}/lessons/${encodeURIComponent(slug)}/keep`, { headers: { "x-csrf-token": csrf } });
+      expect(res.status(), "keeping the lesson").toBe(200);
+      const after = await read<{ candidates: { slug: string; status: string }[] }>(`/api/tasks/${taskId}/lessons`);
+      expect(after.candidates.find((c) => c.slug === slug)?.status).toBe("approved");
+      return `lesson ${slug} kept`;
+    });
     await step("keep", async () => {
       const { task } = await read<{ task: Shown }>(`/api/tasks/${taskId}`);
       const state = () => read<{ status: { detail: { status: string } } }>(`/api/repos/${projectId}/requests/${task.requestNumber}/status`).then((r) => r.status.detail.status);

@@ -66,8 +66,10 @@ test.describe("signing up to a cloud orchestrator", () => {
     proof.copy("providers.log", cloud.providersLog);
     await cloud.stop();
   });
-  test.afterEach(async ({}, testInfo) => {
+  test.afterEach(async ({ browser }, testInfo) => {
     proof.decide(testInfo.status === testInfo.expectedStatus, testInfo.error?.message ?? "");
+    // The pages a scenario opened poll the orchestrator; closed here, they do not meet it stopped when the file's last hook ends it.
+    await Promise.all(browser.contexts().map((context) => context.close()));
   });
 
   test("given the landing page's sign-up button, when a person follows it, then it leads to the orchestrator's sign-up page, which offers Google, GitHub and Microsoft and says nobody joins without an invitation", async ({ browser }) => {
@@ -85,7 +87,7 @@ test.describe("signing up to a cloud orchestrator", () => {
     // then
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Start with TeamHandbook Orchestrator");
     for (const [name, provider] of [["Google", "google"], ["GitHub", "github"], ["Microsoft", "microsoft"]]) {
-      await expect(page.getByRole("link", { name: `Continue with ${name}` })).toHaveAttribute("href", `/api/auth/${provider}/start`);
+      await expect(page.getByRole("link", { name: `Sign in with ${name}` })).toHaveAttribute("href", `/api/auth/${provider}/start`);
     }
     await expect(page.getByText("nobody joins without an invitation")).toBeVisible();
   });

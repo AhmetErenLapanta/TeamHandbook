@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pg from "pg";
 import { PUBLIC_URL } from "../../browser-tests/cloud-setup.js";
@@ -83,6 +83,8 @@ export async function cloudOrchestrator(scenario: string): Promise<CloudOrchestr
   execFileSync("node", [server, "migrate"], { env, stdio: "ignore" });
   const log = join(dir, "orchestrator.log");
   const child = spawn("node", [server], { env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a")] });
+  // How the process ended is written down, so a scenario that finds it gone can say why.
+  child.on("exit", (code, signal) => appendFileSync(log, `[the orchestrator process ended: exit ${code}, signal ${signal}, at ${new Date().toISOString()}]\n`));
   const origin = `http://127.0.0.1:${port}`;
   const stop = async () => {
     if (child.exitCode === null) {
