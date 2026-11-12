@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import type { ApprovedVerification, CheckRuns, DetectedCheck, DetectedStep, DetectedVerification, StepRun, TaskVerification, Verdict } from "../../shared/verification.js";
 import { gitAsyncMaybe } from "../git.js";
@@ -49,6 +49,21 @@ export function commitReader(mirror: string, sha: string): ReadFile {
     return text === null || text.length > MAX_FILE_BYTES ? null : text;
   };
 }
+
+/** A repository's files as a task's copy of it has them: its last commit when it is a repository's own folder with one, the files as they lie otherwise. */
+export async function repoReader(folder: string): Promise<ReadFile> {
+  // git names its top by the real path, so a folder reached through a link (/var on macOS) is compared by its own.
+  const top = (await gitAsyncMaybe(["rev-parse", "--show-toplevel"], folder))?.trim();
+  const head = top && top === (await realpath(folder).catch(() => folder)) ? (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], folder))?.trim() : null;
+  return head ? commitReader(folder, head) : folderReader(folder);
+}
+
+/**
+ * What an approval is kept under: the project, and for a repository inside a folder of several
+ * the project and its path in the folder. The folder owns it, so its access rule holds for it and
+ * a team's approval of a connected repository is never mixed with a person's of their own copy.
+ */
+export const approvalScope = (projectId: string, path = ""): string => (path ? `${projectId}/${path}` : projectId);
 
 /** An approval the screen can still show: one of an earlier shape reads as none, so nothing runs on it. */
 export async function approvedVerification(store: Settings, tenant: string, repoId: string): Promise<ApprovedVerification | null> {
