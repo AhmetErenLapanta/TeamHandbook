@@ -15,6 +15,7 @@ import { runnerHolds, runnerOf } from "./machines.js";
 import { localMode } from "./mode.js";
 import { route } from "./route-scopes.js";
 import type { RouteKey } from "./route-scopes.js";
+import { MACHINE_FEATURES } from "./runner-store.js";
 import type { MachineAgentStatus, MachineRecord, RunnerEvent } from "./runner-store.js";
 import { createRunnerService, NotHeld } from "./runner-service.js";
 import type { RunnerService } from "./runner-service.js";
@@ -246,7 +247,7 @@ function outcomeOf(raw: unknown, mask: Mask): TaskOutcome | null {
   const changes = o.changes === undefined || o.changes === null ? null : changesOf(o.changes, mask);
   if (changes === undefined) return null;
   const request = o.request ? { title: mask(o.request.title), body: mask(o.request.body) } : null;
-  return { status: o.status!, error: o.error === null ? null : mask(o.error!), nativeSessionId: o.nativeSessionId!, branch: o.branch!, position: o.position!, request, ...(changes ? { changes } : {}) };
+  return { status: o.status!, error: o.error === null ? null : mask(o.error!), nativeSessionId: o.nativeSessionId!, branch: o.branch!, position: o.position!, request, ...(changes ? { changes } : {}), ...(typeof o.limitResetAt === "string" ? { limitResetAt: o.limitResetAt } : {}) };
 }
 
 const SNAPSHOT = SHA;
@@ -436,7 +437,9 @@ export function runnerRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
     if (call instanceof Response) return call;
     const agents = agentsOf(call.body.agents);
     if (!agents) return c.json({ error: `a machine reports at most ${AGENTS_MAX} agents, each with its id, whether it is installed, its version, whether it is supported and its sign-in, and nothing else` }, 400);
-    await ctx.store.touchMachine(ctx.tenant, call.machine.id, new Date().toISOString(), agents);
+    // Only the names this orchestrator knows are kept: a newer runner's other names mean nothing here.
+    const features = Array.isArray(call.body.features) ? MACHINE_FEATURES.filter((f) => (call.body.features as unknown[]).includes(f)) : [];
+    await ctx.store.touchMachine(ctx.tenant, call.machine.id, new Date().toISOString(), agents, features);
     if (call.body.started === true) await ctx.tasks?.autoContinue(call.machine.id);
     return c.body(null, 204);
   });

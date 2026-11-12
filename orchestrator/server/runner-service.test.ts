@@ -27,6 +27,64 @@ describe("the runner service a local orchestrator's runner calls", () => {
     expect(mem.logs.get("tsk-ada")).toEqual(["Started on this machine."]);
   });
 
+  it("given runs that end at a usage limit with a reset an hour ahead, one long past, one two months off, one not a time, and one that ended for review, when each finishes, then only the interrupted one with the near reset keeps it", async () => {
+    // given
+    const mem = memoryStore();
+    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const ahead = new Date(Date.now() + 3_600_000).toISOString();
+    const ends: [string, TaskOutcome["status"], string][] = [
+      ["tsk-near", "interrupted", ahead],
+      ["tsk-past", "interrupted", new Date(Date.now() - 60_000).toISOString()],
+      ["tsk-far", "interrupted", new Date(Date.now() + 60 * 86_400_000).toISOString()],
+      ["tsk-word", "interrupted", "soon"],
+      ["tsk-review", "needs-review", ahead],
+    ];
+
+    // when
+    for (const [id, status, limitResetAt] of ends) {
+      mem.queued.push(task(id, ADA));
+      const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+      await service.finish(id, lease!.leaseId, { status, error: "Claude Code reached its usage limit.", nativeSessionId: "sess-1", branch: null, position: null, request: null, limitResetAt });
+    }
+
+    // then
+    expect(Object.fromEntries(ends.map(([id]) => [id, mem.ended[id]!.limitResetAt ?? null]))).toEqual({ "tsk-near": ahead, "tsk-past": null, "tsk-far": null, "tsk-word": null, "tsk-review": null });
+  });
+
+  it("given a machine's agent that estimates its turn twice in one batch, when the batch arrives, then the task keeps the latest estimate", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-est", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+
+    // when
+    await service.events("tsk-est", lease!.leaseId, [{ n: 1, event: { type: "spend", usd: 0.02 } }, { n: 2, event: { type: "spend", usd: 0.03 } }]);
+
+    // then
+    expect(mem.patched).toContainEqual({ taskId: "tsk-est", patch: { turnEstimate: 0.03 } });
+  });
+
+  it("given runs that end for review and that fail, when each finishes and what follows its end is done, then only the one in review is told that is done, after it", async () => {
+    // given
+    const mem = memoryStore();
+    const order: string[] = [];
+    const service = createRunnerService({ tenant: "acme", store: mem.store, onFinished: async (id) => void order.push(`followed ${id}`) });
+    const finish = async (id: string, status: TaskOutcome["status"]) => {
+      mem.queued.push(task(id, ADA));
+      const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+      await service.finish(id, lease!.leaseId, { status, error: null, nativeSessionId: null, branch: status === "needs-review" ? `task/${id}` : null, position: null, request: null });
+      order.push(...mem.patched.filter((p) => p.taskId === id && "stage" in (p.patch as object)).map((p) => `${p.taskId} stage ${String((p.patch as { stage: unknown }).stage)}`));
+    };
+
+    // when
+    await finish("tsk-review", "needs-review");
+    await finish("tsk-failed", "failed");
+
+    // then
+    expect(order).toEqual(["followed tsk-review", "tsk-review stage null", "followed tsk-failed"]);
+  });
+
   it("given a runner already running a task, when it polls, then it leases nothing more", async () => {
     const mem = memoryStore();
     mem.queued.push(task("tsk-1", ADA));
@@ -181,6 +239,21 @@ describe("the runner service a local orchestrator's runner calls", () => {
     await service.events("tsk-1", lease!.leaseId, [{ n: 1, event: { type: "request_withdrawn", requestId: "toolu_1" } }]);
 
     expect(mem.requests[0]).toMatchObject({ status: "withdrawn", responseCapability: "not_resumable" });
+  });
+
+  it("given a machine reporting that its agent called a skill, when the event arrives, then the task records its name once and a call that names no skill is left out", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+    const call = (target: string | null, id: string, tool = "Skill") => ({ type: "tool_call" as const, id, tool, target, status: "started" as const });
+
+    // when
+    await service.events("tsk-1", lease!.leaseId, [{ n: 1, event: call("add-ledger-migration", "t1") }, { n: 2, event: call("add-ledger-migration", "t2") }, { n: 3, event: call("../../etc", "t3") }, { n: 4, event: call(null, "t4") }, { n: 5, event: call("teamhandbook-task-skills:release-notes", "t5") }, { n: 6, event: call("db-query", "t6", "skill") }]);
+
+    // then
+    expect(mem.used.get("tsk-1")).toEqual(["add-ledger-migration", "release-notes", "db-query"]);
   });
 
   it("given a machine reporting its agent's starting context, when the event arrives, then the task records it and its log gets no line", async () => {

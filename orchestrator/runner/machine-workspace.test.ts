@@ -44,10 +44,10 @@ describe("a task in its person's one work folder on their machine", { timeout: 6
 
   const options = () => ({ dataDir: join(home, "runner-data"), org: "acme", hostEnv: { PATH: process.env.PATH, HOME: home }, gitConfig: ["-c", `url.${forge}.insteadOf=${REMOTE}`, "-c", "protocol.file.allow=always"] });
 
-  async function run(prompt: string) {
+  async function run(prompt: string, continues?: WorkspaceWork["continues"]) {
     const log: string[] = [];
     const records: TaskProgress[] = [];
-    const work: WorkspaceWork = { prompt, mode: "auto", choices: null, setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null, verification: null }, rules: [], workspace: { machineId: "mch_here", projectId: "prj_code", path: "~/code" }, branch: "task/tsk_ws_1" };
+    const work: WorkspaceWork = { prompt, mode: "auto", choices: null, setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null, verification: null }, rules: [], workspace: { machineId: "mch_here", projectId: "prj_code", path: "~/code" }, branch: "task/tsk_ws_1", ...(continues ? { continues } : {}) };
     const hooks: ExecutorHooks = { signal: new AbortController().signal, onEvent: () => {}, log: (text) => void log.push(text), record: (p) => void records.push(p), onProcess: () => {}, decide: async () => ({ decision: "deny" }), leaseHeld: async () => true };
     const task: RunnerTask = { id: "tsk_ws_1", title: "Add an on-call note", agent: "fake", nativeSession: null, work };
     const executor = machineExecutor({ ...options(), machineId: "mch_here", adapters: [fakeAgentAdapter(FAKE_AGENT)] });
@@ -128,6 +128,55 @@ describe("a task in its person's one work folder on their machine", { timeout: 6
     expect(outcome).toMatchObject({ status: "needs-review", error: STOPPED, repos: [{ path: "payments-api", branch: "task/tsk_ws_1", baseSha: before }] });
     expect(git(["show", "task/tsk_ws_1:ON-CALL.md"], join(code, "payments-api"))).toBe("Page the on-call engineer.");
     expect(log).toContain(`${STOPPED} What the agent changed by then waits for review: keep it or undo it.`);
+  });
+
+  it("given a task's change left on a repository's branch, when its person asks for more, then the next run starts from that change, adds to it on the same branch, and keeps the first base", async () => {
+    // given
+    const before = git(["rev-parse", "HEAD"], join(code, "payments-api"));
+    const first = await run("Task: Add an on-call note\nstand-in: work in payments-api");
+    const head = first.outcome.repos![0]!.head;
+
+    // when
+    const { outcome, log } = await run("Task: Name the pager rotation\nstand-in: work in payments-api", { repos: [{ path: "payments-api", head, baseSha: before }] });
+
+    // then
+    expect(outcome).toMatchObject({ status: "needs-review", repos: [{ path: "payments-api", branch: "task/tsk_ws_1", baseSha: before }] });
+    const after = outcome.repos![0]!.head;
+    expect(git(["rev-parse", "task/tsk_ws_1"], join(code, "payments-api"))).toBe(after);
+    expect(git(["rev-parse", "task/tsk_ws_1^"], join(code, "payments-api"))).toBe(head);
+    expect(git(["ls-tree", "-r", "--name-only", "task/tsk_ws_1", "skills"], join(code, "payments-api")).split("\n").sort()).toEqual(["skills/add-an-on-call-note/SKILL.md", "skills/name-the-pager-rotation/SKILL.md"]);
+    expect(log).toContain("Went on from task/tsk_ws_1 in 1 of the 2 repositories of code, where the request left it; the others start at their last commits.");
+  });
+
+  it("given a task's branch its person moved since the request was read, when the task goes on, then nothing is changed and the task fails saying so", async () => {
+    // given
+    const before = git(["rev-parse", "HEAD"], join(code, "payments-api"));
+    const first = await run("Task: Add an on-call note\nstand-in: work in payments-api");
+    const head = first.outcome.repos![0]!.head;
+    git(["branch", "--force", "task/tsk_ws_1", before], join(code, "payments-api"));
+
+    // when
+    const { outcome } = await run("Task: Name the pager rotation\nstand-in: work in payments-api", { repos: [{ path: "payments-api", head, baseSha: before }] });
+
+    // then
+    expect(outcome).toMatchObject({ status: "failed", error: "task/tsk_ws_1 of payments-api moved since the request was read; nothing was changed." });
+    expect(git(["rev-parse", "task/tsk_ws_1"], join(code, "payments-api"))).toBe(before);
+  });
+
+  it("given two repositories the agent changes and one whose task branch already holds a commit the change does not follow, when the run ends, then that one is left out with git's reason and the other is reported for review", async () => {
+    // given
+    const notes = join(code, "notes");
+    const blocked = git(["-c", "user.name=Seed", "-c", "user.email=seed@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "an earlier round"], notes);
+    git(["branch", "task/tsk_ws_1", blocked], notes);
+
+    // when
+    const { outcome, log } = await run("Task: Add an on-call note\nstand-in: work in payments-api\nstand-in: work in notes");
+
+    // then
+    expect(outcome).toMatchObject({ status: "needs-review", repos: [{ path: "payments-api", branch: "task/tsk_ws_1" }] });
+    expect(outcome.repos).toHaveLength(1);
+    expect(git(["rev-parse", "task/tsk_ws_1"], notes)).toBe(blocked);
+    expect(log).toEqual(expect.arrayContaining([expect.stringMatching(/^notes: the change was not written to task\/tsk_ws_1 in your repository \(.*\); it is left out of this task\.$/)]));
   });
 
   it("given an agent that changes no repository, when the run ends, then the task fails and no repository gets a branch", async () => {

@@ -270,6 +270,22 @@ describe("a machine's calls to a team's orchestrator", () => {
     expect((await store.listMachines(TENANT, null)).find((m) => m.agents.length)?.agents).toEqual(agents);
   });
 
+  it("given a machine whose runner names what it understands, one name this orchestrator knows and one it does not, and then a runner from before that names nothing, when each reports, then the machine keeps the known name and then none", async () => {
+    // given
+    const { store, maxs } = await organization();
+    const agents = [{ id: "claude-code", installed: true, version: "2.1.316", supported: "ok", signIn: "signed-in" }];
+    const features = async () => (await store.listMachines(TENANT, null)).find((m) => m.agents.length)?.features;
+
+    // when
+    await maxs(RUNNER_PATHS.status, { agents, features: ["workspace-continues", "something-later"] });
+    const named = await features();
+    await maxs(RUNNER_PATHS.status, { agents });
+    const older = await features();
+
+    // then
+    expect([named, older]).toEqual([["workspace-continues"], []]);
+  });
+
   /** Max's machine takes the task and the work the orchestrator hands it, clones its base, pushes the branch it names with a note holding `note`, and finishes it for review. */
   async function pushedForReview(root: string, note: string) {
     const { store, ctx, maxs } = await organization({ dataDir: join(root, "data"), wired: true });

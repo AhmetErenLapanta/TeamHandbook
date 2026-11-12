@@ -477,13 +477,12 @@ describe("a team member's machine, working in a folder of its own without git", 
   });
 });
 
-describe("a task on a team's repository stopped on its person's machine", { timeout: 60_000 }, () => {
+describe("a task on a team's repository that ends early on its person's machine", { timeout: 60_000 }, () => {
   let root: string;
   beforeEach(() => void (root = realpathSync(mkdtempSync(join(tmpdir(), "machine-stop-")))));
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it("given an agent that changed the checkout and is still working, when its person stops the task, then the change is pushed on the task's branch with their git and the task waits for review with why it stopped", async () => {
-    // given
+  function teamRepository() {
     const bare = join(root, "forge.git");
     git(["init", "--quiet", "--bare", "--initial-branch=main", bare], root);
     const seed = join(root, "seed");
@@ -496,6 +495,14 @@ describe("a task on a team's repository stopped on its person's machine", { time
     const home = join(root, "home");
     mkdirSync(home);
     writeFileSync(join(home, ".gitconfig"), "[user]\n\tname = Max Example\n\temail = max@example.invalid\n");
+    const work: CheckoutWork = { prompt: "Task: Add a note\nstand-in: wait 30 seconds", mode: "auto", choices: null, setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null, verification: null }, rules: [], repo: { url: FORGE, baseBranch: "main", baseSha }, branch: "task/tsk_stop_1" };
+    const executor = (agent: AgentAdapter) => machineExecutor({ dataDir: join(root, "data"), org: "acme", machineId: "mch_here", adapters: [agent], hostEnv: { PATH: process.env.PATH, HOME: home }, gitConfig: ["-c", `url.${bare}.insteadOf=${FORGE}`, "-c", "protocol.file.allow=always"], gitEnv: { GIT_ALLOW_PROTOCOL: "https:ssh:file" } });
+    return { bare, baseSha, work, executor };
+  }
+
+  it("given an agent that changed the checkout and is still working, when its person stops the task, then the change is pushed on the task's branch with their git and the task waits for review with why it stopped", async () => {
+    // given
+    const { bare, baseSha, work, executor } = teamRepository();
     const base = fakeAgentAdapter(FAKE_AGENT);
     const writing: AgentAdapter = {
       ...base,
@@ -507,17 +514,44 @@ describe("a task on a team's repository stopped on its person's machine", { time
         },
       },
     };
-    const work: CheckoutWork = { prompt: "Task: Add a note\nstand-in: wait 30 seconds", mode: "auto", choices: null, setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null, verification: null }, rules: [], repo: { url: FORGE, baseBranch: "main", baseSha }, branch: "task/tsk_stop_1" };
     const controller = new AbortController();
     const hooks: ExecutorHooks = { signal: controller.signal, onEvent: () => {}, log: () => {}, record: () => {}, onProcess: () => setTimeout(() => controller.abort(new Error(STOPPED)), 300), decide: async () => ({ decision: "deny" }), leaseHeld: async () => true };
-    const executor = machineExecutor({ dataDir: join(root, "data"), org: "acme", machineId: "mch_here", adapters: [writing], hostEnv: { PATH: process.env.PATH, HOME: home }, gitConfig: ["-c", `url.${bare}.insteadOf=${FORGE}`, "-c", "protocol.file.allow=always"], gitEnv: { GIT_ALLOW_PROTOCOL: "https:ssh:file" } });
 
     // when
-    const outcome = await executor.run({ id: "tsk_stop_1", title: "Add a note", agent: "fake", nativeSession: null, work }, hooks);
+    const outcome = await executor(writing).run({ id: "tsk_stop_1", title: "Add a note", agent: "fake", nativeSession: null, work }, hooks);
 
     // then
     expect(outcome).toMatchObject({ status: "needs-review", error: STOPPED, branch: "task/tsk_stop_1" });
     expect(git(["show", "task/tsk_stop_1:ON-CALL.md"], bare)).toBe("Page the on-call engineer.");
     expect(git(["rev-parse", "task/tsk_stop_1^"], bare)).toBe(baseSha);
+  });
+
+  it.each([
+    ["a reset time", "2099-01-01T00:00:00.000Z", { status: "interrupted", limitResetAt: "2099-01-01T00:00:00.000Z", nativeSessionId: expect.any(String) }],
+    ["no reset time", undefined, { status: "failed" }],
+  ])("given an agent that keeps its session and hits its person's usage limit with %s, when its run ends, then the task waits to go on in that session after the reset, or fails when no reset is known", async (_name, resetAt, expected) => {
+    // given
+    const { work, executor } = teamRepository();
+    const base = fakeAgentAdapter(FAKE_AGENT);
+    const limited: AgentAdapter = {
+      ...base,
+      twoWay: {
+        capabilities: { ...base.twoWay!.capabilities, resume: true },
+        launch(paths, setup, { sessionId: _sessionId, resume: _resume, ...options }) {
+          const launched = base.twoWay!.launch(paths, setup, options);
+          return { ...launched, codec: { ...launched.codec, finish: () => ({ type: "terminal", status: "failed", summary: "", failure: { class: "usage_limit", message: "Your plan's usage limit was reached.", retryable: false, ...(resetAt ? { resetAt } : {}) } }) } };
+        },
+      },
+    };
+    const hooks: ExecutorHooks = { signal: new AbortController().signal, onEvent: () => {}, log: () => {}, record: () => {}, onProcess: () => {}, decide: async () => ({ decision: "deny" }), leaseHeld: async () => true };
+
+    // when
+    const outcome = await executor(limited).run({ id: "tsk_stop_1", title: "Add a note", agent: "fake", nativeSession: null, work: { ...work, prompt: "Task: Add a note" } }, hooks);
+
+    // then
+    const kept = join(root, "data", "runner", "machines", "acme", "tasks", "tsk_stop_1");
+    expect(outcome).toMatchObject(expected);
+    expect(existsSync(kept)).toBe(resetAt !== undefined);
+    await releasePersonalGuard(kept);
   });
 });

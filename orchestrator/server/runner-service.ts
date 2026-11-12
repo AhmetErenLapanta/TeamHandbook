@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { AgentRequest, Decision } from "./tasks/adapters/contract.js";
-import { PLAN_DECLINED } from "./task-requests.js";
+import { calledSkill } from "./skill-rules.js";
+import { agentTimeMs, PLAN_DECLINED } from "./task-requests.js";
 import type { TaskDecision, TaskRequestKind, TaskRequestStore } from "./task-requests.js";
 import type { TaskStore, TestOutcome } from "./tasks/types.js";
 import type { FollowUpStore } from "./task-followups.js";
@@ -8,6 +9,7 @@ import type { LeasedTaskEnd, RunnerEvent, RunnerStore } from "./runner-store.js"
 import type { MachineMcpServer } from "../runner/machine-mcp.js";
 import type { Lease, NumberedEvent, RemoteWork, RunnerCommand, TaskOutcome, TaskProgress } from "../runner/link.js";
 import { newId } from "./ids.js";
+import { resetAtFromTime } from "./tasks/adapters/failure.js";
 import { detectSecret, POLICY_ACTIONS } from "./plugin.js";
 
 /** The orchestrator's hold on a task leased to a runner: given up after this long without a renewal. */
@@ -21,7 +23,7 @@ export const POLL_TICK_MS = 1_000;
  */
 export type RunnerServiceStore = Pick<RunnerStore, "claimLocalTask" | "renewLease" | "heldTasks" | "appendRunnerEvents" | "updateLeasedTask" | "finishLeasedTask" | "taskLease" | "requestStop"> &
   Pick<TaskRequestStore, "recordTaskRequest" | "taskRequests" | "endTaskRequests" | "withdrawTaskRequest"> &
-  Pick<TaskStore, "appendTaskLog" | "noteTaskContext" | "updateTask"> &
+  Pick<TaskStore, "appendTaskLog" | "noteTaskContext" | "noteUsedSkill" | "updateTask"> &
   Pick<FollowUpStore, "pendingFollowUps" | "markFollowUpsDelivered">;
 
 /**
@@ -278,8 +280,12 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
         if (event.type === "request_withdrawn") await store.withdrawTaskRequest(tenant, taskId, event.requestId, iso(now()));
         else if (event.type === "context") await store.noteTaskContext(tenant, taskId, event.tokens);
         else if (event.type === "mcp_status") await store.updateTask(tenant, taskId, { mcpNeedsSignIn: event.needsSignIn });
+        else if (event.type === "tool_call" && event.tool.toLowerCase() === "skill" && event.status === "started" && calledSkill(event.target)) await store.noteUsedSkill(tenant, taskId, calledSkill(event.target)!);
         else if (event.type === "spend") await onSpend?.(taskId, event.usd);
       }
+      // The latest estimate of the turn is kept on the task until the turn's own cost replaces it.
+      const estimate = events.map(({ event }) => event).filter((event) => event.type === "spend").at(-1);
+      if (estimate) await held(() => store.updateLeasedTask(tenant, taskId, leaseId, { turnEstimate: estimate.usd }));
     },
     async request(taskId, leaseId, request) {
       if (!(await store.renewLease(tenant, taskId, leaseId, iso(now() + LEASE_MS), iso(now())))) throw new NotHeld();
@@ -314,10 +320,19 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
       if (reached.length) await store.markFollowUpsDelivered(tenant, reached, iso(now()));
     },
     async finish(taskId, leaseId, outcome) {
-      const end: LeasedTaskEnd = { status: outcome.status, error: outcome.error, nativeSession: outcome.nativeSessionId, branch: outcome.branch };
+      // A reset that is no time, already past or a month off is not believed: the task stays interrupted for its person.
+      const limitResetAt = outcome.status === "interrupted" ? resetAtFromTime(outcome.limitResetAt, now()) : undefined;
+      const since = (await store.taskLease(tenant, taskId))?.runStartedAt;
+      const ranMs = since ? agentTimeMs(since, now(), await store.taskRequests(tenant, taskId)) : null;
+      const end: LeasedTaskEnd = { status: outcome.status, error: outcome.error, nativeSession: outcome.nativeSessionId, branch: outcome.branch, ...(ranMs !== null ? { ranMs } : {}), ...(limitResetAt ? { limitResetAt } : {}) };
       await held(() => store.finishLeasedTask(tenant, taskId, leaseId, end, iso(now())));
       await store.endTaskRequests(tenant, taskId, iso(now()));
-      await onFinished(taskId, outcome);
+      try {
+        await onFinished(taskId, outcome);
+      } finally {
+        // What follows the end is done, however it went: the task is in review, and its page stops following it.
+        if (outcome.status === "needs-review") await store.updateTask(tenant, taskId, { stage: null });
+      }
     },
     wake() {
       woken.emit("wake");
