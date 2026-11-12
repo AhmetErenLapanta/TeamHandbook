@@ -81,12 +81,18 @@ export interface TaskRecord {
   tools?: TaskToolChoice | null;
   /** What the person's own Claude Code loaded into a run as them on this orchestrator's host, by count alone; absent when none of it did. */
   loaded?: TaskLoaded | null;
+  /** The skills the agent called during the run, by name, each once and at most USED_SKILLS_MAX; absent when none. */
+  usedSkills?: string[] | null;
   /** How many tokens the agent's first request carried, the context its cost starts from; a run that goes on keeps the first. */
   context?: { tokens: number };
   /** When the task's current run on a runner started: a continued task's limit of time counts from here, not from its first start. */
   runStartedAt?: string;
   /** Started to plan first: the agent changes nothing until its starter approves the plan it puts to them. */
   planFirst?: boolean;
+  /** For a task on its starter's machine cut off at their plan's usage limit: when the limit resets and the task goes on. */
+  limitResetAt?: string;
+  /** How long its agent worked over its runs on a machine, its cards' waits left out. */
+  ranMs?: number;
   /** Where the orchestrator sent a task started with no project named, and why. */
   routing?: { path: string; reason: string; fallback: boolean };
   /** What a stopped run asked its starter, and their answer once given; the next run takes the answer. */
@@ -132,6 +138,8 @@ export interface TaskChanges {
   kept?: { at: string; by: string } | null;
 }
 
+export const USED_SKILLS_MAX = 20;
+
 export type TaskMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
 
 export type TaskStage = "working" | "tests" | "request";
@@ -154,6 +162,11 @@ export interface TaskTarget {
   origin?: string;
   targetBranch?: string;
   description?: { title: string; body: string };
+  /**
+   * A request opened with its person's own sign-in on a forge this organization never connected: no record of it is kept
+   * here, so nothing reads its state again; the task links to it there.
+   */
+  forgeRequest?: { forge: string; number: number; url: string };
   baseSha: string | null;
   branch: string | null;
   tests: TestOutcome | null;
@@ -162,7 +175,10 @@ export interface TaskTarget {
   cost: TaskCost;
 }
 
-export type TaskTargetPatch = Partial<Pick<TaskTarget, "repoId" | "status" | "reason" | "baseSha" | "branch" | "tests" | "requestNumber" | "error" | "cost">>;
+/** A task on a folder of repositories that left a change in some of them: its targets name where each is in the folder. */
+export const inWorkspace = (task: Pick<TaskRecord, "requestNumber" | "targets">): boolean => task.requestNumber === null && Boolean(task.targets?.some((t) => t.path !== undefined));
+
+export type TaskTargetPatch = Partial<Pick<TaskTarget, "repoId" | "status" | "reason" | "baseSha" | "branch" | "tests" | "requestNumber" | "error" | "cost" | "forgeRequest">>;
 
 /** An agent's event for the task's log: the line it reads as, its type and the event itself, all masked. */
 export interface TaskLogEvent {
@@ -204,8 +220,10 @@ export interface TaskFilter {
   since?: string;
   /** Finished at or after this time (ISO); a task not finished is not taken. */
   finishedSince?: string;
-  /** Text the title holds, matched as the description is. */
+  /** Text the title or the issue key holds, whatever the case. */
   titleHas?: string;
+  /** Text one of the task's log lines holds, whatever the case: for a search box's words, read over the recent tasks it is given. */
+  logHas?: string;
   requestNumber?: number;
   /** Opened a request the store records as opened at or after this time (ISO), whenever the task itself started. */
   requestOpenedSince?: string;
@@ -297,6 +315,8 @@ export interface TaskStore {
   markTaskFilesUndone(tenant: string, id: string, paths: readonly string[], undone: NonNullable<TaskChanges["undone"]>): Promise<boolean>;
   /** Keeps how many tokens the task's first agent request carried, once: a later run's leaves the first as it is. */
   noteTaskContext(tenant: string, id: string, tokens: number): Promise<void>;
+  /** Adds a skill the agent called to the task's record, once; nothing past USED_SKILLS_MAX. */
+  noteUsedSkill(tenant: string, id: string, name: string): Promise<void>;
   /** Records that its person keeps the change, once: false when it was kept or undone already, or there is none. */
   markTaskChangesKept(tenant: string, id: string, kept: NonNullable<TaskChanges["kept"]>): Promise<boolean>;
   /** Shares a task with a member to read; false when it is shared with them already. */
