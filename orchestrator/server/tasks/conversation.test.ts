@@ -46,6 +46,8 @@ const PROGRAM = [
   '  if (line.startsWith("turn ") && tool === "Spend") { console.log(JSON.stringify({ type: "spend", usd: 0.12 })); process.exit(1); }',
   '  if (line.startsWith("turn ") && tool === "Once") { if (!globalThis.once) { globalThis.once = true; setTimeout(() => console.log(JSON.stringify({ type: "result", summary: "Did the work and what was added while it worked." })), 1500); } continue; }',
   '  if (line.startsWith("turn ") && tool === "Partial") { writeFileSync("notes.md", "Halfway.\\n"); console.log("ask r1 Bash npm test"); continue; }',
+  '  if (line.startsWith("turn ") && tool === "SpendPartial") { writeFileSync("notes.md", "Halfway.\\n"); console.log(JSON.stringify({ type: "spend", usd: 0.07 })); console.log("ask r1 Bash npm test"); continue; }',
+  '  if (line.startsWith("turn ") && tool === "SpendAsk") { console.log(JSON.stringify({ type: "spend", usd: 0.05 })); console.log("ask r1 Bash npm test"); continue; }',
   '  if (line.startsWith("turn ")) console.log(`ask r1 ${tool} npm test`);',
   '  if (/^(allow|deny) r1/.test(line)) appendFileSync(heard, `${line}\\n`);',
   '  if (line === "allow r1") writeFileSync("notes.md", "Ran the tests.\\n");',
@@ -453,6 +455,22 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
 
     // then
     expect(outcome).toMatchObject({ status: "needs-review", branch: expect.stringContaining(`task/${task.id}`) });
+  });
+
+  it("given agents that estimated their turn's cost and wait on their starter's card, one that changed a file and one that did not, when their starters stop them, then each task keeps the cost estimated while it ran", async () => {
+    // given
+    const changed = await asking("SpendPartial");
+    const unchanged = await asking("SpendAsk");
+    await Promise.all([askedOf(changed.ctx, changed.task), askedOf(unchanged.ctx, unchanged.task)]);
+
+    // when
+    await changed.ctx.tasks!.cancel(changed.task.id);
+    await unchanged.ctx.tasks!.cancel(unchanged.task.id);
+    await Promise.all([changed.ctx.tasks!.idle(), unchanged.ctx.tasks!.idle()]);
+
+    // then
+    expect((await changed.ctx.store.getTask(changed.ctx.tenant, changed.task.id))!).toMatchObject({ status: "needs-review", cost: { usd: 0.07 } });
+    expect((await unchanged.ctx.store.getTask(unchanged.ctx.tenant, unchanged.task.id))!).toMatchObject({ status: "cancelled", cost: { usd: 0.05 } });
   });
 
   it("given an agent that ends before reporting its turn's cost, when the run is over, then the task keeps the cost it estimated while it ran", async () => {

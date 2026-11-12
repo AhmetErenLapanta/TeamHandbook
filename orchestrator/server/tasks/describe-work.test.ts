@@ -16,7 +16,7 @@ import { seededContext } from "../test-fixtures.js";
 import { createVault } from "../vault.js";
 import { fakeAgentAdapter } from "./agents.js";
 import { Redactor } from "./redact.js";
-import { createTaskRunner, prompt, TASK_LIMITS_SETTING } from "./runner.js";
+import { CONTINUE_AFTER_STOP, createTaskRunner, prompt, TASK_LIMITS_SETTING } from "./runner.js";
 import { UNKNOWN_COST } from "./types.js";
 import type { TaskRecord } from "./types.js";
 import type { CheckoutWork, FolderWork, WorkspaceWork } from "../../runner/link.js";
@@ -25,6 +25,7 @@ import { readEvidence } from "./verify.js";
 import { ATTACHMENT_LIMITS } from "../attachments.js";
 import { handedChecks } from "./leased.js";
 import { machineProjectUrl } from "../projects.js";
+import { CONTINUE_AFTER_LIMIT } from "./adapters/failure.js";
 
 const OWNER: Principal = { id: "owner", name: "Owner", email: "owner@example.invalid", role: "owner", ownedTeams: [] };
 const FAKE_AGENT = join(import.meta.dirname, "..", "..", "demo", "fake-agent.mjs");
@@ -184,6 +185,34 @@ describe("a task described for its person's machine", { timeout: 120_000 }, () =
     expect((await ctx.store.getTask(ctx.tenant, task.id))!.question ?? null).toBeNull();
   });
 
+  it("given tasks on a machine cut off at the usage limit that went on after its reset, one with its agent's session and one without, when each is described and the first once more, then the first hand-out with a session is told to go on with care after the limit, the next as a cut-off run, and the one without a session carries the task", async () => {
+    // given
+    const { ctx, task } = await kept({ runner: "local" });
+    const other: TaskRecord = { ...task, id: newId("tsk"), createdAt: new Date(Date.now() + 1).toISOString() };
+    await ctx.store.createTask(other);
+    const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+    const cutOff = async (id: string, session: string | null) => {
+      const at = new Date().toISOString();
+      await ctx.store.claimLocalTask(ctx.tenant, "ada@example.invalid", "mch_1", `lease_${id}`, new Date(Date.now() + 90_000).toISOString(), at);
+      await ctx.store.finishLeasedTask(ctx.tenant, id, `lease_${id}`, { status: "interrupted", error: "The demo agent reached its usage limit.", nativeSession: session, branch: null, limitResetAt: resetAt }, at);
+      await ctx.store.continueAfterLimit(ctx.tenant, id, resetAt);
+      await ctx.store.claimLocalTask(ctx.tenant, "ada@example.invalid", "mch_1", `again_${id}`, new Date(Date.now() + 90_000).toISOString(), at);
+    };
+    await cutOff(task.id, "sess-1");
+    await cutOff(other.id, null);
+
+    // when
+    const described = async (id: string) => checkedWork(await ctx.tasks!.describeWork(id)).prompt;
+    const goesOn = await described(task.id);
+    const fresh = await described(other.id);
+    const again = await described(task.id);
+
+    // then
+    expect(goesOn).toBe(CONTINUE_AFTER_LIMIT);
+    expect(fresh).toContain("Add an on-call note");
+    expect(again).toBe(CONTINUE_AFTER_STOP);
+  });
+
   it("given no time limit of the operator's own, when a machine leases a task under a 45-minute cap and then under none, then its run's time is the cap on screen and then has no end of its own", async () => {
     // given
     const { ctx, task } = await kept({});
@@ -230,6 +259,76 @@ describe("a task described for its person's machine", { timeout: 120_000 }, () =
     expect(work.branch).toEqual(expect.any(String));
     expect(again.branch).toBe(work.branch);
     expect(work.limits.verification).toBeNull();
+  });
+
+  it("given a task on a folder of repositories cut off at the usage limit that went on after the reset, when the machine leases it twice, then it is first told to go on with care and then as a cut-off run, never the whole task again", async () => {
+    // given
+    const { ctx, task } = await kept();
+    await ctx.store.upsertRepo({ tenant: ctx.tenant, id: "code", team: "Payments", name: "code", url: machineProjectUrl("mch_laptop", "~/code") });
+    ctx.addedRepos = new Map([["code", { id: "code", forge: "machine", kind: "code", skillsFrom: null, gitOrigin: null, memberUrl: null, machine: { id: "mch_laptop", path: "~/code", name: "code", git: "none", repos: 2 }, addedBy: OWNER.email, addedAt: new Date().toISOString() }]]);
+    const inWorkspace: TaskRecord = { ...task, id: "tsk_workspacelimit000000000000", repoId: "code", runner: "local" };
+    await ctx.store.createTask(inWorkspace);
+    const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+    const at = new Date().toISOString();
+    await ctx.store.claimLocalTask(ctx.tenant, "ada@example.invalid", "mch_laptop", "lease_ws_1", new Date(Date.now() + 90_000).toISOString(), at);
+    await ctx.store.finishLeasedTask(ctx.tenant, inWorkspace.id, "lease_ws_1", { status: "interrupted", error: "The demo agent reached its usage limit.", nativeSession: "sess-ws", branch: null, limitResetAt: resetAt }, at);
+    await ctx.store.continueAfterLimit(ctx.tenant, inWorkspace.id, resetAt);
+    await ctx.store.claimLocalTask(ctx.tenant, "ada@example.invalid", "mch_laptop", "lease_ws_2", new Date(Date.now() + 90_000).toISOString(), at);
+
+    // when
+    const first = (checkedWork(await ctx.tasks!.describeWork(inWorkspace.id)) as WorkspaceWork).prompt;
+    const again = (checkedWork(await ctx.tasks!.describeWork(inWorkspace.id)) as WorkspaceWork).prompt;
+
+    // then
+    expect([first, again]).toEqual([CONTINUE_AFTER_LIMIT, CONTINUE_AFTER_STOP]);
+  });
+
+  it("given a folder task that left a request open in one repository, a change on its machine in another and a merged request in a third, when its person sends more and its machine leases it, then a machine that knows how gets where each goes on and the words, and one from before gets neither the offer nor the list", async () => {
+    // given
+    const { ctx, task } = await kept();
+    await ctx.store.upsertRepo({ tenant: ctx.tenant, id: "code", team: "Payments", name: "code", url: machineProjectUrl("mch_laptop", "~/code") });
+    ctx.addedRepos = new Map([["code", { id: "code", forge: "machine", kind: "code", skillsFrom: null, gitOrigin: null, memberUrl: null, machine: { id: "mch_laptop", path: "~/code", name: "code", git: "none", repos: 3 }, addedBy: OWNER.email, addedAt: new Date().toISOString() }]]);
+    const now = new Date().toISOString();
+    const ada = (await ctx.store.listUsers(ctx.tenant)).find((u) => u.email === "ada@example.invalid")!;
+    for (const id of ["mch_laptop", "mch_old"]) await ctx.store.insertMachine({ tenant: ctx.tenant, id, userId: ada.id, name: id, platform: "darwin", publicKey: "", agents: [], createdAt: now, lastSeenAt: now, revokedAt: null, tokenHash: (id === "mch_old" ? "e" : "d").repeat(64) }, null);
+    await ctx.store.touchMachine(ctx.tenant, "mch_laptop", now, undefined, ["workspace-continues"]);
+    await ctx.store.saveRequest({ tenant: ctx.tenant, repoId: "payments-skills", number: 4, provider: "local", url: "local://requests/payments-skills/4", branch: "task/folder", headSha: "a".repeat(40), title: "Add a note", status: "open", createdAt: now, createdBy: "ada@example.invalid" });
+    await ctx.store.recordRequestCheck(ctx.tenant, "payments-skills", 4, { head: "a".repeat(40), passed: true });
+    await ctx.store.saveRequest({ tenant: ctx.tenant, repoId: "payments-skills", number: 5, provider: "local", url: "local://requests/payments-skills/5", branch: "task/folder", headSha: "c".repeat(40), title: "Add a note", status: "merged", createdAt: now, createdBy: "ada@example.invalid" });
+    const targets = [
+      { repoId: "payments-skills", status: "request" as const, reason: "changed by the agent in alpha", path: "alpha", baseSha: "1".repeat(40), branch: "task/folder", tests: null, requestNumber: 4, error: null, cost: UNKNOWN_COST },
+      { repoId: "code", status: "local" as const, reason: "no-remote", path: "beta", head: "b".repeat(40), baseSha: "2".repeat(40), branch: "task/folder", tests: null, requestNumber: null, error: null, cost: UNKNOWN_COST },
+      { repoId: "payments-skills", status: "request" as const, reason: "changed by the agent in gamma", path: "gamma", baseSha: "3".repeat(40), branch: "task/folder", tests: null, requestNumber: 5, error: null, cost: UNKNOWN_COST },
+    ];
+    const reviewed = async (id: string, machine: string): Promise<TaskRecord> => {
+      const record: TaskRecord = { ...task, id, repoId: "code", runner: "local", status: "queued" };
+      await ctx.store.createTask(record);
+      await ctx.store.claimLocalTask(ctx.tenant, "ada@example.invalid", machine, `lease_${id}`, new Date(Date.now() + 90_000).toISOString(), now);
+      await ctx.store.finishLeasedTask(ctx.tenant, id, `lease_${id}`, { status: "needs-review", error: null, nativeSession: null, branch: "task/folder" }, now);
+      await ctx.store.setTaskTargets(ctx.tenant, id, targets);
+      return (await ctx.store.getTask(ctx.tenant, id))!;
+    };
+    const knows = await reviewed(newId("tsk"), "mch_laptop");
+    const older = await reviewed(newId("tsk"), "mch_old");
+    const signedIn: MiddlewareHandler<OrchestratorEnv> = async (c, next) => {
+      c.set("user", { ...OWNER, id: ada.id, email: ada.email, name: ada.name, role: "admin" });
+      await next();
+    };
+    const app = createApp(ctx, signedIn);
+    const send = (id: string) => app.request(`/api/tasks/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Also name the escalation lead.", commandId: `more-${id.slice(-12)}` }) });
+
+    // when
+    const offers = [(await (await app.request(`/api/tasks/${knows.id}`)).json()).task.followUp, (await (await app.request(`/api/tasks/${older.id}`)).json()).task.followUp];
+    const sent = [await send(knows.id), await send(older.id)];
+    await ctx.store.claimLocalTask(ctx.tenant, "ada@example.invalid", "mch_laptop", "lease_again", new Date(Date.now() + 90_000).toISOString(), now);
+    const work = checkedWork(await ctx.tasks!.describeWork(knows.id)) as WorkspaceWork;
+
+    // then
+    expect(offers).toEqual(["continue", null]);
+    expect(sent.map((r) => r.status)).toEqual([202, 409]);
+    expect(work.continues).toEqual({ repos: [{ path: "alpha", head: "a".repeat(40), baseSha: "1".repeat(40) }, { path: "beta", head: "b".repeat(40), baseSha: "2".repeat(40) }] });
+    expect(work.branch).toBe("task/folder");
+    expect(work.prompt).toContain("Also name the escalation lead.");
   });
 
   it("given a folder on its person's machine that is one git repository itself, when the machine leases its task, then it is handed a workspace on a task branch, told it works in a copy, with no folder settings and nothing in place", async () => {

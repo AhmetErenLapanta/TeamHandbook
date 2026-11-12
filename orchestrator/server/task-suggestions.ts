@@ -2,6 +2,7 @@ import type { OrchestratorContext } from "./app.js";
 import type { Principal } from "./auth.js";
 import type { FollowUpQuote, FollowUpRecord } from "./task-followups.js";
 import { canStartOnTeam } from "./tasks/guards.js";
+import type { FollowUpOffer } from "./tasks/runner.js";
 import type { TaskRecord } from "./tasks/types.js";
 
 /**
@@ -33,7 +34,7 @@ export function suggestionStatus(followUp: Pick<FollowUpRecord, "status">, reque
 }
 
 /** Whether this person suggests a follow-up now: someone who starts tasks on the team but did not start this one, while its request is open and the task takes one. */
-export function suggestsOn(user: Principal, task: Pick<TaskRecord, "createdBy" | "team">, offered: "steer" | "continue" | null, requestOpen: boolean): boolean {
+export function suggestsOn(user: Principal, task: Pick<TaskRecord, "createdBy" | "team">, offered: FollowUpOffer, requestOpen: boolean): boolean {
   return !user.key && !startedTask(user, task) && canStartOnTeam(user, task.team) && offered !== null && requestOpen;
 }
 
@@ -54,7 +55,7 @@ export function nameReader(ctx: Pick<OrchestratorContext, "store" | "tenant">): 
  * The task views as this person reads them: the starter sees every suggestion and answers the
  * waiting ones, a teammate sees only their own with how it stands, and `suggests` opens their box.
  */
-export async function withSuggestions<T extends Pick<TaskRecord, "id" | "createdBy" | "team" | "repoId" | "requestNumber"> & { followUp: "steer" | "continue" | null; request: { status: string } | null }>(
+export async function withSuggestions<T extends Pick<TaskRecord, "id" | "createdBy" | "team" | "repoId" | "requestNumber"> & { followUp: FollowUpOffer; request: { status: string } | null }>(
   ctx: Pick<OrchestratorContext, "store" | "tenant">,
   viewer: Principal,
   views: T[],

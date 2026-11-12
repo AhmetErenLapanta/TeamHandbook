@@ -11,7 +11,7 @@ import { gitAsyncMaybe, stoppedFromOutside } from "../git.js";
 import type { Principal } from "../auth.js";
 import type { RepoRecord, Store } from "../store.js";
 import type { LocalTargetReason, TaskRecord, TaskTarget } from "./types.js";
-import { UNKNOWN_COST } from "./types.js";
+import { inWorkspace, UNKNOWN_COST } from "./types.js";
 import { originOf } from "../projects.js";
 import { teamAssignment } from "../propose.js";
 import { detectSecret } from "../plugin.js";
@@ -52,7 +52,7 @@ export async function openPushedRequest(ctx: OrchestratorContext, taskId: string
   const task = await ctx.store.getTask(ctx.tenant, taskId);
   // The words a run that went on from the task's request was handed stay pending until it ends, so a lease taken
   // again hands them out again; once it ends, however it ended, none is handed out a second time.
-  if (task && task.requestNumber !== null) {
+  if (task && (task.requestNumber !== null || inWorkspace(task))) {
     const handed = await ctx.store.pendingFollowUps(ctx.tenant, task.id);
     if (handed.length) await ctx.store.markFollowUpsDelivered(ctx.tenant, handed.map((f) => f.id), new Date().toISOString());
   }
@@ -99,7 +99,7 @@ export async function openPushedRequest(ctx: OrchestratorContext, taskId: string
   if ("head" in checked) await ctx.store.recordRequestCheck(ctx.tenant, repo.id, kept.number, { head: checked.head, passed: true });
 }
 
-async function continuedRequest(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, request: RequestRecord): Promise<void> {
+export async function continuedRequest(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, request: RequestRecord): Promise<void> {
   const read = await syncRepo(ctx, repo.id).catch((err: unknown) => {
     if (stoppedFromOutside(err)) return null;
     throw err;
@@ -151,8 +151,21 @@ async function workspaceRequests(ctx: OrchestratorContext, task: TaskRecord, pus
   const user = await principalOf(ctx.store, account);
   const masked = await taskMask(ctx, task);
   const log = (line: string) => ctx.store.appendTaskLog(ctx.tenant, task.id, [masked(line)]);
-  const targets: TaskTarget[] = [];
-  for (const entry of pushed) targets.push(await reportedTarget(ctx, task, user, entry, masked, log, run));
+  // A run that went on from what the task left keeps each repository it did not change as it was, and one whose request
+  // is still open has that request checked again at its new head rather than a second one opened.
+  const earlier = task.targets ?? [];
+  const targets: TaskTarget[] = earlier.filter((t) => t.path === undefined || !pushed.some((entry) => entry.path === t.path));
+  for (const entry of pushed) {
+    // Only a branch the machine pushed moves the request; one it kept goes on as a change kept on the machine.
+    const before = entry.origin && entry.pushed !== false ? earlier.find((t) => t.path === entry.path && t.status === "request" && t.requestNumber !== null) : undefined;
+    const open = before ? await ctx.store.getRequest(ctx.tenant, before.repoId, before.requestNumber!) : null;
+    const repo = open?.status === "open" && open.branch === entry.branch ? await ctx.store.getRepo(ctx.tenant, open.repoId) : null;
+    if (before && open && repo) {
+      await continuedRequest(ctx, task, repo, open);
+      await log(`${entry.path || "the folder"}: went on in request #${open.number} on ${open.branch}.`);
+      targets.push(before);
+    } else targets.push(await reportedTarget(ctx, task, user, entry, masked, log, run));
+  }
   if (targets.length) await ctx.store.setTaskTargets(ctx.tenant, task.id, targets);
   // A change kept on the person's machine is one to review there, so the task waits for review with it.
   if (!targets.some((t) => t.status === "request" || t.status === "local")) await ctx.store.updateTask(ctx.tenant, task.id, { status: "failed", error: "No request was opened for any repository the agent changed; the log says why for each." });

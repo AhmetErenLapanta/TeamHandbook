@@ -41,6 +41,10 @@ export interface FollowUpStore {
   pendingFollowUps(tenant: string, taskId: string): Promise<FollowUpRecord[]>;
   /** Every follow-up of the task, whatever came of it, oldest first. */
   taskFollowUps(tenant: string, taskId: string): Promise<FollowUpRecord[]>;
+  /** Puts new words in a person's follow-up that still waits for the agent, and new quotes unless `quotes` is left out; false once it reached it or was removed. One that looks like it holds a secret is refused. */
+  editFollowUp(tenant: string, taskId: string, id: string, text: string, quotes?: FollowUpQuote[] | null): Promise<boolean>;
+  /** Takes back a person's follow-up that still waits for the agent; false once it reached it or was removed. */
+  dropFollowUp(tenant: string, taskId: string, id: string): Promise<boolean>;
   /** Marks these pending follow-ups delivered; says how many were. */
   markFollowUpsDelivered(tenant: string, ids: readonly string[], at: string): Promise<number>;
   /** The task ended: its follow-ups still pending are closed and no longer delivered; says how many. */
