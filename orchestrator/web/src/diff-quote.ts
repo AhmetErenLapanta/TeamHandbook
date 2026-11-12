@@ -3,6 +3,9 @@ import { numberLines } from "./design/DiffPatch";
 /** Lines of the diff a person points the agent at, with the file and the lines they cover. */
 export interface Quote { path: string; lines: string; text: string }
 
+/** What a quote of the agent's own words or log is said to point at, with the log's line numbers as its lines. */
+export const AGENT_LOG = "the agent's log";
+
 /** Lines one quote carries at most: enough for a function, short of filling the agent's prompt. */
 export const MOST_QUOTED = 40;
 /** Characters one quote carries at most, as the orchestrator takes them. */

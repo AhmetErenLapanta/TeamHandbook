@@ -382,7 +382,7 @@ button.switch[aria-checked="true"] .switch-knob { transform: translateX(14px); }
 .forge-state.warn { color: var(--warn); }
 .notify-switch { display: grid; gap: 2px; }
 .notify-switch p { margin: 0; }
-.notify-ask { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-4); background: var(--surface-sunken); font-size: var(--text-sm); }
+.quote-selection { position: fixed; z-index: 3; box-shadow: var(--shadow-popover); }
 .request-diff { margin-top: 4px; }
 .diff-files { display: grid; margin: 6px 0 0; }
 .diff-patch { max-height: 420px; overflow: auto; font-size: var(--text-xs); }

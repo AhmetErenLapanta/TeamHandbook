@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { parseMarkdown, safeHref } from "./markdown-read";
 import type { Block, Inline } from "./markdown-read";
@@ -47,5 +47,7 @@ function block(b: Block, i: number, media: Media): ReactNode {
 
 /** Text someone else wrote, read as Markdown and drawn from its parts alone: none of it becomes markup of its own. */
 export function Markdown({ text, media }: { text: string; media?: Media }) {
-  return <div className="markdown" dir="auto">{parseMarkdown(text).map((b, i) => block(b, i, media))}</div>;
+  // A live page draws again on every line the agent writes; the text of each sentence and card is read once.
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
+  return <div className="markdown" dir="auto">{blocks.map((b, i) => block(b, i, media))}</div>;
 }

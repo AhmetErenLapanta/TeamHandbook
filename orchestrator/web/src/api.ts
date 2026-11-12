@@ -550,9 +550,15 @@ export interface TaskRecord {
   startedBy?: { name: string };
   /** Whether the orchestrator can read a plan this stopped task put to its starter, to approve and go on from. */
   planToApprove?: boolean;
+  /** How long the agent ran, as the orchestrator counts it without the time its cards waited; absent on a task still running or from before it was kept. */
+  ranMs?: number;
+  /** What its starter wrote to the agent that has not reached it yet, the oldest first: each can still be changed or taken back. */
+  messages?: QueuedMessage[];
   /** What the task waits on a person for, when the agent asked; absent while it waits on nobody. */
   attention?: "approval" | "answer" | "limited" | null;
 }
+/** A message of the starter's that waits for the agent's next step. */
+export interface QueuedMessage { id: string; text: string; quotes: { path: string; lines: string; text: string }[] | null; createdAt: string }
 /** A follow-up a teammate suggested; it reaches the agent only once the task's starter continues with it. */
 export interface TaskSuggestion {
   id: string;
@@ -576,6 +582,9 @@ export interface TaskRequest {
   answer: { decision: RequestDecision; note?: string } | { answers: QuestionAnswers } | null;
   answeredBy: string | null;
   createdAt: string;
+  /** When it was answered, and when it would have run out; the time between its card and the answer is the person's, not the agent's. */
+  answeredAt?: string | null;
+  expiresAt?: string | null;
 }
 /** allow_for_task lasts until the task ends; no decision outlives the task it was given in. */
 export type RequestDecision = "allow_once" | "allow_for_task" | "deny";
@@ -617,6 +626,12 @@ export interface Readiness { checkedAt: string; agents: { id: string; label: str
 
 export interface TaskStartInput { planFirst?: boolean; title: string; description: string; issueUrl: string; repoId?: string; path?: string; withoutIssueText?: boolean; agent: string; template: TaskTemplate | null; targets?: TaskTargets; skills?: string[]; choices?: AgentChoices; mode?: PermissionMode; projectSkills?: { source: string; name: string }[]; mcpServers?: string[]; mcpConfirmed?: string[] }
 
+/** What the orchestrator finds for words: the tasks whose title or issue key holds them and, for three letters or more, those whose log does. */
+export const searchApi = {
+  tasks: (q: string) => get<{ tasks: SearchedTask[]; inLog: SearchedTask[] }>(`/api/search?${new URLSearchParams({ q })}`),
+};
+export interface SearchedTask { id: string; title: string; repoId: string; status: string }
+
 export const tasksApi = {
   budgets: () => get<CurrentBudgets>("/api/policies/current-budgets"),
   options: () => get<TaskOptions>("/api/tasks/options"),
@@ -657,6 +672,11 @@ export const tasksApi = {
   /** A retry with the same commandId is the same message, sent once. */
   message: (id: string, input: { text: string; quotes: { path: string; lines: string; text: string }[] }, commandId: string) =>
     call<{ followUp: TaskRecord["followUp"] }>("POST", `/api/tasks/${id}/messages`, { text: input.text, ...(input.quotes.length ? { quotes: input.quotes } : {}), commandId }).then((b) => b.followUp),
+  /** Changes the words, and the quotes when given, of a message that has not reached the agent; refused once it has. */
+  editMessage: (id: string, messageId: string, input: { text: string; quotes?: QueuedMessage["quotes"] }) =>
+    call<{ message: QueuedMessage }>("PATCH", `/api/tasks/${id}/messages/${encodeURIComponent(messageId)}`, input).then((b) => b.message),
+  /** Takes back a message that has not reached the agent. */
+  removeMessage: (id: string, messageId: string) => call<{ removed: true }>("DELETE", `/api/tasks/${id}/messages/${encodeURIComponent(messageId)}`),
   /** A teammate's follow-up, kept for the task's starter; a retry with the same commandId is the same suggestion. */
   suggest: (id: string, input: { text: string; quotes: { path: string; lines: string; text: string }[] }, commandId: string) =>
     call<{ suggestion: { id: string; status: TaskSuggestion["status"] } }>("POST", `/api/tasks/${id}/suggestions`, { text: input.text, ...(input.quotes.length ? { quotes: input.quotes } : {}), commandId }),
@@ -704,12 +724,15 @@ export interface OrgGitLabApp { webUrl: string; clientId: string; by: string; at
 export type CliSignIn = { state: "idle" } | { state: "waiting"; code: string | null; url: string | null; note?: string } | { state: "done"; account: string | null } | { state: "failed"; error: string; installed: boolean };
 /** Whether this orchestrator signs the person's own CLI in from the card, and where that stands; `why` says why not. */
 /** `org`: whether the orchestrator can connect the organization to the forge, and what is missing when not; null for anyone but an owner or an admin. */
-export interface ForgeSignIn { offered: boolean; why: string | null; org: { available: boolean; missing: string[] } | null; cli: OwnCli | null; installLine: string | null; signIn: CliSignIn }
+export type DeviceSignIn = { state: "idle" } | { state: "waiting"; code: string; url: string } | { state: "done"; account: string; host: string } | { state: "failed"; error: string };
+export interface ForgeSignIn { offered: boolean; why: string | null; org: { available: boolean; missing: string[] } | null; cli: OwnCli | null; installLine: string | null; signIn: CliSignIn; device: { offered: boolean; signIn: DeviceSignIn } | null }
 
 /** The organization's one-click connection to GitLab or GitHub, its repositories there, and the team repository it makes. */
 export const forgeApi = {
   signInState: (kind: "gitlab" | "github") => get<ForgeSignIn>(`/api/forge/${kind}/sign-in`),
   signIn: (kind: "gitlab" | "github") => call<ForgeSignIn>("POST", `/api/forge/${kind}/sign-in`, {}),
+  deviceSignIn: (kind: "gitlab" | "github") => call<{ signIn: DeviceSignIn }>("POST", `/api/forge/${kind}/device`, {}),
+  deviceSignOut: (kind: "gitlab" | "github") => call<{ signIn: DeviceSignIn }>("DELETE", `/api/forge/${kind}/device`),
   connection: (kind: "gitlab" | "github") => get<{ connection: ForgeConnection | null; available: boolean; missing: string[] }>(`/api/forge/${kind}/connection`),
   connect: (kind: "gitlab" | "github") => call<{ authorizeUrl: string }>("POST", `/api/forge/${kind}/connect`, {}),
   disconnect: (kind: "gitlab" | "github") => call<{ ok: true; note?: string }>("DELETE", `/api/forge/${kind}/connection`),

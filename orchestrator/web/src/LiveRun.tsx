@@ -96,13 +96,13 @@ export function LiveRun({ run, working = false, withPlan = true, first = null }:
           {run.plan.map((step, i) => <li key={i} data-state={step.state} dir="auto">{step.text}</li>)}
         </ol>
       ) : null}
-      <ol className="run-stream" aria-label="What the agent did">
+      <ol className="run-stream" aria-label="What the agent did" data-quotable="">
         {first}
         {run.stream.map((line) =>
           line.kind === "tool" ? <ToolRow key={line.key} line={line} current={line.key === running} />
             : line.kind === "time" ? <li key={line.key} className="run-line" data-kind="time"><time dateTime={line.at}>{clock(line.at)}</time></li>
               : line.kind === "you" ? <li key={line.key} className="run-line" data-kind="you" dir="auto"><strong>{line.by ?? "You"}</strong> {line.text}</li>
-              : line.kind === "say" ? <li key={line.key} className="run-line" data-kind="say"><Markdown text={line.text} /></li>
+              : line.kind === "say" ? <li key={line.key} className="run-line" data-kind="say" data-seq={line.key.slice("say-".length)}><Markdown text={line.text} /></li>
               : <li key={line.key} className="run-line" data-kind={line.kind} dir="auto">{line.text}</li>,
         )}
         {working && !running ? <li className="run-line" data-kind="now">Thinking…</li> : null}

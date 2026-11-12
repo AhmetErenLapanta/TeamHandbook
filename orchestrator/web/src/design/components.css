@@ -550,6 +550,7 @@ aside.rail dd { margin: 0; min-width: 0; }
 .connect { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
 .connect > *, .connect-head > :is(h2, h3) { margin: 0; }
 .connect > .actions { margin-top: var(--space-1); }
+.sign-in-code code { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
 
 /* The live task (design.md): the plan, the stream of the agent's events, its cards and the steer box. */
 .run-plan { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: grid; gap: var(--space-1); font-size: var(--text-sm); }
@@ -583,13 +584,28 @@ aside.rail dd { margin: 0; min-width: 0; }
 .run-where-folders button { display: flex; width: 100%; justify-content: flex-start; gap: var(--space-2); }
 .run-line[data-kind="tool"] { margin-left: var(--space-4); font-size: var(--text-sm); color: var(--text-muted); }
 .run-line[data-kind="tool"] .mono { color: var(--text); }
-.run-line[data-kind="tool"] > details > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
+/* Inline flow, not flex: a long joined call wraps beside its marks instead of dropping under them as one block. */
+.run-line[data-kind="tool"] > details > summary { display: block; }
+.run-line[data-kind="tool"] > details > summary > .run-mark { margin-right: var(--space-2); vertical-align: middle; }
+.run-line[data-kind="tool"] > details > summary > :is(.mono, .change-weight, .diff-stat, .state) { margin-left: var(--space-1); }
 .run-line[data-kind="tool"] > details > :not(summary) { margin: var(--space-2) 0 0 var(--space-5); }
-/* The fold mark's own right margin would double the line's gap; the gap alone parts it from the verb. */
-.run-line[data-kind="tool"] > details > summary::before { margin-right: 0; }
 /* A call with nothing to fold starts where a folded call's verb does: the mark's 2px margin, its 7.5px with its edge, then the gap. */
 .run-line[data-kind="tool"]:not(:has(details)) { padding-left: calc(2px + 7.5px + var(--space-2)); }
 .run-line[data-kind="time"] { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* The person's words sit apart from the agent's: on the right, on their own surface; one still waiting for the agent has no fill and a dashed edge. */
+.run-line[data-kind="you"], section.queued li { justify-self: end; max-width: min(40rem, 85%); padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--surface-sunken); }
+section.queued { display: grid; justify-items: end; gap: var(--space-1); margin-top: var(--space-3); }
+section.queued > ul { width: 100%; justify-items: end; gap: var(--space-2); }
+section.queued li { display: flex; align-items: baseline; gap: var(--space-2); border: 1px dashed var(--border-strong); background: transparent; }
+section.queued li > .pre { flex: 1 1 auto; min-width: 0; }
+section.queued li:has(> form) { width: min(40rem, 85%); }
+section.queued li > form { flex: 1 1 auto; }
+/* On a phone the sentence keeps the whole row; its quote note and Edit and Remove go under it, the actions at the right end. */
+@media (max-width: 639px) {
+  section.queued li { flex-wrap: wrap; }
+  section.queued li > .pre { flex-basis: 100%; }
+  section.queued li > button:first-of-type { margin-left: auto; }
+}
 .run-mark { flex: none; display: inline-block; width: 12px; height: 12px; align-self: center; }
 .run-mark[data-status="running"] { border: 1.5px solid var(--working-soft); border-top-color: var(--working); border-radius: var(--radius-full); animation: run-turn 0.9s linear infinite; }
 .run-mark[data-status="done"] { width: 5px; height: 9px; margin: 0 3px 2px; border: solid var(--text-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
@@ -608,6 +624,10 @@ aside.rail dd { margin: 0; min-width: 0; }
 .run-steer { position: sticky; bottom: 0; z-index: 1; display: flex; align-items: flex-end; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); padding: var(--space-3) 0; border-top: 1px solid var(--border); background: var(--canvas); }
 /* While a question or a request for permission waits, its answer is the page's one action: the box stops staying on top of it. */
 main:has(.approval.pending) .run-steer { position: static; }
+.follow-form { gap: var(--space-1); }
+.follow-form > p { margin: 0; }
+.follow-form > .actions { margin-top: var(--space-1); }
+.form .follow-text { min-height: 96px; font-family: var(--font-sans); font-size: var(--text-md); font-weight: var(--weight-regular); }
 .run-steer textarea { flex: 1 1 auto; min-height: var(--control-height); max-height: 30vh; font-family: var(--font-sans); font-size: var(--text-base); }
 /* The rail's Changed so far: a file a line, its path in mono and its change weight at the line's end, growing as the run goes. */
 .run-changed { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
