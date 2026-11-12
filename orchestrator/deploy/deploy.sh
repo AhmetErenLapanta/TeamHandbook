@@ -63,6 +63,15 @@ for provider in GOOGLE GITHUB MICROSOFT; do
   id_name="ORCHESTRATOR_SIGN_IN_${provider}_CLIENT_ID"
   [ -z "${!id_name:-}" ] || providers="$providers $(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')"
 done
+# One-click GitLab and GitHub: the application's id here, its secrets as files under secrets/forge.
+forge_files=""
+[ -z "${ORCHESTRATOR_FORGE_GITLAB_CLIENT_ID:-}" ] || forge_files="$forge_files gitlab_client_secret"
+if [ -n "${ORCHESTRATOR_FORGE_GITHUB_APP_ID:-}" ]; then
+  for name in ORCHESTRATOR_FORGE_GITHUB_APP_SLUG ORCHESTRATOR_FORGE_GITHUB_CLIENT_ID; do
+    [ -n "${!name:-}" ] || die "$env_file sets ORCHESTRATOR_FORGE_GITHUB_APP_ID but not $name; the GitHub App's settings are all set or none"
+  done
+  forge_files="$forge_files github_client_secret github_private_key github_webhook_secret"
+fi
 # The orchestrator opens sign-up from the two addresses alone, so a closed one is one without them.
 if [ "${ORCHESTRATOR_SIGN_UP:-open}" = closed ] && { [ -n "${ORCHESTRATOR_PRIVACY_URL:-}" ] || [ -n "${ORCHESTRATOR_TERMS_URL:-}" ]; }; then
   die "$env_file says ORCHESTRATOR_SIGN_UP=closed and sets ORCHESTRATOR_PRIVACY_URL or ORCHESTRATOR_TERMS_URL, which open sign-up; leave both empty to keep it closed"
@@ -183,7 +192,7 @@ check_secrets() {
   local dir=${ORCHESTRATOR_SECRETS_DIR:-./secrets} missing
   missing=$(read_target "for n in $SECRETS; do [ -s '$dir'/\$n ] || echo \$n; done; [ -d '$dir' ] || echo dir")
   if [ "$dry" = 1 ] && [ "$transport" = ssh ]; then
-    printf '  would check that %s holds %s, and sign-in/<provider>_client_secret for:%s\n' "$dir" "$SECRETS" "${providers:- none}"
+    printf '  would check that %s holds %s, sign-in/<provider>_client_secret for:%s, and forge/<file> for:%s\n' "$dir" "$SECRETS" "${providers:- none}" "${forge_files:- none}"
     return 0
   fi
   [ -z "$missing" ] || die "the target's $dir lacks: $(echo $missing); write each as a file (docs/operations/run-as-a-service.md)"
@@ -194,7 +203,12 @@ check_secrets() {
     sign_in_missing="$sign_in_missing$(read_target "[ -s '$dir'/sign-in/${provider}_client_secret ] || echo ' sign-in/${provider}_client_secret'")"
   done
   [ -z "$sign_in_missing" ] || die "the target's $dir lacks:$sign_in_missing"
-  on_target "mkdir -p -m 700 '$dir'/sign-in"
+  local forge_missing="" file
+  for file in $forge_files; do
+    forge_missing="$forge_missing$(read_target "[ -s '$dir'/forge/$file ] || echo ' forge/$file'")"
+  done
+  [ -z "$forge_missing" ] || die "the target's $dir lacks:$forge_missing (write each as a file there; the env example names them)"
+  on_target "mkdir -p -m 700 '$dir'/sign-in '$dir'/forge"
   local loose
   # Octal modes, which GNU, BSD and busybox find all read; a find that fails says so rather than passing.
   loose=$(read_target "find '$dir' -maxdepth 0 ! -perm 700 && find '$dir' -mindepth 1 -perm -002 && find '$dir' -mindepth 1 -perm -020 || echo 'find failed'")
