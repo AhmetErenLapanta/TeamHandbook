@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, call, manages, tasksApi } from "../api";
-import type { ActivitySummary, Onboarding, Principal, RepoRecord, RequestRecord, TaskOptions } from "../api";
+import type { ActivitySummary, Onboarding, Principal, RepoRecord, RequestRecord } from "../api";
 import { cloudSteps, soloSteps, ownForge } from "../setup-steps";
 import type { Step } from "../setup-steps";
 import { PageHead } from "../design/PageHead";
@@ -13,6 +13,9 @@ import { here, navigate } from "../router";
 import { Loading } from "../Status";
 import { CopyText } from "../Confirm";
 import { HandbookRail, HandbookSection, pickKey } from "./Handbook";
+import { HandbookPluginCard } from "./PluginCard";
+import { usePersonalSetup } from "./personal";
+import type { Personal } from "./personal";
 import type { HandbookPick, Proposed } from "./Handbook";
 import { lessonsApi, skillText } from "../TaskLearned";
 import type { TaskLessonRow } from "../TaskLearned";
@@ -205,17 +208,6 @@ function LessonRail({ task, slug, onDecided }: { task: string; slug: string; onD
   );
 }
 
-type Personal = NonNullable<TaskOptions["agents"][number]["personal"]>;
-
-/** What one person's own Claude Code starts a task with, read from it: their skills and commands, plugins, MCP servers and CLAUDE.md. */
-function useLoaded(enabled: boolean): Personal | null {
-  const [personal, setPersonal] = useState<Personal | null>(null);
-  useEffect(() => {
-    if (!enabled) return;
-    tasksApi.options().then((o) => setPersonal(o.agents.find((a) => a.id === "claude-code")?.personal ?? null), () => setPersonal(null));
-  }, [enabled]);
-  return personal;
-}
 
 /** One person's own setup where no team repository exists yet: what their Claude Code loads in one sentence, the list folded, and the one way on, sharing it with a team. */
 function YourSetup({ personal }: { personal: Personal | null }) {
@@ -270,7 +262,7 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
   const [lessons, readLessons] = useLessons();
   const shared = useShared();
   const problems = useSetupProblems();
-  const loaded = useLoaded(local);
+  const loaded = usePersonalSetup(local);
   useEffect(() => {
     api.summary().then(setSummary, () => setSummary(null));
     api.onboarding().then(setOnboarding, () => setOnboarding(null));
@@ -287,6 +279,7 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
   return (
     <div className="page">
       <PageHead title="Team" {...(sentence ? { summary: sentence } : {})} {...(invite ? { actions: invite } : {})} />
+      <HandbookPluginCard me={me} />
       <div className={picked ? "with-rail" : undefined}>
         <div>
           {/* Setup still open is the page's empty state; a team that is set up and broke since sees what broke. */}

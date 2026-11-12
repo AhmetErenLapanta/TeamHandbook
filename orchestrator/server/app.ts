@@ -83,6 +83,7 @@ import { forgeConnectRoutes } from "./forge/oauth-routes.js";
 import { forgeReadRoutes } from "./forge/read-routes.js";
 import { onForgeRoutes } from "./forge/on-forge-routes.js";
 import { handbookRoutes } from "./forge/handbook-routes.js";
+import { handbookPluginRoutes } from "./handbook-plugin-routes.js";
 import { requestReader, seesRequest } from "./forge/request-access.js";
 import { forgeHostRoutes } from "./forge/hosts.js";
 import { agentCreditRoutes } from "./forge/agent-credits.js";
@@ -588,6 +589,7 @@ export function createApp(ctx: OrchestratorContext, auth: MiddlewareHandler<Orch
   });
 
   if (ctx.tasks) app.route("/", taskRoutes(ctx, ctx.tasks));
+  if (ctx.tasks) app.route("/", handbookPluginRoutes(ctx, ctx.tasks));
   if (ctx.tasks) app.route("/", taskSuggestionRoutes(ctx, ctx.tasks));
   if (ctx.tasks) app.route("/", reviewRoutes(ctx));
 

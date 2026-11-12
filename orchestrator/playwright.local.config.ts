@@ -19,6 +19,7 @@ const browser = join(scratch, "browser.sh");
 mkdirSync(HOME, { recursive: true });
 writeFileSync(browser, `#!/bin/sh\nprintf '%s' "$1" > '${OPENED}'\n`);
 chmodSync(browser, 0o755);
+if (process.env.ORCHESTRATOR_E2E_SCREENSHOTS) writeFileSync(join(HOME, ".stand-in-signed-in"), "");
 
 export default defineConfig({
   testDir: "browser-tests",
