@@ -111,7 +111,7 @@ describe("a session of opencode serve 2.x", () => {
     return events;
   }
 
-  it("given the hand-written 2.x run that asks to run the tests, when a person allows it once, then the call is answered once, another session's question is refused with a reason, tokens count the cache and reasoning, and cost stays unknown", async () => {
+  it("given the hand-written 2.x run that asks to run the tests, when a person allows it once, then the call is answered once, another session's question is refused with a reason, tokens count the cache and reasoning, and the step's cost is what it reported", async () => {
     // when
     const events = await run2(readTranscript(join(import.meta.dirname, "transcripts", "opencode2-serve-approval.ndjson")), "Run the tests and fix what fails.", (e, s) => e.type === "request" && s.respond(e.request.id, "allow-once"));
 
@@ -123,7 +123,7 @@ describe("a session of opencode serve 2.x", () => {
       { type: "tool_call", id: "call-1", tool: "bash", target: "npm test", command: "npm test", status: "done" },
       { type: "tool_call", tool: "edit", target: null, status: "refused" },
     ]);
-    expect(events).toContainEqual({ type: "usage", cost: { usd: null, inputTokens: 140, outputTokens: 25 } });
+    expect(events).toContainEqual({ type: "usage", cost: { usd: 0.0042, inputTokens: 140, outputTokens: 25 } });
     expect(events.at(-1)).toEqual({ type: "terminal", status: "completed", summary: "The tests pass.", nativeSessionId: S });
   });
 
@@ -379,6 +379,20 @@ describe("the context an OpenCode run starts with", () => {
 
     // then
     for (const found of [contexts((l) => run.decode(l), runStep), contexts((l) => serve1.decode(l), serveStep), contexts((l) => serve2.decode(l), step2)]) expect(found).toEqual([{ type: "context", tokens: 10_000 }]);
+  });
+});
+
+describe("an OpenCode skill call", () => {
+  it("given a call that loads a skill, when it starts, then its target is the skill's name, as a Claude Code Skill call's is", () => {
+    // given
+    const codec = opencodeServeCodec(S, 1);
+    const running = JSON.stringify({ type: "message.part.updated", properties: { part: { sessionID: S, id: "p-c1", type: "tool", tool: "skill", callID: "c1", state: { status: "running", input: { name: "add-entity-field" } } } } });
+
+    // when
+    const events = codec.decode(running);
+
+    // then
+    expect(events).toEqual([{ type: "tool_call", id: "c1", tool: "skill", target: "add-entity-field", status: "started" }]);
   });
 });
 

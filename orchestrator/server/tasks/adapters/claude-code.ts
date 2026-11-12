@@ -169,7 +169,8 @@ export function claudeCodeDecoder(asked: PermissionMode | null = null, work?: st
           if (part?.type === "text" && typeof part.text === "string" && part.text.trim()) return [{ type: "message", text: part.text.trim() }];
           if (part?.type === "tool_use" && typeof part.name === "string") {
             const input = part.input && typeof part.input === "object" ? (part.input as Record<string, unknown>) : {};
-            const target = [input.file_path, input.pattern, input.path].find((v) => typeof v === "string");
+            // A skill the agent calls is named by its input, never by a path: the one place a name of a skill is read.
+            const target = part.name === "Skill" ? input.skill : [input.file_path, input.pattern, input.path].find((v) => typeof v === "string");
             const call: Call = { tool: part.name, target: shownTarget(work, typeof target === "string" ? target : null), ...(part.name === "Bash" && typeof input.command === "string" ? { command: input.command } : {}), input };
             const id = typeof part.id === "string" && part.id ? part.id : null;
             if (id) calls.set(id, call);
@@ -331,7 +332,7 @@ const requestKind = (tool: string): RequestKind => KIND[tool] ?? (tool.startsWit
 
 /** What a call is aimed at, as the card shows it; the tool's name when its input names nothing. */
 function callSummary(tool: string, input: Record<string, unknown>): string {
-  const target = ["command", "file_path", "path", "pattern", "url", "query"].map((k) => input[k]).find((v) => typeof v === "string");
+  const target = ["command", "file_path", "path", "pattern", "url", "query", "skill"].map((k) => input[k]).find((v) => typeof v === "string");
   return typeof target === "string" ? target : tool;
 }
 
