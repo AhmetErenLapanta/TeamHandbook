@@ -1,6 +1,6 @@
 {
   "name": "teamhandbook-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A web orchestrator for the team repositories TeamHandbook sets up: what every team has, changes proposed as merge requests, opt-in usage, and agent tasks that end in a request for review.",
   "type": "module",
   "private": true,

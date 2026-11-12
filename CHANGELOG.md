@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.34.0] - 2026-11-12
 
 This release carries Orchestrator 0.2.0. The plugin's own commands and hooks are unchanged.
 
