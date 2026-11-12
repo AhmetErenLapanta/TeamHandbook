@@ -2,11 +2,11 @@
  * Where the command palette can jump, and the group it is listed under. A folder opens as a project
  * first, so it carries `open`, which answers where to go; `inside` is what typing into it reads.
  */
-export interface Jump { label: string; detail: string; to: string; group: Group; open?: () => Promise<string>; inside?: string }
+export interface Jump { label: string; detail: string; to: string; group: Group; open?: () => Promise<string>; inside?: string; asked?: boolean }
 
-export type Group = "Pages" | "Repositories" | "Folders" | "Tasks";
+export type Group = "Actions" | "Pages" | "Repositories" | "Folders" | "Tasks";
 
-const GROUPS: readonly Group[] = ["Pages", "Repositories", "Folders", "Tasks"];
+const GROUPS: readonly Group[] = ["Actions", "Pages", "Repositories", "Folders", "Tasks"];
 
 /** Jumps a group lists at most: enough to pick from without the palette scrolling. */
 export const MOST_A_GROUP = 5;
@@ -19,8 +19,8 @@ export function jumpsFor(jumps: readonly Jump[], query: string): Jump[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
   const score = (j: Jump) => {
-    // The folders were read for what was typed, so each one already matches it.
-    if (j.group === "Folders") return 0;
+    // The folders and what the orchestrator found were read for what was typed, so each one already matches it.
+    if (j.group === "Folders" || j.asked) return 0;
     const label = j.label.toLowerCase();
     if (label.startsWith(needle)) return 0;
     if (label.includes(needle)) return 1;

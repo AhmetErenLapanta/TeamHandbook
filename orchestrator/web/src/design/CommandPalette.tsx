@@ -15,12 +15,13 @@ const FOLDER_DELAY_MS = 150;
  * more; the folders, on one person's own machine, are read for what is typed: the right arrow looks
  * inside the folder, Backspace after a "/" goes up one, and a folder opens as a project on Enter.
  */
-export function CommandPalette({ open, onClose, jumps, more, folders }: { open: boolean; onClose: () => void; jumps: readonly Jump[]; more?: () => Promise<Jump[]>; folders?: (query: string) => Promise<Jump[]> }) {
+export function CommandPalette({ open, onClose, jumps, more, folders, finds }: { open: boolean; onClose: () => void; jumps: readonly Jump[]; more?: () => Promise<Jump[]>; folders?: (query: string) => Promise<Jump[]>; finds?: (query: string) => Promise<Jump[]> }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [query, setQuery] = useState("");
   const [read, setRead] = useState<Jump[]>([]);
   const [at, setAt] = useState(0);
   const [inFolders, setInFolders] = useState<Jump[]>([]);
+  const [found_, setFound] = useState<Jump[]>([]);
   const [refused, setRefused] = useState<string | null>(null);
   const listId = useId();
   useEffect(() => {
@@ -33,6 +34,16 @@ export function CommandPalette({ open, onClose, jumps, more, folders }: { open: 
       clearTimeout(timer);
     };
   }, [open, folders, query]);
+  // The orchestrator's own search, for what the newest page of tasks does not hold: older tasks, an issue key, a word of the agent's.
+  useEffect(() => {
+    if (!open || !finds || !query.trim()) return setFound([]);
+    let current = true;
+    const timer = setTimeout(() => void finds(query).then((found) => current && setFound(found), () => current && setFound([])), FOLDER_DELAY_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [open, finds, query]);
   useEffect(() => {
     const box = dialog.current;
     if (!box) return;
@@ -43,7 +54,7 @@ export function CommandPalette({ open, onClose, jumps, more, folders }: { open: 
       void more?.().then(setRead, () => setRead([]));
     } else if (!open && box.open) box.close();
   }, [open, more]);
-  const found = jumpsFor([...jumps, ...read, ...inFolders], query);
+  const found = jumpsFor([...jumps, ...read, ...inFolders, ...found_.filter((j) => !read.some((r) => r.to === j.to))], query);
   const active = found[Math.min(at, found.length - 1)];
   const go = (jump: Jump) => {
     // A folder becomes a project before it is opened; a folder it cannot be is said here, and the palette stays.
