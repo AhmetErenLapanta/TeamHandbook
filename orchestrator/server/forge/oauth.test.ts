@@ -123,6 +123,17 @@ describe("forge applications from the environment", () => {
     expect(forgeAppsFromEnv({})).toEqual({});
   });
 
+  it("given every ORCHESTRATOR_FORGE_* setting empty, as the cloud compose file passes them when none is set, when read, then no application is offered", () => {
+    // given
+    const env = Object.fromEntries(["GITLAB_CLIENT_ID", "GITLAB_CLIENT_SECRET_FILE", "GITLAB_URL", "GITHUB_APP_ID", "GITHUB_APP_SLUG", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET_FILE", "GITHUB_PRIVATE_KEY_FILE", "GITHUB_WEBHOOK_SECRET_FILE", "GITHUB_URL"].map((name) => [`ORCHESTRATOR_FORGE_${name}`, ""]));
+
+    // when
+    const apps = forgeAppsFromEnv(env);
+
+    // then
+    expect(apps).toEqual({});
+  });
+
   it("given a GitLab client id without its secret, when read, then the start is refused naming the missing setting", () => {
     expect(() => forgeAppsFromEnv({ ORCHESTRATOR_FORGE_GITLAB_CLIENT_ID: "id" })).toThrow(/ORCHESTRATOR_FORGE_GITLAB_CLIENT_SECRET/);
   });

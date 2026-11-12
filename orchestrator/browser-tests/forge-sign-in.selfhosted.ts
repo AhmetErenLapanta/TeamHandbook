@@ -16,14 +16,19 @@ for (const forge of [
     // given
     await page.goto("/demo/integrations");
     const card = page.locator(`#card-${forge.kind}`);
-    await expect(card.getByRole("button", { name: `Sign in with ${forge.name}` })).toBeVisible();
+    // The card reads the person's CLI before it draws, several starts of it, which a loaded machine slows.
+    await expect(card.getByRole("button", { name: `Sign in with ${forge.name}` })).toBeVisible({ timeout: 15_000 });
     await expect(card.getByLabel("Application ID")).toBeHidden();
 
     // when
     await card.getByRole("button", { name: `Sign in with ${forge.name}` }).click();
 
     // then
-    await expect(card.getByRole("status")).toContainText(`Enter ABCD-1234 on ${forge.name}: Open ${forge.name}. Waiting for ${forge.name}.`);
+    await expect(card.getByRole("status")).toContainText(`Enter this code on ${forge.name}:`, { timeout: 15_000 });
+    await expect(card.locator(".sign-in-code").getByText("ABCD-1234", { exact: true })).toBeVisible();
+    await expect(card.getByRole("status")).toContainText(`Open ${forge.name}. Waiting for ${forge.name}.`);
+    await expect(card.getByRole("button", { name: "Copy the code" })).toBeVisible();
+    await expect(card.getByRole("button", { name: `Sign in with ${forge.name}` })).toHaveCount(0);
     await expect(card.getByRole("link", { name: `Open ${forge.name}` })).toHaveAttribute("href", forge.page);
     writeFileSync(join(home, `.stand-in-${forge.tool}-approved`), "");
     await expect(card.getByText("Connected", { exact: true })).toBeVisible({ timeout: 15_000 });

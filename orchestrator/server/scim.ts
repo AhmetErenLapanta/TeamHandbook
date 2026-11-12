@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { forgetPersonForge } from "./forge/device-sign-in.js";
+import type { SecretStore } from "./vault.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { OrchestratorContext } from "./app.js";
@@ -59,7 +61,7 @@ interface ScimGroup {
   created: string;
 }
 
-export interface ScimStore extends AccountStore {
+export interface ScimStore extends AccountStore, Pick<SecretStore, "deleteSecret"> {
   listSettings(tenant: string, prefix: string): Promise<{ key: string; value: string }[]>;
 }
 
@@ -129,7 +131,7 @@ async function checkToken(store: AccountStore, tenant: string, presented: string
  * Shuts a person out at once: sessions, keys and app tokens go, and the account is marked off,
  * which every way in reads. Refused for the last owner, whom nothing outside may lock out.
  */
-export async function turnOff(store: AccountStore, tenant: string, user: UserRecord): Promise<void> {
+export async function turnOff(store: ScimStore, tenant: string, user: UserRecord): Promise<void> {
   if (!(await store.turnOffUser(tenant, user.id, new Date().toISOString()))) {
     throw new ScimError("this is the organization's only owner still on; make someone else an owner first", 409, "mutability");
   }
@@ -137,6 +139,7 @@ export async function turnOff(store: AccountStore, tenant: string, user: UserRec
   const now = new Date().toISOString();
   for (const key of await store.listKeys(tenant, { kind: "user", id: user.id })) if (!key.revokedAt) await store.revokeKey(tenant, key.id, now);
   await store.dropOauthGrants(tenant, user.id);
+  await forgetPersonForge(store, tenant, user.id);
 }
 
 async function scimUser(store: AccountStore, tenant: string, id: string): Promise<ScimUser> {

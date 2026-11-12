@@ -6,7 +6,7 @@ import { Connect } from "./Connect";
 import { Hint } from "./Hint";
 import { here } from "./router";
 import { sentence } from "./said";
-import { ConfirmAction } from "./Confirm";
+import { ConfirmAction, CopyText } from "./Confirm";
 import { Loading, LoadFailed } from "./Status";
 import { FORGES } from "../../shared/forge-def";
 import { APP_FORGES, FORGE_LABEL } from "./forge-connection";
@@ -332,6 +332,27 @@ function OwnGitLabApp({ onSaved, beside = false }: { onSaved: () => void; beside
  * it signs their own gh or glab in through the browser and follows it to the end, the token staying
  * with the CLI. Tokens for single repositories wait under "Other ways to connect".
  */
+/**
+ * A sign-in waiting on its code: the code is the one thing the person types on another site, so it
+ * stands on its own line, large, with Copy; then the forge's page and what the card waits for.
+ */
+function SignInCode({ forge, code, url, note }: { forge: string; code: string | null; url: string | null; note?: string }) {
+  return (
+    <>
+      {code ? (
+        <>
+          <p>Enter this code on {forge}:</p>
+          <div className="sign-in-code"><CopyText text={code} label="Copy the code" well /></div>
+        </>
+      ) : null}
+      <p>
+        {url ? <><a href={url} target="_blank" rel="noopener">Open {forge}</a>{code ? "" : " to sign in"}. </> : null}
+        {note ? <>{note}. </> : null}Waiting for {forge}.
+      </p>
+    </>
+  );
+}
+
 export function ForgeConnectCard({ card, repos, other, onChanged }: { card: ForgeCardData; repos: RepoRecord[]; other: ReactNode; onChanged: () => void }) {
   const kind = card.id;
   const forge = FORGE_LABEL[kind];
@@ -342,14 +363,14 @@ export function ForgeConnectCard({ card, repos, other, onChanged }: { card: Forg
   useEffect(() => {
     load();
   }, [kind]);
-  const waiting = read?.signIn.state === "waiting";
+  const waiting = read?.signIn.state === "waiting" || read?.device?.signIn.state === "waiting";
   // While the person approves in the browser the card asks every two seconds, and stops once the CLI ends.
   useEffect(() => {
     if (!waiting) return;
     const timer = setInterval(() => {
       forgeApi.signInState(kind).then((r) => {
         setRead(r);
-        if (r.signIn.state === "done") onChanged();
+        if (r.signIn.state === "done" || r.device?.signIn.state === "done") onChanged();
       }, () => undefined);
     }, 2000);
     return () => clearInterval(timer);
@@ -371,6 +392,32 @@ export function ForgeConnectCard({ card, repos, other, onChanged }: { card: Forg
       });
     };
     const c = card.connection;
+    // The person's own sign-in through the orchestrator's application, a code away, where the organization holds no connection.
+    const device = c ? null : read.device;
+    if (device?.offered) {
+      const flow = device.signIn;
+      const start = () => {
+        setBusy(true);
+        setError(null);
+        forgeApi.deviceSignIn(kind).then(() => load(), (e: Error) => setError(e.message)).finally(() => setBusy(false));
+      };
+      const signOut = () => {
+        setBusy(true);
+        setError(null);
+        forgeApi.deviceSignOut(kind).then(() => load(), (e: Error) => setError(e.message)).finally(() => setBusy(false));
+      };
+      // What the sign-in lets the orchestrator do, said where it is given: the token writes to every repository the person can.
+      const deviceAbout =
+        flow.state === "done"
+          ? `Connected as ${flow.account} on ${flow.host}; the orchestrator opens the requests of the tasks you start as you, and nothing else.`
+          : flow.state === "failed"
+            ? sentence(flow.error)
+            : `Sign in to ${forge} with a one-time code, nothing to install; it lets the orchestrator write to the repositories you can, which it uses only for the requests of the tasks you start.`;
+      const status = flow.state === "waiting" ? <SignInCode forge={forge} code={flow.code} url={flow.url} /> : null;
+      // The page's one filled button is Start here's; while a code waits the card shows only what to do with it.
+      const action = flow.state === "done" ? <button type="button" className="secondary" disabled={busy} onClick={signOut}>Sign out</button> : flow.state === "waiting" ? null : <button type="button" className="secondary" disabled={busy} onClick={start}>Sign in with {forge}</button>;
+      return <Connect id={kind} name={forge} level={3} connected={flow.state === "done"} about={deviceAbout} status={status} action={action} other={other} error={error} />;
+    }
     const about = c
       ? `Connected as ${c.account}.`
       : !read.org
@@ -395,19 +442,14 @@ export function ForgeConnectCard({ card, repos, other, onChanged }: { card: Forg
     : cli.installed
       ? `Sign in with your own ${cli.tool} through the browser; its sign-in stays with ${cli.tool}, and requests open on ${forge} as you.`
       : `${cli.name} is not on this machine. Install it, then check again.`;
-  const status = flow.state === "waiting" ? (
-    <p>
-      {flow.code ? <>Enter <span className="mono">{flow.code}</span> on {forge}{flow.url ? <>: <a href={flow.url} target="_blank" rel="noopener">Open {forge}</a></> : null}. </> : flow.url ? <><a href={flow.url} target="_blank" rel="noopener">Open {forge}</a> to sign in. </> : null}
-      {flow.note ? <>{flow.note}. </> : null}Waiting for {forge}.
-    </p>
-  ) : null;
+  const status = flow.state === "waiting" ? <SignInCode forge={forge} code={flow.code} url={flow.url} note={flow.note} /> : null;
   const action = cli.signedIn ? null : !cli.installed ? (
     <>
       {read.installLine ? <span className="mono">{read.installLine}</span> : <a href={cli.install} target="_blank" rel="noopener">Install {cli.tool}</a>}
       <button type="button" className="secondary" onClick={() => load()}>Check again</button>
     </>
-  ) : (
-    <button type="button" className="secondary" disabled={busy || flow.state === "waiting"} onClick={signIn}>Sign in with {forge}</button>
+  ) : flow.state === "waiting" ? null : (
+    <button type="button" className="secondary" disabled={busy} onClick={signIn}>Sign in with {forge}</button>
   );
   return <Connect id={kind} name={forge} level={3} connected={cli.signedIn} about={about} status={status} action={action} other={other} error={error ?? failed} />;
 }
