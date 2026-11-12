@@ -19,7 +19,7 @@ cd ~/work/parcel-pricer && git init -q && git add . && git commit -qm "Parcel pr
 
 | # | You do | The screen says |
 |---|---|---|
-| 1 | From a clone of this repository, run `npm start` (the npx and install.sh paths come with the first release). | The browser opens on "Give a team of agents any folder on this machine: say what needs doing, and review every change before you keep it." |
+| 1 | From a clone of this repository, run `npm start` (or `npx teamhandbook-orchestrator`). | The browser opens on "Give a team of agents any folder on this machine: say what needs doing, and review every change before you keep it." |
 | 2 | Under **Folder name or path**, type `~/work/parcel-pricer` and press Enter. | **What should the agent do here?**, with the folder's name above it. |
 | 3 | Look under the box. | No line: Claude Code is ready. If one is there, it says what to do and offers **Check again**. |
 | 4 | In a terminal in the folder, run `node --test`. | The test "prices a parcel exactly at a weight limit at that tier" fails. |

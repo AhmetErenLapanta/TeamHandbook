@@ -263,6 +263,9 @@ const pace = () => new Promise((resolve) => setTimeout(resolve, Number(process.e
 // follow-up sent while the agent works is taken into the turn it is in, an interrupt ends that turn,
 // and an answer to a permission question (a plan put to its person) arrives when the person gives it.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Left with no orchestrator (the process that started it gone, another its parent now) the agent has no one to wait for: it ends.
+const parent = process.ppid;
+setInterval(() => process.ppid !== parent && process.exit(0), 2000).unref();
 const followUps = [];
 const answers = new Map();
 let stdinClosed = false;

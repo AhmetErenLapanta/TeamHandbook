@@ -2,8 +2,11 @@
 .team-rows li { padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
 .team-rows li:last-child { border-bottom: 0; }
 .team-rows li.picked { background: var(--accent-soft); }
+.plugin-card { display: grid; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+.plugin-card p { margin: 0; }
 .team-fold { margin: 0 0 var(--space-3); }
 .team-fold summary { cursor: pointer; color: var(--text-muted); }
+.handbook-join { display: grid; gap: var(--space-1); margin: var(--space-3) 0 0; }
 .handbook-repo { max-width: 22rem; }
 .team-pick { display: inline-flex; align-items: baseline; gap: var(--space-2); }
 .team-share { display: grid; gap: var(--space-1); }

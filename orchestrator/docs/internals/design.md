@@ -361,6 +361,22 @@ servers shared; 1 lesson waits for review"), with Invite members as its action.
   and its memory; tasks here use them.", then the tabs folded under "Show them", each row "from
   your Claude Code", read only, and one action, "Share with a team", which offers "Start a team
   handbook" or "Join a team handbook". The top bar keeps its four sections either way.
+- **The handbook plugin, on one person's own orchestrator**, which reads this computer's Claude
+  Code: when the plugin is not in it, one card sits right under Team's head, before any section,
+  with no heading and no box, a hairline under it like a row. A sentence, its first part in the
+  strong weight ("Add the handbook plugin to your Claude Code. It turns what your sessions teach
+  into skills you keep or share."), then "Install the plugin…" filled and "Not now" beside it.
+  Pressed, it says first what it does, in one muted sentence naming the two commands in mono
+  (`claude plugin marketplace add`, `claude plugin install`) and "Nothing else changes", with
+  Install filled and Cancel beside it; nothing runs before that press. While it runs Install reads
+  "Installing…" and waits; a refusal is the CLI's own reason in the danger tone with "Install the
+  plugin…" again; done, the card is one sentence, "The handbook plugin is installed; your next
+  Claude Code session has it." "Not now" puts it away for good; the plugin already there draws
+  nothing.
+- **On a team's orchestrator** there is no card: it runs on the team's server, which neither sees
+  a person's computer nor installs anything on it. The Team handbook section carries one muted line
+  under its tabs instead, "To get these in your own Claude Code:" with the join command as
+  `CopyText`, the same command the setup line hands to teammates who have not joined.
 - **An empty section is not drawn**, in either experience: no "Lessons to review 0", no "Getting
   set up" once nothing is left; the page holds what has something in it. A page with nothing at
   all in it shows its empty state, one sentence and one action.
@@ -402,7 +418,10 @@ It opens under the Tasks page head in place of the list's first section, with it
 The field for what to do comes first and takes an issue link as well as words; the agent sits
 under it, and nothing asks where the task works; the skills the agent loads are rows with a checkbox, the skill's name in mono,
 one sentence of what it does and where it comes from (yours, the team's, this repository's);
-model, budget and tools fold under More options. Start task is the
+model, budget and tools fold under More options. A task on a team's skills repository is any
+change at first, so its Kind of task (Any change, Write a new skill, Improve a skill) folds under
+More options too; picking another kind keeps the fold open with the skill's name or the skill
+under it. Start task is the
 one filled action, Cancel beside it. The rail says before it starts where the agent works, whether
 Undo or a request takes the change back, and the limits a task stops at (on a team's orchestrator
 also the team's commands and network); on a person's own orchestrator where it works is said once
@@ -472,10 +491,25 @@ the task form says both before Start."
   ran, cost, and Loaded: what the agent loaded, the same list the task form shows) and the log, folded once the task ended.
   What a run cost reads beside what made it large: Cost ("$0.41"), then Context ("48k tokens at
   its start"), then Loaded, three rows of facts with no sentence joining them, since the
-  orchestrator measures each but not how much one caused the other. The head's sentence keeps
-  only the running total ("$0.41 so far"); a value not known is left out.
+  orchestrator measures each but not how much one caused the other. Ran is the agent's own time:
+  the minutes a card stood waiting for its person are not in it, and read on their own row once
+  they pass a minute ("Waited 7m for you"). An ended run whose agent reported no cost reads "Cost
+  Not reported" in the rail, since that is a fact about the run; a list's cost column says nothing.
+  While it runs, the head's sentence counts on its own, a second at a time, the time and the
+  running total: "The agent has worked 3m 12s; $0.41 so far." A value not known is left out.
+- **Notices, asked where they mean something.** On a working task its person started, one muted
+  line under the head, until the browser has been asked: "Away from this page when it needs you?"
+  with "Get a notification" and "Not now" as links beside it, spaced, with no dot between. The
+  account menu keeps the standing switch.
 - **On a phone** the rail follows the changes, and a patch scrolls sideways with a visible edge
   saying there is more.
+- **Going on from a review**, the same section in both experiences: under the changes of a task
+  waiting for its starter's review, "Continue with a follow-up", one field, the quoted lines as
+  chips over it, and "Start the next run". Its note says where the next run starts, in the words
+  of where the change is now: with a request open, "A new run starts on the request's branch with
+  your words, and the request gets its new changes."; with none yet, "A new run starts where this
+  one left off, with your words, and its changes join this review." A team's orchestrator offers
+  it as a person's own does.
 - **Sharing to read.** "Share…" in the head, a secondary, opens one field in the rail's Shared
   with section, "A teammate's email", with Share and Cancel. The people it is shared with are rows
   there, picked to remove ("Remove…" shows once one is picked). They read the page without its
@@ -608,6 +642,15 @@ screen or a menu of its own.
   the plan into a field in place, and Copy. Started, the card shrinks to one line ("You started
   with the plan, 5 steps") and its steps become the to-do list at the top. A plan is never saved
   or opened anywhere on the person's behalf; Copy is how it is kept.
+- **The person's words** read as theirs at a squint: what they told the agent sits in the stream
+  where they sent it, set to the right on the sunken surface with the radius, "You" (or the
+  teammate's name) leading it, while the agent's lines stay flat on the left. A message sent while
+  the agent is mid-step waits for its next one in the same block above the foot row, drawn as not
+  sent yet: no fill, a dashed hairline. "Waiting for the agent's next step" heads them in one muted
+  line, and each keeps Edit and Remove, quiet buttons, at its right end, so they line up row under
+  row. On a phone the sentence keeps the whole width and its quote note, Edit and Remove go on a
+  line under it, the buttons still at the right end. Read by the agent, a message leaves the
+  waiting rows and appears in the stream as said.
 - **The foot row** stays at the foot of the surface whenever the task is queued, running or waiting
   and the reader can stop it, even before the stream has a line: "Stop…", a danger action,
   outlined and asked first. Where the reader can steer the agent, the row also holds the steer
@@ -637,7 +680,8 @@ The parts by name, for the screens that draw them: `.run-plan` (`li` with `data-
 `doing` or `done`), `ol.run-stream > li.run-line` with `data-kind` of `say`, `tool`, `card`, `you`
 or `time`, its fold a `details`, a tool line's mark `.run-mark` with `data-status` of `running`,
 `done`, `failed` or `refused`, the running call's line `data-current`, "Thinking…" between calls `li.run-line[data-kind="now"]`,
-"Jump to latest" `button.run-jump`, the foot row `form.run-steer` holding Stop and, where steering
+"Jump to latest" `button.run-jump`, the messages waiting for the agent `section.queued`, a `li` each,
+the foot row `form.run-steer` holding Stop and, where steering
 is offered, the field and Send, and in the rail `ul.run-changed`, a file
 a line with its path and its `ChangeWeight`.
 

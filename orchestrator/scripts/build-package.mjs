@@ -90,6 +90,10 @@ writeFileSync(
       type: "module",
       license: manifest.license,
       engines: manifest.engines,
+      // npm's page for the package links back to the source from these.
+      repository: { type: "git", url: "git+https://github.com/AhmetErenLapanta/TeamHandbook.git", directory: "orchestrator" },
+      homepage: "https://github.com/AhmetErenLapanta/TeamHandbook/tree/master/orchestrator#readme",
+      bugs: { url: "https://github.com/AhmetErenLapanta/TeamHandbook/issues" },
       bin: { "teamhandbook-orchestrator": "bin/handbook-orchestrator.mjs", "handbook-orchestrator": "bin/handbook-orchestrator.mjs" },
       files: ["bin", "dist", "LICENSE", "README.md"],
     },

@@ -13,7 +13,8 @@ import { forgeTokenName } from "../propose.js";
 import { createVault, storeSecret } from "../vault.js";
 import type { CliResult, CliRun } from "./own-cli.js";
 import { dropFromRequest, openRequestOnForge, originRequest, remoteForge, requestForPushedBranch, requestOnForge, updateRequestBranch } from "./pushed.js";
-import { principalOf, setupFirstOwner } from "../accounts.js";
+import { createUser, principalOf, setupFirstOwner } from "../accounts.js";
+import { DEVICE_ENDPOINTS, personTokenName } from "./device-sign-in.js";
 import { copyOf } from "../test-fixtures.js";
 import { plainGitServer } from "./stand-in-git.js";
 
@@ -211,6 +212,60 @@ describe("the forge a remote is on, as the screen names its request", () => {
     const named = ["git@gitlab.com:acme/alpha.git", "https://github.com/acme/beta.git", "https://git.acme.invalid/payments/gamma.git", "https://git.example.invalid/acme/delta.git", "https://github.com/acme"].map((remote) => remoteForge(ctx, remote));
 
     expect(named).toEqual(["gitlab", "github", "gitlab", null, null]);
+  });
+});
+
+describe("a path repository's request opened on its forge with the task starter's own sign-in, where their CLI is not used", () => {
+  /** The opened() fixture on an orchestrator more than one person reaches, its GitLab taken as the public one, and Ada signed in to it with a code. */
+  async function signedIn() {
+    const made = await personsClone((w) => `${w}/acme/skills.git`);
+    const ctx = { ...made.ctx, ownForgeCli: false } as OrchestratorContext;
+    const ada = await principalOf(ctx.store, await setupFirstOwner(ctx.store, "solo", "setup-code", { code: "setup-code", email: "ada@example.invalid", password: "correct horse battery" }));
+    const answer = await requestForPushedBranch(ctx, made.repo, pushed(made.base));
+    if (!("opened" in answer)) throw new Error("no local request");
+    const request = { ...answer.opened, tenant: "solo", repoId: made.repo.id, title: "Add the pushed skill", status: "open" as const, provider: "local" as const, createdAt: new Date().toISOString(), createdBy: ada.email, checkedHead: made.head };
+    await ctx.store.saveRequest(request);
+    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName("gitlab", ada.id), "stand-in-person-token", ada.email);
+    const publicHost = DEVICE_ENDPOINTS.gitlab.host;
+    DEVICE_ENDPOINTS.gitlab.host = new URL(made.web).host;
+    restore.push(() => (DEVICE_ENDPOINTS.gitlab.host = publicHost));
+    const calls: { method: string; url: string; auth: string | null }[] = [];
+    const send = (async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push({ method, url: String(url), auth: new Headers(init?.headers).get("authorization") });
+      const answer = method === "POST" ? { iid: 3, web_url: `${made.web}/acme/skills/-/merge_requests/3`, state: "opened" } : { name: "handbook/pushed", commit: { id: made.head } };
+      return new Response(JSON.stringify(answer), { status: method === "POST" ? 201 : 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    return { ...made, ctx, ada, request, calls, send };
+  }
+  const restore: (() => void)[] = [];
+  afterEach(() => restore.splice(0).forEach((undo) => undo()));
+
+  it("given the task's starter signed in to GitLab with a code, when they press, then the branch reaches the origin and the merge request opens with their token, and only they are offered the button", async () => {
+    const { ctx, repo, request, ada, forgeRepo, head, calls, send } = await signedIn();
+    const bea = await createUser(ctx.store, "solo", new Set(), { email: "bea@example.invalid", role: "admin", teams: [] }, ada);
+
+    const offered = await requestOnForge(ctx, repo, request.number, ada);
+    const notOffered = await requestOnForge(ctx, repo, request.number, bea);
+    const opened = await openRequestOnForge(ctx, repo, request, ada, undefined, send);
+
+    expect(offered.forge).toBe("gitlab");
+    expect(notOffered.forge).toBeNull();
+    expect(opened).toEqual({ number: 3, url: expect.stringMatching(/\/merge_requests\/3$/) });
+    expect(execFileSync("git", ["rev-parse", "refs/heads/handbook/pushed"], { cwd: forgeRepo, encoding: "utf8" }).trim()).toBe(head);
+    expect(calls.find((c) => c.method === "POST")?.auth).toBe("Bearer stand-in-person-token");
+  });
+
+  it("given an admin who did not start the task, when they press, then it is refused and nothing is pushed or asked of the forge, even with a sign-in of their own", async () => {
+    const { ctx, repo, request, ada, forgeRepo, calls, send } = await signedIn();
+    const bea = await principalOf(ctx.store, await createUser(ctx.store, "solo", new Set(), { email: "bea@example.invalid", role: "admin", teams: [] }, ada));
+    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName("gitlab", bea.id), "bea-token", bea.email);
+
+    const pressing = openRequestOnForge(ctx, repo, request, bea, undefined, send);
+
+    await expect(pressing).rejects.toMatchObject({ code: "not-one-person", message: "only the person who started the task opens its request on the forge" });
+    expect(calls).toEqual([]);
+    expect(execFileSync("git", ["branch", "--list", "handbook/*"], { cwd: forgeRepo, encoding: "utf8" }).trim()).toBe("");
   });
 });
 

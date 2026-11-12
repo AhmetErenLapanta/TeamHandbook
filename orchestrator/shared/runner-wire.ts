@@ -96,6 +96,7 @@ export interface ProtocolRefusal {
 export interface StatusBody {
   agents: MachineAgentStatus[];
   started?: true;
+  features?: string[];
 }
 
 /** The most agents one machine reports. */

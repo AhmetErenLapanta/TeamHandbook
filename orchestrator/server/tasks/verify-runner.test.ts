@@ -14,6 +14,7 @@ import { git } from "../git.js";
 import { copyOf, seededContext, storePrincipals } from "../test-fixtures.js";
 import { fakeAgentAdapter } from "./agents.js";
 import { createTaskRunner } from "./runner.js";
+import type { TaskRunner } from "./runner.js";
 import { detectVerification } from "./verify-detect.js";
 import { approveVerification, commitReader, readEvidence } from "./verify.js";
 
@@ -22,7 +23,11 @@ const REPO = "payments-skills";
 const MAKEFILE = 'test:\n\t@if [ -f broken.flag ]; then echo "FAIL: $$(cat broken.flag)"; exit 1; fi; echo "all checks pass"\n';
 
 const dirs: string[] = [];
-afterEach(() => {
+// Each test's runner is shut down after it, which ends its agents' process groups: a stand-in left running outlives the
+// test with no parent and spins.
+const runners: TaskRunner[] = [];
+afterEach(async () => {
+  await Promise.all(runners.splice(0).map((r) => r.shutdown()));
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -84,7 +89,8 @@ function agent(root: string, onFirst: string, onRepair = "", summary = "Wrote th
   writeFileSync(
     file,
     `import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-const prompt = readFileSync(0, "utf8");
+let prompt = "";
+for await (const chunk of process.stdin) prompt += chunk;
 const repair = prompt.includes("This is repair round");
 appendFileSync(${JSON.stringify(turns)}, repair ? "repair\\n" : "first\\n");
 if (repair) {
@@ -102,6 +108,7 @@ console.log(JSON.stringify({ type: "result", summary: ${JSON.stringify(summary)}
 
 async function run(ctx: OrchestratorContext, script: string, testCommand: string | null = null) {
   const tasks = createTaskRunner(ctx, { agents: [fakeAgentAdapter(script)], isolation: { mode: "process", network: "open" }, testCommand: () => testCommand, hostEnv: { PATH: process.env.PATH } });
+  runners.push(tasks);
   const repo = (await ctx.store.getRepo(ctx.tenant, REPO))!;
   const started = await tasks.start({ repo, title: "Add an on-call handover", description: "", agent: "fake", user: ADMIN });
   await tasks.idle();
@@ -205,6 +212,7 @@ describe("a check in a folder worked on in place", { timeout: 120_000 }, () => {
     const script = agent(root, 'writeFileSync("todo.md", "- one\\n"); writeFileSync("broken.flag", "the list is empty");', 'rmSync("broken.flag", { force: true }); writeFileSync("todo.md", "- one\\n- two\\n");');
     // The repair round is what is measured, so the agent runs one-shot: Auto as the person would otherwise talk, asking about tools off its list.
     ctx.tasks = createTaskRunner(ctx, { agents: [{ ...fakeAgentAdapter(script), twoWay: undefined }], isolation: { mode: "process", network: "open" }, testCommand: () => null, hostEnv: { PATH: process.env.PATH, HOME: home }, profile: "personal" });
+    runners.push(ctx.tasks);
     await ctx.tasks.ready();
     const withTasks = createApp(ctx, as(ada));
 

@@ -18,7 +18,7 @@ import { basename, delimiter, dirname, join, sep } from "node:path";
  * download and fail on every check.
  */
 
-const REPOSITORY = "https://github.com/AhmetErenLapanta/TeamHandbook";
+export const REPOSITORY = "https://github.com/AhmetErenLapanta/TeamHandbook";
 /** The release whose tag never moves and whose manifest.json names the newest version (install.sh says why). */
 export const LATEST_RELEASE = `${REPOSITORY}/releases/download/handbook-orchestrator-latest`;
 const versionRelease = (version: string) => `${REPOSITORY}/releases/download/handbook-orchestrator-v${version}`;

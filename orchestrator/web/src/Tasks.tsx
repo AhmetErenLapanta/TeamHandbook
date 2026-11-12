@@ -16,7 +16,9 @@ import { PageHead } from "./design/PageHead";
 import { TurnSection } from "./design/TurnSection";
 import { stateOf, stateSaid } from "./task-state";
 import type { Decided } from "./attention";
-import { readSeen } from "./AttentionWatcher";
+import { NotifyAsk, readSeen } from "./AttentionWatcher";
+import { HandbookPluginCard } from "./team/PluginCard";
+import { QuoteSelection } from "./QuoteSelection";
 import { ForgeState } from "./ForgeState";
 import { SignInLine } from "./machines/SignIn";
 import { readPref, usePref, writePref } from "./prefs";
@@ -45,7 +47,7 @@ import { asksNow, machineWait, TaskRequests, WaitingNote } from "./TaskRequests"
 import { TaskShares } from "./TaskShares";
 import { TaskLearned } from "./TaskLearned";
 import { useFolderReview } from "./projects/ReviewChanges";
-import { addQuote, TaskFollowUp } from "./TaskFollowUp";
+import { addQuote, QueuedMessages, TaskFollowUp } from "./TaskFollowUp";
 import { limitsLine } from "./settings/TaskLimits";
 import { McpSignIn } from "./McpSignIn";
 import { TaskQuestion } from "./TaskQuestion";
@@ -118,11 +120,42 @@ function StatusBadge({ task }: { task: TaskRecord }) {
   );
 }
 
-function duration(task: Pick<TaskRecord, "startedAt" | "finishedAt">): string {
-  if (!task.startedAt) return "not started";
-  const ms = new Date(task.finishedAt ?? Date.now()).getTime() - new Date(task.startedAt).getTime();
+/** The time a task's agent waited on its person: from each card to its answer, its running out, or the end of the run, where cards overlap counted once. */
+export function waitedMs(task: Pick<TaskRecord, "startedAt" | "finishedAt" | "requests">): number {
+  if (!task.startedAt) return 0;
+  const ends = new Date(task.finishedAt ?? Date.now()).getTime();
+  const windows = (task.requests ?? []).flatMap((r) => {
+    if (r.status === "withdrawn") return [];
+    const from = new Date(r.createdAt).getTime();
+    const given = r.answeredAt ?? (r.status === "expired" ? r.expiresAt : null);
+    return [[from, Math.min(ends, given ? new Date(given).getTime() : ends)] as const];
+  }).filter(([from, to]) => to > from).sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let until = -Infinity;
+  for (const [from, to] of windows) {
+    if (to <= until) continue;
+    total += to - Math.max(from, until);
+    until = to;
+  }
+  return Math.max(0, total);
+}
+
+/** A wait as people round it: whole minutes, and hours past the first, never the seconds. */
+export function waitSaid(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+}
+
+function spoken(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 ? ` ${s % 60}s` : ""}`;
+}
+
+/** How long the agent ran: from its start to its end, without the time it stood on a card waiting for its person. */
+function duration(task: Pick<TaskRecord, "startedAt" | "finishedAt" | "requests" | "ranMs">): string {
+  if (!task.startedAt) return "not started";
+  if (task.finishedAt && task.ranMs !== undefined) return spoken(task.ranMs);
+  return spoken(new Date(task.finishedAt ?? Date.now()).getTime() - new Date(task.startedAt).getTime() - waitedMs(task));
 }
 
 export function ordinal(n: number): string {
@@ -243,6 +276,7 @@ export function taskFacts(task: TaskRecord, agent: string, me: Pick<Principal, "
   const run = [{ term: "Agent", value: agent || "The agent" }, { term: "Started", value: `${when(task.createdAt)} by ${task.createdBy === me.email ? "you" : task.createdBy}` }];
   if (task.tests === "passed" || task.tests === "failed") run.push({ term: "Tests", value: task.tests });
   if (task.startedAt && task.finishedAt) run.push({ term: "Ran", value: duration(task) });
+  if (waitedMs(task) >= 60_000) run.push({ term: "Waited", value: `${waitSaid(waitedMs(task))} for you` });
   // What a run cost, the context it opened with and what it loaded sit side by side, so the reader sees what drove the cost without the page claiming it.
   if (task.cost.usd !== null) run.push({ term: "Cost", value: `$${task.cost.usd.toFixed(task.cost.usd < 0.01 ? 4 : 2)}${task.costPartial ? ", some parts unreported" : ""}` });
   else if (task.startedAt && task.finishedAt && task.cost.inputTokens === null && task.cost.outputTokens === null) run.push({ term: "Cost", value: "Not reported" });
@@ -258,13 +292,23 @@ export function taskFacts(task: TaskRecord, agent: string, me: Pick<Principal, "
 const INVISIBLE_IN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 
 /** What a link fills the task form with, never a start. */
-export interface TaskStart { issue: string; repo: string; title: string; description: string }
+export interface TaskStart { issue: string; repo: string; title: string; description: string; stripped: boolean }
 
-/** What a link to `work/new` or `tasks/new` fills the task form with: the issue, repository, title and description as given, never more. */
+/**
+ * What a link to `work/new` or `tasks/new` fills the task form with: the issue, repository, title and
+ * description (also given as `prompt`) as given, never more. `stripped` says a hidden character was taken out.
+ */
 export function startLink(search: string): TaskStart {
   const params = new URLSearchParams(search);
-  const clean = (name: string) => (params.get(name) ?? "").replace(INVISIBLE, "").trim();
-  return { issue: clean("issue"), repo: clean("repo"), title: clean("title"), description: (params.get("description") ?? "").replace(INVISIBLE_IN_TEXT, "").trim() };
+  let stripped = false;
+  const clean = (value: string | null, hidden: RegExp) => {
+    const raw = (value ?? "").trim();
+    const cleaned = raw.replace(hidden, "").trim();
+    if (cleaned !== raw) stripped = true;
+    return cleaned;
+  };
+  const read = { issue: clean(params.get("issue"), INVISIBLE), repo: clean(params.get("repo"), INVISIBLE), title: clean(params.get("title"), INVISIBLE), description: clean(params.get("description") ?? params.get("prompt"), INVISIBLE_IN_TEXT) };
+  return { ...read, stripped };
 }
 
 /** What the form starts with: a link's values, else the words this browser kept from the last visit. */
@@ -559,6 +603,7 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
         {options.profile.personal ? (
           <p className={options.profile.refused ? "error" : "muted"} role="note">{options.profile.refused ? `Tasks do not run: ${options.profile.refused}.` : options.profile.note}</p>
         ) : null}
+        {start?.stripped ? <p className="muted" role="note">The link carried hidden characters; they were taken out.</p> : null}
         {start?.repo && !linkedCode && !linkedSkills ? <p className="muted" role="note">The link names a repository you do not start tasks in here; pick one below.</p> : null}
         {restored && !empty ? (
           <p className="muted small" role="note">
@@ -637,7 +682,6 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
         ) : null) : (
           <div className="row">
             {skillRepos.length > 1 ? <Select label="Repository" value={skillRepo} onChange={setSkillRepo} options={skillRepos.map((r) => ({ value: r.id, label: r.name, hint: r.team }))} describedBy={error ? errorId : undefined} invalid={Boolean(error)} /> : null}
-            <Select label="Kind of task" value={kind} onChange={(v) => { setKind(v as SkillKind); setSkill(""); }} options={SKILL_KINDS} />
             {kind === "skill.write" ? (
               <label>Skill name<input value={skill} onChange={(e) => setSkill(e.target.value)} maxLength={63} pattern="[a-z0-9][a-z0-9-]*" placeholder="on-call-handover" required /></label>
             ) : null}
@@ -669,6 +713,7 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
             <summary>More options</summary>
             <div className="task-form">
               {compact ? agentPicker : null}
+              {mode === "skills" ? <Select label="Kind of task" value={kind} onChange={(v) => { setKind(v as SkillKind); setSkill(""); }} options={SKILL_KINDS} /> : null}
             <label>Title<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder={named || "From the issue"} {...described} /></label>
               {issue ? <label>Notes for the agent<textarea className="short" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={8000} /></label> : null}
               {byOrchestrator ? null : <AgentChoicesPicker options={options.agents.find((a) => a.id === agent)?.options} value={choices} onChange={setChoices} />}
@@ -792,7 +837,7 @@ function FolderChanges({ task, local, starter, onChanged, onQuote }: { task: Tas
           ) : t.status === "local" && t.branch ? (
             <>
               <p className="muted">{keptLocally(t.reason, t.branch, task.ranOn ?? null)}</p>
-              {t.reason === "unpushed" && t.forge && starter
+              {(t.reason === "unpushed" || t.reason === "not-connected") && t.forge && starter
                 ? <OpenKept taskId={task.id} position={task.targets!.indexOf(t)} forge={t.forge} onOpened={onChanged} />
                 : <CopyText text={`git switch ${t.branch}`} label="Copy the command" />}
             </>
@@ -936,7 +981,7 @@ function BoardRows({ cards, me, agents }: { cards: BoardCard[]; me: Principal; a
               </td>
               <td className="rc-extra rc-weight">{c.changes ? <><ChangeWeight added={c.changes.additions} removed={c.changes.deletions} /> <span className="diff-stat"><ChangeCounts added={c.changes.additions} removed={c.changes.deletions} /></span></> : null}</td>
               <td className="rc-extra num">{c.startedAt ? (c.finishedAt ? duration(c) : `${duration(c)} so far`) : null}</td>
-              <td className="rc-extra num">{c.cost.usd !== null ? `$${c.cost.usd.toFixed(2)}` : c.startedAt && c.finishedAt ? <span className="muted">not reported</span> : null}</td>
+              <td className="rc-extra num">{c.cost.usd !== null ? `$${c.cost.usd.toFixed(2)}` : null}</td>
               <td className="rc-extra num">{whenShort(c.finishedAt ?? c.createdAt)}</td>
             </tr>
           );
@@ -1138,6 +1183,7 @@ export function TaskList({ me, start, repos = null, picked = null, onRepos }: { 
         title={local && empty ? PROMISE : "Tasks"}
       />
       {list}
+      {local && empty ? <HandbookPluginCard me={me} quiet /> : null}
     </div>
   );
 }
@@ -1249,9 +1295,9 @@ function TaskLog({ id, log, outputCut, live }: { id: string; log: TaskLogLine[];
       {/* The lines stay a list a screen reader reads at will; what changes is said once by the page's announcer,
           since a busy run's every line read out as it arrived drowned the one that mattered. */}
       <div role="log" aria-label="Task log" aria-live="off">
-        <ol className={`task-log${live ? "" : " task-log-ended"}`}>
+        <ol className={`task-log${live ? "" : " task-log-ended"}`} data-quotable="">
           {log.slice(from).map((line) => (
-            <li key={line.seq} id={`log-line-${line.seq}`} aria-current={line.seq === current ? "true" : undefined}>
+            <li key={line.seq} id={`log-line-${line.seq}`} data-seq={line.seq} aria-current={line.seq === current ? "true" : undefined}>
               <span className="muted mono">{logTime(line.at)}</span> <span dir="auto">{marked(line.text, query)}</span>
             </li>
           ))}
@@ -1480,13 +1526,15 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
               </>
             ) : null) : requestOpen ? <a className={`button${task.status === "needs-review" ? "" : " secondary"}`} href={here("repositories", task.repoId, "requests")}>Open the request</a> : null}
             {heldPlan && canEdit && !asking ? <button type="button" onClick={approveHeldPlan} disabled={busy} title="The task goes on from the plan the agent made, which nobody had answered yet.">Approve the plan and continue</button> : null}
-            {AGAIN.includes(task.status) && canEdit && !asking ? <button type="button" onClick={again} disabled={busy} title="Starts a new task with the same work, project, agent and options; this one stays as it is.">Run again</button> : null}
+            {AGAIN.includes(task.status) && canEdit && !asking ? <button type="button" className={heldPlan ? "secondary" : undefined} onClick={again} disabled={busy} title="Starts a new task with the same work, project, agent and options; this one stays as it is.">Run again</button> : null}
             {canShare && !sharing ? <button type="button" className="secondary" onClick={() => setSharing(true)}>Share…</button> : null}
           </>
         )}
       >
         <span className={`state ${stateWord.tone}`} data-status={state}>{stateWord.word}{task.queuePosition !== null ? `, #${task.queuePosition} in line` : ""}</span>
       </PageHead>
+      {ACTIVE.includes(task.status) && task.createdBy === me.email ? <NotifyAsk /> : null}
+      {quote ? <QuoteSelection onQuote={quote} /> : null}
       {/* The change is the page; what was asked and how the run went sit beside it in the rail. */}
       <div className="with-rail">
         <div className="task-main">
@@ -1525,6 +1573,7 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
             if (continued && followUp === "continue") setAttempt((n) => n + 1);
             else void reread();
           }} />
+          {followUp && task.messages?.length ? <QueuedMessages task={task.id} messages={task.messages} onChanged={() => void reread()} /> : null}
           {followUp && !(followUp !== "continue" && asksNow(task)) ? (
             <TaskFollowUp task={task} kind={followUp} jump={jump} stop={stop} quotes={quotes} onQuotes={setQuotes} onSent={() => {
               // A continued run is a new turn on the same task, followed from its start; anything else reads where the task stands now.

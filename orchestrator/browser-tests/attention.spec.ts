@@ -80,18 +80,26 @@ test("given a running task whose plan waits for its person, when the watcher loo
   expect(await page.evaluate(() => (window as unknown as { told: string[] }).told)).toEqual(["Add a retry needs your approval"]);
 });
 
-test("given a browser that has not been asked, when a page opens, then one line offers notifications, and asking once or saying not now takes it away", async ({ page }) => {
+test("given a browser that has not been asked, when the page of a task working for its person opens, then one quiet line offers notifications there only, and asking once or saying not now takes it away", async ({ page }) => {
   // given
   await page.addInitScript(() => {
     class Stand { static permission = "default"; static async requestPermission() { Stand.permission = "granted"; return "granted"; } }
     (window as unknown as { Notification: unknown }).Notification = Stand;
   });
+  await page.route("**/api/tasks/t8?*", (route) => route.fulfill({ json: { task: task("t8", "Add a retry", "running", "working"), log: [], outputCut: false } }));
   await page.goto("/demo/tasks");
-  const ask = page.getByRole("region", { name: "Notifications" });
-  await expect(ask).toContainText("Get a notification when a task needs you.");
+  const ask = page.getByRole("note", { name: "Notifications" });
+  await expect(ask).toHaveCount(0);
 
   // when
-  await ask.getByRole("button", { name: "Turn on notifications" }).click();
+  await page.goto("/demo/tasks/t8");
+
+  // then
+  await expect(ask).toContainText("Away from this page when it needs you?");
+  await expect(ask.getByRole("button", { name: "Get a notification" })).not.toHaveClass(/secondary/);
+
+  // when
+  await ask.getByRole("button", { name: "Get a notification" }).click();
 
   // then
   await expect(ask).toHaveCount(0);

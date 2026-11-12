@@ -3,10 +3,12 @@ import { folderAsk, folderUp, jumpsFor, MOST_A_GROUP } from "./palette";
 import type { Jump } from "./palette";
 
 const JUMPS: Jump[] = [
+  { label: "New task", detail: "Say what needs doing", to: "/demo/tasks/new", group: "Actions" },
+  { label: "Start agents", detail: "On the issues of the Work board", to: "/demo/work", group: "Actions" },
   { label: "Tasks", detail: "Agent tasks", to: "/demo/tasks", group: "Pages" },
   { label: "Settings", detail: "Your account", to: "/demo/settings", group: "Pages" },
   { label: "payments-api", detail: "Platform", to: "/demo/tasks?repo=payments-api", group: "Repositories" },
-  { label: "Retry failed webhook payments", detail: "payments-api", to: "/demo/tasks/1", group: "Tasks" },
+  { label: "Retry failed webhook payments", detail: "PAY-142, payments-api", to: "/demo/tasks/1", group: "Tasks" },
 ];
 
 describe("jumpsFor", () => {
@@ -77,5 +79,30 @@ describe("the folder path typed into the palette", () => {
 
     // then
     expect(up).toEqual(["~/code/", "~/", "/srv/", null, null, null]);
+  });
+});
+
+describe("jumpsFor actions and issue keys", () => {
+  it("given a word that an action and a page share, and an issue key that only a task's detail holds, when the jumps are read, then the action is listed first and the key finds its task", () => {
+    // when
+    const task = jumpsFor(JUMPS, "task");
+    const key = jumpsFor(JUMPS, "PAY-142");
+
+    // then
+    expect(task.map((j) => j.label).slice(0, 2)).toEqual(["New task", "Tasks"]);
+    expect(key.map((j) => j.label)).toEqual(["Retry failed webhook payments"]);
+  });
+});
+
+describe("jumpsFor what the orchestrator found", () => {
+  it("given a task the orchestrator found for a word of its log, when the word is typed, then it is listed though neither its title nor its detail holds the word", () => {
+    // given
+    const found: Jump = { label: "Add a retry", detail: "payments-api, in its log", to: "/demo/tasks/9", group: "Tasks", asked: true };
+
+    // when
+    const listed = jumpsFor([...JUMPS, found], "migration");
+
+    // then
+    expect(listed).toEqual([found]);
   });
 });

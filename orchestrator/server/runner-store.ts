@@ -21,10 +21,16 @@ export interface MachineRecord {
   /** The machine's Ed25519 public key; every request it makes is signed by the key only the machine holds. */
   publicKey: string;
   agents: MachineAgentStatus[];
+  /** What of the work the orchestrator hands out the machine's runner says it understands; a runner from before it says none. */
+  features?: MachineFeature[];
   createdAt: string;
   lastSeenAt: string | null;
   revokedAt: string | null;
 }
+
+/** A part of the work a runner understands only from some version on; the orchestrator offers what needs it only to a machine that lists it. */
+export const MACHINE_FEATURES = ["workspace-continues"] as const;
+export type MachineFeature = (typeof MACHINE_FEATURES)[number];
 
 export interface PairingRecord {
   tenant: string;
@@ -43,6 +49,8 @@ export interface TaskLease {
   nativeSession: string | null;
   /** The branch the runner reported it pushes to; a request it reports is held to this one. */
   branch: string | null;
+  /** When the run that holds it now started. */
+  runStartedAt?: string | null;
 }
 
 /** An event as the store keeps it, numbered by the runner per task so a resent batch writes nothing twice: its kind, the line the log shows, and the masked event itself. */
@@ -63,6 +71,8 @@ export interface LeasedTaskPatch {
   branch?: string;
   tests?: TestOutcome;
   addCost?: TaskCost;
+  /** The agent's estimate of the turn it is in, in dollars, kept until the turn's own cost comes and added to it when the run is cut off first. */
+  turnEstimate?: number;
   /** The agent's session id, recorded before the agent starts, so Continue after a crash resumes it. */
   nativeSession?: string;
 }
@@ -72,6 +82,10 @@ export interface LeasedTaskEnd {
   error: string | null;
   nativeSession: string | null;
   branch: string | null;
+  /** For a run cut off at its plan's usage limit: when the limit resets, already checked to be near and ahead. */
+  limitResetAt?: string | null;
+  /** How long the agent worked in this run, its cards' waits left out; added to what earlier runs worked. */
+  ranMs?: number;
 }
 
 export interface RunnerStore {
@@ -87,7 +101,7 @@ export interface RunnerStore {
   listMachines(tenant: string, userId: string | null): Promise<MachineRecord[]>;
   /** Revokes the machine and interrupts the tasks it holds in the same transaction; false when there was none to revoke. */
   revokeMachine(tenant: string, id: string, at: string): Promise<boolean>;
-  touchMachine(tenant: string, id: string, at: string, agents?: readonly MachineAgentStatus[]): Promise<void>;
+  touchMachine(tenant: string, id: string, at: string, agents?: readonly MachineAgentStatus[], features?: readonly MachineFeature[]): Promise<void>;
   /** Records a signed request's nonce until `until`; false when the machine used it already. */
   takeNonce(tenant: string, machineId: string, nonce: string, until: string): Promise<boolean>;
   /** Deletes nonces past their time and pairings used or expired. */
@@ -107,6 +121,14 @@ export interface RunnerStore {
   cancelLocalTask(tenant: string, taskId: string, at: string): Promise<boolean>;
   /** Puts an interrupted task no runner holds back in line, its machine and session kept, with the caller's receipt, if any, in the same write; false when it was not such a task. */
   continueLocalTask(tenant: string, taskId: string, receipt: Pick<CommandReceipt, "actorId" | "commandId" | "kind" | "result"> | null, at: string): Promise<boolean>;
+  /** Interrupted tasks on a machine waiting for a usage limit that resets at or before `before`: when, when the limit was hit, and how many times one went on by itself. */
+  limitedTasks(tenant: string, before: string): Promise<{ taskId: string; resetAt: string; limitAt: string | null; goneOn: number }[]>;
+  /** Lets go of the reset the task waits for, so nothing puts it back in line for it; false when it waits for another or none. */
+  dropLimit(tenant: string, taskId: string, resetAt: string): Promise<boolean>;
+  /** Puts the task waiting for this reset back in line, counted and marked as going on after the limit; false when it no longer waits for it. */
+  continueAfterLimit(tenant: string, taskId: string, resetAt: string): Promise<boolean>;
+  /** Whether the task's run being handed out goes on after a usage limit reset; true once per such going on. */
+  takeLimitContinue(tenant: string, taskId: string): Promise<boolean>;
   /** Asks the runner holding the task to stop it, until the run ends; false when no runner holds it. A `reason` (a limit's) becomes the task's error when the run ends. */
   requestStop(tenant: string, taskId: string, at: string, reason?: string | null): Promise<boolean>;
   /** Keeps each event once by its number; false when the lease is not the task's. */

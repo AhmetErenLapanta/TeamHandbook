@@ -28,6 +28,7 @@ test("given a local orchestrator started with nothing configured, when the link 
   await expect(page.getByRole("button", { name: /sign in/i })).toHaveCount(0);
 
   if (process.env.ORCHESTRATOR_E2E_SCREENSHOTS) {
+    await expect(page.getByText(/^Checking\b/)).toHaveCount(0, { timeout: 30_000 });
     const text = await page.content();
     for (const trace of [homedir(), tmpdir(), userInfo().username].filter((t) => t.length >= 4)) expect(text, `the picture shows ${trace}`).not.toContain(trace);
     mkdirSync(OUT, { recursive: true });

@@ -16,6 +16,17 @@ under the person's name; the search is beside it.
   days, **Team handbook** (the team's skills, MCP servers and commands) and **Policies**.
 - **Integrations**: each service and each repository's forge access.
 
+On one person's own orchestrator, **Team** and the empty first **Tasks** screen carry one card
+while the handbook plugin is missing from their Claude Code: "Add the handbook plugin to your
+Claude Code. It turns what your sessions teach into skills you keep or share." **Install the
+plugin…** says what pressing it does (add the TeamHandbook marketplace to your Claude Code and
+install the plugin, with `claude plugin marketplace add` and `claude plugin install`), then
+**Install** does it, in your own Claude Code folder, and the card says "The handbook plugin is
+installed; your next Claude Code session has it." Nothing is installed except by that click;
+**Not now** hides the card. A refusal shows what Claude Code said, and the two commands can be
+typed in Claude Code instead. A team's orchestrator never installs anything: its **Team handbook**
+shows the commands to copy, under "To get these in your own Claude Code".
+
 Skill use over time (**Usage**: skill use per day for 7, 30 or 90 days; admins and team owners
 also see it by team and by skill and export it as CSV or JSON), **Leaderboard**, **Logs** and **Audit**
 (the orchestrator's event log, admins only; each change opens on a page of its own at

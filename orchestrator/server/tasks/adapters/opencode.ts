@@ -32,6 +32,9 @@ const targetOf = (input: Record<string, unknown>): string | null => {
 
 const record = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
+/** OpenCode's tool that loads a skill, by its name (`{ name }`, 1.19.4); the call's target is the skill, as Claude Code's Skill call's is. */
+const SKILL_TOOL = "skill";
+
 /** OpenCode's own to-do list, shown as the plan and not as calls. */
 const BOOKKEEPING = new Set(["todowrite", "todoread"]);
 
@@ -39,7 +42,8 @@ const BOOKKEEPING = new Set(["todowrite", "todoread"]);
 function callEvent(id: string, tool: string, input: Record<string, unknown>, status: "started" | "done" | "failed", work?: string, servers: readonly string[] = []): AgentEvent[] {
   if (BOOKKEEPING.has(tool)) return [];
   const mcp = opencodeMcp(tool, servers);
-  return [{ type: "tool_call", id, tool, target: shownTarget(work, targetOf(input)), ...(mcp ? { mcp } : {}), ...(tool === "bash" && typeof input.command === "string" ? { command: input.command } : {}), status }];
+  const target = tool === SKILL_TOOL ? (typeof input.name === "string" ? input.name : null) : shownTarget(work, targetOf(input));
+  return [{ type: "tool_call", id, tool, target, ...(mcp ? { mcp } : {}), ...(tool === "bash" && typeof input.command === "string" ? { command: input.command } : {}), status }];
 }
 
 /** Whole lines of a shell call's output that have not gone yet; the rest of a line waits for its end unless the call ended. */
@@ -488,7 +492,7 @@ function opencode2ServeCodec(sessionID: string, work?: string, questions = false
           const tokens = (data.tokens ?? {}) as Record<string, unknown>;
           const cache = (tokens.cache ?? {}) as Record<string, unknown>;
           const input = tokensOf(tokens.input, cache.read, cache.write);
-          return [...context(input), { type: "usage", cost: { usd: null, inputTokens: input, outputTokens: tokensOf(tokens.output, tokens.reasoning) } }];
+          return [...context(input), { type: "usage", cost: { usd: num(data.cost), inputTokens: input, outputTokens: tokensOf(tokens.output, tokens.reasoning) } }];
         }
         case "session.retry.scheduled":
           return [{ type: "error", failure: error2Failure(data.error, "provider_retrying") }];

@@ -339,6 +339,8 @@ test("given a team repository with skills, MCP servers and commands, when Team o
   await expect(tabs.getByRole("tab", { name: "Skills" })).toHaveAttribute("aria-selected", "true");
   const first = handbook.getByRole("listitem").first();
   await expect(first).toContainText("from payments-skills");
+  await expect(handbook).toContainText("To get these in your own Claude Code:");
+  await expect(handbook.locator(".handbook-join code").first()).toContainText("/plugin marketplace add");
 
   // when
   await tabs.getByRole("tab", { name: "MCP servers" }).click();
@@ -662,6 +664,110 @@ test.describe("the welcome on one person's machine", () => {
     // then
     await expect(handbook).toContainText("/handbook:init");
     await expect(handbook).toContainText("/handbook:join");
+  });
+
+  const withPlugins = async (page: Page, plugins: unknown[]): Promise<void> => {
+    const personal = { commands: [], plugins, mcpServers: [], claudeMd: false, readAt: new Date().toISOString() };
+    await page.route("**/api/tasks/options", (route) => route.fulfill({ json: { agents: [{ id: "claude-code", label: "Claude Code", readiness: { ready: true, state: "ready" }, personal }], repos: [], readinessReport: true, profile: { personal: false } } }));
+    await page.route((url) => url.pathname === "/api/repos", (route) => route.fulfill({ json: { repos: [] } }));
+  };
+
+  test("given a local orchestrator whose Claude Code lacks the handbook plugin, when Team opens, then one card offers it, says what pressing Install does first, and installs only after that press", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await withPlugins(page, []);
+    const installs: string[] = [];
+    await page.route((url) => url.pathname === "/api/handbook/plugin", (route) => {
+      installs.push(route.request().method());
+      return route.fulfill({ json: { installed: true } });
+    });
+
+    // when
+    await page.goto("/demo/team");
+    const card = page.locator(".plugin-card");
+
+    // then
+    await expect(card).toContainText("Add the handbook plugin to your Claude Code.");
+    await expect(card.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+
+    // when
+    await card.getByRole("button", { name: "Install the plugin…" }).click();
+
+    // then
+    await expect(card).toContainText("claude plugin marketplace add and claude plugin install");
+    expect(installs).toEqual([]);
+
+    // when
+    await card.getByRole("button", { name: "Install", exact: true }).click();
+
+    // then
+    await expect(card).toContainText("The handbook plugin is installed");
+    expect(installs).toEqual(["POST"]);
+  });
+
+  test("given an install the CLI refuses, when Install is pressed, then the card says why and offers the install again", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await withPlugins(page, []);
+    await page.route((url) => url.pathname === "/api/handbook/plugin", (route) => route.fulfill({ json: { installed: false, why: "marketplace unreachable" } }));
+
+    // when
+    await page.goto("/demo/team");
+    const card = page.locator(".plugin-card");
+    await card.getByRole("button", { name: "Install the plugin…" }).click();
+    await card.getByRole("button", { name: "Install", exact: true }).click();
+
+    // then
+    await expect(card.getByRole("alert")).toHaveText("marketplace unreachable");
+    await expect(card.getByRole("button", { name: "Install the plugin…" })).toBeVisible();
+  });
+
+  test("given the handbook plugin already in Claude Code, when Team opens, then no card is drawn", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await withPlugins(page, [{ name: "handbook", marketplace: "teamhandbook", version: "0.33.0", enabled: true, scope: "user" }]);
+
+    // when
+    await page.goto("/demo/team");
+    await expect(page.getByRole("heading", { level: 1, name: "Team" })).toBeVisible();
+
+    // then
+    await expect(page.locator(".plugin-card")).toHaveCount(0);
+  });
+
+  test("given a fresh orchestrator whose first answer has no read of Claude Code yet, when Team opens, then the card appears once a later answer has it, without a reload", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await page.route((url) => url.pathname === "/api/repos", (route) => route.fulfill({ json: { repos: [] } }));
+    let asked = 0;
+    const personal = { commands: [], plugins: [], mcpServers: [], claudeMd: false, readAt: new Date().toISOString() };
+    await page.route("**/api/tasks/options", (route) => {
+      asked += 1;
+      return route.fulfill({ json: { agents: [{ id: "claude-code", label: "Claude Code", readiness: { ready: true, state: "ready" }, personal: asked < 3 ? null : personal }], repos: [], readinessReport: true, profile: { personal: false } } });
+    });
+
+    // when
+    await page.goto("/demo/team");
+
+    // then
+    await expect(page.locator(".plugin-card")).toContainText("Add the handbook plugin to your Claude Code.", { timeout: 15_000 });
+    expect(asked).toBeGreaterThanOrEqual(3);
+  });
+
+  test("given the card offered, when Not now is pressed and Team is opened again, then it stays away", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await withPlugins(page, []);
+    await page.goto("/demo/team");
+    const card = page.locator(".plugin-card");
+
+    // when
+    await card.getByRole("button", { name: "Not now" }).click();
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "Team" })).toBeVisible();
+
+    // then
+    await expect(card).toHaveCount(0);
   });
 
   test("given a local orchestrator with everything set up, when Team opens, then Getting set up is not drawn", async ({ page }) => {

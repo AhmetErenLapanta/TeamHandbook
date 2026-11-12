@@ -307,7 +307,7 @@ describe("a task over several repositories", { timeout: 120_000 }, () => {
     await ctx.tasks!.idle();
   });
 
-  it("given a team owner whose team is taken away and kept to its owners while the first repository runs, when the task reaches the second, then it is not run there and the first request stays open", async () => {
+  it("given a team owner whose team is taken away and kept to its owners while the first repository runs, when the task reaches the second, then it is not run there, spent nothing there, and the first request stays open", async () => {
     // given
     const held = heldAgent();
     const { ctx, runner, issue } = await services({ agent: held.script });
@@ -328,6 +328,7 @@ describe("a task over several repositories", { timeout: 120_000 }, () => {
     const task = (await ctx.store.getTask("acme", started.id))!;
     expect(task.targets!.map((t) => t.status)).toEqual(["request", "failed"]);
     expect(task.targets![1]!.error).toBe("The task did not run on orders-bff: Olu Example no longer starts tasks on Orders's repositories.");
+    expect(task.targets![1]!.cost).toEqual({ usd: 0, inputTokens: 0, outputTokens: 0 });
     expect((await ctx.store.getRequest("acme", "orders-service", 1))?.status).toBe("open");
   });
 

@@ -24,7 +24,7 @@ import { taskMergeRefusal } from "./guards.js";
 import { mergeRequest } from "../propose.js";
 import { createTaskRunner, PUSH_REF, wentOnFromKey } from "./runner.js";
 import { UNKNOWN_COST } from "./types.js";
-import type { TaskRecord } from "./types.js";
+import type { TaskRecord, TaskTarget } from "./types.js";
 
 const ADA: Principal = { id: "ada", name: "Ada Example", email: "ada@example.invalid", role: "admin", ownedTeams: [] };
 const OWNER: Principal = { id: "owner", name: "Owner", email: "owner@example.invalid", role: "owner", ownedTeams: [] };
@@ -479,6 +479,32 @@ describe("a branch a machine pushed, checked before its request opens", { timeou
       expect(done.targets![0]!.baseSha).not.toBe("1".repeat(40));
       expect(await ctx.store.getRequest(ctx.tenant, task.repoId, done.targets![0]!.requestNumber!)).toMatchObject({ status: "open", checkedHead: head });
       expect(log.some((l) => l.startsWith("payments: opened request #"))).toBe(true);
+    });
+
+    it("given a folder task whose machine went on from its open request, when the run ends again, then that request is checked at the new head, no second one opens, the repository the run left alone keeps its target, and the words it went on with are delivered", async () => {
+      // given
+      const { ctx, task, outcome, said, clone } = await pushed([{ "ON-CALL.md": "Page the on-call engineer.\n" }]);
+      const bare = localRepoPath((await ctx.store.getRepo(ctx.tenant, task.repoId))!.url)!;
+      await openPushedRequest(ctx, task.id, reported(outcome, git(["rev-parse", "HEAD"], clone).trim(), bare));
+      const opened = (await said()).task.targets![0]!;
+      const keptOnMachine: TaskTarget = { repoId: task.repoId, status: "local", reason: "no-remote", path: "notes", head: "2".repeat(40), baseSha: "3".repeat(40), branch: outcome.branch, tests: null, requestNumber: null, error: null, cost: UNKNOWN_COST };
+      await ctx.store.setTaskTargets(ctx.tenant, task.id, [keptOnMachine, opened]);
+      writeFileSync(join(clone, "ON-CALL.md"), "Page the on-call engineer twice.\n");
+      git(["-c", "user.name=Ada Example", "-c", "user.email=ada@example.invalid", "commit", "--quiet", "-am", "step 2"], clone);
+      git(["push", "--quiet", "origin", `${outcome.branch}:refs/heads/${outcome.branch}`], clone);
+      const next = git(["rev-parse", "HEAD"], clone).trim();
+      await ctx.store.addFollowUp({ tenant: ctx.tenant, id: "fup_ws_more", taskId: task.id, source: "person", key: "person:ws-more-0001", text: "Page twice.", quotes: null, createdAt: new Date().toISOString(), createdBy: ADA.email });
+
+      // when
+      await openPushedRequest(ctx, task.id, reported(outcome, next, bare));
+
+      // then
+      const { task: done, log } = await said();
+      expect(await ctx.store.listRequests(ctx.tenant)).toHaveLength(1);
+      expect(await ctx.store.getRequest(ctx.tenant, task.repoId, opened.requestNumber!)).toMatchObject({ status: "open", checkedHead: next });
+      expect(done.targets).toEqual([expect.objectContaining({ path: "notes", status: "local" }), expect.objectContaining({ path: "payments", status: "request", requestNumber: opened.requestNumber })]);
+      expect(log).toContain(`payments: went on in request #${opened.requestNumber} on ${outcome.branch}.`);
+      expect(await ctx.store.pendingFollowUps(ctx.tenant, task.id)).toEqual([]);
     });
 
     it("given a repository with a remote the machine did not push its branch to, when the task ends, then no request opens there, the task waits for review with the change kept on the machine, and the log says the branch stays in it", async () => {

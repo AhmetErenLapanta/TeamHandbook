@@ -59,6 +59,7 @@ const LIVE = (() => {
   return [
     line({ type: "todos", items: [{ text: "Read the webhook code", state: "done" }, { text: "Write the runbook entry", state: "doing" }, { text: "Run the webhook tests", state: "todo" }] }),
     line({ type: "message", text: "The retries live in `deliver.ts`; I will write them up for whoever is on call:\n\n- five attempts, **backing off** each time\n- the failed queue after that\n\n```\nnpm test -- webhooks --reporter=verbose --testNamePattern=\"retries five times before the failed queue\"\n```" }),
+    line({ type: "steer", text: "Leave the failed queue as it is; only the retries change.", by: null }),
     line({ type: "tool_call", id: "a", tool: "Read", target: "src/webhooks/deliver.ts", status: "started" }),
     line({ type: "tool_call", id: "b", tool: "Read", target: "src/webhooks/retry.ts", status: "started" }),
     line({ type: "tool_call", id: "c", tool: "Edit", target: "runbooks/failed-webhooks.md", status: "started" }),
@@ -184,7 +185,8 @@ const SCREENS: Screen[] = [
     await expect(p.getByText("How often should the webhook retry?")).toBeVisible();
   } },
   { name: "task-live", open: async (p) => {
-    await taskAs(p, { status: "running", requests: [], queuePosition: null, followUp: "steer", startedAt: new Date(Date.now() - 86_000).toISOString() }, LIVE);
+    await taskAs(p, { status: "running", requests: [], queuePosition: null, followUp: "steer", startedAt: new Date(Date.now() - 86_000).toISOString(), messages: [{ id: "m1", text: "Name the provider's outage windows in the runbook too.", quotes: null, createdAt: new Date().toISOString() }, { id: "m2", text: "Keep it short.", quotes: [{ path: "runbooks/failed-webhooks.md", lines: "38-40", text: "Each event is tried five times" }], createdAt: new Date().toISOString() }] }, LIVE);
+    await expect(p.getByRole("region", { name: "Messages waiting for the agent" })).toBeVisible();
     await expect(p.getByRole("region", { name: "The agent at work" }).getByRole("list", { name: "What the agent did" })).toBeVisible();
     await expect(p.locator("form.run-steer")).toBeVisible();
     await p.locator(".run-line[data-kind='tool']").filter({ hasText: "npm test" }).locator("summary").click();
@@ -273,6 +275,17 @@ const SCREENS: Screen[] = [
   { name: "requests", open: (p) => p.goto("/demo/repositories/requests").then(() => undefined) },
   { name: "controls", open: (p) => p.goto("/demo/team").then(() => undefined) },
   { name: "team-personal", open: async (p) => { await inMode(p, "local"); await p.goto("/demo/team"); } },
+  { name: "team-plugin", open: async (p) => {
+    await inMode(p, "local");
+    await p.route("**/api/tasks/options", async (route) => {
+      const body = await (await route.fetch()).json();
+      const personal = { commands: [], plugins: [], mcpServers: [], claudeMd: false, readAt: new Date().toISOString() };
+      await route.fulfill({ json: { ...body, agents: [...body.agents.filter((a: { id: string }) => a.id !== "claude-code"), { id: "claude-code", label: "Claude Code", readiness: { ready: true, state: "ready" }, personal }] } });
+    });
+    await p.goto("/demo/team");
+    await p.locator(".plugin-card").getByRole("button", { name: "Install the plugin…" }).click();
+    await expect(p.locator(".plugin-card").getByRole("button", { name: "Install", exact: true })).toBeVisible();
+  } },
   { name: "team-personal-alone", open: async (p) => {
     await inMode(p, "local");
     await p.route(/\/api\/(orgs\/demo\/)?repos$/, async (route) => {
@@ -586,6 +599,50 @@ test.describe("the keyboard shortcuts", () => {
     // then
     await expect(page.getByRole("dialog", { name: "Search" })).toBeHidden();
     await expect(page.locator(".day-sentence")).toHaveText(new RegExp(`^In ${second!}, `));
+  });
+
+  test("given the search open, when 'new task' is typed and Enter pressed, then the Actions group leads and Enter opens the new task page", async ({ page }) => {
+    // given
+    await page.goto("/demo/work");
+    await settled(page);
+    await page.keyboard.press("ControlOrMeta+K");
+    const search = page.getByRole("searchbox", { name: "Search pages, projects and tasks" });
+
+    // when
+    await search.fill("new task");
+
+    // then
+    await expect(page.getByRole("group", { name: "Actions" }).getByRole("option", { name: /New task/ })).toBeVisible();
+    await expect(page.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+
+    // when
+    await search.press("Enter");
+
+    // then
+    await expect(page).toHaveURL(/\/demo\/tasks\/new$/);
+    await expect(page.getByRole("form", { name: "New task" })).toBeVisible();
+  });
+
+  test("given a word only a task's log holds, when it is typed in the search, then the orchestrator's answer lists the task as found in its log and Enter opens it", async ({ page }) => {
+    // given
+    await page.route("**/api/search?*", (route) => route.fulfill({ json: { tasks: [], inLog: [{ id: "tsk_found", title: "Add the retry", repoId: "payments-skills", status: "needs-review" }], projects: [], folders: [] } }));
+    await page.goto("/demo/tasks");
+    await settled(page);
+    await page.keyboard.press("ControlOrMeta+K");
+    const search = page.getByRole("searchbox", { name: "Search pages, projects and tasks" });
+
+    // when
+    await search.fill("migration");
+
+    // then
+    const option = page.getByRole("group", { name: "Tasks" }).getByRole("option", { name: /Add the retry/ });
+    await expect(option).toContainText("in its log");
+
+    // when
+    await search.press("Enter");
+
+    // then
+    await expect(page).toHaveURL(/\/demo\/tasks\/tsk_found$/);
   });
 
   test("given a page with a search of its own, when / is pressed, then the cursor goes to that search and no second one opens", async ({ page }) => {

@@ -10,7 +10,7 @@ import type { OrchestratorEnv, Principal } from "../auth.js";
 import type { RunnerService } from "../runner-service.js";
 import { seededContext, storePrincipals } from "../test-fixtures.js";
 import { fakeAgentAdapter } from "./agents.js";
-import { AUTO_CONTINUE_MAX, AUTO_CONTINUE_SETTING, createTaskRunner, DEFAULT_TASK_LIMITS, wentOnFromKey } from "./runner.js";
+import { AUTO_CONTINUE_MAX, AUTO_CONTINUE_SETTING, autoContinuedKey, createTaskRunner, DEFAULT_TASK_LIMITS, LIMIT_CONTINUES_MAX, wentOnFromKey } from "./runner.js";
 import { taskPaths } from "./isolation.js";
 
 const ADMIN: Principal = { id: "a", name: "Ada Example", email: "ada@example.invalid", role: "admin", ownedTeams: [] };
@@ -174,7 +174,7 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
     expect((await statusOf(ctx, gone.id)).status).toBe("interrupted");
   });
 
-  it("given a task its machine ran when the orchestrator restarted, when restarts cut it off again and again and its starter continues it, then it goes back in line by itself three times in a row, waits for Continue after that, counts again from its starter's Continue, and stays put while the setting is off", async () => {
+  it("given a task its machine ran when the orchestrator restarted, when restarts cut it off again and again and its starter continues it, then it goes back in line by itself three times in five minutes, waits for Continue after that, counts again from its starter's Continue, and stays put while the setting is off", async () => {
     // given
     const { ctx, app, start } = await withRunners();
     const seen = new Date().toISOString();
@@ -209,7 +209,34 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
     expect((await statusOf(ctx, task.id)).status).toBe("interrupted");
     const lines = (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text);
     expect(lines.filter((l) => l.startsWith("The task's machine stopped running it; it goes on by itself"))).toHaveLength(4);
-    expect(lines.filter((l) => l === `The task's machine stopped running it ${AUTO_CONTINUE_MAX} times in a row, so it waits for Continue.`)).toHaveLength(1);
+    expect(lines.filter((l) => l === `The task's machine stopped running it ${AUTO_CONTINUE_MAX + 1} times in five minutes, so it waits for Continue.`)).toHaveLength(1);
+  });
+
+  it("given a task its machine stopped three times, once more than five minutes ago and twice within them, when it is stopped again, then it goes on by itself, and a stop after that waits for Continue", async () => {
+    // given
+    const { ctx, start } = await withRunners();
+    const seen = new Date().toISOString();
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    await ctx.store.insertMachine({ tenant: ctx.tenant, id: "mch_window", userId: ADMIN.id, name: "here", platform: "darwin", publicKey: "", agents: [], createdAt: seen, lastSeenAt: seen, revokedAt: null, tokenHash: "2".repeat(64) }, null);
+    const task = await start();
+    await ctx.store.setSetting(ctx.tenant, autoContinuedKey(task.id), JSON.stringify([ago(6), ago(3), ago(1)]));
+    let n = 0;
+    const restart = async () => {
+      const lease = `lease_${++n}`;
+      await ctx.store.claimLocalTask(ctx.tenant, ADMIN.email, "mch_window", lease, new Date(Date.now() + 90_000).toISOString(), seen);
+      await ctx.store.finishLeasedTask(ctx.tenant, task.id, lease, { status: "interrupted", error: "The orchestrator stopped before this task finished.", nativeSession: null, branch: null }, seen);
+      return ctx.tasks!.autoContinue("mch_window");
+    };
+
+    // when
+    const third = await restart();
+    const fourth = await restart();
+
+    // then
+    expect([third, fourth]).toEqual([[task.id], []]);
+    const lines = (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text);
+    expect(lines).toContain(`The task's machine stopped running it; it goes on by itself (3 of ${AUTO_CONTINUE_MAX} in five minutes).`);
+    expect(lines).toContain(`The task's machine stopped running it ${AUTO_CONTINUE_MAX + 1} times in five minutes, so it waits for Continue.`);
   });
 
   it("given a task cut off on its machine while going on from its request, and a push to that request since, when its machine calls in again, then it does not go on by itself and says why, once", async () => {
@@ -258,6 +285,9 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
     await ctx.store.updateTask(ctx.tenant, continued.id, { startedAt: at(600) });
     const waiting = await claimed("lease_wait", 45);
     await ctx.store.recordTaskRequest({ tenant: ctx.tenant, id: "req_waiting", taskId: waiting.id, targetPosition: null, sourceKey: "req_waiting", kind: "command", payload: { tool: "WebFetch", target: "https://example.invalid" }, createdAt: at(5), expiresAt: new Date(now.getTime() + 600_000).toISOString() });
+    const answered = await claimed("lease_answered", 45);
+    await ctx.store.recordTaskRequest({ tenant: ctx.tenant, id: "req_answered", taskId: answered.id, targetPosition: null, sourceKey: "req_answered", kind: "command", payload: { tool: "WebFetch", target: "https://example.invalid" }, createdAt: at(40), expiresAt: null });
+    await ctx.store.answerTaskRequest(ctx.tenant, "req_answered", { decision: "allow_once" }, ADMIN.email, "web", at(20));
 
     // when
     const stopped = await ctx.tasks!.enforceLimits();
@@ -273,6 +303,7 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
     expect(await statusOf(ctx, slow.id)).toMatchObject({ status: "cancelled", error: "Stopped at the 30-minute cap for this task." });
     expect((await statusOf(ctx, continued.id)).status).toBe("running");
     expect((await statusOf(ctx, waiting.id)).status).toBe("running");
+    expect((await statusOf(ctx, answered.id)).status).toBe("running");
   });
 
   it("given an interrupted task whose run put a plan to its starter that nobody answered, when they continue it approving the plan, and continue one with no plan the same way, then the next run gets the plan as approved and the log keeps it, and the other is refused", async () => {
@@ -301,6 +332,108 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
     expect((await ctx.store.pendingFollowUps(ctx.tenant, planned.id)).map((f) => f.text)).toEqual([expect.stringContaining("1. Edit README.md")]);
     expect((await ctx.store.taskLog(ctx.tenant, planned.id, 0)).map((l) => l.text)).toEqual(expect.arrayContaining(["## Plan", "1. Edit README.md"]));
     expect([refused.status, (await refused.json()).code]).toEqual([409, "no-plan"]);
+  });
+
+  it("given tasks on a back machine cut off at the usage limit, when the orchestrator sweeps, then the one whose limit reset a minute ago goes on, one just reset and one still ahead wait, one asking waits for its answer, and one reset a day late or after three goings on waits for its person, also on the next sweep", async () => {
+    // given
+    const { ctx, asked, start } = await withRunners();
+    const now = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
+    await ctx.store.insertMachine({ tenant: ctx.tenant, id: "mch_lim", userId: ADMIN.id, name: "laptop", platform: "darwin", publicKey: "", agents: [], createdAt: iso(now), lastSeenAt: iso(now), revokedAt: null, tokenHash: "9".repeat(64) }, null);
+    let leases = 0;
+    const cutOff = async (id: string, resetAt: number, hitAt = resetAt - 3_600_000) => {
+      const lease = `lease_${++leases}`;
+      await ctx.store.claimLocalTask(ctx.tenant, ADMIN.email, "mch_lim", lease, iso(now + 90_000), iso(now));
+      await ctx.store.finishLeasedTask(ctx.tenant, id, lease, { status: "interrupted", error: "The demo agent reached its usage limit.", nativeSession: "sess", branch: null, limitResetAt: iso(resetAt) }, iso(hitAt));
+    };
+    const spent = await start();
+    for (let i = 0; i < LIMIT_CONTINUES_MAX; i++) {
+      await cutOff(spent.id, now - 120_000);
+      await ctx.store.continueAfterLimit(ctx.tenant, spent.id, iso(now - 120_000));
+    }
+    await cutOff(spent.id, now - 120_000);
+    const tasks: Record<string, { id: string }> = {};
+    for (const [name, resetAt, hitAt] of [["due", now - 120_000, undefined], ["early", now - 30_000, undefined], ["ahead", now + 3_600_000, undefined], ["late", now - 120_000, now - 120_000 - 2 * 86_400_000], ["asking", now - 120_000, undefined]] as const) {
+      tasks[name] = await start();
+      await cutOff(tasks[name]!.id, resetAt, hitAt);
+    }
+    await ctx.store.recordTaskRequest({ tenant: ctx.tenant, id: "req_lim", taskId: tasks.asking!.id, targetPosition: null, sourceKey: "lim-1", kind: "question", payload: { tool: "AskUserQuestion", summary: "Which file?" }, createdAt: iso(now), expiresAt: null });
+    const wakes = asked.wakes;
+
+    // when
+    const continued = await ctx.tasks!.autoContinueAlive();
+    const later = await ctx.tasks!.autoContinueAlive();
+
+    // then
+    const reset = iso(now - 120_000).slice(11, 16);
+    expect([continued, later]).toEqual([[tasks.due!.id], []]);
+    expect(asked.wakes).toBe(wakes + 1);
+    expect(await statusOf(ctx, tasks.due!.id)).toMatchObject({ status: "queued", error: null });
+    expect((await ctx.store.taskLog(ctx.tenant, tasks.due!.id, 0)).map((l) => l.text)).toContain(`The usage limit reset at ${reset} UTC; the task goes on where it left off.`);
+    for (const name of ["early", "ahead", "asking"]) expect(await statusOf(ctx, tasks[name]!.id)).toMatchObject({ status: "interrupted", limitResetAt: expect.any(String) });
+    for (const waits of [tasks.late!.id, spent.id]) expect(await statusOf(ctx, waits)).toMatchObject({ status: "interrupted" });
+    expect((await statusOf(ctx, tasks.late!.id)).limitResetAt).toBeUndefined();
+    expect((await ctx.store.taskLog(ctx.tenant, tasks.late!.id, 0)).map((l) => l.text)).toContain(`The usage limit reset at ${reset} UTC, more than a day after the task stopped; continue it yourself.`);
+    expect((await statusOf(ctx, spent.id)).limitResetAt).toBeUndefined();
+    expect((await ctx.store.taskLog(ctx.tenant, spent.id, 0)).map((l) => l.text)).toContain(`The usage limit reset ${LIMIT_CONTINUES_MAX} times during this task; continue it yourself.`);
+  });
+
+  it("given a task on a back machine cut off at the usage limit an hour before it resets, when the orchestrator reads it and sweeps, then it says it waits for the limit until then and no restart puts it back in line", async () => {
+    // given
+    const { ctx, app, start } = await withRunners();
+    const now = Date.now();
+    await ctx.store.insertMachine({ tenant: ctx.tenant, id: "mch_wait", userId: ADMIN.id, name: "laptop", platform: "darwin", publicKey: "", agents: [], createdAt: new Date(now).toISOString(), lastSeenAt: new Date(now).toISOString(), revokedAt: null, tokenHash: "6".repeat(64) }, null);
+    const task = await start();
+    const resetAt = new Date(now + 3_600_000).toISOString();
+    await ctx.store.claimLocalTask(ctx.tenant, ADMIN.email, "mch_wait", "lease_wait", new Date(now + 90_000).toISOString(), new Date(now).toISOString());
+    await ctx.store.finishLeasedTask(ctx.tenant, task.id, "lease_wait", { status: "interrupted", error: "The demo agent reached its usage limit.", nativeSession: "sess", branch: null, limitResetAt: resetAt }, new Date(now).toISOString());
+
+    // when
+    const continued = await ctx.tasks!.autoContinueAlive();
+    const shown = (await (await app.request(`/api/tasks/${task.id}`)).json()).task;
+
+    // then
+    expect(continued).toEqual([]);
+    expect(shown).toMatchObject({ status: "interrupted", waitingFor: "limit", resetAt, state: "usage-limit" });
+  });
+
+  it("given a task that worked twenty minutes on its machine over two runs and one the orchestrator ran for an hour with a card waiting forty minutes, when each is read, then each says how long its agent worked", async () => {
+    // given
+    const { ctx, app, start } = await withRunners();
+    const now = Date.now();
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    await ctx.store.insertMachine({ tenant: ctx.tenant, id: "mch_ran", userId: ADMIN.id, name: "laptop", platform: "darwin", publicKey: "", agents: [], createdAt: iso(200), lastSeenAt: iso(0), revokedAt: null, tokenHash: "5".repeat(64) }, null);
+    const leased = await start();
+    await ctx.store.claimLocalTask(ctx.tenant, ADMIN.email, "mch_ran", "lease_ran", new Date(now + 90_000).toISOString(), iso(150));
+    await ctx.store.finishLeasedTask(ctx.tenant, leased.id, "lease_ran", { status: "needs-review", error: null, nativeSession: null, branch: null, ranMs: 20 * 60_000 }, iso(0));
+    const here = await start();
+    await ctx.store.updateTask(ctx.tenant, here.id, { status: "failed", startedAt: iso(60), finishedAt: iso(0) });
+    await ctx.store.recordTaskRequest({ tenant: ctx.tenant, id: "req_ran", taskId: here.id, targetPosition: null, sourceKey: "req_ran", kind: "command", payload: { tool: "WebFetch", target: "https://example.invalid" }, createdAt: iso(50), expiresAt: null });
+    await ctx.store.answerTaskRequest(ctx.tenant, "req_ran", { decision: "allow_once" }, ADMIN.email, "web", iso(10));
+
+    // when
+    const read = async (id: string) => (await (await app.request(`/api/tasks/${id}`)).json()).task.ranMs;
+
+    // then
+    expect([await read(leased.id), await read(here.id)]).toEqual([20 * 60_000, 20 * 60_000]);
+  });
+
+  it("given a task at work on its starter's machine, when they send it a message, then it waits for the agent's turn to end there, and an agent only a machine runs is offered the same", async () => {
+    // given
+    const { ctx, app, start } = await withRunners();
+    const now = new Date();
+    await ctx.store.insertMachine({ tenant: ctx.tenant, id: "mch_msg", userId: ADMIN.id, name: "laptop", platform: "darwin", publicKey: "", agents: [], createdAt: now.toISOString(), lastSeenAt: now.toISOString(), revokedAt: null, tokenHash: "8".repeat(64) }, null);
+    const task = await start();
+    await ctx.store.claimLocalTask(ctx.tenant, ADMIN.email, "mch_msg", "lease_msg", new Date(now.getTime() + 90_000).toISOString(), now.toISOString());
+
+    // when
+    const offered = (await (await app.request(`/api/tasks/${task.id}`)).json()).task.followUp;
+    const sent = await app.request(`/api/tasks/${task.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Also name the pager rotation.", commandId: "msg-on-machine-01" }) });
+    const machineOnly = ctx.tasks!.followUp({ ...(await statusOf(ctx, task.id)), agent: "claude-code", mode: "auto" });
+
+    // then
+    expect([offered, sent.status, machineOnly]).toEqual(["queue", 202, "queue"]);
+    expect((await ctx.store.pendingFollowUps(ctx.tenant, task.id)).map((f) => f.text)).toEqual(["Also name the pager rotation."]);
   });
 
   it("given a task that failed before its plan was answered, its plan asked for in the older way with no text, when it is read, approved with nothing to read, then with its plan file on disk, and with the plan its page shows, then it offers the plan once the file is there and goes back in line from the plan the page sent", async () => {
@@ -398,7 +531,7 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
     // then
     expect(going).toEqual([slept.id]);
     expect([(await statusOf(ctx, slept.id)).status, (await statusOf(ctx, away.id)).status]).toEqual(["queued", "interrupted"]);
-    expect((await ctx.store.taskLog(ctx.tenant, slept.id, 0)).map((l) => l.text)).toContain(`The task's machine stopped running it; it goes on by itself (1 of ${AUTO_CONTINUE_MAX} in a row).`);
+    expect((await ctx.store.taskLog(ctx.tenant, slept.id, 0)).map((l) => l.text)).toContain(`The task's machine stopped running it; it goes on by itself (1 of ${AUTO_CONTINUE_MAX} in five minutes).`);
   });
 
   it("given tasks stopped cleanly with this orchestrator's own runner, and one on a person's machine that went away, when the orchestrator starts again, then its own go on by themselves and each says what stopped it", async () => {

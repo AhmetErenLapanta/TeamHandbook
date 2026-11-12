@@ -1,4 +1,5 @@
 import { BATCH_BYTES, EVENTS_PER_BATCH, POLL_WAIT_MAX_MS, RUNNER_PATHS } from "../shared/runner-wire.js";
+import { MACHINE_FEATURES } from "../server/runner-store.js";
 import type { ForgeRequestAnswer, PollAnswer, ProtocolRefusal, RenewAnswer } from "../shared/runner-wire.js";
 import type { NumberedEvent, RunnerLink } from "./link.js";
 import { signedCall } from "./profile.js";
@@ -97,7 +98,7 @@ export function httpLink(profile: RunnerProfile, fetchImpl: Fetch = fetch): Runn
       await call(RUNNER_PATHS.finish(taskId), { leaseId, outcome });
     },
     async status(agents, started) {
-      await call(RUNNER_PATHS.status, { agents, ...(started ? { started: true } : {}) });
+      await call(RUNNER_PATHS.status, { agents, features: [...MACHINE_FEATURES], ...(started ? { started: true } : {}) });
     },
     async folders(nonce, answer) {
       await call(RUNNER_PATHS.folders(nonce), { answer });

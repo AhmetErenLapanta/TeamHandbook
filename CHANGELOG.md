@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.34.0] - 2026-11-12
+
+This release carries Orchestrator 0.2.0. The plugin's own commands and hooks are unchanged.
+
+### Orchestrator 0.2.0: Added
+
+- **A card offers to install the handbook plugin** on Team and on the empty first Tasks screen,
+  when it is missing from your Claude Code: **Install the plugin…**, then **Install**. It runs
+  `claude plugin marketplace add` and `claude plugin install` only when you press, and only on an
+  orchestrator you alone use; a team's orchestrator shows the commands to copy instead.
+- **Sign in to GitHub or GitLab.com with a one-time code**, nothing to install, where the
+  orchestrator has its own application registered with that forge (`ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID`,
+  `ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID`; see `orchestrator/docs/operations/forge-apps.md`). Without
+  one the cards keep the `gh` and `glab` way. The token is sealed for you alone and no secret is kept.
+- **A request from a machine's branch on a repository the organization never connected** opens as
+  you, on your press, after the orchestrator checks the head, the base and the team's rules; it
+  is a link only, and nothing merges it from there.
+- **Waiting messages to the agent can be changed or taken back** until the agent reads them:
+  "Waiting for the agent's next step:" lists each with **Edit** and **Remove**.
+- **A selection in the agent's words or the log is quoted into the follow-up** with
+  **Quote in follow-up**.
+- **Search finds more**: the whole server, an issue key, words in what the agent said or ran
+  (marked "in its log"), and the actions **New task** and **Start agents**.
+- **A task on your machine cut off by your plan's usage limit waits for the reset** and goes on
+  by itself, a limited number of times.
+- **Each repository in a folder of several runs its own approved checks**, approved and forgotten per
+  repository; a repository with none says so in the log.
+- **A follow-up on a folder of repositories goes on from the kept change**, on the same branch,
+  and an open request is checked again at the new head instead of a second one opening.
+- **A task's page says which skills the agent called**, and a skill's before and after counts them.
+- **A link with `prompt=` fills the new task form**, and says when hidden characters were taken out.
+- **A cloud or staging deploy takes the GitHub App and the GitLab application** for one-click
+  connecting, with their secrets as files under `secrets/forge`; `deploy.sh` stops and names a missing file.
+
+### Orchestrator 0.2.0: Changed
+
+- **Cost counts what a stopped or cut-off task had spent**, from the agent's estimate of its turn;
+  the "not reported" label beside a cost is gone.
+- **A task's run time leaves out the time the agent waited on you**; a "Waited" line shows it.
+- **The notification question is one quiet line on a working task's page**, shown to its starter.
+- **Lessons show sooner after a task ends** (every 15 seconds), and a dropped lesson is logged.
+- **A restarted run is told to go on where it left off** and not to repeat what already started.
+- **The npm package page links to the repository, homepage and issues.**
+
+### Orchestrator 0.2.0: Fixed
+
+- **A live task page no longer re-reads all of its text on every line the agent writes.**
+- **Tool lines in a live run wrap beside their marks** instead of dropping under them.
+- **A task stopped on a machine with changes keeps them**: they are pushed to the task branch and wait for review with the reason it stopped.
+- **`doctor` no longer reports the data folder it just made as in use.**
+
+### Upgrading from Orchestrator 0.1.0
+
+Six additive database steps (42 to 47) run on the first start, on SQLite and on Postgres; they add
+columns only and change no existing row. An older task shows no run time, used skills or usage-limit
+wait. No setting was renamed or removed.
+
 ## [0.33.0] - 2026-11-11
 
 ### Added

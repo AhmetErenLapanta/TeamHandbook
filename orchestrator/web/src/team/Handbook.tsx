@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Inventory, Principal, RepoRecord, RequestRecord } from "../api";
+import type { Inventory, JoinMessage, Principal, RepoRecord, RequestRecord } from "../api";
+import { CopyText } from "../Confirm";
 import { TurnSection } from "../design/TurnSection";
 import { CommandEditor, CommandRemoval, McpForm, McpRemoval, SkillEditor, SkillRemoval, canEdit } from "../Editing";
 import { Select } from "../Select";
@@ -46,12 +47,16 @@ export function HandbookSection({ me, repos, counts, picked, proposed, onPick, o
   const [repoId, setRepoId] = useState<string | null>(null);
   const [tab, setTab] = useState<HandbookTab>("skills");
   const [inventory, setInventory] = useState<Inventory | null>(null);
+  const [join, setJoin] = useState<JoinMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const repo = teamRepos.find((r) => r.id === repoId) ?? teamRepos[0];
   const load = (id: string) => {
     setError(null);
-    api.inventory(id).then((r) => setInventory(r.inventory), (e: Error) => setError(e.message));
+    api.inventory(id).then((r) => {
+      setInventory(r.inventory);
+      setJoin(r.join);
+    }, (e: Error) => setError(e.message));
   };
   useEffect(() => {
     setInventory(null);
@@ -103,6 +108,9 @@ export function HandbookSection({ me, repos, counts, picked, proposed, onPick, o
             ))}
           </div>
           {list}
+          {me.mode !== "local" && join && "use" in join ? (
+            <p className="muted handbook-join">To get these in your own Claude Code: {join.use.map((c) => <CopyText key={c} text={c} />)}</p>
+          ) : null}
         </>
       )}
     </TurnSection>

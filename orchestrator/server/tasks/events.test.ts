@@ -77,6 +77,21 @@ describe("following a task's log as a stream", () => {
     expect(got[2]!.data).toMatchObject({ id, status: "needs-review" });
   });
 
+  it("given a task that ended for review while its request is still being opened, when its stream is opened and the request opens a moment later, then the stream carries the task with its request before it closes", { timeout: 20_000 }, async () => {
+    // given
+    const { ctx, app, id } = await finished();
+    const done = (await ctx.store.getTask(ctx.tenant, id))!;
+    await ctx.store.updateTask(ctx.tenant, id, { requestNumber: null, stage: "request" });
+    setTimeout(() => void ctx.store.updateTask(ctx.tenant, id, { requestNumber: done.requestNumber, stage: null }), 3 * STREAM_TICK_MS);
+
+    // when
+    const got = await events(await app.request(`/api/tasks/${id}/events?after=0`));
+
+    // then
+    const last = got.filter((e) => e.event === "task").at(-1)!.data as { requestNumber: number | null };
+    expect(last.requestNumber).toBe(done.requestNumber);
+  });
+
   it("given a task interrupted on its runner, when its stream is opened, then it carries the task as it stands and closes", async () => {
     // given
     const { ctx, app, id } = await finished();

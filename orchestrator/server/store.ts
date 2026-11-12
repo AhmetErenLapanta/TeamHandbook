@@ -12,6 +12,7 @@ import type { OrchestratorEvent, EventCursor, EventFilter, EventStore } from "./
 import type { DailyUsage, UsageCount, UsageStore } from "./usage.js";
 import type { SecretStore } from "./vault.js";
 import { taskWritten } from "./tasks/log-bus.js";
+import { USED_SKILLS_MAX } from "./tasks/types.js";
 import type { TaskChanges, TaskFilter, TaskLoaded, TaskLogLine, TaskPatch, TaskRecord, TaskStatus, TaskStore, TaskTarget, TaskTargetPatch, TaskShare, TaskTargetStatus, TaskToolChoice, TestOutcome } from "./tasks/types.js";
 import type { IdentityLogin, IdentityRecord, IdentitySessionRecord, IdentityStore, OrgRecord, PendingAccount, PendingSignIn, Plan, Quotas } from "./identities.js";
 import type { CommandReceipt, EffectRecord, EffectReplay, EffectStatus, EffectStore } from "./effects.js";
@@ -19,7 +20,7 @@ import { answerProblem } from "./task-requests.js";
 import type { IdentityEvent, IdentityEventStore } from "./identity-funnel.js";
 import type { AttachmentRecord, AttachmentStore } from "./attachment-store.js";
 import type { ResponseCapability, TaskAnswer, TaskRequestKind, TaskRequestRecord, TaskRequestStatus, TaskRequestStore } from "./task-requests.js";
-import type { MachineAgentStatus, MachineRecord, RunnerStore, TaskLease } from "./runner-store.js";
+import type { MachineAgentStatus, MachineFeature, MachineRecord, RunnerStore, TaskLease } from "./runner-store.js";
 import type { FollowUpQuote, FollowUpRecord, FollowUpSource, FollowUpStatus, FollowUpStore } from "./task-followups.js";
 import { Redactor } from "./tasks/redact.js";
 import { detectSecret } from "./plugin.js";
@@ -639,12 +640,15 @@ interface TaskRow {
   skills?: string | null;
   tools?: string | null;
   loaded?: string | null;
+  used_skills?: string | null;
   context_tokens?: number | string | null;
   run_started_at?: string | null;
   routing?: string | null;
   question?: string | null;
   mcp_needs_sign_in?: string | null;
   plan_first?: number | null;
+  limit_reset_at?: string | null;
+  ran_ms?: number | string | null;
   mode?: string | null;
   parent_id?: string | null;
   result?: string | null;
@@ -664,6 +668,7 @@ interface TargetRow {
   origin?: string | null;
   target_branch?: string | null;
   description?: string | null;
+  forge_request?: string | null;
   base_sha: string | null;
   branch: string | null;
   tests: string | null;
@@ -686,6 +691,7 @@ function toTarget(row: TargetRow): TaskTarget {
     ...(row.origin ? { origin: row.origin } : {}),
     ...(row.target_branch ? { targetBranch: row.target_branch } : {}),
     ...(row.description ? { description: JSON.parse(row.description) as { title: string; body: string } } : {}),
+    ...(row.forge_request ? { forgeRequest: JSON.parse(row.forge_request) as NonNullable<TaskTarget["forgeRequest"]> } : {}),
     baseSha: row.base_sha,
     branch: row.branch,
     tests: row.tests as TestOutcome | null,
@@ -705,6 +711,7 @@ function targetColumns(patch: TaskTargetPatch): Record<string, SqlValue> {
   if (patch.tests !== undefined) columns.tests = patch.tests;
   if (patch.requestNumber !== undefined) columns.request_number = patch.requestNumber;
   if (patch.error !== undefined) columns.error = patch.error;
+  if (patch.forgeRequest !== undefined) columns.forge_request = JSON.stringify(patch.forgeRequest);
   if (patch.cost !== undefined) {
     columns.cost_usd = patch.cost.usd;
     columns.input_tokens = patch.cost.inputTokens;
@@ -757,7 +764,15 @@ function taskWhere(tenant: string, f: TaskFilter): { sql: string; params: SqlVal
   // superset on one of them; the escape keeps a % or _ in the text from matching anything.
   if (f.descriptionHas !== undefined) clauses.push("description LIKE ? ESCAPE '\\'"), params.push(`%${f.descriptionHas.replace(/[\\%_]/g, "\\$&")}%`);
   // A search box's words: the same on both stores, whatever the case.
-  if (f.titleHas !== undefined) clauses.push("LOWER(title) LIKE ? ESCAPE '\\'"), params.push(`%${f.titleHas.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`);
+  if (f.titleHas !== undefined) {
+    const like = `%${f.titleHas.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`;
+    clauses.push("(LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(issue_key, '')) LIKE ? ESCAPE '\\')");
+    params.push(like, like);
+  }
+  if (f.logHas !== undefined) {
+    clauses.push("EXISTS (SELECT 1 FROM task_log l WHERE l.tenant = tasks.tenant AND l.task_id = tasks.id AND LOWER(l.text) LIKE ? ESCAPE '\\')");
+    params.push(`%${f.logHas.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`);
+  }
   return { sql: clauses.join(" AND "), params };
 }
 
@@ -791,12 +806,15 @@ function toTask(row: TaskRow): TaskRecord {
     ...(row.skills ? { skills: JSON.parse(row.skills) as string[] } : {}),
     ...(row.tools ? { tools: JSON.parse(row.tools) as TaskToolChoice } : {}),
     ...(row.loaded ? { loaded: JSON.parse(row.loaded) as TaskLoaded } : {}),
+    ...(row.used_skills ? { usedSkills: JSON.parse(row.used_skills) as string[] } : {}),
     ...(row.context_tokens !== null && row.context_tokens !== undefined ? { context: { tokens: Number(row.context_tokens) } } : {}),
     ...(row.run_started_at ? { runStartedAt: row.run_started_at } : {}),
     ...(row.routing ? { routing: JSON.parse(row.routing) as NonNullable<TaskRecord["routing"]> } : {}),
     ...(row.question ? { question: JSON.parse(row.question) as NonNullable<TaskRecord["question"]> } : {}),
     ...(row.mcp_needs_sign_in ? { mcpNeedsSignIn: JSON.parse(row.mcp_needs_sign_in) as string[] } : {}),
     ...(row.plan_first ? { planFirst: true } : {}),
+    ...(row.limit_reset_at ? { limitResetAt: row.limit_reset_at } : {}),
+    ...(row.ran_ms !== null && row.ran_ms !== undefined ? { ranMs: Number(row.ran_ms) } : {}),
     ...(row.mode ? { mode: row.mode as NonNullable<TaskRecord["mode"]> } : {}),
     ...(row.parent_id ? { parentId: row.parent_id, depth: Number(row.depth) } : {}),
     ...(row.runner === "local" ? { runner: "local" as const } : {}),
@@ -1237,6 +1255,11 @@ export function createStore(db: SqlDriver): Store {
         const own = `mcp.personal.${id}`;
         await tx.run("DELETE FROM secrets WHERE tenant = ? AND substr(name, 1, ?) = ?", [tenant, own.length + 1, `${own}.`]);
         await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, own]);
+        // The forge sign-ins they made with a one-time code (forge/device-sign-in.ts): the token writes to every repository they can.
+        for (const kind of ["github", "gitlab"]) {
+          await tx.run("DELETE FROM secrets WHERE tenant = ? AND name = ?", [tenant, `forge-person:${kind}:${id}`]);
+          await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `forge.person.${kind}.${id}`]);
+        }
         await dropGrants(tx, tenant, id);
         await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `scim.user.${id}`]);
         await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `${OFF_PREFIX}${id}`]);
@@ -1791,8 +1814,8 @@ export function createStore(db: SqlDriver): Store {
         return true;
       });
     },
-    async touchMachine(tenant, id, at, agents) {
-      await db.run("UPDATE machines SET last_seen_at = ?, agents = COALESCE(?, agents) WHERE tenant = ? AND id = ? AND revoked_at IS NULL", [at, agents ? JSON.stringify(agents) : null, tenant, id]);
+    async touchMachine(tenant, id, at, agents, features) {
+      await db.run("UPDATE machines SET last_seen_at = ?, agents = COALESCE(?, agents), features = COALESCE(?, features) WHERE tenant = ? AND id = ? AND revoked_at IS NULL", [at, agents ? JSON.stringify(agents) : null, features ? JSON.stringify(features) : null, tenant, id]);
     },
     async takeNonce(tenant, machineId, nonce, until) {
       return (await db.run("INSERT INTO runner_nonces (tenant, machine_id, nonce, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (tenant, machine_id, nonce) DO NOTHING", [tenant, machineId, nonce, until])) > 0;
@@ -1847,6 +1870,16 @@ export function createStore(db: SqlDriver): Store {
     async markTaskChangesUndone(tenant, id, undone) {
       return settleTaskChanges(db, tenant, id, { undone });
     },
+    async noteUsedSkill(tenant, id, name) {
+      await db.transaction(async (tx) => {
+        // The row is locked first: two calls close together would otherwise both read the same list and the second write would drop the first name.
+        await tx.run("UPDATE tasks SET id = id WHERE tenant = ? AND id = ?", [tenant, id]);
+        const row = await one<{ used_skills: string | null }>(tx, "SELECT used_skills FROM tasks WHERE tenant = ? AND id = ?", [tenant, id]);
+        const held = row?.used_skills ? (JSON.parse(row.used_skills) as string[]) : [];
+        if (!row || held.includes(name) || held.length >= USED_SKILLS_MAX) return;
+        await tx.run("UPDATE tasks SET used_skills = ? WHERE tenant = ? AND id = ?", [JSON.stringify([...held, name]), tenant, id]);
+      });
+    },
     async noteTaskContext(tenant, id, tokens) {
       await db.run("UPDATE tasks SET context_tokens = ? WHERE tenant = ? AND id = ? AND context_tokens IS NULL", [tokens, tenant, id]);
     },
@@ -1894,7 +1927,8 @@ export function createStore(db: SqlDriver): Store {
     async continueLocalTask(tenant, taskId, receipt, at) {
       return db.transaction(async (tx) => {
         // Conditional on no lease, as a cancel is; the receipt is written only with the change it answers.
-        const queued = await tx.run("UPDATE tasks SET status = 'queued', stage = NULL, error = NULL WHERE tenant = ? AND id = ? AND runner = 'local' AND status = 'interrupted' AND lease_id IS NULL", [tenant, taskId]);
+        // Its person going on lets go of a usage limit's reset it waited for: the run they asked for is the one that goes on.
+        const queued = await tx.run("UPDATE tasks SET status = 'queued', stage = NULL, error = NULL, limit_reset_at = NULL, limit_at = NULL WHERE tenant = ? AND id = ? AND runner = 'local' AND status = 'interrupted' AND lease_id IS NULL", [tenant, taskId]);
         if (queued && receipt) {
           await tx.run(
             "INSERT INTO command_receipts (tenant, actor_id, command_id, kind, task_id, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tenant, actor_id, command_id) DO NOTHING",
@@ -1903,6 +1937,28 @@ export function createStore(db: SqlDriver): Store {
         }
         return queued > 0;
       });
+    },
+    async limitedTasks(tenant, before) {
+      const rows = await db.all<{ id: string; limit_reset_at: string; limit_at: string | null; auto_continues: number | string | null }>(
+        "SELECT id, limit_reset_at, limit_at, auto_continues FROM tasks WHERE tenant = ? AND runner = 'local' AND status = 'interrupted' AND lease_id IS NULL AND limit_reset_at IS NOT NULL AND limit_reset_at <= ? ORDER BY limit_reset_at, id",
+        [tenant, before],
+      );
+      return rows.map((r) => ({ taskId: r.id, resetAt: r.limit_reset_at, limitAt: r.limit_at, goneOn: Number(r.auto_continues ?? 0) }));
+    },
+    async dropLimit(tenant, taskId, resetAt) {
+      return (await db.run("UPDATE tasks SET limit_reset_at = NULL, limit_at = NULL WHERE tenant = ? AND id = ? AND limit_reset_at = ?", [tenant, taskId, resetAt])) > 0;
+    },
+    async continueAfterLimit(tenant, taskId, resetAt) {
+      // One write, conditional on the reset it waited for: of two orchestrators sweeping one database, one puts it back.
+      return (
+        (await db.run(
+          "UPDATE tasks SET status = 'queued', stage = NULL, error = NULL, limit_reset_at = NULL, limit_at = NULL, auto_continues = COALESCE(auto_continues, 0) + 1, limit_goes_on = 1 WHERE tenant = ? AND id = ? AND runner = 'local' AND status = 'interrupted' AND lease_id IS NULL AND limit_reset_at = ?",
+          [tenant, taskId, resetAt],
+        )) > 0
+      );
+    },
+    async takeLimitContinue(tenant, taskId) {
+      return (await db.run("UPDATE tasks SET limit_goes_on = 0 WHERE tenant = ? AND id = ? AND limit_goes_on = 1", [tenant, taskId])) > 0;
     },
     async requestStop(tenant, taskId, at, reason = null) {
       // Kept on the task rather than in one process, so the runner hears it from whichever
@@ -1913,6 +1969,9 @@ export function createStore(db: SqlDriver): Store {
       const columns = taskColumns({ stage: patch.stage, baseSha: patch.baseSha, tests: patch.tests });
       if (patch.branch !== undefined) columns.branch = patch.branch;
       if (patch.nativeSession !== undefined) columns.native_session = patch.nativeSession;
+      if (patch.turnEstimate !== undefined) columns.turn_estimate_usd = patch.turnEstimate;
+      // A turn's own cost replaces the estimate of it.
+      else if (patch.addCost) columns.turn_estimate_usd = null;
       const set = Object.keys(columns).map((n) => `${n} = ?`);
       const values: SqlValue[] = Object.values(columns);
       // A part the agent did not report stays as it was; the first one it reports starts the sum.
@@ -1933,9 +1992,19 @@ export function createStore(db: SqlDriver): Store {
         // restart to put back in line. Each expression reads the row as it was, stop_requested_at included.
         const interrupted = end.status === "interrupted";
         const cutOff = "? = 'interrupted' AND stop_requested_at IS NULL";
+        // A run that ends for review keeps the stage "request" until what follows its end (its request opened, its
+        // change kept) is done, so a page that reads it finished does not stop following it before then.
+        // A run cut off at its plan's usage limit waits for the reset, from now; any other end waits for none.
+        const limit = interrupted ? (end.limitResetAt ?? null) : null;
+        // A run cut off before its turn reported keeps the agent's estimate of that turn as part of its cost; one that ended
+        // for review on its own had the turn's cost reported, so an estimate left over from it adds nothing.
+        await tx.run(
+          "UPDATE tasks SET cost_usd = COALESCE(cost_usd, 0) + turn_estimate_usd WHERE tenant = ? AND id = ? AND lease_id = ? AND status = 'running' AND turn_estimate_usd > 0 AND (stop_requested_at IS NOT NULL OR ? <> 'needs-review')",
+          [tenant, taskId, leaseId, end.status],
+        );
         const ended = await tx.run(
-          `UPDATE tasks SET status = CASE WHEN ? = 'interrupted' AND stop_requested_at IS NOT NULL THEN 'cancelled' ELSE ? END, error = CASE WHEN stop_requested_at IS NOT NULL AND stop_reason IS NOT NULL THEN stop_reason ELSE ? END, stop_reason = NULL, native_session = CASE WHEN ${cutOff} THEN COALESCE(?, native_session) ELSE NULL END, branch = COALESCE(?, branch), stage = NULL, finished_at = CASE WHEN ${cutOff} THEN NULL ELSE ? END, lease_id = NULL, lease_until = NULL, stop_requested_at = NULL WHERE tenant = ? AND id = ? AND lease_id = ? AND status = 'running'`,
-          [end.status, end.status, end.error, end.status, interrupted ? end.nativeSession : null, end.branch, end.status, now, tenant, taskId, leaseId],
+          `UPDATE tasks SET status = CASE WHEN ? = 'interrupted' AND stop_requested_at IS NOT NULL THEN 'cancelled' ELSE ? END, error = CASE WHEN stop_requested_at IS NOT NULL AND stop_reason IS NOT NULL THEN stop_reason ELSE ? END, stop_reason = NULL, native_session = CASE WHEN ${cutOff} THEN COALESCE(?, native_session) ELSE NULL END, branch = COALESCE(?, branch), stage = CASE WHEN ? = 'needs-review' THEN 'request' ELSE NULL END, finished_at = CASE WHEN ${cutOff} THEN NULL ELSE ? END, lease_id = NULL, lease_until = NULL, stop_requested_at = NULL, turn_estimate_usd = NULL, ran_ms = COALESCE(ran_ms, 0) + ?, limit_reset_at = CASE WHEN ${cutOff} THEN ? ELSE NULL END, limit_at = CASE WHEN ${cutOff} THEN ? ELSE NULL END WHERE tenant = ? AND id = ? AND lease_id = ? AND status = 'running'`,
+          [end.status, end.status, end.error, end.status, interrupted ? end.nativeSession : null, end.branch, end.status, end.status, now, Math.round(end.ranMs ?? 0), end.status, limit, end.status, limit ? now : null, tenant, taskId, leaseId],
         );
         // The agent that asked has stopped with the run, so nobody is left to hear an answer.
         if (ended) await tx.run("UPDATE task_requests SET status = 'expired', response_capability = 'not_resumable', answered_at = ? WHERE tenant = ? AND task_id = ? AND status = 'pending'", [now, tenant, taskId]);
@@ -1954,12 +2023,12 @@ export function createStore(db: SqlDriver): Store {
       });
     },
     async taskLease(tenant, taskId) {
-      const row = await one<{ runner: string; claimed_by: string | null; lease_id: string | null; lease_until: string | null; native_session: string | null; branch: string | null }>(
+      const row = await one<{ runner: string; claimed_by: string | null; lease_id: string | null; lease_until: string | null; native_session: string | null; branch: string | null; run_started_at: string | null }>(
         db,
-        "SELECT runner, claimed_by, lease_id, lease_until, native_session, branch FROM tasks WHERE tenant = ? AND id = ?",
+        "SELECT runner, claimed_by, lease_id, lease_until, native_session, branch, run_started_at FROM tasks WHERE tenant = ? AND id = ?",
         [tenant, taskId],
       );
-      return row ? { runner: row.runner as TaskLease["runner"], claimedBy: row.claimed_by, leaseId: row.lease_id, leaseUntil: row.lease_until, nativeSession: row.native_session, branch: row.branch } : null;
+      return row ? { runner: row.runner as TaskLease["runner"], claimedBy: row.claimed_by, leaseId: row.lease_id, leaseUntil: row.lease_until, nativeSession: row.native_session, branch: row.branch, runStartedAt: row.run_started_at } : null;
     },
     async appendRunnerEvents(tenant, taskId, leaseId, events) {
       return written(tenant, taskId, db.transaction(async (tx) => {
@@ -2007,6 +2076,17 @@ export function createStore(db: SqlDriver): Store {
     },
     async taskFollowUps(tenant, taskId) {
       return (await db.all<FollowUpRow>("SELECT * FROM task_followups WHERE tenant = ? AND task_id = ? ORDER BY created_at, id", [tenant, taskId])).map(toFollowUp);
+    },
+    async editFollowUp(tenant, taskId, id, text, quotes) {
+      const kept = quotes ? JSON.stringify(quotes) : null;
+      const secret = detectSecret(text) ?? (kept ? detectSecret(kept) : null);
+      if (secret) throw new Error(`the follow-up holds what looks like a ${secret}; it is kept masked, never with a secret`);
+      // Quotes left out stay as they were: a change of the words alone keeps what they point at.
+      const [set, values] = quotes === undefined ? ["text = ?", [text]] : ["text = ?, quotes = ?", [text, kept]];
+      return (await db.run(`UPDATE task_followups SET ${set} WHERE tenant = ? AND task_id = ? AND id = ? AND source = 'person' AND status = 'pending'`, [...values, tenant, taskId, id])) === 1;
+    },
+    async dropFollowUp(tenant, taskId, id) {
+      return (await db.run("UPDATE task_followups SET status = 'dismissed' WHERE tenant = ? AND task_id = ? AND id = ? AND source = 'person' AND status = 'pending'", [tenant, taskId, id])) === 1;
     },
     async markFollowUpsDelivered(tenant, ids, at) {
       if (!ids.length) return 0;
@@ -2108,9 +2188,9 @@ export function createStore(db: SqlDriver): Store {
         await tx.run("DELETE FROM task_targets WHERE tenant = ? AND task_id = ?", [tenant, taskId]);
         for (const [position, t] of targets.entries()) {
           await tx.run(
-            `INSERT INTO task_targets (tenant, task_id, position, repo_id, status, reason, path, head, origin, target_branch, description, base_sha, branch, tests, request_number, error, cost_usd, input_tokens, output_tokens)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [tenant, taskId, position, t.repoId, t.status, t.reason, t.path ?? null, t.head ?? null, t.origin ?? null, t.targetBranch ?? null, t.description ? JSON.stringify(t.description) : null, t.baseSha, t.branch, t.tests, t.requestNumber, t.error, t.cost.usd, t.cost.inputTokens, t.cost.outputTokens],
+            `INSERT INTO task_targets (tenant, task_id, position, repo_id, status, reason, path, head, origin, target_branch, description, forge_request, base_sha, branch, tests, request_number, error, cost_usd, input_tokens, output_tokens)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [tenant, taskId, position, t.repoId, t.status, t.reason, t.path ?? null, t.head ?? null, t.origin ?? null, t.targetBranch ?? null, t.description ? JSON.stringify(t.description) : null, t.forgeRequest ? JSON.stringify(t.forgeRequest) : null, t.baseSha, t.branch, t.tests, t.requestNumber, t.error, t.cost.usd, t.cost.inputTokens, t.cost.outputTokens],
           );
         }
       });
@@ -2426,6 +2506,7 @@ interface MachineRow {
   platform: string;
   public_key: string;
   agents: string;
+  features?: string | null;
   created_at: string;
   last_seen_at: string | null;
   revoked_at: string | null;
@@ -2440,6 +2521,7 @@ function toMachine(row: MachineRow): MachineRecord {
     platform: row.platform,
     publicKey: row.public_key,
     agents: JSON.parse(row.agents) as MachineAgentStatus[],
+    ...(row.features ? { features: JSON.parse(row.features) as MachineFeature[] } : {}),
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
     revokedAt: row.revoked_at,
@@ -3394,6 +3476,73 @@ export const MIGRATIONS: Migration[] = [
       if (!have.has("plan_first")) db.exec("ALTER TABLE tasks ADD COLUMN plan_first INTEGER");
     },
     postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_first INTEGER"),
+  },
+  {
+    // A task on a person's machine cut off at their plan's usage limit: when it resets, when it was hit, how many times
+    // the task went on by itself after one, and that its next run is such a going on.
+    version: 42,
+    kind: "expand",
+    name: "a task waiting for its usage limit to reset",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("limit_reset_at")) db.exec("ALTER TABLE tasks ADD COLUMN limit_reset_at TEXT");
+      if (!have.has("limit_at")) db.exec("ALTER TABLE tasks ADD COLUMN limit_at TEXT");
+      if (!have.has("auto_continues")) db.exec("ALTER TABLE tasks ADD COLUMN auto_continues INTEGER");
+      if (!have.has("limit_goes_on")) db.exec("ALTER TABLE tasks ADD COLUMN limit_goes_on INTEGER");
+    },
+    postgres: (db) =>
+      db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS limit_reset_at TEXT, ADD COLUMN IF NOT EXISTS limit_at TEXT, ADD COLUMN IF NOT EXISTS auto_continues INTEGER, ADD COLUMN IF NOT EXISTS limit_goes_on INTEGER"),
+  },  {
+    // The agent's estimate of the turn it is in on a machine, so a run cut off before the turn reported still counts it.
+    version: 43,
+    kind: "expand",
+    name: "the estimate of a machine's turn in progress",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("turn_estimate_usd")) db.exec("ALTER TABLE tasks ADD COLUMN turn_estimate_usd REAL");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS turn_estimate_usd DOUBLE PRECISION"),
+  },  {
+    // How long a task's agent worked over its runs on a machine, its cards' waits left out, for the time its page says.
+    version: 44,
+    kind: "expand",
+    name: "the time a task's agent worked",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("ran_ms")) db.exec("ALTER TABLE tasks ADD COLUMN ran_ms INTEGER");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS ran_ms BIGINT"),
+  },
+  {
+    // The skills a task's agent called, by name, for the line that says what a task used and for what a skill is measured on.
+    version: 45,
+    kind: "expand",
+    name: "the skills a task's agent called",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("used_skills")) db.exec("ALTER TABLE tasks ADD COLUMN used_skills TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS used_skills TEXT"),
+  },  {
+    // What of the handed-out work a machine's runner says it understands, so a newer part goes only to one that does.
+    version: 46,
+    kind: "expand",
+    name: "what a machine's runner understands",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(machines)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("features")) db.exec("ALTER TABLE machines ADD COLUMN features TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE machines ADD COLUMN IF NOT EXISTS features TEXT"),
+  },  {
+    // A request opened with its person's own sign-in on a forge the organization never connected, kept on its target.
+    version: 47,
+    kind: "expand",
+    name: "a request opened on a forge the organization never connected",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(task_targets)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("forge_request")) db.exec("ALTER TABLE task_targets ADD COLUMN forge_request TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE task_targets ADD COLUMN IF NOT EXISTS forge_request TEXT"),
   },
 ];
 

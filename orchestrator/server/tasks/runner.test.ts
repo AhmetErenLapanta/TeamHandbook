@@ -344,6 +344,35 @@ async function until(check: () => boolean | Promise<boolean>, what: string): Pro
   throw new Error(`never: ${what}`);
 }
 
+describe("a task this orchestrator ran that goes on from its review", { timeout: 120_000 }, () => {
+  it("given a task in review whose request is open, when its starter asks for more, then this orchestrator offers to go on, runs it again from the request's branch, adds one commit to that branch, checks the same request at it and hands the words once", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "again", 'import { existsSync, readFileSync } from "node:fs"; const at = "skills/on-call/SKILL.md"; mkdirSync("skills/on-call", { recursive: true }); writeFileSync(at, existsSync(at) ? readFileSync(at, "utf8") + "Page twice.\\n" : "---\\nname: on-call\\ndescription: Use when handing over the on-call shift.\\n---\\n\\nPage once.\\n");'))]);
+    ctx.tasks = tasks;
+    const { task, bare } = await startAndWait(ctx, tasks, "fake");
+    const request = (await ctx.store.getRequest(ctx.tenant, task.repoId, task.requestNumber!))!;
+    const firstHead = git(["rev-parse", request.branch], bare).trim();
+    const app = createApp(ctx, as(ADMIN));
+
+    // when
+    const offered = (await (await app.request(`/api/tasks/${task.id}`)).json()).task.followUp;
+    const sent = await app.request(`/api/tasks/${task.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Page twice.", commandId: "more-team-0001" }) });
+    await tasks.idle();
+
+    // then
+    const nextHead = git(["rev-parse", request.branch], bare).trim();
+    expect([offered, sent.status]).toEqual(["continue", 202]);
+    expect(git(["rev-parse", `${nextHead}^`], bare).trim()).toBe(firstHead);
+    expect(git(["show", `${request.branch}:skills/on-call/SKILL.md`], bare)).toContain("Page twice.");
+    expect((await ctx.store.listRequests(ctx.tenant, task.repoId)).map((r) => r.number)).toEqual([request.number]);
+    expect(await ctx.store.getTask(ctx.tenant, task.id)).toMatchObject({ status: "needs-review", requestNumber: request.number });
+    expect((await ctx.store.getRequest(ctx.tenant, task.repoId, request.number))!.checkedHead).toBe(nextHead);
+    expect(await ctx.store.pendingFollowUps(ctx.tenant, task.id)).toEqual([]);
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`Went on in request #${request.number} on ${request.branch}. It waits for a person to review and merge it.`);
+  });
+});
+
 describe("an orchestrator that stops while a task runs", () => {
   it("given a running agent with a child of its own and a queued task, when the orchestrator shuts down, then both processes end, the directories go and both tasks fail saying why", async () => {
     // given

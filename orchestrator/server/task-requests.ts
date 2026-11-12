@@ -144,3 +144,24 @@ function questionProblem(questions: unknown, answer: TaskAnswer): AnswerProblem 
   if (Object.values(given).some((a) => a.other && detectSecret(a.other))) return { code: "answer-looks-secret", message: "part of the answer looks like a password or key; write it without that, then send" };
   return null;
 }
+
+/**
+ * How long an agent worked from `since` to `end`: the time its cards waited on a person is left out, cards that waited
+ * at once counted once, so the minute cap and the time a task's page says agree, and a long wait for an answer is not
+ * work.
+ */
+export function agentTimeMs(since: string, end: number, cards: readonly Pick<TaskRequestRecord, "createdAt" | "answeredAt">[]): number {
+  const from = Date.parse(since);
+  const waits = cards
+    .map((c) => [Math.max(from, Date.parse(c.createdAt)), Math.min(end, c.answeredAt ? Date.parse(c.answeredAt) : end)] as const)
+    .filter(([a, b]) => b > a)
+    .sort(([a], [b]) => a - b);
+  let waited = 0;
+  let reach = from;
+  for (const [a, b] of waits) {
+    if (b <= reach) continue;
+    waited += b - Math.max(a, reach);
+    reach = b;
+  }
+  return Math.max(0, end - from - waited);
+}

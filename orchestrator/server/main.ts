@@ -73,6 +73,7 @@ import { movesOnPhase, withMergeMoves } from "./work/move.js";
 import { startAutomationWatch } from "./work/automations.js";
 import { WORK_DEPS } from "./work/routes.js";
 import { stopCliSignIns } from "./forge/cli-sign-in.js";
+import { stopDeviceSignIns } from "./forge/device-sign-in.js";
 import { localRepoPath } from "./forge/local.js";
 
 /**
@@ -518,6 +519,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     for (const stop of watches) stop();
     // A forge CLI sign-in still waiting for its person is stopped, so no CLI outlives the orchestrator.
     stopCliSignIns();
+    stopDeviceSignIns();
     const requestsDone = new Promise<void>((resolve) => server.close(() => resolve()));
     const stopped = Promise.all([...served.map(({ ctx }) => ctx.tasks!.shutdown()), ...(embedded ? [embedded.loop.stop()] : []), stopEffects(), requestsDone.then(() => drainTurns(STOP_GRACE_MS))]);
     void Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, STOP_GRACE_MS))]).finally(() => process.exit(0));

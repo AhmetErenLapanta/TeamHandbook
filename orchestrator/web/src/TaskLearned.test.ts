@@ -39,6 +39,18 @@ describe("learnedSentence", () => {
     expect(sentences).toEqual([null, null]);
   });
 
+  it("given an agent that called skills, when the sentence is made, then it says how many it called beside what the task started with, and alone when it started with none", () => {
+    // given
+    const started = { skills: { team: ["a", "b", "c"], project: [], used: ["a", "personal-one"] }, candidates: null };
+    const alone = { skills: { team: [], project: [], used: ["personal-one"] }, candidates: null };
+
+    // when
+    const sentences = [learnedSentence(started), learnedSentence(alone)];
+
+    // then
+    expect(sentences).toEqual(["Started with 3 team skills, the agent called 2.", "The agent called 1 skill."]);
+  });
+
   it("given two lessons waiting and no skill, when the sentence is made, then it starts with the count in the plural", () => {
     // when
     const sentence = learnedSentence({ skills: { team: [], project: [] }, candidates: [lesson("a", "pending"), lesson("b", "pending")] });

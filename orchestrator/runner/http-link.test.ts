@@ -111,7 +111,7 @@ describe("a machine's runner reaching a team's orchestrator over HTTP", () => {
     expect(Math.max(...parts.map((p) => Buffer.byteLength(JSON.stringify(p))))).toBeLessThanOrEqual(BATCH_BYTES + 1_000);
   });
 
-  it("given a machine paired with a team and an agent a crash left running for it, when its runner starts, then that agent is ended, its agents show on its row, the team's next task runs, and stopping still reports the end", async () => {
+  it("given a machine paired with a team and an agent a crash left running for it, when its runner starts, then that agent is ended, its agents and what it can do show on its row, the team's next task runs, and stopping still reports the end", async () => {
     const org = await orchestrator();
     const { code } = await (await org.browser("/api/machines/pair", "POST", {})).json();
     await connect({ address: ADDRESS, code, dataDir, name: "max-laptop", platform: "darwin-arm64", fetch: org.fetchImpl });
@@ -136,5 +136,6 @@ describe("a machine's runner reaching a team's orchestrator over HTTP", () => {
     expect(ran).toBe("tsk_http_2");
     expect((await org.store.getTask("acme", "tsk_http_2"))!.status).toBe("interrupted");
     expect((await org.store.listMachines("acme", null))[0]!.agents).toEqual([{ id: "claude-code", installed: true, version: "2.1.316", supported: "ok", signIn: "signed-in" }]);
+    expect((await org.store.listMachines("acme", null))[0]!.features).toEqual(["workspace-continues"]);
   });
 });

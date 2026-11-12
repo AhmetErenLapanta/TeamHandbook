@@ -45,7 +45,7 @@ import { withSuggestions } from "../task-suggestions.js";
 import { choicesProblem } from "./adapters/contract.js";
 import type { AgentChoices } from "./adapters/contract.js";
 import { DEFAULT_MODE, highestWithin, isPermissionMode, MODE_LABEL, PERMISSION_MODES } from "../../shared/permission-mode.js";
-import { answerProblem } from "../task-requests.js";
+import { agentTimeMs, answerProblem } from "../task-requests.js";
 import type { TaskAnswer, TaskRequestRecord } from "../task-requests.js";
 import { memberTags } from "../directory.js";
 import { localMachineId } from "../local.js";
@@ -56,15 +56,15 @@ import { budgetLedger, ownSetupFor, taskCreators, taskStartRefusal, unnamedMode 
 import { orchestratorPolicies } from "../policy-routes.js";
 import { autoContinuedKey, CODE_TEMPLATE, MAX_CHILD_TASKS, TASK_LIMITS_SETTING, taskLimits, MAX_DELEGATION_DEPTH, namingFor, NO_RUNNER, ORCHESTRATOR_ONLY, OUTPUT_CUT, machineWaits, printable, START_REFUSED, SUGGESTIONS_AT_ONCE } from "./runner.js";
 import { machineOffers } from "../../runner/machine-agents.js";
-import type { TaskRunner } from "./runner.js";
+import type { FollowUpOffer, TaskRunner } from "./runner.js";
 import { taskPaths } from "./isolation.js";
 import { CLAUDE_PLANS_DIR } from "./profile.js";
 import { PLAN_TEXT_MAX } from "../../shared/runner-wire.js";
 import { shadowChanges, shadowFile, shadowPlaceOf, shadowUndo } from "../shadow-git.js";
-import { ORCHESTRATOR_AGENT, FINISHED } from "./types.js";
+import { inWorkspace, ORCHESTRATOR_AGENT, FINISHED } from "./types.js";
 import { folderLoaded, loadedLine, mostUsed, routed, routingLine, routingPrompt } from "./routing.js";
 import { taskForge, taskState } from "./state.js";
-import { approvedVerification, approveVerification, changedSince, commitReader, folderReader } from "./verify.js";
+import { approvedVerification, approveVerification, changedSince, repoReader } from "./verify.js";
 import { detectVerification } from "./verify-detect.js";
 import type { ReadFile } from "./verify-detect.js";
 import type { ApprovedVerification, DetectedStep } from "../../shared/verification.js";
@@ -411,6 +411,9 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const asking = new Set<string>();
     for (const task of tasks.filter((t) => t.status === "running")) if ((await ctx.store.taskRequests(ctx.tenant, task.id)).some((r) => r.status === "pending")) asking.add(task.id);
     const requestOf = (repoId: string, number: number) => byNumber.get(`${repoId}#${number}`);
+    // A task on a folder of repositories goes on from what it left only on a machine that knows how.
+    const goesOn = new Set<string>();
+    for (const task of tasks.filter(inWorkspace)) if (await workspaceGoesOn(ctx, task)) goesOn.add(task.id);
     // A stopped task whose plan is still readable is offered to go on from it, whatever stopped it.
     const plans = new Set<string>();
     for (const task of tasks.filter((t) => t.runner === "local" && (t.status === "failed" || t.status === "cancelled" || t.status === "interrupted"))) if (await unansweredPlan(ctx, task)) plans.add(task.id);
@@ -418,14 +421,16 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
       const request = task.requestNumber !== null ? byNumber.get(`${task.repoId}#${task.requestNumber}`) : undefined;
       const at = line.indexOf(task.id);
       const targets = task.targets ?? null;
-      const waitingFor = kept(task) ? waits.get(task.createdBy) ?? null : null;
+      const waitingFor = task.status === "interrupted" && task.limitResetAt ? "limit" : kept(task) ? waits.get(task.createdBy) ?? null : null;
       return {
         ...task,
         phase: taskPhase(task, (repoId, number) => byNumber.get(`${repoId}#${number}`)?.status ?? null),
         queuePosition: at >= 0 ? at + 1 : null,
-        followUp: offeredFollowUp(runner, task, request),
+        followUp: offeredFollowUp(runner, task, request, goesOn.has(task.id)),
         // Kept for the starter's own machine while none of theirs can take it: the card says how to connect one, or that it is away.
+        // Cut off at their usage limit, it says when the limit resets and the task goes on.
         waitingFor,
+        ...(task.limitResetAt ? { resetAt: task.limitResetAt } : {}),
         state: taskState(task, requestOf, waitingFor, asking.has(task.id)),
         forge: taskForge(task, requestOf),
         folderTrust: trusts.get(task.repoId) ?? null,
@@ -435,7 +440,7 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
         request: request ? { status: request.status, provider: request.provider, branch: request.branch, url: request.url, ...(request.heldHead ? { heldReason: request.heldReason } : {}) } : null,
         targets: targets?.map((t) => {
           const opened = t.requestNumber !== null ? byNumber.get(`${t.repoId}#${t.requestNumber}`) : undefined;
-          return { repoId: t.repoId, name: names.get(t.repoId) ?? t.repoId, status: t.status, reason: t.reason, path: t.path ?? null, forge: t.origin ? remoteForge(ctx, t.origin) : null, branch: t.branch, tests: t.tests, error: t.error, cost: t.cost, request: opened ? { number: opened.number, url: opened.url, status: opened.status } : null };
+          return { repoId: t.repoId, name: names.get(t.repoId) ?? t.repoId, status: t.status, reason: t.reason, path: t.path ?? null, forge: t.origin ? remoteForge(ctx, t.origin) : null, branch: t.branch, tests: t.tests, error: t.error, cost: t.cost, request: opened ? { number: opened.number, url: opened.url, status: opened.status } : t.forgeRequest ? { number: t.forgeRequest.number, url: t.forgeRequest.url, status: "open" as const } : null };
         }) ?? null,
         // The task's cost leaves out a repository whose agent reported none. Only a task over several
         // repositories runs an agent per repository; in one working folder a single run changes
@@ -446,7 +451,19 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     return withSuggestions(ctx, viewer, views);
   };
   // One task's page draws a card for each thing its agent asked, so its read and its stream carry them; a list does not.
-  const withAsked = async <T extends { id: string }>(view: T) => ({ ...view, requests: (await ctx.store.taskRequests(ctx.tenant, view.id)).map(shownRequest) });
+  // Its starter's words still waiting for the agent come with them, oldest first, for the page to show, change or take back.
+  // An ended task says how long its agent worked: the runs on a machine as each counted it, a run here from its start to
+  // its end, either way with the time its cards waited on a person left out.
+  const withAsked = async <T extends Pick<TaskRecord, "id" | "startedAt" | "finishedAt" | "ranMs">>(view: T) => {
+    const asked = await ctx.store.taskRequests(ctx.tenant, view.id);
+    const ranMs = view.ranMs ?? (view.startedAt && view.finishedAt ? agentTimeMs(view.startedAt, Date.parse(view.finishedAt), asked) : undefined);
+    return {
+      ...view,
+      ...(view.finishedAt && ranMs !== undefined ? { ranMs } : {}),
+      requests: asked.map(shownRequest),
+      messages: (await ctx.store.pendingFollowUps(ctx.tenant, view.id)).filter((f) => f.source === "person").map(({ id, text, quotes, createdAt }) => ({ id, text, quotes, createdAt })),
+    };
+  };
   const requestsOf = async (task: TaskRecord) => {
     const pairs = [...(task.requestNumber !== null ? [{ repoId: task.repoId, number: task.requestNumber }] : []), ...(task.targets ?? []).flatMap((t) => (t.requestNumber !== null ? [{ repoId: t.repoId, number: t.requestNumber }] : []))];
     return (await Promise.all(pairs.map((p) => ctx.store.getRequest(ctx.tenant, p.repoId, p.number)))).filter((r): r is RequestRecord => r !== null);
@@ -711,7 +728,8 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
           }
           // A finished task's log is complete once a read returns fewer lines than a batch.
           // An interrupted task writes nothing more until a Continue, whose run a page follows anew.
-          if ((FINISHED.includes(task.status) || task.status === "interrupted") && lines.length < STREAM_BATCH) break;
+          // A run on a runner ends before its request opens; its stage says so until then.
+          if ((FINISHED.includes(task.status) || task.status === "interrupted") && task.stage !== "request" && lines.length < STREAM_BATCH) break;
           quiet = lines.length ? 0 : quiet + STREAM_TICK_MS;
           if (quiet >= HEARTBEAT_MS) {
             quiet = 0;
@@ -990,7 +1008,7 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const quotes = readQuotes(body?.quotes);
     if (quotes && "error" in quotes) return c.json({ error: quotes.error, code: "quote-outside-request" }, 400);
     const request = task.requestNumber !== null ? await ctx.store.getRequest(ctx.tenant, task.repoId, task.requestNumber) : null;
-    const offered = offeredFollowUp(runner, task, request);
+    const offered = offeredFollowUp(runner, task, request, inWorkspace(task) && (await workspaceGoesOn(ctx, task)));
     if (!offered) return c.json({ error: NO_FOLLOW_UP, code: "follow-up-not-offered" }, 409);
     if (offered === "continue") {
       const refused = await goOnRefusal(ctx, user, task);
@@ -1008,8 +1026,50 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     }
     if (kept.created) await recordEvent(ctx, user, "task.followup", { repoId: task.repoId, subject: `task:${task.id}`, detail: `sent a follow-up of ${masked.text.length} characters${masked.quotes ? ` with ${masked.quotes.length} quote(s)` : ""}` });
     // Only the message that takes the task out of review puts it back in line; a retry, or more words while it waits, queue nothing.
-    if (kept.created && offered === "continue" && task.status !== "queued") await goOn(ctx, task, `${user.name} asked for more on request #${task.requestNumber}; the task goes on from its branch.`);
+    if (kept.created && offered === "continue" && task.status !== "queued") {
+      await goOn(ctx, task, task.requestNumber !== null ? `${user.name} asked for more on request #${task.requestNumber}; the task goes on from its branch.` : `${user.name} asked for more; the task goes on from the branch it left in each repository.`);
+    }
     return c.json({ followUp: { id: kept.followUp.id, status: kept.followUp.status, createdAt: kept.followUp.createdAt } }, kept.created ? 202 : 200);
+  });
+
+  /** The task its starter sends words to, or the answer that refuses them: nobody else changes what the agent is told. */
+  const startersTask = async (c: Context<OrchestratorEnv>) => {
+    const user = c.get("user");
+    const id = c.req.param("id") ?? "";
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    return task && seesTask(user, task) && (task.createdBy === user.email || task.createdBy === user.id) ? task : null;
+  };
+  const MESSAGE_GONE = { error: "that message already reached the agent or was taken back", code: "message-not-waiting" };
+
+  route(app, "PATCH /api/tasks/:id/messages/:messageId", async (c) => {
+    const task = await startersTask(c);
+    if (!task) return c.json({ error: "unknown task" }, 404);
+    const body = (await c.req.json().catch(() => null)) as { text?: unknown; quotes?: unknown } | null;
+    const text = typeof body?.text === "string" ? body.text.trim() : "";
+    if (!text || text.length > MESSAGE_MAX) return c.json({ error: `a follow-up is 1 to ${MESSAGE_MAX} characters`, code: "message-too-long" }, 400);
+    const quotes = readQuotes(body?.quotes);
+    if (quotes && "error" in quotes) return c.json({ error: quotes.error, code: "quote-outside-request" }, 400);
+    const masked = maskedFollowUp(text, quotes);
+    // A body without quotes changes the words alone; one with them, null included, sets them too.
+    const withQuotes = body !== null && "quotes" in body;
+    let changed;
+    try {
+      changed = await ctx.store.editFollowUp(ctx.tenant, task.id, c.req.param("messageId") ?? "", masked.text, withQuotes ? masked.quotes : undefined);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    if (!changed) return c.json(MESSAGE_GONE, 409);
+    await recordEvent(ctx, c.get("user"), "task.followup", { repoId: task.repoId, subject: `task:${task.id}`, detail: `changed a waiting follow-up to ${masked.text.length} characters` });
+    const now = (await ctx.store.pendingFollowUps(ctx.tenant, task.id)).find((f) => f.id === c.req.param("messageId"));
+    return c.json({ message: { id: c.req.param("messageId"), text: masked.text, quotes: now?.quotes ?? masked.quotes } });
+  });
+
+  route(app, "DELETE /api/tasks/:id/messages/:messageId", async (c) => {
+    const task = await startersTask(c);
+    if (!task) return c.json({ error: "unknown task" }, 404);
+    if (!(await ctx.store.dropFollowUp(ctx.tenant, task.id, c.req.param("messageId") ?? ""))) return c.json(MESSAGE_GONE, 409);
+    await recordEvent(ctx, c.get("user"), "task.followup", { repoId: task.repoId, subject: `task:${task.id}`, detail: "took back a waiting follow-up" });
+    return c.json({ removed: true });
   });
 
   return app;
@@ -1021,10 +1081,34 @@ const UNDO_REASON_MAX = 300;
 /** The longest path a request's file is taken out by. */
 const DROP_PATH_MAX = 1024;
 
-/** A task in review goes on only from a request still open: one merged or closed takes no more. */
-export function offeredFollowUp(runner: TaskRunner, task: TaskRecord, request: RequestRecord | null | undefined): "steer" | "continue" | null {
+/**
+ * A task in review goes on only from a request still open: one merged or closed takes no more. A task on a folder of
+ * repositories goes on when `workspaceOpen` says it can (workspaceGoesOn).
+ */
+export function offeredFollowUp(runner: TaskRunner, task: TaskRecord, request: RequestRecord | null | undefined, workspaceOpen = false): FollowUpOffer {
   const offered = runner.followUp(task);
-  return offered === "continue" && request?.status !== "open" ? null : offered;
+  if (offered !== "continue") return offered;
+  return (task.requestNumber !== null ? request?.status === "open" : workspaceOpen) ? "continue" : null;
+}
+
+/**
+ * Whether a task on a folder of repositories goes on from what it left: a change still kept on its machine or a request
+ * still open, and a runner that starts each copy there: this orchestrator's own, or a machine's that says it does. A
+ * machine's runner from before that would start them from their HEAD, so it is offered none.
+ */
+export async function workspaceGoesOn(ctx: OrchestratorContext, task: TaskRecord): Promise<boolean> {
+  if (task.runner !== "local" || !inWorkspace(task)) return false;
+  const holder = (await ctx.store.taskLease(ctx.tenant, task.id))?.claimedBy;
+  // This orchestrator's own runner goes on as its run here does; a person's machine only when its runner says so.
+  const own = holder !== undefined && holder !== null && holder === (await localMachineId(ctx.store, ctx.tenant));
+  const machine = holder && !own ? (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === holder) : undefined;
+  if (!own && !machine?.features?.includes("workspace-continues")) return false;
+  for (const target of task.targets ?? []) {
+    if (target.path === undefined) continue;
+    if (target.status === "local" && target.head) return true;
+    if (target.status === "request" && target.requestNumber !== null && (await ctx.store.getRequest(ctx.tenant, target.repoId, target.requestNumber))?.status === "open") return true;
+  }
+  return false;
 }
 
 export const NO_FOLLOW_UP = "this task takes no follow-up now: its agent is not working in a session it can be told more in";
@@ -1043,7 +1127,9 @@ export async function goOnRefusal(ctx: OrchestratorContext, user: Principal, tas
 export async function goOn(ctx: OrchestratorContext, task: TaskRecord, line: string): Promise<void> {
   await ctx.store.updateTask(ctx.tenant, task.id, { status: "queued", error: null, finishedAt: null });
   await ctx.store.appendTaskLog(ctx.tenant, task.id, [line]);
-  ctx.runnerService?.wake();
+  // A task on its starter's machine waits for that machine's runner; one this orchestrator runs goes back in its own line.
+  if (task.runner === "local") ctx.runnerService?.wake();
+  else await ctx.tasks?.goOn?.(task.id);
 }
 
 /** What a follow-up holds at most: a person's words, and the request's passages they point at. */
@@ -1126,7 +1212,7 @@ async function askedRouting(ctx: OrchestratorContext, runner: TaskRunner, user: 
  * here, as a teammate or an agent changed them, and the task runs without them until the person approves again.
  */
 async function routedChecks(ctx: OrchestratorContext, user: Principal, projectId: string, folder: string): Promise<string | null> {
-  const detected = await detectVerification(await startReader(folder));
+  const detected = await detectVerification(await repoReader(folder));
   const approved = await approvedVerification(ctx.store, ctx.tenant, projectId);
   if (approved) {
     const changed = changedSince(approved, detected);
@@ -1138,13 +1224,6 @@ async function routedChecks(ctx: OrchestratorContext, user: Principal, projectId
   const pick = (step: DetectedStep) => ({ source: step.source, command: step.command, digest: step.digest });
   const done = await approveVerification(ctx.store, ctx.tenant, projectId, detected, { checks: picked.map(pick), setup: detected.setup ? pick(detected.setup) : null }, user.email);
   return "refused" in done ? null : checkedLine(done);
-}
-
-/** A repository folder's task runs on a copy of its last commit, so its checks are read there; an uncommitted edit is not what runs. */
-async function startReader(folder: string): Promise<ReadFile> {
-  const top = (await gitAsyncMaybe(["rev-parse", "--show-toplevel"], folder))?.trim();
-  const head = top === folder ? (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], folder))?.trim() : null;
-  return head ? commitReader(folder, head) : folderReader(folder);
 }
 
 /** Every approved step by its command, what it runs and whether it reaches the network: nothing Start approved stays out of sight. */

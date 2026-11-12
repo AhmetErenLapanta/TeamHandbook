@@ -102,6 +102,12 @@ export interface FolderWork extends WorkCommon {
 export interface WorkspaceWork extends WorkCommon {
   workspace: { machineId: string; projectId: string; path: string };
   branch: string;
+  /**
+   * A run that goes on from what the task left: each repository listed starts its copy at `head` on `branch` and keeps
+   * `baseSha` as its base; one not listed starts from its HEAD as a first run does. Sent only to a runner that lists
+   * "workspace-continues".
+   */
+  continues?: { repos: { path: string; head: string; baseSha: string }[] };
 }
 
 export type RemoteWork = CheckoutWork | FolderWork | WorkspaceWork;
@@ -223,6 +229,8 @@ export interface TaskOutcome {
   position: number | null;
   /** The request's title and description the run wrote, for the orchestrator to open it from the branch; null unless it ended for review with a branch. */
   request: { title: string; body: string } | null;
+  /** For a run interrupted at its plan's usage limit: when the agent says the limit resets, so the task goes on then. */
+  limitResetAt?: string;
   /**
    * A run in a folder holding several repositories (the person's one working folder): each
    * repository the agent changed, by its path under that folder, with the task's branch, the commit

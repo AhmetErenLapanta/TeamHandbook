@@ -25,7 +25,7 @@ export function onForgeRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
   route(app, "GET /api/repos/:id/requests/:number/on-forge", async (c) => {
     const seen = await visible(c.req.param("id") ?? "", Number(c.req.param("number")), c.get("user"));
     if (!seen) return c.json({ error: "unknown request" }, 404);
-    return c.json(await requestOnForge(ctx, seen.repo, seen.request.number));
+    return c.json(await requestOnForge(ctx, seen.repo, seen.request.number, c.get("user")));
   });
 
   route(app, "POST /api/repos/:id/requests/:number/on-forge", async (c) => {

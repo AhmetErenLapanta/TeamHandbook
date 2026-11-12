@@ -13,7 +13,7 @@ export interface TaskLessonRow {
 }
 
 export interface TaskLessons {
-  skills: { team: string[]; project: string[] };
+  skills: { team: string[]; project: string[]; used?: string[] };
   candidates: TaskLessonRow[] | null;
 }
 
@@ -59,7 +59,7 @@ export function learnedSentence({ skills, candidates }: TaskLessons): string | n
   const sent = lessons.filter((l) => l.status === "sent");
   const machines = [...new Set(sent.map((l) => l.machine).filter((m): m is string => !!m))];
   const parts = [
-    started.length ? `Started with ${started.join(" and ")}` : "",
+    started.length ? `Started with ${started.join(" and ")}${skills.used?.length ? `, the agent called ${skills.used.length}` : ""}` : skills.used?.length ? `The agent called ${count(skills.used.length, "skill")}` : "",
     waiting ? `${count(waiting, "lesson")} ${waiting === 1 ? "waits" : "wait"} for your review` : "",
     kept ? `${count(kept, "lesson")} kept as your skill${kept === 1 ? "" : "s"}` : "",
     sent.length ? `${count(sent.length, "lesson")} ${sent.length === 1 ? "waits" : "wait"} in your review queue${machines.length === 1 ? ` on ${machines[0]}` : ""}` : "",

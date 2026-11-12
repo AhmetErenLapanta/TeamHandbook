@@ -47,8 +47,9 @@ export interface BoardCard {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
-  /** In waiting for a computer: none of the starter's is connected, or theirs is away. */
-  waitingFor: "connect" | "machine" | null;
+  /** In waiting for a computer: none of the starter's is connected, or theirs is away; or for their usage limit to reset at `resetAt`. */
+  waitingFor: "connect" | "machine" | "limit" | null;
+  resetAt?: string;
   /** Why it failed or stopped, as its page says it; null while it has not. */
   error: string | null;
   /** The size of its change, files and lines; null before there is one or when it cannot be read. */
@@ -73,6 +74,9 @@ const REVIEW_DAYS = 90;
 /** The cards one section shows; the count says how many more there are. */
 const CARDS_PER_SECTION = 50;
 const SEARCH_RESULTS = 8;
+/** The fewest characters a search reads the tasks' logs for, and how far back it reads them. */
+const LOG_SEARCH_MIN = 3;
+const LOG_SEARCH_DAYS = 30;
 
 const REASON_SHOWN = 160;
 
@@ -127,7 +131,7 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
   const byRepo: TaskBoard["byRepo"] = {};
   for (const task of tasks) {
     const phase = taskPhase(task, statusOf);
-    const waitingFor = task.runner === "local" && task.status === "queued" ? (waits.get(task.createdBy) ?? null) : null;
+    const waitingFor = task.status === "interrupted" && task.limitResetAt ? "limit" : task.runner === "local" && task.status === "queued" ? (waits.get(task.createdBy) ?? null) : null;
     // A run asks while it works, or a run that stopped asked its starter one question: both wait on their answer.
     const asking = (task.status === "running" && (await ctx.store.taskRequests(ctx.tenant, task.id)).some((r) => r.status === "pending")) || (task.question !== undefined && task.question !== null && !task.question.answer);
     // An interrupted task without a request reads as in review to taskPhase; its next step is to continue.
@@ -156,6 +160,7 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
       startedAt: task.startedAt,
       finishedAt: task.finishedAt,
       waitingFor,
+      ...(waitingFor === "limit" ? { resetAt: task.limitResetAt } : {}),
       error: task.error,
       changes: null,
       request: request ? { repoId: request.repoId, number: request.number, status: request.status, url: request.url } : null,
@@ -179,9 +184,13 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
 }
 
 /** What the palette finds by name: the tasks the person reads, the projects, and on a local orchestrator its owner's folders of this machine. */
-export async function search(ctx: OrchestratorContext, user: Principal, q: string, home?: string) {
+export async function search(ctx: OrchestratorContext, user: Principal, q: string, home?: string, now = Date.now()) {
   const words = q.trim().toLowerCase();
-  const tasks = (await ctx.store.taskPage(ctx.tenant, { ...visibleTasks(user), titleHas: words }, null, SEARCH_RESULTS)).tasks.map((t) => ({ id: t.id, title: t.title, repoId: t.repoId, status: t.status }));
+  const shown = (t: TaskRecord) => ({ id: t.id, title: t.title, repoId: t.repoId, status: t.status });
+  const tasks = (await ctx.store.taskPage(ctx.tenant, { ...visibleTasks(user), titleHas: words }, null, SEARCH_RESULTS)).tasks.map(shown);
+  // What the agent said or ran is searched only for words long enough to mean something, and only across the recent tasks.
+  const named = new Set(tasks.map((t) => t.id));
+  const inLog = words.length < LOG_SEARCH_MIN ? [] : (await ctx.store.taskPage(ctx.tenant, { ...visibleTasks(user), logHas: words, since: new Date(now - LOG_SEARCH_DAYS * 86_400_000).toISOString() }, null, SEARCH_RESULTS)).tasks.filter((t) => !named.has(t.id)).map(shown);
   const projects = (await shownProjects(ctx, user, await ctx.store.listRepos(ctx.tenant)))
     .filter((r) => r.name.toLowerCase().includes(words) || r.id.includes(words))
     .slice(0, SEARCH_RESULTS)
@@ -189,7 +198,7 @@ export async function search(ctx: OrchestratorContext, user: Principal, q: strin
   // The folder picker's own rule: another account on this machine never reads its owner's folder names.
   const listed = localMode() && browsesFolders(user) ? await listFolders(undefined, words, { ...(home ? { home } : {}), dataDir: ctx.dataDir }) : null;
   const folders = listed && !("refused" in listed) ? (listed.matches ?? []).slice(0, SEARCH_RESULTS).map((f) => ({ name: f.name, path: f.path })) : [];
-  return { tasks, projects, folders };
+  return { tasks, inLog, projects, folders };
 }
 
 export function taskBoardRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {

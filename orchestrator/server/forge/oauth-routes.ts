@@ -31,6 +31,7 @@ import {
 import type { AppForge, ReturnPage } from "./oauth.js";
 import { FORGES } from "../../shared/forge-def.js";
 import { cliSignInState, SignInRefused, startCliSignIn } from "./cli-sign-in.js";
+import { DEVICE_ENDPOINTS, deviceClientId, deviceSignInState, forgetPersonForge, startDeviceSignIn } from "./device-sign-in.js";
 import { ownCliStatus } from "./own-cli.js";
 import { githubInstallationAccount, githubInstallUrl, githubUserToken } from "./oauth-github.js";
 import { listConnectionRepos } from "./oauth-repos.js";
@@ -124,12 +125,42 @@ export function forgeConnectRoutes(ctx: OrchestratorContext): { open: Hono; sign
   // The machine's owner signed in, never a key: the CLI it starts signs in as that person.
   const signInRefusal = (user: Principal) => (user.key || !manages(user) ? "only this machine's owner, signed in, signs their own CLI in" : null);
 
+  // The person's own sign-in through the orchestrator's application, where their own CLI is not used here and the forge is its public host.
+  const deviceRead = async (kind: AppForge, user: Principal, ownHere: boolean) => {
+    if (ownHere || user.key || !deviceClientId(kind)) return null;
+    const app = await forgeApp(ctx, kind).catch(() => null);
+    if (app && new URL(app.webUrl).host !== DEVICE_ENDPOINTS[kind].host) return null;
+    return { offered: true, signIn: await deviceSignInState(ctx, user, kind) };
+  };
+
   route(signedIn, "GET /api/forge/:kind/sign-in", async (c) => {
     const kind = forgeOf(c.req.param("kind"));
     if (!kind) return c.json({ error: "a forge is gitlab or github" }, 404);
+    const user = c.get("user");
     // Anyone else signed in reads only that an owner or an admin connects it: nothing of the machine's CLI or the connection's setup.
-    if (signInRefusal(c.get("user"))) return c.json({ offered: false, why: `an owner or an admin connects ${FORGE_NAME[kind]}`, org: null, cli: null, installLine: null, signIn: { state: "idle" } });
-    return c.json(await signInRead(kind));
+    if (signInRefusal(user)) return c.json({ offered: false, why: `an owner or an admin connects ${FORGE_NAME[kind]}`, org: null, cli: null, installLine: null, signIn: { state: "idle" }, device: await deviceRead(kind, user, false) });
+    const read = await signInRead(kind);
+    return c.json({ ...read, device: await deviceRead(kind, user, Boolean(read.cli)) });
+  });
+
+  // Signs the person in to GitHub or GitLab.com with a one-time code through the orchestrator's own application; the card follows it with the GET above.
+  route(signedIn, "POST /api/forge/:kind/device", async (c) => {
+    const kind = forgeOf(c.req.param("kind"));
+    if (!kind) return c.json({ error: "a forge is gitlab or github" }, 404);
+    const user = c.get("user");
+    const clientId = deviceClientId(kind);
+    if (user.key || !clientId || !(await deviceRead(kind, user, Boolean(await ownCliHere(ctx))))) return c.json({ error: `signing in to ${FORGE_NAME[kind]} with a code is not offered on this orchestrator; connect it under Other ways to connect` }, 409);
+    return c.json({ signIn: await startDeviceSignIn(ctx, user, kind, clientId) });
+  });
+
+  // The person's own Sign out: the sealed token and the account go, and the card offers the sign-in again.
+  route(signedIn, "DELETE /api/forge/:kind/device", async (c) => {
+    const kind = forgeOf(c.req.param("kind"));
+    if (!kind) return c.json({ error: "a forge is gitlab or github" }, 404);
+    const user = c.get("user");
+    if (user.key) return c.json({ error: "an API key holds no sign-in of its own" }, 403);
+    await forgetPersonForge(ctx.store, ctx.tenant, user.id, [kind]);
+    return c.json({ signIn: { state: "idle" } });
   });
 
   // Starts the person's own CLI sign-in on this machine; the card follows it with the GET above.

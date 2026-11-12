@@ -129,6 +129,24 @@ describe("doctor on a data directory", () => {
     }
   });
 
+  it("given a data directory that does not exist yet and an open umask, when doctor runs on a local orchestrator, then it makes the directory private and does not report its own as open", async () => {
+    // given
+    const dir = join(scratch(), "fresh");
+    const said: string[] = [];
+    const before = process.umask(0o022);
+
+    // when
+    try {
+      await doctorCommand([], (l) => void said.push(l), { ORCHESTRATOR_MODE: "local", ORCHESTRATOR_DATA_DIR: dir });
+    } finally {
+      process.umask(before);
+    }
+
+    // then
+    expect(statSync(dir).mode & 0o077).toBe(0);
+    expect(said.join("\n")).not.toContain("data-dir-open");
+  });
+
   it("given a stopped orchestrator's data with a schedule and no copy, when doctor runs, then it reports the problem and exits 1", async () => {
     const dir = scratch();
     openSqliteStore(join(dir, "orchestrator.db")).close();

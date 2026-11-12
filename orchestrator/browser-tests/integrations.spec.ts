@@ -76,6 +76,38 @@ async function undo(page: Page, method: string, path: string) {
 }
 
 test.describe("the Integrations page for an admin", () => {
+  test("given the orchestrator's own GitHub application and no organization connection, when an admin signs in from the card, then it offers the one-time code and its page, and says connected as them once GitHub answers", async ({ page }) => {
+    // given
+    let state: Record<string, unknown> = { state: "idle" };
+    await page.route("**/api/forge/github/sign-in", async (route) => {
+      const read = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...read, offered: false, cli: null, device: { offered: true, signIn: state } } });
+    });
+    await page.route("**/api/forge/github/device", async (route) => {
+      state = { state: "waiting", code: "WDJB-MJHT", url: "https://github.com/login/device" };
+      await route.fulfill({ json: { signIn: state } });
+    });
+    await page.goto("/demo/integrations");
+    const card = page.locator("#card-github");
+    await expect(card).toContainText("Sign in to GitHub with a one-time code, nothing to install; it lets the orchestrator write to the repositories you can, which it uses only for the requests of the tasks you start.");
+
+    await expect(card.getByRole("button", { name: "Sign in with GitHub" })).toHaveClass(/secondary/);
+
+    // when
+    await card.getByRole("button", { name: "Sign in with GitHub" }).click();
+
+    // then
+    await expect(card.getByRole("status")).toContainText("Enter this code on GitHub:");
+    await expect(card.locator(".sign-in-code").getByText("WDJB-MJHT", { exact: true })).toBeVisible();
+    await expect(card.getByRole("status")).toContainText("Open GitHub. Waiting for GitHub.");
+    await expect(card.getByRole("button", { name: "Copy the code" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Sign in with GitHub" })).toHaveCount(0);
+    await expect(card.getByRole("link", { name: "Open GitHub" })).toHaveAttribute("href", "https://github.com/login/device");
+    state = { state: "done", account: "ada", host: "github.com" };
+    await expect(card).toContainText("Connected as ada on github.com; the orchestrator opens the requests of the tasks you start as you, and nothing else.", { timeout: 15_000 });
+    await expect(card.getByRole("button", { name: "Sign out" })).toBeVisible();
+  });
+
   test("given no GitLab application registered, when an admin opens Integrations, then the GitLab card says the next step once, and the settings' names wait behind its (i)", async ({ page }) => {
     // given
     const integrations = "/demo/integrations";
@@ -648,9 +680,12 @@ test.describe("the Integrations page for an admin", () => {
     await github.getByRole("button", { name: "Sign in with GitHub" }).click();
 
     // then
-    await expect(github.getByRole("status")).toContainText("Enter ABCD-1234 on GitHub: Open GitHub. Waiting for GitHub.");
+    await expect(github.getByRole("status")).toContainText("Enter this code on GitHub:");
+    await expect(github.locator(".sign-in-code").getByText("ABCD-1234", { exact: true })).toBeVisible();
+    await expect(github.getByRole("button", { name: "Copy the code" })).toBeVisible();
+    await expect(github.getByRole("status")).toContainText("Open GitHub. Waiting for GitHub.");
     await expect(github.getByRole("link", { name: "Open GitHub" })).toHaveAttribute("href", "https://github.com/login/device");
-    await expect(github.getByRole("button", { name: "Sign in with GitHub" })).toBeDisabled();
+    await expect(github.getByRole("button", { name: "Sign in with GitHub" })).toHaveCount(0);
     signedIn = true;
     await expect(github.getByText("Connected", { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(github).toContainText("Connected as ada on github.com.");

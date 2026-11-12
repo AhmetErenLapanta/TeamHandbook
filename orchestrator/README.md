@@ -5,11 +5,13 @@ own machine doing a piece of work in any folder you open, with every change wait
 
 ```sh
 npx teamhandbook-orchestrator@latest
-curl -fsSL https://github.com/AhmetErenLapanta/TeamHandbook/releases/download/handbook-orchestrator-latest/install.sh | sh && handbook-orchestrator
 git clone https://github.com/AhmetErenLapanta/TeamHandbook.git && cd TeamHandbook && npm start
 ```
 
-Each starts the orchestrator on this machine and opens it in your browser: no env file, no
+The installer, `curl -fsSL https://github.com/AhmetErenLapanta/TeamHandbook/releases/download/handbook-orchestrator-latest/install.sh | sh && handbook-orchestrator` installs a single executable for
+Apple silicon Macs and Linux (x64 and arm64); on an Intel Mac, use npx.
+
+Each of these starts the orchestrator on this machine and opens it in your browser: no env file, no
 Docker, no account. `handbook-orchestrator service install` keeps it running whenever you are
 logged in, `handbook-orchestrator update` moves to the newest release, `handbook-orchestrator
 doctor` says what is wrong and how to set it right, and `handbook-orchestrator --help` lists the
@@ -22,31 +24,30 @@ screens with live reload; its settings go in `ORCHESTRATOR_*`, for instance
 You need Node 22.16 or later, git, and Claude Code or OpenCode signed in on this machine, once,
 the way you always do (`claude`, or `opencode auth login`).
 
-The command prints the address it listens on and opens it; a sign-in link in the data folder
-opens it once if the browser does not. The first screen asks one thing, which folder:
+The command prints the address it listens on and opens it. If it did not open the browser, the
+address, or the sign-in link kept in the data folder, opens a page titled "Open TeamHandbook
+Orchestrator" with one **Continue** button; the link works once, and pressing the button spends it.
+The first screen is the **New task** form:
 
-1. **Open a folder**: a **Suggested** folder opens with a click, and when any listed folder has
-   Git, each row says **Git** or **No Git**. In the list, a click goes into a folder, **Up one folder** goes back, and **Open <name>** at the foot opens the one you picked;
-   **Folder name or path** finds another. **Clone from GitHub or GitLab** clones one with your own
-   git sign-in into `~/code/<name>` instead. A folder is taken only inside your home folder, never a
-   hidden one or one under `~/Library`.
-2. **What should the agent do here?**: describe the change and press **Start**. The agent signed
-   in on this machine does it, Claude Code first when both are ready. Under the empty box, **Or start with** offers up to three
-   tasks read off the folder (a TODO or FIXME note of its code, quoted from its file, or running
-   the tests or the linter its `package.json` names); picking one only fills the box.
+1. **Say what needs doing** and press **Start**. The agent signed in on this machine does it,
+   Claude Code first when both are ready. With a folder you used before the form needs one click
+   and one field; when nothing points to a folder, a **Which folder** question lists folders and
+   takes **A folder's path**. A folder is taken only inside your home folder, never a hidden one or
+   one under `~/Library`. Settings > **Where your code lives** adds more folders and clones one from
+   GitHub or GitLab with your own git sign-in.
+2. **Watch it work.** The task's page shows the agent's sentences and tool calls as they come, and a
+   box to tell it something while it works.
 3. **Review the change.** In a folder without Git the agent edits the files in place, and the
    task's page shows **Changes**, each file with its diff: **Keep these changes**,
    or **Undo these changes…** to put each file back as it was before the task.
    In a Git repository the agent works in a copy of its own and the task ends in a request, so
    nothing reaches the repository until you merge it; **Make this a Git repository**, on the
-   project's **Settings** tab, makes a folder one. Everything waiting for you is under Projects >
-   **To review**.
+   project's **Settings** tab, makes a folder one. What waits for you is under **Your turn** on Tasks.
 
-![Give a team of agents any folder on this machine: the folders in your home folder, to open one](docs/screenshots/0-local-welcome.png)
+![A live task: the agent's sentences and tool calls, with a box to tell it something while it works](docs/screenshots/7-live.png)
 
-With a stand-in agent, from the first screen to a task waiting for review took 37 seconds in a
-folder without Git and 34 in a Git repository, two decisions and two screens; the agent's own
-work comes on top.
+From the first screen to a task, one click and one field. With a stand-in agent, a task is waiting for
+review in about two seconds on a one-repository folder; the agent's own work comes on top.
 
 A task runs as you: Claude Code starts with your own setup, as in your own sessions (your
 settings, memory, CLAUDE.md, skills, plugins, hooks and MCP servers), plus the team's skills for

@@ -15,6 +15,11 @@ export function resetAtFrom(seconds: unknown, now: number = Date.now()): string 
   return near(seconds * 1000, now);
 }
 
+/** A usage limit's reset a runner reports as a time, kept only when it is one, ahead and near. */
+export function resetAtFromTime(at: unknown, now: number = Date.now()): string | undefined {
+  return typeof at === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(at) ? near(Date.parse(at), now) : undefined;
+}
+
 const near = (at: number, now: number): string | undefined => (at > now && at - now <= LONGEST_WAIT_MS ? new Date(at).toISOString() : undefined);
 
 /**

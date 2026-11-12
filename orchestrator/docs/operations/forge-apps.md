@@ -1,5 +1,40 @@
 # Registering the GitLab and GitHub apps
 
+Two kinds of registration live here: a two-minute one that lets one person's orchestrator sign in to GitHub or GitLab.com with a code and no command line tools, and the applications a shared team orchestrator connects the organization through.
+
+## Sign in without the command line tools (two minutes, once)
+
+A single person's orchestrator can sign in to GitHub or GitLab in the browser with a short code, with no `gh` or `glab` installed. It needs one application registered for it on each forge, once. The orchestrator ships no secret and keeps none: the sign-in sends only the application's public client ID.
+
+### GitHub: an OAuth App
+
+1. On github.com open **Settings > Developer settings > OAuth Apps > New OAuth App**, under your account or your organization.
+2. Name it, for instance `TeamHandbook Orchestrator`. **Homepage URL** and **Authorization callback URL** can be any address you own (the code flow never uses them), for instance the project's page.
+3. Tick **Enable Device Flow**, then register the application.
+4. Copy the **Client ID**. Do not generate a client secret; none is used.
+5. Set `ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID=<Client ID>`, then restart the orchestrator. The sign-in asks GitHub for the `repo` and `read:org` scopes.
+
+This is an OAuth App, not a GitHub App; the GitHub App below is for a shared orchestrator.
+
+### GitLab.com: an application
+
+1. On gitlab.com open **Preferences > Applications > Add new application** (or the same page of a group).
+2. Name it. **Redirect URI**: any address (the device flow does not use it; GitLab asks for one).
+3. **Confidential**: unticked. **Scopes**: `api` and `write_repository`.
+4. Save, copy the **Application ID**, and set `ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID=<Application ID>`. Restart the orchestrator.
+
+A self-managed GitLab keeps today's way (its own sign-in with `glab`, or the organization's application under **Other ways to connect**).
+
+### What a person sees
+
+With a client ID set, the GitHub and GitLab cards say "Sign in to GitHub with a one-time code; nothing to install." and offer **Sign in with GitHub** (or **GitLab**). The card shows "Enter <code> on GitHub" with **Open GitHub**, the person enters the code there and approves, and the card says "Connected as <account> on <host>." With no client ID, the card falls back to the `gh` or `glab` way, and says which command to install. A code that is not entered within the time the forge gives is dropped, and the person presses the button again.
+
+Where the client ID goes for a release: a client ID can also be compiled into a release in `RELEASE_DEVICE_CLIENTS` (`server/forge/device-sign-in.ts`); the environment variable wins when both are set.
+
+---
+
+## For a shared orchestrator
+
 On a team's orchestrator, an owner or an admin connects the organization's GitLab or GitHub in
 the browser, with one click on **Integrations**, once whoever runs the orchestrator has
 registered an app with that forge. Each app is optional: without it a repository connects with a

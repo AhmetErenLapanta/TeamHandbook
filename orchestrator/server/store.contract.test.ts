@@ -1271,6 +1271,40 @@ describe.each(drivers)("the %s store", (_name, fresh) => {
   });
 });
 
+describe.each(drivers)("the %s store's record of the skills a task's agent called", (_name, fresh) => {
+  it("given two different skills noted at once on one task, when both writes finish, then both names are kept", async () => {
+    await using(fresh, async (store) => {
+      // given
+      await store.createTask(task("a", "tsk_a", "running"));
+
+      // when
+      await Promise.all([store.noteUsedSkill("a", "tsk_a", "add-field"), store.noteUsedSkill("a", "tsk_a", "release-notes"), store.noteUsedSkill("a", "tsk_a", "db-query")]);
+
+      // then
+      expect([...(await store.getTask("a", "tsk_a"))!.usedSkills!].sort()).toEqual(["add-field", "db-query", "release-notes"]);
+    });
+  });
+
+  it("given a skill called twice and more skills than the record holds, when each is noted, then a name is kept once, nothing past the most, and another tenant's task is untouched", async () => {
+    await using(fresh, async (store) => {
+      // given
+      await store.createTask(task("a", "tsk_a", "running"));
+      await store.createTask(task("b", "tsk_a", "running"));
+
+      // when
+      await store.noteUsedSkill("a", "tsk_a", "add-field");
+      await store.noteUsedSkill("a", "tsk_a", "add-field");
+      for (let i = 0; i < 25; i++) await store.noteUsedSkill("a", "tsk_a", `skill-${i}`);
+      await store.noteUsedSkill("a", "tsk_missing", "x");
+
+      // then
+      const held = (await store.getTask("a", "tsk_a"))!.usedSkills!;
+      expect([held.length, held[0], held.filter((n) => n === "add-field").length]).toEqual([20, "add-field", 1]);
+      expect((await store.getTask("b", "tsk_a"))!.usedSkills).toBeUndefined();
+    });
+  });
+});
+
 describe.each(drivers)("the %s store's task effects", (_name, fresh) => {
   const at = "2026-11-02T10:00:00.000Z";
   const later = (seconds: number) => new Date(Date.parse(at) + seconds * 1000).toISOString();
@@ -1798,7 +1832,7 @@ describe.each(drivers)("the %s store's machines and the tasks they lease", (_nam
       expect(await store.claimLocalTask("a", "ada@example.invalid", "mch_1", "lease_4", later(90), later(3))).toBeNull();
       expect((await store.getTask("a", "tsk_srv"))?.status).toBe("queued");
       expect((await store.getTask("a", "tsk_bob"))?.status).toBe("queued");
-      expect(await store.taskLease("a", "tsk_srv")).toEqual({ runner: "server", claimedBy: null, leaseId: null, leaseUntil: null, nativeSession: null, branch: null });
+      expect(await store.taskLease("a", "tsk_srv")).toEqual({ runner: "server", claimedBy: null, leaseId: null, leaseUntil: null, nativeSession: null, branch: null, runStartedAt: null });
     });
   });
 
@@ -1825,7 +1859,7 @@ describe.each(drivers)("the %s store's machines and the tasks they lease", (_nam
       expect(held).toEqual([{ taskId: "tsk_1", leaseId: "lease_1", stopRequested: false }]);
       expect(earlySession).toBe("sess-early");
       expect(await store.getTask("a", "tsk_1")).toMatchObject({ status: "needs-review", finishedAt: later(40), baseSha: "b".repeat(40), cost: { usd: 0.75, inputTokens: 150, outputTokens: 7 } });
-      expect(await store.taskLease("a", "tsk_1")).toEqual({ runner: "local", claimedBy: "mch_1", leaseId: null, leaseUntil: null, nativeSession: null, branch: "task/tsk_1" });
+      expect(await store.taskLease("a", "tsk_1")).toEqual({ runner: "local", claimedBy: "mch_1", leaseId: null, leaseUntil: null, nativeSession: null, branch: "task/tsk_1", runStartedAt: at });
       expect(await store.heldTasks("a", "mch_1", later(41))).toEqual([]);
       expect((await store.taskRequests("a", "tsk_1")).map((r) => [r.status, r.responseCapability])).toEqual([["expired", "not_resumable"]]);
     });
@@ -1902,6 +1936,128 @@ describe.each(drivers)("the %s store's machines and the tasks they lease", (_nam
       expect(ended).toBe(true);
       expect(await store.taskLease("a", "tsk_1")).toMatchObject({ claimedBy: "mch_1", leaseId: null, nativeSession: "sess-early" });
       expect(await store.getTask("a", "tsk_1")).toMatchObject({ status: "interrupted", finishedAt: null });
+    });
+  });
+
+  it("given runs on a machine that end for review, fail and are cut off, when each ends, then only the one for review reads as still opening its request", async () => {
+    await using(fresh, async (store) => {
+      // given
+      for (const [i, id] of ["tsk_rev", "tsk_fail", "tsk_cut"].entries()) {
+        await store.createTask(local("a", id, later(i)));
+        await store.claimLocalTask("a", "ada@example.invalid", "mch_1", `lease_${id}`, later(90), later(i));
+      }
+
+      // when
+      await store.finishLeasedTask("a", "tsk_rev", "lease_tsk_rev", { status: "needs-review", error: null, nativeSession: null, branch: "task/rev" }, later(10));
+      await store.finishLeasedTask("a", "tsk_fail", "lease_tsk_fail", { status: "failed", error: "it failed", nativeSession: null, branch: null }, later(10));
+      await store.finishLeasedTask("a", "tsk_cut", "lease_tsk_cut", { status: "interrupted", error: "cut off", nativeSession: null, branch: null }, later(10));
+
+      // then
+      expect([(await store.getTask("a", "tsk_rev"))!.stage, (await store.getTask("a", "tsk_fail"))!.stage ?? null, (await store.getTask("a", "tsk_cut"))!.stage ?? null]).toEqual(["request", null, null]);
+    });
+  });
+
+  it("given a task that runs twice on a machine, when each run ends with the time its agent worked, then the task keeps their sum", async () => {
+    await using(fresh, async (store) => {
+      // given
+      await store.createTask(local("a", "tsk_twice", at));
+      await store.claimLocalTask("a", "ada@example.invalid", "mch_1", "lease_1", later(90), at);
+      await store.finishLeasedTask("a", "tsk_twice", "lease_1", { status: "interrupted", error: "The machine stopped.", nativeSession: "sess", branch: null, ranMs: 60_000 }, later(60));
+      await store.continueLocalTask("a", "tsk_twice", null, later(70));
+      await store.claimLocalTask("a", "ada@example.invalid", "mch_1", "lease_2", later(200), later(80));
+
+      // when
+      await store.finishLeasedTask("a", "tsk_twice", "lease_2", { status: "needs-review", error: null, nativeSession: null, branch: null, ranMs: 90_000 }, later(170));
+
+      // then
+      expect((await store.getTask("a", "tsk_twice"))!.ranMs).toBe(150_000);
+      expect(await store.taskLease("a", "tsk_twice")).toMatchObject({ runStartedAt: later(80) });
+    });
+  });
+
+  it("given machine runs whose agent estimated its turn, when one is cut off, one is stopped after a change, one's turn reports its cost and one ends for review on its own, then only the cut-off and the stopped ones add the estimate", async () => {
+    await using(fresh, async (store) => {
+      // given
+      const ids = ["tsk_cut", "tsk_stop", "tsk_said", "tsk_done"];
+      for (const [i, id] of ids.entries()) {
+        await store.createTask(local("a", id, later(i)));
+        await store.claimLocalTask("a", "ada@example.invalid", "mch_1", `lease_${id}`, later(90), later(i));
+        await store.updateLeasedTask("a", id, `lease_${id}`, { addCost: { usd: 0.1, inputTokens: null, outputTokens: null } });
+        await store.updateLeasedTask("a", id, `lease_${id}`, { turnEstimate: 0.04 });
+      }
+      await store.updateLeasedTask("a", "tsk_said", "lease_tsk_said", { addCost: { usd: 0.05, inputTokens: null, outputTokens: null } });
+      await store.requestStop("a", "tsk_stop", later(10));
+
+      // when
+      await store.finishLeasedTask("a", "tsk_cut", "lease_tsk_cut", { status: "interrupted", error: "The machine stopped.", nativeSession: null, branch: null }, later(20));
+      await store.finishLeasedTask("a", "tsk_stop", "lease_tsk_stop", { status: "needs-review", error: null, nativeSession: null, branch: null }, later(20));
+      await store.finishLeasedTask("a", "tsk_said", "lease_tsk_said", { status: "failed", error: "The agent failed.", nativeSession: null, branch: null }, later(20));
+      await store.finishLeasedTask("a", "tsk_done", "lease_tsk_done", { status: "needs-review", error: null, nativeSession: null, branch: null }, later(20));
+
+      // then
+      const usd = async (id: string) => Number((await store.getTask("a", id))!.cost.usd!.toFixed(4));
+      expect([await usd("tsk_cut"), await usd("tsk_stop"), await usd("tsk_said"), await usd("tsk_done")]).toEqual([0.14, 0.14, 0.15, 0.1]);
+    });
+  });
+
+  it("given runs on a machine cut off at a usage limit, stopped by their person and ended for review, when each ends, then only the cut-off one waits for its reset, which goes on once, counted, and marks one run as going on after it", async () => {
+    await using(fresh, async (store) => {
+      // given
+      const resetAt = later(3_600);
+      for (const [id, lease] of [["tsk_limit", "lease_1"], ["tsk_stop", "lease_2"], ["tsk_done", "lease_3"]] as const) {
+        await store.createTask(local("a", id, at));
+        await store.claimLocalTask("a", "ada@example.invalid", "mch_1", lease, later(90), at);
+      }
+      await store.requestStop("a", "tsk_stop", later(1));
+
+      // when
+      await store.finishLeasedTask("a", "tsk_limit", "lease_1", { status: "interrupted", error: "Claude Code reached its usage limit.", nativeSession: "sess-1", branch: null, limitResetAt: resetAt }, later(5));
+      await store.finishLeasedTask("a", "tsk_stop", "lease_2", { status: "interrupted", error: null, nativeSession: null, branch: null, limitResetAt: resetAt }, later(5));
+      await store.finishLeasedTask("a", "tsk_done", "lease_3", { status: "needs-review", error: null, nativeSession: null, branch: null, limitResetAt: resetAt }, later(5));
+      const before = await store.limitedTasks("a", later(3_599));
+      const due = await store.limitedTasks("a", later(3_660));
+      const wrongReset = await store.continueAfterLimit("a", "tsk_limit", later(10));
+      const first = await store.continueAfterLimit("a", "tsk_limit", resetAt);
+      const again = await store.continueAfterLimit("a", "tsk_limit", resetAt);
+      const took = [await store.takeLimitContinue("a", "tsk_limit"), await store.takeLimitContinue("a", "tsk_limit")];
+
+      // then
+      expect(before).toEqual([]);
+      expect(due).toEqual([{ taskId: "tsk_limit", resetAt, limitAt: later(5), goneOn: 0 }]);
+      expect((await store.getTask("a", "tsk_stop"))!.limitResetAt).toBeUndefined();
+      expect((await store.getTask("a", "tsk_done"))!.limitResetAt).toBeUndefined();
+      expect([wrongReset, first, again, took]).toEqual([false, true, false, [true, false]]);
+      expect(await store.getTask("a", "tsk_limit")).toMatchObject({ status: "queued", error: null });
+      expect((await store.getTask("a", "tsk_limit"))!.limitResetAt).toBeUndefined();
+      expect(await store.taskLease("a", "tsk_limit")).toMatchObject({ claimedBy: "mch_1", nativeSession: "sess-1" });
+    });
+  });
+
+  it("given two tasks waiting for a usage limit's reset, when one is let go of and its person continues the other, then neither waits for it any more and a later one goes on with its count kept", async () => {
+    await using(fresh, async (store) => {
+      // given
+      const resetAt = later(3_600);
+      for (const [id, lease] of [["tsk_drop", "lease_1"], ["tsk_go", "lease_2"]] as const) {
+        await store.createTask(local("a", id, at));
+        await store.claimLocalTask("a", "ada@example.invalid", "mch_1", lease, later(90), at);
+        await store.finishLeasedTask("a", id, lease, { status: "interrupted", error: "limit", nativeSession: "sess", branch: null, limitResetAt: resetAt }, later(5));
+      }
+      await store.continueAfterLimit("a", "tsk_go", resetAt);
+      await store.claimLocalTask("a", "ada@example.invalid", "mch_1", "lease_3", later(4_000), later(3_700));
+      await store.finishLeasedTask("a", "tsk_go", "lease_3", { status: "interrupted", error: "limit", nativeSession: "sess", branch: null, limitResetAt: later(7_200) }, later(3_800));
+
+      // when
+      const dropped = [await store.dropLimit("a", "tsk_drop", later(10)), await store.dropLimit("a", "tsk_drop", resetAt)];
+      const continued = await store.continueLocalTask("a", "tsk_go", null, later(3_900));
+
+      // then
+      expect(dropped).toEqual([false, true]);
+      expect(continued).toBe(true);
+      expect(await store.limitedTasks("a", later(90_000))).toEqual([]);
+      expect((await store.getTask("a", "tsk_drop"))!.status).toBe("interrupted");
+      await store.claimLocalTask("a", "ada@example.invalid", "mch_1", "lease_4", later(4_100), later(4_000));
+      await store.finishLeasedTask("a", "tsk_go", "lease_4", { status: "interrupted", error: "limit", nativeSession: "sess", branch: null, limitResetAt: later(9_000) }, later(4_050));
+      expect(await store.limitedTasks("a", later(90_000))).toEqual([{ taskId: "tsk_go", resetAt: later(9_000), limitAt: later(4_050), goneOn: 1 }]);
     });
   });
 
@@ -2126,6 +2282,37 @@ describe.each(drivers)("the %s store's tasks in a folder without git", (_name, f
 describe.each(drivers)("the %s store's follow-ups for a running task", (_name, fresh) => {
   const at = "2026-11-03T10:00:00.000Z";
   const followUp = (id: string, key: string, text = "also update the changelog"): NewFollowUp => ({ tenant: "a", id, taskId: "tsk_1", source: "person", key, text, quotes: null, createdAt: at, createdBy: "ada@example.invalid" });
+
+  it("given a person's follow-up waiting, one delivered and a watch's, when each is changed and taken back, then only the waiting person's changes, keeping its quotes when none are given, and is taken back once, and words that look like a secret are refused", async () => {
+    await using(fresh, async (store) => {
+      // given
+      const waiting = (await store.addFollowUp(followUp("fup_w", "w"))).followUp.id;
+      const reached = (await store.addFollowUp(followUp("fup_r", "r"))).followUp.id;
+      const watched = (await store.addFollowUp({ ...followUp("fup_x", "x"), source: "watch" })).followUp.id;
+      await store.markFollowUpsDelivered("a", [reached], at);
+
+      // when
+      const edits = [
+        await store.editFollowUp("a", "tsk_1", waiting, "also update the readme", [{ path: "README.md", lines: "1-2", text: "old" }]),
+        await store.editFollowUp("a", "tsk_1", reached, "too late", null),
+        await store.editFollowUp("a", "tsk_1", watched, "not a person's", null),
+        await store.editFollowUp("b", "tsk_1", waiting, "another organization", null),
+      ];
+      const wordsOnly = await store.editFollowUp("a", "tsk_1", waiting, "also update the readme and the index");
+      const secret = store.editFollowUp("a", "tsk_1", waiting, "use ghp_0123456789abcdefghijklmnopqrstuvwxyzAB", null);
+      const drops = [await store.dropFollowUp("a", "tsk_1", waiting), await store.dropFollowUp("a", "tsk_1", waiting), await store.dropFollowUp("a", "tsk_1", watched)];
+
+      // then
+      expect([...edits, wordsOnly]).toEqual([true, false, false, false, true]);
+      await expect(secret).rejects.toThrow(/looks like a/);
+      expect(drops).toEqual([true, false, false]);
+      expect((await store.taskFollowUps("a", "tsk_1")).map((f) => [f.id, f.status, f.text, f.quotes])).toEqual([
+        ["fup_r", "delivered", "also update the changelog", null],
+        ["fup_w", "dismissed", "also update the readme and the index", [{ path: "README.md", lines: "1-2", text: "old" }]],
+        ["fup_x", "pending", "also update the changelog", null],
+      ]);
+    });
+  });
 
   it("given a follow-up written twice by two nodes, one with quotes, and the task ending, when they are delivered and closed, then each key is kept once, delivered once, what was left pending is closed, and the delivered ones are counted per task by source", async () => {
     await using(fresh, async (store) => {
@@ -2729,6 +2916,12 @@ describe("the schema's shape and the orchestrator that opens it", () => {
       [39, "f27f1d8af8c7"],
       [40, "13272c5f783e"],
       [41, "413008c457f2"],
+      [42, "6a2d1827c955"],
+      [43, "491cde8f73a5"],
+      [44, "37e009550004"],
+      [45, "ea95434da31e"],
+      [46, "78cbdff6dfff"],
+      [47, "a97e538589ab"],
     ]);
   });
 });

@@ -46,6 +46,17 @@ describe("the Claude Code decoder in a session of several turns", () => {
     expect(report.cost).toEqual({ usd: 0.02, inputTokens: 10, outputTokens: 50 });
   });
 
+  it("given the agent calling a skill, when the frame is decoded, then the call's target is the skill's name and not a path", () => {
+    // given
+    const frame = JSON.stringify({ type: "assistant", message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "tool_use", id: "toolu_9", name: "Skill", input: { skill: "add-ledger-migration" } }] } });
+
+    // when
+    const events = claudeCodeDecoder().decode(frame);
+
+    // then
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool_call", tool: "Skill", target: "add-ledger-migration", status: "started" }));
+  });
+
   it("given one reply split into three assistant frames, the last with its whole output, when they are decoded, then the turn's estimate is that reply's priced once at its last usage", () => {
     // given
     const decoder = claudeCodeDecoder();
@@ -253,6 +264,11 @@ describe("Claude Code's permission questions", () => {
     // then
     expect(events.some((e) => e.type === "request")).toBe(false);
     expect(events).toContainEqual({ type: "tool_call", id: "toolu-r1", tool: "mcp__docs__delete_page", target: "/handbook", mcp: { server: "docs", tool: "delete_page" }, status: "refused", refusal: { kind: "not-allowed", reason: "This task does not allow this tool." } });
+  });
+
+  it("given a question about loading a skill, when it arrives, then the card names the skill", async () => {
+    const { events } = await run(script(ask("r1", "Skill", { skill: "add-ledger-migration" }), answered("r1", { behavior: "allow", updatedInput: { skill: "add-ledger-migration" } }), done), (e, s) => e.type === "request" && s.respond("r1", "allow-once"), new Set([...FILE_TOOLS, "Skill"]));
+    expect(events.filter((e) => e.type === "request")).toEqual([{ type: "request", request: { id: "r1", kind: "permission", tool: "Skill", summary: "add-ledger-migration" } }]);
   });
 
   it("given a question the agent takes back, when a person answers it after, then the card is withdrawn and the answer is refused", async () => {

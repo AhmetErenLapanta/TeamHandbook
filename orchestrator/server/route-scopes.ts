@@ -135,6 +135,8 @@ export const ROUTE_SCOPES = {
   "GET /api/forge/hosts": "session",
   "GET /api/forge/:kind/sign-in": "session",
   "POST /api/forge/:kind/sign-in": "session",
+  "POST /api/forge/:kind/device": "session",
+  "DELETE /api/forge/:kind/device": "session",
   "GET /api/forge/:kind/connection": "session",
   "GET /api/forge/:kind/connection/check": "session",
   "POST /api/forge/:kind/connect": "session",
@@ -277,6 +279,9 @@ export const ROUTE_SCOPES = {
   "GET /api/tasks/:id/requests": ["tasks", "read"],
   "POST /api/tasks/:id/requests/:request": "session",
   "POST /api/tasks/:id/messages": "session",
+  // Words still waiting for the agent are its starter's to change or take back, from the same signed-in browser.
+  "PATCH /api/tasks/:id/messages/:messageId": "session",
+  "DELETE /api/tasks/:id/messages/:messageId": "session",
   // A teammate's follow-up waits for the task's starter; suggesting and answering take a person signed in.
   "POST /api/tasks/:id/suggestions": "session",
   "POST /api/tasks/:id/suggestions/:sid/continue": "session",
@@ -306,6 +311,7 @@ export const ROUTE_SCOPES = {
   "GET /api/handbook/own": "session",
   "POST /api/repos/:id/handbook/proposal": "session",
   "POST /api/repos/:id/handbook": "session",
+  "POST /api/handbook/plugin": "session",
   "GET /api/repos/:id/requests/:number/changes": "session",
   "GET /api/repos/:id/requests/:number/changes/:path{.+}": "session",
   "GET /api/repos/:id/media": "session",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { againInput, endReasonOf, findLines, formStart, issueLine, LOG_WINDOW, ordinal, resetDay, shownStatus, splitWork, startLink, startSummary, STATUS_TEXT, reviewSummary, targetNames, taskFacts, taskTitle, windowStart } from "./Tasks";
+import { againInput, endReasonOf, waitedMs, waitSaid, findLines, formStart, issueLine, LOG_WINDOW, ordinal, resetDay, shownStatus, splitWork, startLink, startSummary, STATUS_TEXT, reviewSummary, targetNames, taskFacts, taskTitle, windowStart } from "./Tasks";
 import type { TaskRecord } from "./api";
 
 describe("resetDay", () => {
@@ -58,7 +58,7 @@ describe("startLink", () => {
     const read = startLink(search);
 
     // then
-    expect(read).toEqual({ issue: "SHOP-233", repo: "payments-api", title: "", description: "" });
+    expect(read).toEqual({ issue: "SHOP-233", repo: "payments-api", title: "", description: "", stripped: true });
   });
 
   it("given a link with neither, when it is read, then the form starts empty", () => {
@@ -66,7 +66,17 @@ describe("startLink", () => {
     const read = startLink("?source=jira");
 
     // then
-    expect(read).toEqual({ issue: "", repo: "", title: "", description: "" });
+    expect(read).toEqual({ issue: "", repo: "", title: "", description: "", stripped: false });
+  });
+
+  it("given a link carrying the work as a prompt with a hidden bidi mark, and one with a clean description, when each is read, then the prompt fills the description without the mark and is flagged, and the clean one is not", () => {
+    // when
+    const prompted = startLink(`?prompt=${encodeURIComponent("Add a retry\n\u202eto the webhook")}`);
+    const described = startLink(`?description=${encodeURIComponent("Add a retry\nto the webhook")}`);
+
+    // then
+    expect(prompted).toMatchObject({ description: "Add a retry\nto the webhook", stripped: true });
+    expect(described).toMatchObject({ description: "Add a retry\nto the webhook", stripped: false });
   });
 });
 
@@ -300,6 +310,14 @@ describe("taskFacts", () => {
     expect(running.run.map((f) => f.term)).not.toContain("Cost");
   });
 
+  it("given a finished task that carries the orchestrator's own count of how long the agent ran, when its facts are read, then Ran is that count, not the span from start to end", () => {
+    // when
+    const facts = taskFacts({ ...base, startedAt: "2026-11-03T10:00:00Z", finishedAt: "2026-11-03T12:46:07Z", ranMs: 12 * 60_000 }, "Claude Code", { email: "lin@example.invalid", mode: "self-hosted" }, when);
+
+    // then
+    expect(facts.run).toContainEqual({ term: "Ran", value: "12m" });
+  });
+
   it("given a task the orchestrator sent to a folder on one person's own orchestrator, when its facts are read, then the folder is the one it went to, not the record kept for it", () => {
     // when
     const facts = taskFacts(base, "Claude Code", { email: "lin@example.invalid", mode: "local" }, when, "~/code/payments-api");
@@ -391,5 +409,40 @@ describe("endReasonOf", () => {
     expect(endReasonOf("The plan waited 30 minutes.\nat step 4")).toBe(": The plan waited 30 minutes.");
     expect(endReasonOf("  ")).toBe(".");
     expect(endReasonOf(null)).toBe(".");
+  });
+});
+
+describe("waitedMs", () => {
+  const at = (hm: string) => `2026-11-10T${hm}:00Z`;
+  const request = (over: Record<string, unknown>) => ({ id: "r", kind: "plan", payload: {}, status: "answered", responseCapability: "live", answer: null, answeredBy: null, createdAt: at("10:10"), ...over }) as NonNullable<TaskRecord["requests"]>[number];
+
+  it("given a run of two hours with an answered card, a card that ran out, one that overlapped it and one the agent took back, when its waiting is counted, then each stretch counts once and the withdrawn one not at all", () => {
+    // given
+    const task = {
+      startedAt: at("10:00"),
+      finishedAt: at("12:00"),
+      requests: [
+        request({ createdAt: at("10:10"), answeredAt: at("10:20") }),
+        request({ createdAt: at("10:30"), status: "expired", expiresAt: at("11:30") }),
+        request({ createdAt: at("11:00"), answeredAt: at("11:10") }),
+        request({ createdAt: at("11:40"), status: "withdrawn" }),
+      ],
+    };
+
+    // then
+    expect(waitedMs(task)).toBe(70 * 60_000);
+  });
+
+  it("given a card still unanswered when the run ended and a task with no cards, when their waiting is counted, then the first waited until the end and the second not at all", () => {
+    // then
+    expect(waitedMs({ startedAt: at("10:00"), finishedAt: at("10:30"), requests: [request({ createdAt: at("10:10"), status: "pending" })] })).toBe(20 * 60_000);
+    expect(waitedMs({ startedAt: at("10:00"), finishedAt: at("10:30") })).toBe(0);
+  });
+});
+
+describe("waitSaid", () => {
+  it("given waits of seven minutes exactly, an hour, two and a half hours and ninety seconds, when each is said, then none carries seconds", () => {
+    // then
+    expect([7 * 60_000, 60 * 60_000, 150 * 60_000, 90_000].map(waitSaid)).toEqual(["7m", "1h", "2h 30m", "2m"]);
   });
 });

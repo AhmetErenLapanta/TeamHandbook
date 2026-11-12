@@ -19,6 +19,7 @@ export function memoryStore() {
   };
   const natives = new Map<string, string>();
   const contexts = new Map<string, number>();
+  const used = new Map<string, string[]>();
   const patched: { taskId: string; patch: unknown }[] = [];
   const stops = new Set<string>();
   const logs = new Map<string, string[]>();
@@ -84,6 +85,9 @@ export function memoryStore() {
     async updateTask(_tenant, taskId, patch) {
       patched.push({ taskId, patch });
     },
+    async noteUsedSkill(_tenant, taskId, name) {
+      used.set(taskId, [...new Set([...(used.get(taskId) ?? []), name])]);
+    },
     async noteTaskContext(_tenant, taskId, tokens) {
       if (!contexts.has(taskId)) contexts.set(taskId, tokens);
     },
@@ -109,6 +113,6 @@ export function memoryStore() {
       return n;
     },
   };
-  return { store, queued, events, requests, ended, leases, natives, contexts, logs, followUps, patched };
+  return { store, queued, events, requests, ended, leases, natives, contexts, used, logs, followUps, patched };
 }
 

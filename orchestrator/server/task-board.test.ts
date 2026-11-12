@@ -94,7 +94,17 @@ describe("the Tasks board, by whose turn it is", () => {
     expect([owners.sections.yours, owners.sections.agents.map((c) => c.id).sort()]).toEqual([[], ["tsk_queued", "tsk_working"]]);
     expect(board.sections.yours.find((c) => c.id === "tsk_asking")).toMatchObject({ agent: "fake", startedAt: at(0), issueKey: "SHOP-12", reason: null });
     expect(board.sections.yours.find((c) => c.id === "tsk_failed")?.reason).toBe("The plan waited 30 minutes for an answer.");
-    expect(found).toEqual({ tasks: [{ id: "tsk_review", title: "Add the Retry note", repoId: "shop", status: "needs-review" }], projects: [], folders: [] });
+    expect(found).toEqual({ tasks: [{ id: "tsk_review", title: "Add the Retry note", repoId: "shop", status: "needs-review" }], inLog: [], projects: [], folders: [] });
+    expect((await search(ctx, max, "shop-12")).tasks.map((t) => t.id)).toEqual(["tsk_asking"]);
+
+    // when the agent's words are searched
+    await store.appendTaskLog(TENANT, "tsk_kept", ["The agent ran the Migration script."]);
+    const logged = await search(ctx, max, "migration", undefined, NOW);
+    const short = await search(ctx, max, "mi", undefined, NOW);
+
+    // then they find the task, and only for words of three letters or more
+    expect(logged.inLog.map((t) => t.id)).toEqual(["tsk_kept"]);
+    expect(short.inLog).toEqual([]);
   });
 
   it("given a local orchestrator whose home holds a project named like the search, when its owner and a member of it search, then only the owner is shown the folder", async () => {

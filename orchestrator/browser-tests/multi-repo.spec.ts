@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { chooseAgent, newTaskForm, optionsOf, work } from "./task-form.js";
+import { chooseAgent, moreOptions, newTaskForm, optionsOf, work } from "./task-form.js";
 
 const CANDIDATES = [
   { id: "checkout-service", name: "checkout-service", team: "Payments" },
@@ -194,6 +194,8 @@ test("given team skills chosen, when the form switches to them, then it asks for
 
   // then
   expect(await optionsOf(form, "Repository")).toEqual(["payments-skills Payments", "platform-skills Platform"]);
+  await expect(form.getByRole("combobox", { name: "Kind of task" })).toHaveCount(0);
+  await moreOptions(form);
   expect(await optionsOf(form, "Kind of task")).toEqual(["Any change", "Write a new skill", "Improve a skill", "Refresh the TeamHandbook scaffold", "Switch the plugin to versioning by commit"]);
   await expect(form.getByRole("radio", { name: "Let the agent decide (recommended)" })).toHaveCount(0);
 });

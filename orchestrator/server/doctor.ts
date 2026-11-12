@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { backupSettings } from "./backup.js";
 import type { BackupSettings } from "./backup.js";
-import { orchestratorDataDir, holdDataDir } from "./data-lock.js";
+import { orchestratorDataDir, holdDataDir, privateDataDir } from "./data-lock.js";
 import { connectedOrgs, orgDir, profileFile } from "../runner/profile.js";
 import { readSecretEnv } from "./secret-env.js";
 import { RUNNER_SERVICE, serviceEnvFile, serviceInstalled } from "./service.js";
@@ -176,6 +176,8 @@ export async function doctorCommand(argv: readonly string[], say: (line: string)
   const fix = argv.includes("--fix");
   const dataDir = orchestratorDataDir(env);
   try {
+    // A folder this makes first is made as a start would make it, so doctor never reports its own as open.
+    privateDataDir(dataDir, env);
     holdDataDir(dataDir, `an orchestrator is running on ${dataDir}; stop it before doctor looks its data over`);
   } catch (err) {
     say(`doctor: ${(err as Error).message}`);

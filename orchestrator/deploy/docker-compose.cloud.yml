@@ -68,6 +68,17 @@ services:
       ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_ID: "${ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_ID:-}"
       ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_SECRET_FILE: "${ORCHESTRATOR_SIGN_IN_MICROSOFT_CLIENT_ID:+/run/secrets/sign-in/microsoft_client_secret}"
       ORCHESTRATOR_SIGN_IN_MICROSOFT_ISSUER: "${ORCHESTRATOR_SIGN_IN_MICROSOFT_ISSUER:-}"
+      # The GitLab OAuth application and the GitHub App the operator registered, for one-click connect;
+      # each secret is a file under secrets/forge, named only when its id is set.
+      ORCHESTRATOR_FORGE_GITLAB_CLIENT_ID: "${ORCHESTRATOR_FORGE_GITLAB_CLIENT_ID:-}"
+      ORCHESTRATOR_FORGE_GITLAB_CLIENT_SECRET_FILE: "${ORCHESTRATOR_FORGE_GITLAB_CLIENT_ID:+/run/secrets/forge/gitlab_client_secret}"
+      ORCHESTRATOR_FORGE_GITLAB_URL: "${ORCHESTRATOR_FORGE_GITLAB_URL:-}"
+      ORCHESTRATOR_FORGE_GITHUB_APP_ID: "${ORCHESTRATOR_FORGE_GITHUB_APP_ID:-}"
+      ORCHESTRATOR_FORGE_GITHUB_APP_SLUG: "${ORCHESTRATOR_FORGE_GITHUB_APP_SLUG:-}"
+      ORCHESTRATOR_FORGE_GITHUB_CLIENT_ID: "${ORCHESTRATOR_FORGE_GITHUB_CLIENT_ID:-}"
+      ORCHESTRATOR_FORGE_GITHUB_CLIENT_SECRET_FILE: "${ORCHESTRATOR_FORGE_GITHUB_APP_ID:+/run/secrets/forge/github_client_secret}"
+      ORCHESTRATOR_FORGE_GITHUB_PRIVATE_KEY_FILE: "${ORCHESTRATOR_FORGE_GITHUB_APP_ID:+/run/secrets/forge/github_private_key}"
+      ORCHESTRATOR_FORGE_GITHUB_WEBHOOK_SECRET_FILE: "${ORCHESTRATOR_FORGE_GITHUB_APP_ID:+/run/secrets/forge/github_webhook_secret}"
       # Each organization's plan limits: a positive whole number or unlimited; a cloud orchestrator refuses to start without them.
       ORCHESTRATOR_QUOTA_MEMBERS: "${ORCHESTRATOR_QUOTA_MEMBERS:?set ORCHESTRATOR_QUOTA_MEMBERS in the env file}"
       ORCHESTRATOR_QUOTA_TASKS_PER_MONTH: "${ORCHESTRATOR_QUOTA_TASKS_PER_MONTH:?set ORCHESTRATOR_QUOTA_TASKS_PER_MONTH in the env file}"
@@ -86,6 +97,7 @@ services:
     volumes:
       - orchestrator-data:/data
       - "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/sign-in:/run/secrets/sign-in:ro"
+      - "${ORCHESTRATOR_SECRETS_DIR:-./secrets}/forge:/run/secrets/forge:ro"
       - docker-proxy:/run/docker-proxy
     networks: [edge, internal]
     depends_on:

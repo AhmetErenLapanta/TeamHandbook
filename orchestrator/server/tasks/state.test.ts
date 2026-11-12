@@ -23,6 +23,7 @@ describe("where a task stands, in one word", () => {
       [one("failed"), null, false],
       [one("cancelled"), null, false],
       [one("interrupted"), null, false],
+      [one("interrupted"), "limit", false],
       [one("needs-review", { result: "changes" }), null, false],
       [one("needs-review", { result: "changes", changes: { files: [], undone: null, kept: { at: "", by: "" } } }), null, false],
       [one("needs-review", { result: "changes", changes: { files: [], undone: { at: "", by: "", kept: [] } } }), null, false],
@@ -38,7 +39,19 @@ describe("where a task stands, in one word", () => {
     const forges = [1, 4].map((n) => taskForge(one("needs-review", { requestNumber: n }), requestOf));
 
     // then
-    expect(states).toEqual(["waiting", "waiting-machine", "usage-limit", "working", "needs-you", "needs-you", "failed", "failed", "stopped", "stopped", "needs-you", "kept", "undone", "in-review", "merged", "undone", "kept", "needs-you"]);
+    expect(states).toEqual(["waiting", "waiting-machine", "usage-limit", "working", "needs-you", "needs-you", "failed", "failed", "stopped", "stopped", "usage-limit", "needs-you", "kept", "undone", "in-review", "merged", "undone", "kept", "needs-you"]);
     expect(forges).toEqual([{ kind: "gitlab", number: 1, url: "https://gitlab.example.com/acme/payments/-/merge_requests/1" }, null]);
+  });
+
+  it("given a change kept on a person's machine that its person opened a request for on a forge the organization never connected, when the task is read, then it is in review and its forge is that request", () => {
+    // given
+    const opened = { forge: "github", number: 12, url: "https://github.example.invalid/ada/notes/pull/12" };
+    const task = one("needs-review", { targets: [{ repoId: "payments", status: "request", reason: "opened on github as ada", path: "notes", baseSha: "1".repeat(40), branch: "task/notes", tests: null, requestNumber: null, error: null, cost: { usd: null, inputTokens: null, outputTokens: null }, forgeRequest: opened }] });
+
+    // when
+    const read = [taskState(task, requestOf, null), taskForge(task, requestOf)];
+
+    // then
+    expect(read).toEqual(["in-review", { kind: "github", number: 12, url: opened.url }]);
   });
 });

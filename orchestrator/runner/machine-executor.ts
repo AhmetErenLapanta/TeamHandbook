@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { AgentEvent, AgentSession } from "../server/tasks/adapters/contract.js";
+import type { AgentEvent, AgentFailure, AgentSession } from "../server/tasks/adapters/contract.js";
 import { openSession } from "../server/tasks/adapters/session.js";
 import { writeApprovedProjectMcp, writeTeamSkills } from "../server/tasks/agents.js";
 import type { AgentAdapter, AgentSetup } from "../server/tasks/agents.js";
@@ -71,7 +71,7 @@ export interface MachineExecutorOptions {
 }
 
 class Ended extends Error {
-  constructor(readonly status: "failed" | "interrupted", message: string) {
+  constructor(readonly status: "failed" | "interrupted", message: string, readonly kept: Pick<TaskOutcome, "nativeSessionId" | "limitResetAt"> = { nativeSessionId: null }) {
     super(message);
   }
 }
@@ -131,7 +131,7 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
       try {
         outcome = await runIn(task, work, adapter, paths, resume, hooks);
       } catch (error) {
-        outcome = error instanceof Ended ? ended(error.status, error.message) : ended("failed", error instanceof Error ? error.message : String(error));
+        outcome = error instanceof Ended ? { ...ended(error.status, error.message), ...error.kept } : ended("failed", error instanceof Error ? error.message : String(error));
       }
       if (outcome.status !== "interrupted") {
         await releasePersonalGuard(root);
@@ -241,7 +241,7 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
         : { status: "needs-review", error: result.stopped ?? null, nativeSessionId: result.nativeSessionId, branch: null, position: null, request: null, changes };
     } catch (error) {
       const changes = await keep().catch(() => null);
-      outcome = { ...(error instanceof Ended ? ended(error.status, error.message) : ended("failed", error instanceof Error ? error.message : String(error))), changes };
+      outcome = { ...(error instanceof Ended ? { ...ended(error.status, error.message), ...error.kept } : ended("failed", error instanceof Error ? error.message : String(error))), changes };
     }
     await releasePersonalGuard(root);
     await rm(root, { recursive: true, force: true });
@@ -259,11 +259,11 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     if (task.nativeSession !== null && !resume) return ended("failed", "The copies this task's session worked on are gone from this machine, so it cannot go on; start it again.");
     let outcome: TaskOutcome;
     try {
-      const repos = resume ? (JSON.parse(await readFile(manifest, "utf8")) as WorkspaceRepo[]) : await copyRepos(place.folder, paths, manifest, hooks);
+      const repos = resume ? (JSON.parse(await readFile(manifest, "utf8")) as WorkspaceRepo[]) : await copyRepos(place.folder, paths, manifest, hooks, work);
       const result = await agentRun(task, work, adapter, paths, resume, hooks);
       outcome = await deliverRepos(task, work, place.folder, paths, repos, result, hooks);
     } catch (error) {
-      outcome = error instanceof Ended ? ended(error.status, error.message) : ended("failed", error instanceof Error ? error.message : String(error));
+      outcome = error instanceof Ended ? { ...ended(error.status, error.message), ...error.kept } : ended("failed", error instanceof Error ? error.message : String(error));
     }
     if (outcome.status !== "interrupted") {
       await releasePersonalGuard(root);
@@ -272,23 +272,31 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     return outcome;
   }
 
-  async function copyRepos(folder: string, paths: TaskPaths, manifest: string, hooks: ExecutorHooks): Promise<WorkspaceRepo[]> {
+  async function copyRepos(folder: string, paths: TaskPaths, manifest: string, hooks: ExecutorHooks, work: WorkspaceWork): Promise<WorkspaceRepo[]> {
     await releasePersonalGuard(paths.root);
     await rm(paths.root, { recursive: true, force: true });
     await Promise.all([paths.work, paths.home, paths.tmp, paths.git].map((dir) => mkdir(dir, { recursive: true })));
     const found = await workingCopies(folder);
     if ("tooMany" in found) throw new Ended("failed", `The task did not run: the folder holds more than ${WORKING_COPIES_MAX} repositories; pick the one, or the folder of the few, the task is about.`);
     if (!found.length) throw new Ended("failed", "The task did not run: the folder holds no git repository; open it as a folder project to work in it in place.");
+    const goingOn = work.continues?.repos ?? [];
+    const gone = goingOn.find((entry) => !found.includes(entry.path));
+    if (gone) throw new Ended("failed", `${gone.path || basename(folder)} is no longer a repository in the folder, so the task cannot go on from it; nothing was changed.`);
     const repos: WorkspaceRepo[] = [];
     for (const path of found) {
       const own = join(folder, path);
-      const head = (await git(paths, ["-C", own, "rev-parse", "--verify", "HEAD^{commit}"], { noDirs: true }).catch(() => "")).trim();
+      const from = goingOn.find((entry) => entry.path === path);
+      if (from) {
+        const at = (await git(paths, ["-C", own, "rev-parse", "--verify", "--quiet", `refs/heads/${work.branch}^{commit}`], { noDirs: true }).catch(() => "")).trim();
+        if (at !== from.head) throw new Ended("failed", `${work.branch} of ${path || basename(folder)} moved since the request was read; nothing was changed.`);
+      }
+      const head = from ? from.head : (await git(paths, ["-C", own, "rev-parse", "--verify", "HEAD^{commit}"], { noDirs: true }).catch(() => "")).trim();
       if (!head) {
         hooks.log(`${path || "The folder"} has no commit yet, so the task leaves it out.`);
         continue;
       }
       const objects = (await git(paths, ["-C", own, "rev-parse", "--path-format=absolute", "--git-common-dir"], { noDirs: true })).trim();
-      const repo: WorkspaceRepo = { path, head, git: join(paths.git, path ? path.replace(/[^A-Za-z0-9._-]/g, "_") : "_folder") };
+      const repo: WorkspaceRepo = { path, head, git: join(paths.git, path ? path.replace(/[^A-Za-z0-9._-]/g, "_") : "_folder"), ...(from ? { baseSha: from.baseSha } : {}) };
       const at = repoPaths(paths, repo);
       await mkdir(at.work, { recursive: true });
       await git(at, ["init", "--quiet", "--bare", at.git], { noDirs: true });
@@ -298,7 +306,8 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     }
     if (!repos.length) throw new Ended("failed", "The task did not run: no repository in the folder has a commit to start from.");
     await writeFile(manifest, JSON.stringify(repos));
-    hooks.log(`Copied ${repos.length} repositories of ${basename(folder)} for the agent at their last commits; what you have not committed there is not in the task, and your own copies stay as they are.`);
+    if (goingOn.length) hooks.log(`Went on from ${work.branch} in ${goingOn.length} of the ${repos.length} repositories of ${basename(folder)}, where the request left it; the others start at their last commits.`);
+    else hooks.log(`Copied ${repos.length} repositories of ${basename(folder)} for the agent at their last commits; what you have not committed there is not in the task, and your own copies stay as they are.`);
     return repos;
   }
 
@@ -321,14 +330,25 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
       const tree = (await git(at, ["write-tree"])).trim();
       const commit = (await git(at, ["commit-tree", tree, "-p", repo.head, "-m", task.title], { extraEnv: { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email } })).trim();
       if (!(await hooks.leaseHeld())) throw new Ended("interrupted", "This machine no longer holds the task, so its change was not pushed.");
-      await git(paths, ["-C", own, "fetch", "--quiet", "--no-tags", at.git, `${commit}:refs/heads/${work.branch}`], { noDirs: true, ...(result.stopped ? {} : { signal: hooks.signal }), extraEnv: { GIT_ALLOW_PROTOCOL: "file" } });
-      const origin = withoutCredential((await git(paths, ["-C", own, "config", "--get", "remote.origin.url"], { noDirs: true }).catch(() => "")).trim());
       const label = repo.path || basename(folder);
+      const refused = await git(paths, ["-C", own, "fetch", "--quiet", "--no-tags", at.git, `${commit}:refs/heads/${work.branch}`], { noDirs: true, ...(result.stopped ? {} : { signal: hooks.signal }), extraEnv: { GIT_ALLOW_PROTOCOL: "file" } }).then(
+        () => null,
+        (error: Error) => {
+          if (!result.stopped) stopped(hooks);
+          return error.message;
+        },
+      );
+      if (refused) {
+        hooks.log(`${label}: the change was not written to ${work.branch} in your repository (${refused}); it is left out of this task.`);
+        continue;
+      }
+      const origin = withoutCredential((await git(paths, ["-C", own, "config", "--get", "remote.origin.url"], { noDirs: true }).catch(() => "")).trim());
       const target = origin ? (await git(paths, ["-C", own, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { noDirs: true }).catch(() => "")).trim().replace(/^origin\//, "") || null : null;
       if (origin && !target) hooks.log(`${label} does not say which branch its origin's default is, so its request has no target; git remote set-head origin -a in it names one.`);
       hooks.log(origin ? `The branch ${work.branch} of ${label} is in your repository; this machine pushes nothing to its origin, so the push is yours.` : `${label} has no remote; its branch ${work.branch} is in your repository.`);
-      delivered.push({ path: repo.path, branch: work.branch, head: commit, baseSha: repo.head, origin, target, request: { title: task.title, body }, pushed: false });
+      delivered.push({ path: repo.path, branch: work.branch, head: commit, baseSha: repo.baseSha ?? repo.head, origin, target, request: { title: task.title, body }, pushed: false });
     }
+    if (!delivered.length) throw new Ended("failed", "No repository's change could be written to its task branch, so there is nothing to review; the log says why for each.");
     if (result.stopped) hooks.log(keptAfterStop(result.stopped));
     return { status: "needs-review", error: result.stopped ?? null, nativeSessionId: result.nativeSessionId, branch: null, position: null, request: null, repos: delivered };
   }
@@ -467,7 +487,7 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     const result = await converse(session, hooks, work.limits.timeoutMs, stop, ownMcpTool(work.setup.mcpTools), ready.masked, launched !== null);
     stopped(hooks);
     if (result.timedOut) throw new Ended("failed", `The agent ran past the task's ${Math.round(work.limits.timeoutMs / 60_000)} minutes and was stopped.`);
-    if (result.terminal?.status !== "completed") throw new Ended("failed", result.terminal?.failure?.message ?? "The agent stopped before it finished.");
+    if (result.terminal?.status !== "completed") throw untilReset(work, result.terminal?.failure, result.terminal?.nativeSessionId ?? sessionId) ?? new Ended("failed", result.terminal?.failure?.message ?? "The agent stopped before it finished.");
     return { summary: result.terminal.summary, nativeSessionId: result.terminal.nativeSessionId ?? sessionId };
   }
 
@@ -539,6 +559,7 @@ interface WorkspaceRepo {
   path: string;
   head: string;
   git: string;
+  baseSha?: string;
 }
 
 export function machinePush({ dataDir, org, hostEnv, gitConfig = [], gitEnv = {} }: Pick<MachineExecutorOptions, "dataDir" | "org" | "hostEnv" | "gitConfig" | "gitEnv">): (ask: PushAsk) => Promise<PushAnswer> {
@@ -583,6 +604,11 @@ interface Prepared {
   setup: AgentSetup;
   masked: string[];
   prompt: string;
+}
+
+function untilReset(work: RemoteWork, failure: AgentFailure | undefined, nativeSessionId: string | null): Ended | null {
+  if (failure?.class !== "usage_limit" || !failure.resetAt || !nativeSessionId || "folder" in work) return null;
+  return new Ended("interrupted", failure.message, { nativeSessionId, limitResetAt: failure.resetAt });
 }
 
 function stoppedByPerson(hooks: ExecutorHooks): boolean {

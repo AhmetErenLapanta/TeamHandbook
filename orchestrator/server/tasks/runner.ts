@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { access, copyFile, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { calledSkill } from "../skill-rules.js";
 import { newId } from "../ids.js";
 import { DEFAULT_MODE } from "../../shared/permission-mode.js";
 import type { PermissionMode } from "../../shared/permission-mode.js";
@@ -12,12 +13,12 @@ import { removesAgentCredits, withoutAgentCredits } from "../forge/agent-credits
 import { changeCommit, localRepoPath, scratch } from "../forge/local.js";
 import { localMachineId } from "../local.js";
 import { answeredSection, STUCK_RULE, stuckOf } from "./stuck.js";
-import { requestForPushedBranch } from "../forge/pushed.js";
+import { requestForPushedBranch, updateRequestBranch } from "../forge/pushed.js";
 import { machineFolderOf, projectFolder } from "../projects.js";
 import { shadowChanges, shadowPlaceOf, shadowSnapshot } from "../shadow-git.js";
 import type { Principal } from "../auth.js";
 import { canStartOnTeam, everyTask } from "./guards.js";
-import { keepHandedChecks, openPushedRequest } from "./leased.js";
+import { continuedRequest, keepHandedChecks, openPushedRequest } from "./leased.js";
 import { attachmentPath } from "../attachments.js";
 import { machineMcpServerOf, readTaskTools } from "../task-tools.js";
 import type { MachineMcpServer } from "../../runner/machine-mcp.js";
@@ -39,6 +40,8 @@ import { versionRaise, versionRaiseNote } from "../versions.js";
 import type { RepoRecord, Store } from "../store.js";
 import { agentSetup, personalMcp, writeTeamSkills } from "./agents.js";
 import { probePersonalSetup } from "./personal-setup.js";
+import { installHandbookPlugin } from "./plugin-install.js";
+import type { PluginInstall } from "./plugin-install.js";
 import { folderTrust, inPlaceFolder, opensInPlace } from "./folder-trust.js";
 import type { PersonalSetup } from "./personal-setup.js";
 import type { AgentAdapter, AgentReport, AgentSetup, McpTool, OrchestratorAccess } from "./agents.js";
@@ -46,12 +49,13 @@ import { checkout, collectChanges, fence, settleSetup } from "./changes.js";
 import { containerInvocation, dockerEnv, isolationProblem, makeTaskDirs, runProcess, taskEnv, taskPaths } from "./isolation.js";
 import type { Invocation, IsolationConfig, RunOptions, RunOutcome, TaskPaths } from "./isolation.js";
 import type { AgentAnswers, AgentChoices, AgentCodec, AgentEvent, AgentOption, AgentRequest, AgentSession, AgentTransport, Decision } from "./adapters/contract.js";
+import { CONTINUE_AFTER_LIMIT } from "./adapters/failure.js";
 import { foldSession } from "./adapters/fold.js";
 import { personalRules } from "../../runner/opencode-rules.js";
 import { keepOpencodeModel, personalOpencodeModel } from "../../runner/opencode-model.js";
 import { machineAdapters, offerOf } from "../../runner/machine-agents.js";
 import { runOpencodeAsYou } from "../../runner/opencode-session.js";
-import { PLAN_DECLINED } from "../task-requests.js";
+import { agentTimeMs, PLAN_DECLINED } from "../task-requests.js";
 import type { TaskAnswer, TaskRequestKind } from "../task-requests.js";
 import type { FollowUpRecord } from "../task-followups.js";
 import { openSession } from "./adapters/session.js";
@@ -94,7 +98,7 @@ import type { Readiness } from "./readiness.js";
 import { killTaskGroup, sweepTaskDirs, TASK_MARKER } from "./orphans.js";
 import { MIN_LITERAL, Redactor } from "./redact.js";
 import { neutralizeReferences } from "./references.js";
-import { ORCHESTRATOR_AGENT, UNKNOWN_COST } from "./types.js";
+import { inWorkspace, ORCHESTRATOR_AGENT, UNKNOWN_COST } from "./types.js";
 import type { TaskCost, TaskLogEvent, TaskPatch, TaskRecord, TaskTarget, TaskTemplate, TaskToolChoice } from "./types.js";
 import { logText } from "./adapters/fold.js";
 import { eventOf } from "../runner-routes.js";
@@ -102,7 +106,7 @@ import { currentPrincipal, EARLIER_WORK_MAX, MAX_CANDIDATES, planPrompt, planned
 import type { TargetChoice } from "./targets.js";
 import { askAgent, askForSkills } from "./skills.js";
 import type { SkillSuggestion, SuggestionDeps } from "./skills.js";
-import { approvedVerification, commitReader, evidenceMarkdown, folderReader, MAX_REPAIRS, notRun, OutputTail, planVerification, saveEvidence, testOutcome, testsSummary, verifyAfter, verifyBefore } from "./verify.js";
+import { approvalScope, approvedVerification, commitReader, evidenceMarkdown, folderReader, MAX_REPAIRS, notRun, OutputTail, planVerification, saveEvidence, testOutcome, testsSummary, verifyAfter, verifyBefore } from "./verify.js";
 import type { Planned, VerifyIo, VerifyPlan } from "./verify.js";
 import type { ReadFile } from "./verify-detect.js";
 import type { StepRun, TaskVerification } from "../../shared/verification.js";
@@ -264,12 +268,22 @@ function sumCost(parts: readonly TaskCost[]): TaskCost {
   return { usd: sum("usd"), inputTokens: sum("inputTokens"), outputTokens: sum("outputTokens") };
 }
 
-/** How many restarts in a row put a task back in line by themselves; after them it waits for its starter's Continue. */
+/** How many restarts within AUTO_CONTINUE_WINDOW_MS put a task back in line by themselves; one more and it waits for its starter's Continue. */
 export const AUTO_CONTINUE_MAX = 3;
+/** The stretch those restarts count in: a task cut off again and again soon after is likely what brings its runner down, a laptop that sleeps now and then is not. */
+export const AUTO_CONTINUE_WINDOW_MS = 5 * 60_000;
 /** Set to "off", a restart leaves every task it cut off for its starter's Continue. */
 export const AUTO_CONTINUE_SETTING = "tasks.auto-continue";
-/** How many restarts in a row put the task back in line; its starter's Continue starts the count again. */
+/** When restarts put the task back in line lately, or that it waits for Continue; its starter's Continue starts it again. */
 export const autoContinuedKey = (taskId: string) => `task.auto-continued.${taskId}`;
+/** What the key holds once the task waits for its starter's Continue. */
+const WAITS_FOR_CONTINUE = String(AUTO_CONTINUE_MAX + 1);
+
+/** The times restarts put the task back in line within the window before `now`; a count kept by an earlier version holds none. */
+function recentContinues(kept: string | null, now: number): string[] {
+  const times = kept?.startsWith("[") ? (JSON.parse(kept) as string[]) : [];
+  return times.filter((at) => now - Date.parse(at) < AUTO_CONTINUE_WINDOW_MS);
+}
 /** The head of its request a machine's run went on from; a lease that resumes the run's session keeps it. */
 export const wentOnFromKey = (taskId: string) => `task.went-on-from.${taskId}`;
 
@@ -307,6 +321,16 @@ export function startTaskLimits(tasks: TaskRunner, everyMs = TASK_LIMITS_SWEEP_M
   return () => clearInterval(timer);
 }
 
+/** The first message of a session a machine resumes after its run was cut off, as by a restart or the machine sleeping. */
+export const CONTINUE_AFTER_STOP = "Continue where you left off. Your run was cut off before it finished, so check whether anything you started already happened before doing it again.";
+
+/** How long after a usage limit's reset its task goes on, so a clock a little behind the plan's does not start it early. */
+export const LIMIT_GRACE_MS = 60_000;
+/** Times a task goes on by itself after a usage limit; past them its person continues it. */
+export const LIMIT_CONTINUES_MAX = 3;
+/** A reset further off than this from when the limit was hit leaves the task to its person: its context and branch have aged. */
+export const LIMIT_WAIT_MAX_MS = 24 * 3_600_000;
+
 /** How often the tasks of runners that are back go in line again: well inside a lease, so a laptop that slept past one goes on soon after it wakes. */
 export const AUTO_CONTINUE_SWEEP_MS = 15_000;
 
@@ -335,7 +359,9 @@ export interface TaskRunner {
   shutdown(): Promise<void>;
   start(input: StartTask): Promise<TaskRecord>;
   cancel(id: string): Promise<TaskRecord | null>;
-  /** Puts the tasks a stop of the runner `holder` cut off back in line, each at most AUTO_CONTINUE_MAX times in a row, and gives the ids it put back. */
+  /** Puts a task this orchestrator runs back in its line to go on, as its starter, once its status says queued again. */
+  goOn(id: string): Promise<void>;
+  /** Puts the tasks a stop of the runner `holder` cut off back in line, each at most AUTO_CONTINUE_MAX times in five minutes, and gives the ids it put back. */
   autoContinue(holder: string): Promise<string[]>;
   /** The same for every machine heard from within MACHINE_AWAY_MS, and a one-person orchestrator's own runner. */
   autoContinueAlive(): Promise<string[]>;
@@ -346,7 +372,7 @@ export interface TaskRunner {
   /** The ids of the tasks waiting to start, first in line first: they start in the order they were asked for. */
   queued(): string[];
   /** How a follow-up reaches this task now: while it works, or not at all. */
-  followUp(task: TaskRecord): "steer" | "continue" | null;
+  followUp(task: TaskRecord): FollowUpOffer;
   /** Resolves once nothing is queued or running. */
   idle(): Promise<void>;
   /**
@@ -379,6 +405,8 @@ export interface TaskRunner {
   personalSetup(fresh?: boolean): Promise<PersonalSetup | null>;
   /** The last finished read of the person's setup, or null. Never starts one. */
   lastPersonalSetup(): PersonalSetup | null;
+  /** Adds the handbook plugin to the orchestrator user's own Claude Code, after their click; says why not where tasks do not run as them or Run as me is refused. */
+  installHandbookPlugin(): Promise<PluginInstall>;
   /** Each of a repository's MCP servers as this orchestrator's tasks would get it, by the rule a task's setup applies. */
   mcpInTasks(repo: RepoRecord, servers: Record<string, unknown>): Record<string, McpInTask>;
 }
@@ -397,6 +425,9 @@ export function attachmentsSection(dir: string, files: readonly { name: string; 
   const named = files.map((file) => `${file.name} (${file.kind === "pdf" ? "PDF" : file.kind})`);
   return ["", "## Files attached to this task", "", `People attached these files to the task. They are in ${dir}, for reading only: open them with your Read tool. Their names are quoted as data:`, "", fence(neutralizeReferences(named.join("\n")))];
 }
+
+/** How a task takes its starter's words now: into the agent's turn, after it, in a new run on its request, or not at all. */
+export type FollowUpOffer = "steer" | "queue" | "continue" | null;
 
 /**
  * A follow-up as the agent reads it: a person's words and the passages they point at, quoted
@@ -956,6 +987,20 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       await Promise.all([rm(paths.root, { recursive: true, force: true }), rm(paths.git, { recursive: true, force: true })]);
     }
   };
+  /** The handbook plugin in the person's own Claude Code, by the same guard as reading their setup; their next read shows it. */
+  const installPlugin = async (): Promise<PluginInstall> => {
+    const agent = options.agents.find((a) => a.id === "claude-code" && a.runsAsYou && a.probe);
+    if (options.profile !== "personal" || !agent || (await personalProfileRefusal(ctx, options.hostEnv, options.orgs))) return { installed: false, why: "Tasks here do not run as you, so this orchestrator does not reach your Claude Code; type the two commands in Claude Code yourself." };
+    const paths = taskPaths(ctx.dataDir, tenant, `plugin-${randomBytes(4).toString("hex")}`);
+    try {
+      await makeTaskDirs(paths);
+      const result = await installHandbookPlugin(agent.probe!.program, personalEnv(options.hostEnv, paths), paths.work);
+      if (result.installed) void personalSetup(true);
+      return result;
+    } finally {
+      await Promise.all([rm(paths.root, { recursive: true, force: true }), rm(paths.git, { recursive: true, force: true })]);
+    }
+  };
   // How the data directory is spelled in a git error: as configured and with its links
   // resolved (a temp directory under /var is /private/var on macOS), longest first.
   const dataDirNames = () =>
@@ -1031,7 +1076,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
    * since the agent's description of the change lived only in the process that stopped.
    */
   async function reopenCutOff(): Promise<void> {
-    for (const task of await everyTask(store, tenant, { statuses: ["needs-review"] })) {
+    const inReview = await everyTask(store, tenant, { statuses: ["needs-review"] });
+    for (const task of inReview) {
       if (task.runner !== "local" || task.requestNumber !== null || task.result === "changes") continue;
       const branch = (await store.taskLease(tenant, task.id))?.branch;
       const once = `pushed.reopened.${task.id}`;
@@ -1040,6 +1086,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       await store.appendTaskLog(tenant, task.id, [`The orchestrator stopped before this task's request opened; it is opened now from ${branch}.`]);
       await openPushedRequest(ctx, task.id, { status: "needs-review", error: null, nativeSessionId: null, branch, position: null, request: { title: task.title, body: "Opened after the orchestrator restarted: the agent's own description of the change was not kept." } });
     }
+    // What follows a run's end, cut off with the stop, is done above or not at all: none still reads as opening its request.
+    for (const task of inReview) if (task.stage === "request") await store.updateTask(tenant, task.id, { stage: null });
   }
 
   // Held as a value rather than a pending rejection: a store that fails here fails every
@@ -1257,6 +1305,37 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     return handed;
   }
 
+  /**
+   * What a machine's run is told first. A session the machine resumes already holds the task: told it again, the agent
+   * would start it over, so it is told only to go on, with care, after a usage limit's reset or a cut-off run alike. A run
+   * that goes on from what the task left takes the person's words with the task, fenced as data, as no relay reaches it.
+   */
+  async function firstMessage(task: TaskRecord, prompt: string, goesOn: boolean): Promise<string> {
+    const resumes = Boolean((await store.taskLease(tenant, task.id))?.nativeSession);
+    if ((await store.takeLimitContinue(tenant, task.id)) && resumes) return CONTINUE_AFTER_LIMIT;
+    if (goesOn) return goingOn(prompt, await store.pendingFollowUps(tenant, task.id));
+    return resumes ? CONTINUE_AFTER_STOP : prompt;
+  }
+
+  /**
+   * Where each repository of a folder task goes on from: a change kept on the machine from its head there, a request still
+   * open from its head as the orchestrator last read it, each with the base it started from. One merged or closed is left
+   * out and starts from its HEAD; none listed means the run is a first one.
+   */
+  async function workspaceContinues(task: TaskRecord): Promise<WorkspaceWork["continues"]> {
+    if (!inWorkspace(task)) return undefined;
+    const repos: { path: string; head: string; baseSha: string }[] = [];
+    for (const target of task.targets ?? []) {
+      if (target.path === undefined || !target.baseSha) continue;
+      if (target.status === "local" && target.head) repos.push({ path: target.path, head: target.head, baseSha: target.baseSha });
+      if (target.status !== "request" || target.requestNumber === null) continue;
+      const request = await store.getRequest(tenant, target.repoId, target.requestNumber);
+      const head = request?.status === "open" ? (request.checkedHead ?? request.heldHead ?? null) : null;
+      if (head) repos.push({ path: target.path, head, baseSha: target.baseSha });
+    }
+    return repos.length ? { repos } : undefined;
+  }
+
   async function describeFolder(task: TaskRecord, user: Principal, repo: RepoRecord, machine: { machineId: string; path: string }, agent: AgentAdapter): Promise<FolderWork | WorkspaceWork> {
     if (task.template) throw new Error("a folder without git takes a task of its own, with no template");
     if (!inConfiguration(ctx, repo.id)) throw new Error(NOT_CONFIGURED);
@@ -1271,7 +1350,12 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     const built = await promptFor(task, user, repo, issue, plan.setup, plan.first.prompt, copied ? "workspace" : "folder");
     const redactor = new Redactor((await secretsForTask(ctx, repo.id, repo.team)).map((secret) => secret.value));
     const masked = (text: string) => text.split("\n").map((line) => redactor.line(line)).join("\n");
-    const handed = copied ? `Handed to ${user.name}'s machine, to work on a copy of each repository in ${machine.path} on the task's branch.` : `Handed to ${user.name}'s machine, to work in ${machine.path} in place.`;
+    // Only a runner that says it starts each copy at the head it is given goes on; an older one would start from HEAD.
+    const knows = copied && (await store.listMachines(tenant, null)).some((m) => m.id === machine.machineId && m.features?.includes("workspace-continues"));
+    const continues = knows ? await workspaceContinues(task) : undefined;
+    const handed = continues
+      ? `Handed to ${user.name}'s machine to go on in ${machine.path} from what the task left: ${continues.repos.map((r) => `${r.path || "the folder"} at ${r.head.slice(0, 7)}`).join(", ")}; any other repository starts from its HEAD.`
+      : copied ? `Handed to ${user.name}'s machine, to work on a copy of each repository in ${machine.path} on the task's branch.` : `Handed to ${user.name}'s machine, to work in ${machine.path} in place.`;
     await store.appendTaskLog(tenant, task.id, [...plan.first.notes, ...built.notes, plan.personalNote, handed].map(masked));
     const command = options.testCommand(repo);
     if (copied) {
@@ -1284,12 +1368,13 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         await store.setTaskBranch(tenant, task.id, branch);
       }
       return {
-        prompt: masked(built.text),
+        prompt: masked(await firstMessage(task, built.text, Boolean(continues))),
         mode: task.mode ?? DEFAULT_MODE,
         choices: task.choices ?? null,
       ...(task.planFirst ? { planFirst: true } : {}),
         workspace: { machineId: machine.machineId, projectId: repo.id, path: machine.path },
         branch,
+        ...(continues ? { continues } : {}),
         rules: plan.rules,
         setup: { plugin: plan.source?.head ? await pluginOf(mirrorDir(ctx, plan.source.id), plan.source.head) : null, mcpTools: plan.setup.mcpTools, deniedTools: plan.setup.deniedTools ?? [], ownSetup: plan.setup.personal?.ownSetup === true, folderSettings: false, ...(await machineServers(task, repo)) },
         ...(await leaseAttachments(task)),
@@ -1380,8 +1465,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     const plan = await agentPlan(task, user, repo, code, baseSha, agent, true);
     if ("failed" in plan) throw new Error(reason(plan.failed));
     const built = await promptFor(task, user, repo, issue, plan.setup, plan.first.prompt);
-    // The words the person went on with, fenced as data, are part of the run's prompt; no relay reaches a run on a machine.
-    const text = continues ? goingOn(built.text, await store.pendingFollowUps(tenant, task.id)) : built.text;
+    const text = await firstMessage(task, built.text, Boolean(continues));
     const redactor = new Redactor((await secretsForTask(ctx, repo.id, repo.team)).map((secret) => secret.value));
     const masked = (text: string) => text.split("\n").map((line) => redactor.line(line)).join("\n");
     if (!continues) await store.updateTask(tenant, task.id, { baseSha });
@@ -1500,28 +1584,31 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     if (!holders.size || (await store.getSetting(tenant, AUTO_CONTINUE_SETTING)) === "off") return [];
     const own = await localMachineId(store, tenant);
     const continued: string[] = [];
-    for (const { id } of await everyTask(store, tenant, { statuses: ["interrupted"] })) {
+    for (const { id, limitResetAt } of await everyTask(store, tenant, { statuses: ["interrupted"] })) {
+      // Cut off at its plan's usage limit, it would only meet the limit again now: it goes on once the limit resets.
+      if (limitResetAt) continue;
       const holder = (await store.taskLease(tenant, id))?.claimedBy;
       if (!holder || !holders.has(holder)) continue;
       const stopped = holder === own ? "The orchestrator restarted while this task ran" : "The task's machine stopped running it";
-      const times = Number((await store.getSetting(tenant, autoContinuedKey(id))) ?? 0);
-      if (times <= AUTO_CONTINUE_MAX && (await requestMoved(id))) {
-        // Its session's checkout is behind the request now; whether to go on from it is its starter's call. Said once.
+      const kept = await store.getSetting(tenant, autoContinuedKey(id));
+      if (kept === WAITS_FOR_CONTINUE) continue;
+      // Said once each: the key then says the task waits for Continue, so a later start leaves it as it is.
+      if (await requestMoved(id)) {
+        // Its session's checkout is behind the request now; whether to go on from it is its starter's call.
         await store.appendTaskLog(tenant, id, [`${stopped}, and its request's branch moved since the run went on from it, so it waits for Continue.`]);
-        await store.setSetting(tenant, autoContinuedKey(id), String(AUTO_CONTINUE_MAX + 1));
+        await store.setSetting(tenant, autoContinuedKey(id), WAITS_FOR_CONTINUE);
         continue;
       }
-      if (times >= AUTO_CONTINUE_MAX) {
-        // Said once: the count goes past the ceiling, so a later start leaves the task as it is.
-        if (times === AUTO_CONTINUE_MAX) {
-          await store.appendTaskLog(tenant, id, [`${stopped} ${AUTO_CONTINUE_MAX} times in a row, so it waits for Continue.`]);
-          await store.setSetting(tenant, autoContinuedKey(id), String(times + 1));
-        }
+      const now = Date.now();
+      const recent = recentContinues(kept, now);
+      if (recent.length >= AUTO_CONTINUE_MAX) {
+        await store.appendTaskLog(tenant, id, [`${stopped} ${AUTO_CONTINUE_MAX + 1} times in five minutes, so it waits for Continue.`]);
+        await store.setSetting(tenant, autoContinuedKey(id), WAITS_FOR_CONTINUE);
         continue;
       }
-      if (!(await store.continueLocalTask(tenant, id, null, new Date().toISOString()))) continue;
-      await store.setSetting(tenant, autoContinuedKey(id), String(times + 1));
-      await store.appendTaskLog(tenant, id, [`${stopped}; it goes on by itself (${times + 1} of ${AUTO_CONTINUE_MAX} in a row).`]);
+      if (!(await store.continueLocalTask(tenant, id, null, new Date(now).toISOString()))) continue;
+      await store.setSetting(tenant, autoContinuedKey(id), JSON.stringify([...recent, new Date(now).toISOString()]));
+      await store.appendTaskLog(tenant, id, [`${stopped}; it goes on by itself (${recent.length + 1} of ${AUTO_CONTINUE_MAX} in five minutes).`]);
       continued.push(id);
     }
     if (continued.length) ctx.runnerService?.wake();
@@ -1545,11 +1632,13 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     const stopped: string[] = [];
     for (const task of await everyTask(store, tenant, { statuses: ["running"] })) {
       const since = task.runStartedAt ?? task.startedAt;
-      // An agent waiting on its person's answer spends nothing, so the clock stops nobody who has not answered yet.
-      const waits = maxMinutes !== null && (await store.taskRequests(tenant, task.id)).some((r) => r.status === "pending");
+      // An agent waiting on its person's answer spends nothing: the clock stops nobody who has not answered yet, and
+      // counts none of the time a card waited once they have.
+      const cards = maxMinutes !== null && since ? await store.taskRequests(tenant, task.id) : [];
+      const waits = cards.some((r) => r.status === "pending");
       const reason =
         maxUsd !== null && task.cost.usd !== null && task.cost.usd >= maxUsd ? costCapReason(maxUsd, false)
-        : maxMinutes !== null && !waits && since && now - Date.parse(since) >= maxMinutes * 60_000 ? `Stopped at the ${maxMinutes}-minute cap for this task.`
+        : maxMinutes !== null && since && !waits && agentTimeMs(since, now, cards) >= maxMinutes * 60_000 ? `Stopped at the ${maxMinutes}-minute cap for this task.`
         : null;
       if (reason && (await stopFor(task, reason, now))) stopped.push(task.id);
     }
@@ -1590,7 +1679,34 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     const now = Date.now();
     const back = (await store.listMachines(tenant, null)).filter((m) => !m.revokedAt && m.lastSeenAt !== null && now - Date.parse(m.lastSeenAt) < MACHINE_AWAY_MS).map((m) => m.id);
     const own = ctx.mode === "local" ? await localMachineId(store, tenant) : null;
-    return continueHeldBy(new Set([...back, ...(own ? [own] : [])]));
+    return [...(await continueHeldBy(new Set([...back, ...(own ? [own] : [])]))), ...(await continueAfterLimits(now))];
+  }
+
+  /**
+   * Puts back in line, a minute after it resets, each task on a machine cut off at its person's usage limit, unless they
+   * are asked something first. One whose reset was more than a day off, or that went on three times already, waits for them.
+   */
+  async function continueAfterLimits(now: number): Promise<string[]> {
+    const hour = (iso: string) => `${iso.slice(11, 16)} UTC`;
+    const continued: string[] = [];
+    for (const { taskId, resetAt, limitAt, goneOn } of await store.limitedTasks(tenant, new Date(now - LIMIT_GRACE_MS).toISOString())) {
+      if ((await store.taskRequests(tenant, taskId)).some((r) => r.status === "pending")) continue;
+      const waitedFor = Date.parse(resetAt) - Date.parse(limitAt ?? resetAt) > LIMIT_WAIT_MAX_MS ? `The usage limit reset at ${hour(resetAt)}, more than a day after the task stopped; continue it yourself.`
+        : goneOn >= LIMIT_CONTINUES_MAX ? `The usage limit reset ${LIMIT_CONTINUES_MAX} times during this task; continue it yourself.`
+          : null;
+      if (waitedFor) {
+        if (!(await store.dropLimit(tenant, taskId, resetAt))) continue;
+        // Its person's Continue is what goes on with it now: no restart of its machine puts it back in line either.
+        await store.setSetting(tenant, autoContinuedKey(taskId), WAITS_FOR_CONTINUE);
+        await store.appendTaskLog(tenant, taskId, [waitedFor]);
+        continue;
+      }
+      if (!(await store.continueAfterLimit(tenant, taskId, resetAt))) continue;
+      await store.appendTaskLog(tenant, taskId, [`The usage limit reset at ${hour(resetAt)}; the task goes on where it left off.`]);
+      continued.push(taskId);
+    }
+    if (continued.length) ctx.runnerService?.wake();
+    return continued;
   }
 
   async function cancelTask(id: string): Promise<TaskRecord | null> {
@@ -1742,6 +1858,10 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       if (event.type === "context") {
         void store.noteTaskContext(tenant, task.id, event.tokens).catch((err: Error) => console.error(`task ${task.id}: its context was not recorded: ${err.message}`));
         return null;
+      }
+      // A skill the agent calls is kept on the task by name; the call still shows in the log as any tool does.
+      if (event.type === "tool_call" && event.tool.toLowerCase() === "skill" && event.status === "started" && calledSkill(event.target)) {
+        void store.noteUsedSkill(tenant, task.id, calledSkill(event.target)!).catch((err: Error) => console.error(`task ${task.id}: a skill it called was not recorded: ${err.message}`));
       }
       // Kept on the task for its page and the next start's form; the adapter says it in a line of its own.
       if (event.type === "mcp_status") {
@@ -2045,7 +2165,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
      * holds and on the prompt alone otherwise, and what it reported. `nothing` ends the sentence that
      * says what a failed run leaves behind.
      */
-    const runAgent = async (agent: AgentAdapter, paths: TaskPaths, setup: AgentSetup, text: string, personal: boolean, env: Record<string, string>, egress: TaskProxy | null, part: TargetPart | null, record: (patch: TargetPatch) => Promise<void>, nothing: string, rules: readonly PolicyRule[] = []): Promise<{ report: AgentReport } | { failed: string }> => {
+    const agentRun = async (agent: AgentAdapter, paths: TaskPaths, setup: AgentSetup, text: string, personal: boolean, env: Record<string, string>, egress: TaskProxy | null, part: TargetPart | null, record: (patch: TargetPatch) => Promise<void>, nothing: string, rules: readonly PolicyRule[] = []): Promise<{ report: AgentReport } | { failed: string }> => {
       const mode = task.mode ?? DEFAULT_MODE;
       if (servedAsYou(agent, personal)) {
         if (options.isolation.mode === "container") return { failed: `The task did not run: ${agent.label} runs as you only in process isolation, on this machine.` };
@@ -2098,6 +2218,22 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         return { failed: `The agent deleted its working directory, so nothing was left to read back; ${nothing}.` };
       }
       return { report };
+    };
+
+    /**
+     * The agent's run. One a Stop or a cap cuts off before it reports still counts what it spent by then, its usage so far
+     * and the agent's estimate of the turn it was in, so a stopped task shows a cost rather than none.
+     */
+    const runAgent = async (...args: Parameters<typeof agentRun>): ReturnType<typeof agentRun> => {
+      const before = spent?.usd ?? 0;
+      try {
+        return await agentRun(...args);
+      } catch (err) {
+        const usd = (spent?.usd ?? 0) - before + turnSpend;
+        const record = args[8];
+        if (err instanceof Cancelled && usd > 0) await record({ cost: { ...UNKNOWN_COST, usd } }).catch(() => {});
+        throw err;
+      }
     };
 
     /** Text a check printed, masked as the request's body is: each block on its own, so a key block left open in one masks nothing after it. */
@@ -2173,8 +2309,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         const mirror = mirrorDir(ctx, repo.id);
         // A task a runner here takes on from its open request starts from that request's branch as it is now and pushes onto
         // it, keeping its first base on record; the words the person went on with are in its prompt.
-        const goesOn = task.runner === "local" && task.requestNumber !== null && !part ? await store.getRequest(tenant, repo.id, task.requestNumber) : null;
-        if (task.runner === "local" && task.requestNumber !== null && !part && goesOn?.status !== "open") return { failed: "The task did not go on: its request is no longer open." };
+        const goesOn = task.requestNumber !== null && !part ? await store.getRequest(tenant, repo.id, task.requestNumber) : null;
+        if (task.requestNumber !== null && !part && goesOn?.status !== "open") return { failed: "The task did not go on: its request is no longer open." };
         if (goesOn) {
           const synced = await syncRepo(ctx, repo.id);
           if ("error" in synced) return { failed: `The task did not go on: its repository could not be read (${synced.error}).` };
@@ -2200,6 +2336,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         let report: AgentReport;
         let refreshed: ScaffoldRefresh | null = null;
         let prior: CheckBefore | null = null;
+        // The words its person went on with, handed to the agent in its prompt; marked delivered once the request takes the change.
+        let handed: FollowUpRecord[] = [];
         let repair: ((prompt: string) => Promise<string | null>) | null = null;
         // The vault's secrets for this task's team and repository, by name, for its setup, agent and tests.
         let secretEnv: Record<string, string> = {};
@@ -2312,7 +2450,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
           // Built just before the agent starts, so it works from the issue as it is now.
           const built = await promptFor(task, user, repo, issue, setup, [...firstSkills, ...(part?.prompt ?? [])]);
           if (built.notes.length) await log(...built.notes);
-          const text = [goesOn ? goingOn(built.text, await store.pendingFollowUps(tenant, task.id)) : built.text, ...(await attachedFiles(task, paths.root, setup))].join("\n");
+          handed = goesOn ? await store.pendingFollowUps(tenant, task.id) : [];
+          const text = [goesOn ? goingOn(built.text, handed) : built.text, ...(await attachedFiles(task, paths.root, setup))].join("\n");
           // A repair round is this same call with another prompt: the same agent in the same checkout, under the same guard, rules, secrets and proxy.
           const turn = (prompt: string) => runAgent(agent, paths, setup, prompt, personal, { ...secretEnv, ...ownEnv }, egress, part, record, "no request was opened", policy);
           const ran = await untilStopped(turn(text));
@@ -2382,6 +2521,14 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
           const summarised = redactor.carriesCredential(report.summary) ? { ...report, summary: "(withheld: the agent's report held a credential)" } : report;
           const body = requestBody(task, summarised, tests, warnings, versionNote, refreshed !== null, options.isolation.network, egress && { allowed: egress.allowed, refused: egress.proxy.refused() }, part?.body, evidence, approvedPlan);
           const bodyRedactor = new Redactor(credentialValues);
+          // Going on here, the change is a new commit on the request's branch over the head it started from; one that
+          // moved meanwhile refuses it. The request is then read and checked again at its new head.
+          if (goesOn && task.runner !== "local") {
+            await updateRequestBranch(ctx, repo, goesOn.branch, { files, title: subject, commitBody: commitBody(task), author: { name: user.name, email: user.email }, expectedHead: baseSha }).catch(async (err: Error) => {
+              throw new Error(`Request #${goesOn.number} was not updated: ${failureText(err, await dataDirNames())}`);
+            });
+            return { request: goesOn };
+          }
           return sink.deliver({ ...repo, head: baseSha }, user, {
             title: subject,
             // Printable as the log is: a NUL in the agent's report would otherwise reach a git
@@ -2401,6 +2548,12 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         if ("pushed" in delivered) {
           await log(`Pushed ${delivered.pushed.branch} to ${repo.name}; the request opens from it.`);
           return { pushed: delivered.pushed, summary: report.summary, files: changes.files };
+        }
+        if (goesOn && task.runner !== "local") {
+          await continuedRequest(ctx, task, repo, goesOn);
+          if (handed.length) await store.markFollowUpsDelivered(tenant, handed.map((f) => f.id), new Date().toISOString());
+          await log(`Went on in request #${goesOn.number} on ${goesOn.branch}. It waits for a person to review and merge it.`);
+          return { request: goesOn, summary: report.summary, files: changes.files };
         }
         // The orchestrator's own commit, made from the change it just checked: a later push to the branch is checked again before it merges.
         await store.recordRequestCheck(tenant, repo.id, delivered.request.number, { head: delivered.request.headSha, passed: true });
@@ -2590,10 +2743,24 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       if (at.real !== folder) return { failed: "The task did not run: the folder moved or became a link since it was opened; open it again." };
       try {
         await makeTaskDirs(paths);
-        const copies: { rel: string; path: string; git: string; sha: string }[] = [];
+        // A run that goes on from what the task left: each repository whose request is still open starts at that
+        // request's head on its branch, and keeps the base its request started from; any other starts from its HEAD.
+        const goingOnFrom = new Map<string, { head: string; base: string; request: RequestRecord; target: TaskTarget }>();
+        for (const target of inWorkspace(task) ? task.targets! : []) {
+          if (target.path === undefined || target.status !== "request" || target.requestNumber === null || !target.baseSha) continue;
+          const request = await store.getRequest(tenant, target.repoId, target.requestNumber);
+          const head = request?.status === "open" ? (request.checkedHead ?? request.heldHead ?? null) : null;
+          if (request && head) goingOnFrom.set(target.path, { head, base: target.baseSha, request, target });
+        }
+        const copies: { rel: string; path: string; git: string; sha: string; base: string }[] = [];
         for (const rel of rels) {
           const path = join(folder, rel);
-          const sha = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], path))?.trim();
+          const from = goingOnFrom.get(rel);
+          if (from) {
+            const at = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${from.request.branch}^{commit}`], path))?.trim();
+            if (at !== from.head) return { failed: `The task did not go on: ${from.request.branch} in ${rel} moved since its request was read; start a new task for more.` };
+          }
+          const sha = from?.head ?? (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], path))?.trim();
           if (!sha) {
             await log(`${rel}: it has no commit yet, so the agent does not get it.`);
             continue;
@@ -2607,15 +2774,20 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
           await writeFile(join(git, "objects", "info", "alternates"), `${objects}\n`);
           await mkdir(join(paths.work, rel), { recursive: true });
           await gitAsync(["--git-dir", git, "--work-tree", join(paths.work, rel), "read-tree", "--reset", "-u", sha], paths.root);
-          copies.push({ rel, path, git, sha });
+          copies.push({ rel, path, git, sha, base: from?.base ?? sha });
         }
         if (!copies.length) return { failed: `The task did not run: no repository in ${project.name} has a commit to start from.` };
         await log(`Copied ${copies.length} repositor${copies.length === 1 ? "y" : "ies"} of ${project.name} for the agent: ${copies.map((c) => `${c.rel} at ${c.sha.slice(0, 7)}`).join(", ")}. Nothing is written into them until each one the agent changes gets its branch.`);
-        // One branch for every repository the agent changes, named as a machine running the same folder names it.
-        const named = taskBranch(task.id, task.title, null, issue);
-        if ("needsTicket" in named) return { failed: `The task did not run: ${ticketNeeded(project.name, named.needsTicket)}.` };
-        const { branch, problem } = await screenedBranch(named.branch, task.id);
-        if (problem) await log(`The branch named from the title cannot be used (${problem}); each request goes on ${branch}.`);
+        // One branch for every repository the agent changes, named as a machine running the same folder names it; a run
+        // that goes on keeps the one its requests are on.
+        let branch = [...goingOnFrom.values()][0]?.request.branch;
+        if (!branch) {
+          const named = taskBranch(task.id, task.title, null, issue);
+          if ("needsTicket" in named) return { failed: `The task did not run: ${ticketNeeded(project.name, named.needsTicket)}.` };
+          const screened = await screenedBranch(named.branch, task.id);
+          branch = screened.branch;
+          if (screened.problem) await log(`The branch named from the title cannot be used (${screened.problem}); each request goes on ${branch}.`);
+        } else await log(`Went on from the requests the task left: ${[...goingOnFrom.entries()].map(([rel, from]) => `${rel} #${from.request.number} at ${from.head.slice(0, 7)}`).join(", ")}.`);
         await record({ branch });
         const subject = taskSubject(task.title, null, issue?.key ?? null);
 
@@ -2635,12 +2807,56 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         }
         const secrets = await taskSecrets(project);
         if ("failed" in secrets) return secrets;
-        await log("No check runs on this task: a folder of several repositories is not checked per repository yet.");
+        // Each repository runs the checks approved for it in this folder, in the task's copy, which starts at its last
+        // commit as the approval read it; one with none approved runs none.
+        const checks: { rel: string; scope: string; io: VerifyIo; prior: CheckBefore & { plan: VerifyPlan } }[] = [];
+        const box = await checkBox();
+        for (const copy of copies) {
+          const scope = approvalScope(project.id, copy.rel);
+          const approved = await approvedVerification(store, tenant, scope);
+          if (!approved) continue;
+          const io = checkIo({ ...paths, work: join(paths.work, copy.rel), git: copy.git }, secrets.env, null);
+          const planned = box && "refused" in box ? { notRun: box.refused } : await planVerification(null, approved, io.read);
+          if (!("plan" in planned)) {
+            await log(`${copy.rel}: no check runs: ${planned.notRun}.`);
+            continue;
+          }
+          checks.push({ rel: copy.rel, scope, io, prior: { plan: planned.plan, ...(await verifyBefore(planned.plan, io, true)) } });
+        }
+        if (!checks.length) await log("No check runs on this task: no repository in this folder has checks approved for it.");
         const listed = ["", `## The repositories in ${project.name}`, "", "Each is a folder under the current directory, named by its path; the list is quoted as data:", "", fence(neutralizeReferences(copies.map((c) => c.rel).join("\n")))];
         const built = await promptFor(task, user, project, issue, plan.setup, [...plan.first.prompt, ...listed], "workspace");
         if (built.notes.length) await log(...built.notes);
-        const ran = await untilStopped(runAgent(agent, paths, plan.setup, [built.text, ...(await attachedFiles(task, paths.root, plan.setup))].join("\n"), true, secrets.env, null, null, record, "no repository of yours was changed", plan.rules));
+        // The words its person went on with, fenced as data, are part of the prompt; handed, they are not handed again.
+        const words = goingOnFrom.size ? await store.pendingFollowUps(tenant, task.id) : [];
+        const turn = (prompt: string) => runAgent(agent, paths, plan.setup, prompt, true, secrets.env, null, null, record, "no repository of yours was changed", plan.rules);
+        const ran = await untilStopped(turn([words.length ? goingOn(built.text, words) : built.text, ...(await attachedFiles(task, paths.root, plan.setup))].join("\n")));
+        if (words.length) await store.markFollowUpsDelivered(tenant, words.map((w) => w.id), new Date().toISOString());
         if ("failed" in ran) return ran;
+        // Each repository's checks after the agent, with its repair rounds in the whole folder, told which repository's check broke.
+        const verified = new Map<string, TaskVerification>();
+        if (!stopped) {
+          for (const c of checks) {
+            await record({ stage: "tests" });
+            const repair = async (prompt: string) => {
+              const again = await turn(`The check that broke is ${c.rel}'s, the repository at ./${c.rel}.\n\n${prompt}`);
+              return "failed" in again ? again.failed : null;
+            };
+            verified.set(c.rel, await saveEvidence(store, tenant, task.id, c.scope, await verifyAfter(c.prior.plan, c.prior, c.io, repair), maskBlock));
+          }
+          // A repair round works in the whole folder, so it can break a repository checked before it: each of those is
+          // checked once more, with no repair, and a break then is what its evidence says rather than the earlier pass.
+          const lastRepaired = checks.map((c) => (verified.get(c.rel)?.repairs ?? 0) > 0).lastIndexOf(true);
+          for (const c of checks.slice(0, Math.max(0, lastRepaired))) {
+            const again = await verifyAfter(c.prior.plan, c.prior, c.io, null);
+            if (testOutcome(again) === "failed") {
+              await log(`${c.rel}: its check broke again after a later repository's repair round.`);
+              verified.set(c.rel, await saveEvidence(store, tenant, task.id, c.scope, again, maskBlock));
+            }
+          }
+          const outcomes = [...verified.values()].map(testOutcome);
+          if (outcomes.length) await record({ tests: outcomes.includes("failed") ? "failed" : outcomes.every((o) => o === "skipped") ? "skipped" : "passed" });
+        }
 
         await record({ stage: "request" });
         const summarised = redactor.carriesCredential(ran.report.summary) ? { ...ran.report, summary: "(withheld: the agent's report held a credential)" } : ran.report;
@@ -2658,7 +2874,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
               await log(`${copy.rel}: no request was opened: its path names no record that fits under ${project.name}; open it as a project of its own.`);
               continue;
             }
-            const target = (fields: Partial<TaskTarget>): TaskTarget => ({ repoId: repo.id, status: "failed", reason: `changed by the agent in ${copy.rel}`, baseSha: copy.sha, branch, tests: null, requestNumber: null, error: null, cost: UNKNOWN_COST, ...fields });
+            const verification = verified.get(copy.rel) ?? null;
+            const target = (fields: Partial<TaskTarget>): TaskTarget => ({ repoId: repo.id, status: "failed", reason: `changed by the agent in ${copy.rel}`, path: copy.rel, baseSha: copy.base, branch, tests: verification ? testOutcome(verification) : null, requestNumber: null, error: null, cost: UNKNOWN_COST, ...fields });
             const refuse = async (why: string) => {
               targets.push(target({ error: why }));
               await log(`${copy.rel}: ${why}`);
@@ -2679,7 +2896,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
               continue;
             }
             if (checked.warnings.length) await log(...checked.warnings.map((warning) => `${copy.rel}: look at this before merging: ${warning}`));
-            const told = requestBody(task, summarised, "not run", checked.warnings, null, false, options.isolation.network, null, [], [], approvedPlan).split("\n").map((line) => bodyRedactor.line(printable(line))).join("\n");
+            const evidence = verification ? maskBlock(evidenceMarkdown(verification).join("\n")).split("\n") : [];
+            const told = requestBody(task, summarised, verification ? testsSummary(verification) : "not run", checked.warnings, null, false, options.isolation.network, null, [], evidence, approvedPlan).split("\n").map((line) => bodyRedactor.line(printable(line))).join("\n");
             const body = credits ? withoutAgentCredits(told) : told;
             const secret = detectSecret(`${subject}\n${body}`);
             if (secret) {
@@ -2700,6 +2918,14 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
             } finally {
               await rm(work, { recursive: true, force: true });
             }
+            const from = goingOnFrom.get(copy.rel);
+            if (from) {
+              // Its open request takes the new head, checked again; no second request opens for the same branch.
+              await continuedRequest(ctx, task, repo, from.request);
+              targets.push({ ...from.target, tests: verification ? testOutcome(verification) : from.target.tests });
+              await log(`${copy.rel}: went on in request #${from.request.number} on ${branch}.`);
+              continue;
+            }
             const answer = await requestForPushedBranch(ctx, repo, { title: subject, body, branch, baseSha: copy.sha, assignment: await teamAssignment(ctx, repo, user) }).catch((err: Error) => ({ refused: err.message }));
             if (!("opened" in answer)) {
               await refuse(`The request was not opened: ${"refused" in answer ? answer.refused : answer.reason}; the branch ${branch} is in that repository.`);
@@ -2714,8 +2940,10 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
             await recordEvent(ctx, user, "request.opened", { repoId: repo.id, subject: `request:${request.number}`, detail: `"${request.title}" on ${request.branch}, changed by the agent in ${copy.rel} of ${project.name}` });
           }
         } finally {
-          // Kept however the loop ends, so a cancel between two repositories leaves the requests already open on the task.
-          if (targets.length) await store.setTaskTargets(tenant, task.id, targets);
+          // Kept however the loop ends, so a cancel between two repositories leaves the requests already open on the task;
+          // a run that went on keeps each repository it did not change as the task had it.
+          const untouched = goingOnFrom.size ? (task.targets ?? []).filter((t) => t.path === undefined || !targets.some((n) => n.path === t.path)) : [];
+          if (targets.length || untouched.length) await store.setTaskTargets(tenant, task.id, [...untouched, ...targets]);
         }
         if (!changed) {
           if (stopped) throw new Cancelled();
@@ -2766,7 +2994,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         // A task over several repositories opens each request here; none is left to a runner's push.
         if (!("request" in outcome)) {
           const failed = "failed" in outcome ? outcome.failed : "a branch was pushed where a request was to open";
-          await setTarget(at, { status: "failed", error: failed });
+          // Refused before its agent ran, the repository spent nothing: its cost is none, not one left unreported.
+          await setTarget(at, { status: "failed", error: failed, ...(refused ? { cost: { usd: 0, inputTokens: 0, outputTokens: 0 } } : {}) });
           await closeTargets(failed);
           const open = earlier.map((e) => `${e.name} #${e.request.number}`);
           return { status: "failed", error: `${name}: ${failed}${open.length ? ` The requests already opened stay open: ${open.join(", ")}.` : ""}` };
@@ -3002,6 +3231,14 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       return task;
     },
     cancel: cancelTask,
+    async goOn(id) {
+      const task = await store.getTask(tenant, id);
+      if (!task || task.runner === "local" || task.status !== "queued" || queue.some((q) => q.task.id === id) || running.has(id)) return;
+      const account = (await store.listUsers(tenant)).find((u) => u.email === task.createdBy);
+      if (!account) return void (await store.updateTask(tenant, id, { status: "failed", error: "The task did not go on: the person who started it has no account here any more.", finishedAt: new Date().toISOString() }));
+      queue.push({ task, user: await principalOf(store, account) });
+      pump();
+    },
     autoContinue,
     autoContinueAlive,
     enforceLimits,
@@ -3013,10 +3250,18 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     followUp: (task) => {
       // A task in review whose request a runner's push opened goes on in a new run on that request's branch, and so does
       // one whose run on it failed or was cut off, with the request still open; words sent while that run waits join its prompt.
-      if (task.status !== "running" && task.status !== "cancelled" && task.runner === "local" && task.requestNumber !== null && !task.targetMode && !task.template && !task.parentId) return "continue";
-      if (task.status !== "running" || task.runner === "local") return null;
-      const agent = agents.get(task.agent);
-      return agent && talksIn(agent, task.mode ?? DEFAULT_MODE, options.profile === "personal") && agent.twoWay!.capabilities.steer ? "steer" : null;
+      // A task on its starter's machine goes on there; one this orchestrator ran goes on here, from its open request.
+      const goesOnHere = !task.runner && !(Boolean(ctx.runnerService) && !options.serverTasks) && task.requestNumber !== null;
+      if (task.status !== "running" && task.status !== "cancelled" && (goesOnHere || (task.runner === "local" && (task.requestNumber !== null || inWorkspace(task)))) && !task.targetMode && !task.template && !task.parentId) return "continue";
+      if (task.status !== "running") return null;
+      const local = task.runner === "local";
+      // A machine runs its own copy of the agent, which an orchestrator that runs none still knows, as the work it hands out does.
+      const agent = agents.get(task.agent) ?? (local ? machineAdapters().find((a) => a.id === task.agent) : undefined);
+      if (!agent?.twoWay) return null;
+      // A starter's machine talks to the agent as its person, or when it plans first, and hands it one message after each turn.
+      if (!(local ? talksIn(agent, task.mode ?? DEFAULT_MODE, true) || task.planFirst : talksIn(agent, task.mode ?? DEFAULT_MODE, options.profile === "personal"))) return null;
+      // An agent that steers takes words while it works; one that does not takes them once its turn ends.
+      return !local && agent.twoWay.capabilities.steer ? "steer" : "queue";
     },
     readiness(fresh = false) {
       const inFlight = checking !== null && checked?.checkedAt !== checking.stamp;
@@ -3031,6 +3276,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     lastReadiness: () => checked,
     personalSetup,
     lastPersonalSetup: () => personalRead,
+    installHandbookPlugin: installPlugin,
     mcpInTasks: (repo, servers) => mcpInTasks(options.agents, options.mcpTools?.(repo) ?? [], servers),
     idle() {
       return new Promise((resolve) => {

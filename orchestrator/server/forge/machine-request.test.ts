@@ -66,6 +66,20 @@ describe("a change kept on its machine, opened as a request because its starter 
     expect(handed).toHaveLength(1);
   });
 
+  it("given a change the machine pushed to a remote no organization connected, when its starter presses, then the request opens with their sign-in and the change records it as the forge's, with no machine push", async () => {
+    // given
+    const ctx = await taskWith(kept({ reason: "not-connected" }));
+    const { push, open, handed } = standIns({ pushed: true });
+    const unconnected = async () => ({ opened: { forge: "GitLab", account: "ada", number: 12, url: "https://gitlab.example.invalid/acme/alpha/-/merge_requests/12" } });
+
+    // when
+    const target = await openKeptChange(ctx, ADA, "tsk_a", 0, push, open, unconnected);
+
+    // then
+    expect(target).toMatchObject({ status: "request", reason: "opened on GitLab as ada", forgeRequest: { forge: "GitLab", number: 12, url: "https://gitlab.example.invalid/acme/alpha/-/merge_requests/12" } });
+    expect(handed).toEqual([]);
+  });
+
   it("given the branch pushed and the request refused by the orchestrator's checks, when its starter presses, then it says the branch was pushed and why no request opened", async () => {
     const ctx = await taskWith(kept());
     const { push, open } = standIns({ pushed: true }, { refused: "the task's starter is no longer on record here" });
