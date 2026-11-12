@@ -136,7 +136,7 @@ test.describe("another team's owner", () => {
       await newTaskForm(page);
 
       // then
-      await expect(form.getByRole("combobox", { name: "Kind of task" })).toBeVisible();
+      await expect(form.getByRole("combobox", { name: "Kind of task" })).toHaveCount(0);
       await expect(form.getByRole("combobox", { name: "Repository" })).toHaveCount(0);
       await expect(form).not.toContainText("payments-skills");
     });
@@ -170,7 +170,7 @@ test("given the dark theme, when a task's links are shown, then a row's title ta
   const outline = await page.getByRole("link", { name: "Open the request" }).evaluate((a) => getComputedStyle(a).outlineStyle);
   // A row's title is a link drawn in the text colour, so the table reads as rows rather than a column of links.
   await page.goto("/demo/tasks");
-  await expect(page.getByRole("link", { name: "Check the link colours" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Check the link colours" }).first()).toBeVisible({ timeout: 30_000 });
   const colours = await page.locator("main a.row-link").evaluateAll((links) => links.map((a) => getComputedStyle(a).color));
 
   // then

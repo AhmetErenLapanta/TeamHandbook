@@ -513,6 +513,28 @@ test("given one person's own task whose change is its own copy's request, when i
   await expect(head.getByRole("button", { name: "Keep these changes" })).toHaveCount(0);
 });
 
+test("given a change a machine kept because its remote is not a connected repository, when its starter signed in to GitLab, then the same button opens a merge request, and without the sign-in only the command is offered", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const kept = { repoId: "payments-skills", name: "payments-skills", status: "local", reason: "not-connected", path: "alpha", branch: "task/alpha", forge: "gitlab", tests: null, error: null, request: null };
+  let target: Record<string, unknown> = kept;
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, targets: [target], ranOn: "ada-laptop" }), log: [], outputCut: false } }));
+  await page.goto("/demo/tasks/t1");
+  const group = page.getByRole("region", { name: "Changes", exact: true }).getByRole("region", { name: "alpha" });
+
+  // then
+  await expect(group.getByRole("button", { name: "Open a merge request" })).toBeVisible();
+  await expect(group.getByRole("button", { name: "Copy the command" })).toHaveCount(0);
+
+  // when the starter is not signed in to a forge
+  target = { ...kept, forge: null };
+  await page.reload();
+
+  // then
+  await expect(group.getByRole("button", { name: "Copy the command" })).toBeVisible();
+  await expect(group.getByRole("button", { name: "Open a merge request" })).toHaveCount(0);
+});
+
 test("given a change a machine kept on its branch with a GitLab remote, when its starter opens a merge request and the machine first answers why it cannot, then the reason shows, and once opened the group reads as a request", async ({ page }) => {
   // given
   const at = new Date().toISOString();
@@ -846,6 +868,137 @@ test("given a task its starter stopped that left changes for review, when its pa
   // then
   await expect(page.getByRole("note").filter({ hasText: "Stopped by the person who started the task." })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "Stopped by" })).toHaveCount(0);
+});
+
+test("given a running task its starter can message and a log with several lines, when two lines of the log are selected, then a button quotes them into the follow-up as the log's lines, and a selection outside the log offers none", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const log = [1, 2, 3, 4].map((seq) => ({ seq, at, text: `The agent said line ${seq}` }));
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ startedAt: at, followUp: "steer" }), log, outputCut: false } }));
+  await page.goto("/demo/tasks/t1");
+  await page.locator("details.log-fold").filter({ hasText: "Log" }).last().evaluate((d) => ((d as HTMLDetailsElement).open = true));
+  await expect(page.locator("ol.task-log li").first()).toBeVisible();
+
+  // when
+  await page.evaluate(() => {
+    const rows = document.querySelectorAll("ol.task-log li");
+    window.getSelection()!.setBaseAndExtent(rows[1]!, 0, rows[2]!, rows[2]!.childNodes.length);
+  });
+
+  // then
+  const button = page.getByRole("button", { name: "Quote in follow-up" });
+  await expect(button).toBeVisible();
+
+  // when
+  await button.click();
+
+  // then
+  await expect(page.getByRole("list", { name: "Quoted lines" })).toContainText("log 2-3");
+  await expect(button).toHaveCount(0);
+
+  // when the title is selected
+  await page.evaluate(() => window.getSelection()!.selectAllChildren(document.querySelector("h1")!));
+
+  // then
+  await expect(button).toHaveCount(0);
+});
+
+test("given messages of the starter's that wait for the agent's next step, when one is changed, one is taken back and one has reached the agent meanwhile, then each goes to its own route and the list follows the page's next read", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  let messages = [
+    { id: "m1", text: "Also cover refunds.", quotes: null, createdAt: at },
+    { id: "m2", text: "Skip the docs.", quotes: [{ path: "the agent's log", lines: "3", text: "x" }], createdAt: at },
+    { id: "m3", text: "Late one.", quotes: null, createdAt: at },
+  ];
+  const sent: string[] = [];
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ startedAt: at, followUp: "queue", messages }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/messages/*", (route) => {
+    const id = route.request().url().split("/").pop()!;
+    sent.push(`${route.request().method()} ${id} ${route.request().postData() ?? ""}`.trim());
+    if (id === "m3") return route.fulfill({ status: 409, json: { error: "that message already reached the agent", code: "message-not-waiting" } });
+    const edited = route.request().method() === "PATCH" ? (route.request().postDataJSON() as { text: string }).text : null;
+    messages = messages.filter((m) => m.id !== id || edited !== null).map((m) => (m.id === id && edited !== null ? { ...m, text: edited } : m));
+    return route.fulfill({ json: route.request().method() === "PATCH" ? { message: messages.find((m) => m.id === id) } : { removed: true } });
+  });
+  await page.goto("/demo/tasks/t1");
+  const waiting = page.getByRole("region", { name: "Messages waiting for the agent" });
+  await expect(waiting.getByRole("listitem")).toHaveCount(3);
+  await expect(waiting).toContainText("with 1 quoted passage");
+
+  // when the first is changed
+  await waiting.getByRole("listitem").nth(0).getByRole("button", { name: "Edit" }).click();
+  await waiting.getByRole("textbox", { name: "Change the message" }).fill("Also cover refunds and returns.");
+  await waiting.getByRole("button", { name: "Save" }).click();
+
+  // then
+  await expect(waiting.getByRole("listitem").nth(0)).toContainText("Also cover refunds and returns.");
+
+  // when the second, which carries a quoted passage, is changed
+  await waiting.getByRole("listitem").nth(1).getByRole("button", { name: "Edit" }).click();
+  await waiting.getByRole("textbox", { name: "Change the message" }).fill("Skip the docs and the changelog.");
+  await waiting.getByRole("button", { name: "Save" }).click();
+
+  // then its words changed and the quote went with them, so the server keeps it
+  await expect(waiting.getByRole("listitem").nth(1)).toContainText("Skip the docs and the changelog.");
+  await expect(waiting).toContainText("with 1 quoted passage");
+
+  // when the second is taken back
+  await waiting.getByRole("listitem").nth(1).getByRole("button", { name: "Remove" }).click();
+
+  // then
+  await expect(waiting.getByRole("listitem")).toHaveCount(2);
+
+  // when the third has already reached the agent
+  messages = messages.filter((m) => m.id !== "m3");
+  await waiting.getByRole("listitem").nth(1).getByRole("button", { name: "Remove" }).click();
+
+  // then it says so and the list reads again without it
+  await expect(waiting.getByRole("alert")).toContainText("already reached the agent");
+  expect(sent).toEqual([
+    'PATCH m1 {"text":"Also cover refunds and returns."}',
+    'PATCH m2 {"text":"Skip the docs and the changelog.","quotes":[{"path":"the agent\'s log","lines":"3","text":"x"}]}',
+    "DELETE m2",
+    "DELETE m3",
+  ]);
+});
+
+test("given a task in review that goes on from a change with no request, when its page opens, then the follow-up says the new run joins this review, and with a request it says the request's branch", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  let over: Record<string, unknown> = { status: "needs-review", phase: "review", startedAt: at, finishedAt: at, followUp: "continue" };
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task(over), log: [], outputCut: false } }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  const form = page.getByRole("form", { name: "Continue with a follow-up" });
+  await expect(form).toContainText("A new run starts where this one left off, with your words, and its changes join this review.");
+
+  // when the task has a request
+  over = { ...over, requestNumber: 7, request: { status: "open", provider: "local", branch: "handbook/task-t1", url: "local://requests/payments-skills/7" } };
+  await page.reload();
+
+  // then
+  await expect(page.getByRole("form", { name: "Continue with a follow-up" })).toContainText("A new run starts on the request's branch");
+});
+
+test("given the follow-up box of a task in review, when its text is measured, then it is the task form's text: regular weight, medium size, a box of at least 96 px", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, followUp: "continue" }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const style = await page.getByRole("textbox", { name: "What the agent should do" }).evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { size: s.fontSize, weight: s.fontWeight, min: s.minHeight };
+  });
+
+  // then
+  expect(style).toEqual({ size: "16px", weight: "400", min: "96px" });
 });
 
 test("given a task whose agent made a plan first, when its starter reads it, changes it and starts with it, then the changed plan is what is sent, the card shrinks to one line, and a decline is sent as a decline", async ({ page }) => {

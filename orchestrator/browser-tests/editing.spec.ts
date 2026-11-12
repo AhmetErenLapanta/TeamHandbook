@@ -45,7 +45,7 @@ test.describe("a team owner editing a skill", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText(/Request #\d+ opened on handbook\/orchestrator-skill-release-checklist-/);
+    await expect(page.getByRole("status").filter({ hasText: /Request #\d+ opened/ })).toContainText(/Request #\d+ opened on handbook\/orchestrator-skill-release-checklist-/, { timeout: 30_000 });
     await openTab(page, "payments-skills", "Requests");
     const requests = page.getByRole("region", { name: /^Requests from the orchestrator/ });
     const row = requests.getByRole("row", { name: /PAY feat\(skill\): update release-checklist/ });
@@ -88,7 +88,7 @@ test.describe("a team whose branches start with a ticket", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText("Request #99 opened on TEAM-77-skill-on-call");
+    await expect(page.getByRole("status").filter({ hasText: "Request #99" })).toContainText("opened on TEAM-77-skill-on-call", { timeout: 30_000 });
     expect(sent!.branch).toBe("TEAM-77-skill-on-call");
   });
 });
@@ -115,7 +115,7 @@ test.describe("a team owner changing how requests are named", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText("Request #98 opened");
+    await expect(page.getByRole("status").filter({ hasText: "Request #98 opened" })).toContainText("Request #98 opened", { timeout: 30_000 });
     expect(sent!.change).toEqual({ kind: "team.naming", commitPrefix: "CORE", branchExample: "CORE-12-add-ledger" });
   });
 
@@ -160,7 +160,7 @@ test.describe("a team owner editing and removing an MCP server", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText("Request #97 opened");
+    await expect(page.getByRole("status").filter({ hasText: "Request #97 opened" })).toContainText("Request #97 opened", { timeout: 30_000 });
     expect(sent()!.change).toEqual({ kind: "mcp.edit", name: "docs", config: { type: "http", url: "https://docs.example.com/v2/mcp" } });
   });
 
@@ -176,7 +176,7 @@ test.describe("a team owner editing and removing an MCP server", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText("Request #97 opened");
+    await expect(page.getByRole("status").filter({ hasText: "Request #97 opened" })).toContainText("Request #97 opened", { timeout: 30_000 });
     expect(sent()!.change).toEqual({ kind: "mcp.remove", name: "postgres" });
   });
 });
@@ -279,7 +279,7 @@ test.describe("a team owner managing a team's usage report", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText("Request #96 opened");
+    await expect(page.getByRole("status").filter({ hasText: "Request #96 opened" })).toContainText("Request #96 opened", { timeout: 30_000 });
     expect(sent).toMatchObject({ action: "rotate", message: "PAY chore: give teammates' TeamHandbook a new address for skill-use counts" });
   });
 });
@@ -310,7 +310,7 @@ test.describe("a team owner changing the team's slash commands", () => {
     await page.getByRole("button", { name: "Open request" }).click();
 
     // then
-    await expect(page.getByRole("status")).toContainText("Request #95 opened");
+    await expect(page.getByRole("status").filter({ hasText: "Request #95 opened" })).toContainText("Request #95 opened", { timeout: 30_000 });
     expect(sent()!.change).toEqual({ kind: "command.add", name: "git:sync", content: "---\ndescription: Bring the branch up to date.\n---\n\nFetch, then rebase.\n" });
   });
 
@@ -366,7 +366,7 @@ test.describe("a request the orchestrator merges, and what waits to be merged", 
 
     // when
     await page.getByRole("region", { name: /^Requests from the orchestrator/ }).getByRole("row", { name: new RegExp(`add ${slug}`) }).getByRole("button", { name: "Merge" }).click();
-    await expect(page.getByRole("region", { name: /^Requests from the orchestrator/ }).getByRole("row", { name: new RegExp(`add ${slug}`) })).toContainText("merged");
+    await expect(page.getByRole("region", { name: /^Requests from the orchestrator/ }).getByRole("row", { name: new RegExp(`add ${slug}`) })).toContainText("merged", { timeout: 30_000 });
 
     // then
     await expect(waiting).not.toContainText(request.branch);

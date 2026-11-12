@@ -258,7 +258,7 @@ const SCREENS: { name: string; open: (page: Page) => Promise<void> }[] = [
       await page.goto("/demo/tasks");
       await page.getByRole("button", { name: /^Search/ }).click();
       await page.getByRole("searchbox", { name: "Search pages, projects and tasks" }).fill("pay");
-      await expect(page.getByRole("option", { name: /payments-skills/ })).toBeVisible();
+      await expect(page.getByRole("group", { name: "Repositories" }).getByRole("option", { name: /payments-skills/ })).toBeVisible();
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: /^Account:/ }).click();
       await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
@@ -347,6 +347,8 @@ const SCREENS: { name: string; open: (page: Page) => Promise<void> }[] = [
         const suggestions = [{ id: "fup_1", by: { name: "Pat Payments" }, text: "Retry only on a timeout, not on a 4xx.", quotes: [{ path: "src/capture.ts", lines: "11-12", text: "+retry()" }], createdAt: new Date().toISOString(), status: "waiting", canAnswer: true }];
         await route.fulfill({ json: { ...body, task: { ...body.task, suggestions, startedBy: { name: "Ada Admin" } } } });
       });
+      // The stream's own task event tells the real, empty list and would replace this stand-in answer.
+      await page.route(`**/api/tasks/${id}/events*`, (route) => route.fulfill({ status: 204 }));
       await page.goto(`/demo/tasks/${id}`);
       await expect(page.getByRole("listitem", { name: "Pat Payments suggests a follow-up" }).getByRole("button", { name: "Continue with it" })).toBeVisible({ timeout: 30_000 });
     },

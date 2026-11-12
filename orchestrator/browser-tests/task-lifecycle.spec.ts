@@ -217,7 +217,7 @@ test("given a failed task whose repository has left the orchestrator's configura
 
   // then
   const form = await newTaskForm(page);
-  await expect(form.getByRole("combobox", { name: "Kind of task" })).toBeVisible();
+  await expect(form.getByRole("combobox", { name: "Kind of task" })).toHaveCount(0);
   await expect(form.getByRole("combobox", { name: "Repository" })).toHaveCount(0);
   await expect(form).not.toContainText("payments-skills");
   // The routed answer is still fetching when the page has what it needs; the next test must not inherit it.
@@ -288,6 +288,7 @@ test("given the task form, when a person picks the template to write a new skill
   const form = await newTaskForm(page);
 
   // when
+  await moreOptions(form);
   await choose(form, "Kind of task", "Write a new skill");
   await form.getByLabel("Skill name").fill("pager-notes");
   await moreOptions(form);
@@ -326,6 +327,7 @@ test("given the template to improve a skill, when the form shows the skill list,
 
   // when
   await choose(form, "Repository", /^payments-skills/);
+  await moreOptions(form);
   await choose(form, "Kind of task", "Improve a skill");
 
   // then
@@ -351,6 +353,7 @@ test("given a team repository whose plugin carries a version, when an admin asks
 
   // when
   await choose(form, "Repository", /^platform-skills/);
+  await moreOptions(form);
   await choose(form, "Kind of task", "Switch the plugin to versioning by commit");
 
   // then the form asks no agent
