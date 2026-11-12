@@ -1065,13 +1065,24 @@ removed from the CLI's environment, and reads only the lines the CLI prints, the
 among them. Whether the CLI is used is decided again at every use: once a second account or a
 service account exists, or the orchestrator listens beyond this machine, nothing is fetched,
 pushed or opened with it, and a repository is connected with a token or through the
-organization's connection. In local mode Work also reads, with that same `gh api` and GET alone, the issues
+organization's connection. Where the person's own CLI is not used and the orchestrator has an
+application of its own on GitHub or GitLab.com (`ORCHESTRATOR_FORGE_<FORGE>_DEVICE_CLIENT_ID`, or
+the release's), the card instead signs that person in with a one-time code they enter on the
+forge's own https page, on the forge's own host: the orchestrator sends the forge only the
+application's id, which carries no secret, and seals the token the forge returns in the vault under
+that person alone; it is never shown again. The token can write to every repository the person can
+(GitHub `repo read:org`, GitLab `api write_repository`), and the orchestrator uses it only to open
+the requests of tasks that person started, never for anyone else's. Their Sign out, the directory
+turning the account off, or the account's deletion removes it. A self-managed GitLab is not signed
+in this way. In local mode Work also reads, with that same `gh api` and GET alone, the issues
 of each github.com repository a project's folder names as its origin, and a task started from
 one of them gets the issue's text redacted line by line, as a tracker's issue text is; an issue
 of any other repository gets its link alone. A task's end opens the local request alone for a
 repository read by path, however many repositories of a folder the agent changed: its branch
 reaches the clone's origin on GitLab or GitHub only when the person presses Open a merge request or
 Open a pull request on that request, and is then pushed and its request opened there the same way,
+or, where the person's own CLI is not used, with the sign-in they made with a one-time code, and
+only when they are the one who started the task,
 over https alone, as the orchestrator checked it: a branch moved since is refused; an origin reached over ssh is never pushed to, and the forge's page that opens the request is
 shown instead. Beyond that, nothing until an operator
 configures one of these:
@@ -1432,7 +1443,15 @@ it never pushes to the origin's default branch, and a branch you moved since is 
 kept on your machine: the task's page names its place in the folder, the branch, and why no request
 opened (no remote, a push not made, or a remote this organization did not connect), and the task
 waits for your review there. The orchestrator reads nothing from those repositories or their
-remotes for it. A request opens only from a branch on a repository this organization connected,
+remotes for it, with one exception: a change on github.com or gitlab.com, when the person who
+started the task signed in there with a one-time code, ran it on their own machine, and presses
+for its request. Then the branch and the default branch the forge names are fetched over https with
+that person's token, sent as git's header to that host alone, into a repository of the
+orchestrator's own under its data directory that is deleted afterwards. The head is held to the one
+the machine reported and the base to the forge's default history before any rule is read. The same
+rules then check it, and the request opens with that token, never anyone else's, as a link only:
+nothing merges it from here, and what is pushed to it after it opens is not checked here, and a
+request whose head on the forge is not the one checked is closed again. Otherwise a request opens only from a branch on a repository this organization connected,
 read from the orchestrator's own copy with its own sign-in, never with a token sent to a host the
 machine names: its base comes from that copy's default branch, a head other than the one reported
 is refused, and the branch is held to the checks above.
@@ -1458,6 +1477,13 @@ which project markers (such as `package.json`) it holds; no file's content. Only
 that organization, ask your own machine; the answer passes through the orchestrator's memory to the
 screen that asked and is not written to its database or a log, and one that is not a list of such
 paths is refused.
+
+**Installing the handbook plugin.** On an orchestrator only its one person reaches, a card offers to
+add the plugin to their Claude Code. Pressing **Install** runs `claude plugin marketplace add` for
+this product's own repository and `claude plugin install handbook@teamhandbook`, each with two
+minutes to answer, in the person's own Claude Code folder; nothing runs before that press, and a
+team's orchestrator refuses the request and installs nothing. What Claude Code says when a step
+fails is masked and cut before it is shown.
 
 **A folder of several repositories.** On your own machine a task in a folder that holds several
 repositories works on a copy of each one's last commit, not the live folder: each copy is a bare

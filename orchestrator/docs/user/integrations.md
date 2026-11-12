@@ -48,7 +48,10 @@ beforehand, so it cannot be connected in one step, and Slack notifications stay 
   that only their machine reaches (`ORCHESTRATOR_AUTH=dev-admin`, no `ORCHESTRATOR_HOST`, one
   account), each forge card is one button, **Sign in with GitHub** or **Sign in with GitLab**. It
   starts the person's own `gh` or `glab` browser sign-in and shows its one-time code ("Enter
-  ABCD-1234 on GitHub") with **Open GitHub**, then waits. Without the CLI the card says to install it,
+  ABCD-1234 on GitHub") with **Open GitHub**, then waits. Where the orchestrator has its own GitHub or GitLab.com application (its registered client ID is
+  in `ORCHESTRATOR_FORGE_<GITHUB|GITLAB>_DEVICE_CLIENT_ID` or in the release), the same button gives
+  a one-time code to enter on the forge's page instead: nothing to install, and the token is sealed
+  for that person alone. Without the CLI or that application the card says to install the CLI,
   then **Check again**. Elsewhere the card connects the organization through the operator's OAuth
   application, with **Connect with GitHub** or **Connect with GitLab**
   ([registering them](../operations/forge-apps.md#registering-the-gitlab-and-github-apps)). Either

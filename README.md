@@ -35,8 +35,10 @@ The orchestrator with the installer instead of npx:
 curl -fsSL https://github.com/AhmetErenLapanta/TeamHandbook/releases/download/handbook-orchestrator-latest/install.sh | sh && handbook-orchestrator
 ```
 
-On macOS use the curl line rather than downloading the archive in a browser, which Gatekeeper stops.
-Windows runs the orchestrator through WSL.
+The installer's single executable is built for Apple silicon Macs and for Linux (x64 and arm64);
+on an Intel Mac use npx, which runs on any system with Node 22.16 or newer. On macOS use the curl
+line rather than downloading the archive in a browser, which Gatekeeper stops. Windows runs the
+orchestrator through WSL.
 
 </details>
 
@@ -64,7 +66,9 @@ A task in the orchestrator can leave a lesson; the plugin's review keeps it as a
 On one machine, no account and no server:
 
 - **Work** shows your Jira board, a GitLab project or a GitHub repository. Connect each in one click:
-  **Sign in with Atlassian**, or **Sign in with GitHub** / **GitLab** through your own `gh` or `glab`.
+  **Sign in with Atlassian**, or **Sign in with GitHub** / **GitLab** through your own `gh` or `glab`
+  (or with a one-time code, nothing to install, where the orchestrator has its own application
+  registered with that forge).
   Pick an issue, press **Start**, watch the agent live, read **Changes**, press **Keep**.
 - Or name a folder and write what should change. The Claude Code signed in on this machine does it
   with your own settings, skills and MCP servers, behind a guard that keeps it inside the folder.
@@ -73,6 +77,8 @@ On one machine, no account and no server:
   in a request on its own branch, and nothing reaches the repository until you merge it.
 - Checks (your tests, or the ones the folder names) run before and after, inside your machine's
   sandbox; a failing change gets two repair rounds before it is marked broken.
+- If the handbook plugin is missing from your Claude Code, a card offers to install it; it installs
+  only when you press **Install**.
 - **Your turn** and **The agents' turn** list what needs you across tasks in flight.
 - What you said while a task ran (a follow-up, a denied call, an undo reason) can become a draft
   skill, yours to keep or reject.
