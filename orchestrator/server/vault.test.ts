@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openSqliteStore } from "./store.js";
-import { createVault, GENERATED_KEY_FILE, maskSecrets, NO_VAULT, ownForgeCliOffered, parseSecretKey, reachedHereOnly, readSecret, SEALED_WITHOUT_KEY, singlePersonOrchestrator, storeSecret, vaultFor } from "./vault.js";
+import { createVault, GENERATED_KEY_FILE, lostSealedSay, maskSecrets, NO_VAULT, ownForgeCliOffered, parseSecretKey, reachedHereOnly, readSecret, SEALED_WITHOUT_KEY, singlePersonOrchestrator, storeSecret, vaultFor, unopenedBy } from "./vault.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -194,5 +194,29 @@ describe("the key on an orchestrator without ORCHESTRATOR_SECRET_KEY", () => {
     expect(NO_VAULT).toMatch(/sign-ins, tokens or other secrets/);
     expect(NO_VAULT).toContain("ORCHESTRATOR_SECRET_KEY");
     expect(NO_VAULT).not.toContain("forge tokens");
+  });
+});
+
+describe("sealed values a key does not open", () => {
+  it("given values sealed under one key and a vault of another, when they are counted, then each that does not open is lost, and the sentence says how many", () => {
+    // given
+    const sealer = createVault(randomBytes(32));
+    const other = createVault(randomBytes(32));
+    const rows = [
+      { tenant: "t", name: "forge.a", sealed: sealer.seal("t", "forge.a", "token-one-0123456789") },
+      { tenant: "t", name: "task.secret.b", sealed: sealer.seal("t", "task.secret.b", "token-two-0123456789") },
+      { tenant: "t", name: "task.secret.c", sealed: other.seal("t", "task.secret.c", "token-three-0123456789") },
+    ];
+
+    // when
+    const lost = unopenedBy(other, rows);
+
+    // then
+    expect(lost).toBe(2);
+    expect(unopenedBy(sealer, rows)).toBe(1);
+    expect(unopenedBy(sealer, [])).toBe(0);
+    expect(lostSealedSay(2, 3)).toBe("2 of the 3 sealed values (forge tokens, task secrets) in this database do not open with the key in use");
+    expect(lostSealedSay(3, 3)).toMatch(/^all of the 3 sealed values/);
+    expect(lostSealedSay(1, 1)).toBe("the sealed value (a forge token or a task secret) in this database does not open with the key in use");
   });
 });

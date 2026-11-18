@@ -8,7 +8,10 @@ import { createApp } from "./app.js";
 import type { OrchestratorContext } from "./app.js";
 import { CSRF_HEADER, sessionCookie } from "./auth.js";
 import type { Principal } from "./auth.js";
-import { deleteTaskSecret, listTaskSecrets, secretKey, secretsForTask, setTaskSecret, UnreadTaskSecret } from "./task-secrets.js";
+import { deleteTaskSecret, dropTaskSecrets, giveTaskSecret, listTaskSecrets, secretKey, secretsForTask, setTaskSecret, sweepTaskSecrets, UnreadTaskSecret } from "./task-secrets.js";
+import { newId } from "./ids.js";
+import type { TaskRunner } from "./tasks/runner.js";
+import type { TaskRecord, TaskStatus } from "./tasks/types.js";
 import { openSqliteStore } from "./store.js";
 import { fakeOpCli } from "./test-fixtures.js";
 import { createVault } from "./vault.js";
@@ -267,5 +270,118 @@ describe("a task secret read from 1Password", () => {
     expect(listed).toMatchObject({ vault: true, op: ["Payments"], secrets: [{ name: "NPM_TOKEN", reference: { provider: "op", reference: ITEM } }] });
     expect(events.find((e) => e.kind === "task-secret.set")?.detail).toBe(`NPM_TOKEN for repository payments-skills; read from ${ITEM}`);
     expect(JSON.stringify([listed, events])).not.toContain(ITEM_VALUE);
+  });
+});
+
+/** A task on payments-skills started by `by`, in `status`. */
+async function taskOf(ctx: OrchestratorContext, by: Principal, status: TaskStatus = "running"): Promise<TaskRecord> {
+  const at = new Date().toISOString();
+  const task: TaskRecord = { tenant: TENANT, id: newId("tsk"), repoId: "payments-skills", team: "Payments", title: "Charge in test mode", description: "", issueUrl: null, issueKey: null, agent: "fake", status, createdBy: by.email, createdAt: at, startedAt: at, finishedAt: null, baseSha: null, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null };
+  await ctx.store.createTask(task);
+  return task;
+}
+
+/** The agent of `task` asking for a secret by `name`. */
+async function asks(ctx: OrchestratorContext, task: TaskRecord, name: string): Promise<string> {
+  const id = newId("req");
+  await ctx.store.recordTaskRequest({ tenant: TENANT, id, taskId: task.id, targetPosition: null, sourceKey: id, kind: "secret", payload: { name, why: "to run the payment tests" }, createdAt: new Date().toISOString(), expiresAt: null });
+  return id;
+}
+
+const given = (ctx: OrchestratorContext) => ctx.store.listSecrets(TENANT, "task.secret.task.");
+
+describe("a secret the agent asks for", () => {
+  it("given a task whose agent asked for a secret, when its starter gives the value, then it is sealed for that task alone, the request reads as given, and no answer, event or list holds the value", async () => {
+    // given
+    const { ctx, owner } = await organization();
+    const task = await taskOf(ctx, owner);
+    const other = await taskOf(ctx, owner);
+    const request = await asks(ctx, task, "STRIPE_TEST_KEY");
+
+    // when
+    const answer = await giveTaskSecret(ctx, owner, task.id, request, VALUE);
+    const events = JSON.stringify((await ctx.store.eventPage(TENANT, {}, null, 50)).events);
+
+    // then
+    expect([answer.name, answer.request.status, answer.request.answer]).toEqual(["STRIPE_TEST_KEY", "answered", { provided: true }]);
+    expect(await secretsForTask(ctx, "payments-skills", "Payments", {}, task.id)).toEqual([{ name: "STRIPE_TEST_KEY", value: VALUE }]);
+    expect(await secretsForTask(ctx, "payments-skills", "Payments", {}, other.id)).toEqual([]);
+    expect(await secretsForTask(ctx, "payments-skills", "Payments", {})).toEqual([]);
+    expect(await listTaskSecrets(ctx)).toEqual([]);
+    expect(JSON.stringify(await ctx.store.taskRequests(TENANT, task.id))).not.toContain(VALUE);
+    expect(events).not.toContain(VALUE);
+    expect((await given(ctx))[0]!.name).not.toContain(VALUE);
+  });
+
+  it("given a secret request, when a teammate, an API key, a short value, a reserved name or a name the team already sets answers it, then each is refused and nothing is sealed", async () => {
+    // given
+    const { ctx, owner, admin, member } = await organization();
+    const task = await taskOf(ctx, owner);
+    await setTaskSecret(ctx, admin, { scope: "team", target: "Payments", name: "NPM_TOKEN", value: VALUE });
+    const plain = await asks(ctx, task, "STRIPE_TEST_KEY");
+    const reserved = await asks(ctx, task, "PATH");
+    const shadowing = await asks(ctx, task, "NPM_TOKEN");
+    const refusal = (run: Promise<unknown>) => run.then(() => null, (err: { status?: number; message: string }) => [err.status, err.message]);
+
+    // when
+    const byTeammate = await refusal(giveTaskSecret(ctx, member, task.id, plain, VALUE));
+    const byKey = await refusal(giveTaskSecret(ctx, { ...owner, key: { id: "k", owner: { kind: "user", id: owner.id }, scopes: { repositories: "read", requests: "write", tasks: "write", usage: "none", members: "none", settings: "none", keys: "none" }, expiresAt: null } }, task.id, plain, VALUE));
+    const short = await refusal(giveTaskSecret(ctx, owner, task.id, plain, "short"));
+    const system = await refusal(giveTaskSecret(ctx, owner, task.id, reserved, VALUE));
+    const shadowed = await refusal(giveTaskSecret(ctx, owner, task.id, shadowing, VALUE));
+
+    // then
+    expect(byTeammate).toEqual([404, "unknown task"]);
+    expect(byKey![0]).toBe(403);
+    expect(short).toEqual([400, expect.stringContaining("at least 8 characters")]);
+    expect(system).toEqual([400, expect.stringContaining("set by the orchestrator or the system")]);
+    expect(shadowed).toEqual([409, expect.stringContaining("already has NPM_TOKEN")]);
+    expect(await given(ctx)).toEqual([]);
+    expect((await ctx.store.taskRequests(TENANT, task.id)).every((r) => r.status === "pending")).toBe(true);
+  });
+
+  it("given values given to tasks, when one task ends, the start-up sweep runs and a starter's account is deleted, then each value goes and a running task's stays", async () => {
+    // given
+    const { ctx, owner, member } = await organization();
+    const ended = await taskOf(ctx, owner);
+    const stopped = await taskOf(ctx, owner);
+    const running = await taskOf(ctx, owner);
+    const theirs = await taskOf(ctx, member);
+    for (const task of [ended, stopped, running]) await giveTaskSecret(ctx, owner, task.id, await asks(ctx, task, "STRIPE_TEST_KEY"), VALUE);
+    await giveTaskSecret(ctx, member, theirs.id, await asks(ctx, theirs, "STRIPE_TEST_KEY"), VALUE);
+    await ctx.store.updateTask(TENANT, stopped.id, { status: "interrupted" });
+
+    // when
+    await dropTaskSecrets(ctx, ended.id);
+    await sweepTaskSecrets(ctx);
+    const beforeDeletion = (await given(ctx)).map((s) => s.name);
+    await ctx.store.deleteUser(TENANT, member.id);
+
+    // then
+    expect(beforeDeletion.sort()).toEqual([`task.secret.task.${running.id}.STRIPE_TEST_KEY`, `task.secret.task.${theirs.id}.STRIPE_TEST_KEY`].sort());
+    expect((await given(ctx)).map((s) => s.name)).toEqual([`task.secret.task.${running.id}.STRIPE_TEST_KEY`]);
+  });
+
+  it("given a secret request, when its starter answers it on the request's own route, then a decline is taken and a 'given' without a value is sent to the card", async () => {
+    // given
+    const { ctx, owner } = await organization();
+    ctx.tasks = { followUp: () => null, queued: () => [] } as unknown as TaskRunner;
+    const task = await taskOf(ctx, owner);
+    const declined = await asks(ctx, task, "STRIPE_TEST_KEY");
+    const claimed = await asks(ctx, task, "OTHER_KEY");
+    const s = await startSession(ctx.store, TENANT, owner.id);
+    const headers = { cookie: `${sessionCookie(TENANT)}=${s.token}`, [CSRF_HEADER]: s.csrf, "content-type": "application/json" };
+    const app = createApp(ctx);
+
+    // when
+    const decline = await app.request(`/api/tasks/${task.id}/requests/${declined}`, { method: "POST", headers, body: JSON.stringify({ answer: { provided: false } }) });
+    const claim = await app.request(`/api/tasks/${task.id}/requests/${claimed}`, { method: "POST", headers, body: JSON.stringify({ answer: { provided: true } }) });
+    const onCard = await app.request(`/api/tasks/${task.id}/secrets/${claimed}`, { method: "POST", headers, body: JSON.stringify({ value: VALUE }) });
+
+    // then
+    expect(decline.status).toBe(200);
+    expect([claim.status, (await claim.json()).code]).toEqual([400, "secret-on-card"]);
+    expect([onCard.status, await onCard.json()]).toEqual([200, { request: { id: claimed, status: "answered" } }]);
+    expect((await given(ctx)).map((x) => x.name)).toEqual([`task.secret.task.${task.id}.OTHER_KEY`]);
   });
 });

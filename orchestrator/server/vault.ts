@@ -147,6 +147,27 @@ export async function storeSecret(store: SecretStore, vault: Vault | null, tenan
   await store.putSecret(tenant, name, vault.seal(tenant, name, value), by);
 }
 
+/** How many of the sealed values given this vault does not open: what a database restored without the key it was sealed with holds. */
+export function unopenedBy(vault: Vault, sealed: readonly { tenant: string; name: string; sealed: string }[]): number {
+  let lost = 0;
+  for (const row of sealed) {
+    try {
+      vault.open(row.tenant, row.name, row.sealed);
+    } catch {
+      lost++;
+    }
+  }
+  return lost;
+}
+
+/** The sentence for sealed values no key in use opens. */
+export const lostSealedSay = (lost: number, total: number): string =>
+  total === 1
+    ? "the sealed value (a forge token or a task secret) in this database does not open with the key in use"
+    : `${lost === total ? "all" : lost} of the ${total} sealed values (forge tokens, task secrets) in this database do not open with the key in use`;
+
+export const LOST_SEALED_FIX = "put back the key they were sealed with (the secret.key of the data directory they came from, or ORCHESTRATOR_SECRET_KEY), or enter them again";
+
 /** An orchestrator restored without its key finds tokens it cannot open; it says so rather than that it keeps none. */
 export const SEALED_WITHOUT_KEY = "a forge token is stored for this repository, but ORCHESTRATOR_SECRET_KEY is not set; start the orchestrator with the key it was sealed with, or save the token again";
 

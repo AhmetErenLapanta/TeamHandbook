@@ -9,7 +9,7 @@ import { printable } from "./runner.js";
  * run on this orchestrator writes its own log. Text from a person's machine passes it before it
  * is stored, since the machine is the person's and is not trusted to have masked it.
  */
-export async function taskMask(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, task: { repoId: string; team: string }): Promise<(text: string) => string> {
-  const redactor = new Redactor((await secretsForTask(ctx, task.repoId, task.team)).map((secret) => secret.value));
+export async function taskMask(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, task: { id?: string; repoId: string; team: string }): Promise<(text: string) => string> {
+  const redactor = new Redactor((await secretsForTask(ctx, task.repoId, task.team, undefined, task.id)).map((secret) => secret.value));
   return (text) => text.split("\n").map((line) => printable(redactor.line(line))).join("\n");
 }
