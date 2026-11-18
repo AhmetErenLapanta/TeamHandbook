@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { parseMarkdown, safeHref } from "./markdown-read";
 import type { Block, Inline } from "./markdown-read";
+import { highlight } from "./highlight";
 
 /** Where an image of the text is read from, or null where none is: the text's own addresses are never fetched by the browser. */
 type Media = ((src: string) => string | null) | undefined;
@@ -36,7 +37,17 @@ function block(b: Block, i: number, media: Media): ReactNode {
     return <Tag key={i}>{inline(b.children, media)}</Tag>;
   }
   if (b.kind === "paragraph") return <p key={i}>{inline(b.children, media)}</p>;
-  if (b.kind === "code") return <pre key={i} className="pre mono"><code>{b.text}</code></pre>;
+  if (b.kind === "code") return <pre key={i} className="pre mono"><code>{highlight(b.text, b.lang).map((t, j) => (t.kind === "plain" ? t.text : <span key={j} className={`tok-${t.kind}`}>{t.text}</span>))}</code></pre>;
+  if (b.kind === "table") {
+    return (
+      <div key={i} className="markdown-table" tabIndex={0} role="region" aria-label="Table">
+        <table>
+          <thead><tr>{b.head.map((h, c) => <th key={c} scope="col">{inline(h, media)}</th>)}</tr></thead>
+          <tbody>{b.rows.map((row, r) => <tr key={r}>{row.map((cell, c) => <td key={c}>{inline(cell, media)}</td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    );
+  }
   if (b.kind === "quote") return <blockquote key={i}>{b.children.map((c, j) => block(c, j, media))}</blockquote>;
   if (b.kind === "list") {
     const items = b.items.map((item, j) => <li key={j}>{inline(item, media)}</li>);
