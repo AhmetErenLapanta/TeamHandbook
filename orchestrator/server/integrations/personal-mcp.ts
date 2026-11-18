@@ -453,6 +453,18 @@ async function serverAt(ctx: OrchestratorContext, userId: string, url: string): 
   return { name: server.name, connected: Boolean(await readTokens(ctx, userId, server.name).catch(() => null)) };
 }
 
+/** The servers the person added to the orchestrator, as the rows of one list need them: name, kind, whether its sign-in or token is held, and how many tools a task is allowed to call. */
+export async function ownServerStates(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, userId: string): Promise<{ name: string; kind: "http" | "stdio"; held: boolean | null; tools: number }[]> {
+  return Promise.all(
+    (await personalServers(ctx, userId)).map(async (s) => ({
+      name: s.name,
+      kind: s.transport,
+      held: s.auth === "oauth" ? Boolean(await readTokens(ctx, userId, s.name).catch(() => null)) : s.auth === "token" ? Boolean(await ctx.store.secretSetAt(ctx.tenant, secretName(userId, s.name, "token"))) : null,
+      tools: s.tools.length,
+    })),
+  );
+}
+
 /** The person's own server that is Atlassian's, and whether it is signed in; null when they have none. */
 export const atlassianServer = (ctx: OrchestratorContext, userId: string) => serverAt(ctx, userId, atlassianMcpUrl());
 
