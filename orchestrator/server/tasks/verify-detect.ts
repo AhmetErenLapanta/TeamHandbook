@@ -220,6 +220,26 @@ async function fromMaven(read: ReadFile): Promise<DetectedCheck[]> {
  * convention. Within that order the checks go test, type check, lint, build, so the first is the one
  * a person is asked to approve.
  */
+/** The setting a project's agent-named checks are kept under, as a folder's first task found them. */
+export const namedChecksKey = (projectId: string) => `checks-named:${projectId}`;
+export const NAMED_BY_AGENT = "named by the agent";
+
+/**
+ * Checks an agent named for its folder, as the detector would have read them: each held to the file it said it came
+ * from, whose content is in its digest, so an approval of it reads as changed once that file does. Its kind is read off
+ * its words; a file no longer there names nothing.
+ */
+export async function namedChecks(read: ReadFile, named: readonly { command: string; source: string }[]): Promise<DetectedCheck[]> {
+  const checks: DetectedCheck[] = [];
+  for (const { command, source } of named) {
+    const material = await read(source);
+    if (material === null) continue;
+    const kind: CheckKind = /\blint\b/.test(command) ? "lint" : /\b(tsc|typecheck|mypy)\b/.test(command) ? "typecheck" : /\bbuild\b/.test(command) ? "build" : "test";
+    checks.push({ kind, ...step(command, command, `${source} (${NAMED_BY_AGENT})`, material) });
+  }
+  return checks;
+}
+
 export async function detectVerification(read: ReadFile): Promise<DetectedVerification> {
   const [node, make, python, go, cargo, gradle, maven] = await Promise.all([fromPackageJson(read), fromMakefile(read), fromPython(read), fromGo(read), fromCargo(read), fromGradle(read), fromMaven(read)]);
   const found = [...node.checks, ...make, ...python.checks, ...go, ...cargo, ...gradle, ...maven];

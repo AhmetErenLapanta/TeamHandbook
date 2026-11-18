@@ -1,4 +1,5 @@
-import { lstat } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { OrchestratorContext } from "../app.js";
 import type { Principal } from "../auth.js";
 import { recordEvent } from "../events.js";
@@ -64,7 +65,23 @@ export async function trustsOwnFolder(ctx: Pick<OrchestratorContext, "addedRepos
   return Array.isArray(copies) && copies.length === 0;
 }
 
-/** A project's trust choice for its page and its tasks': its folder's, or null where no folder of the person's is worked on itself. */
+/**
+ * Whether trusting the folder would change what its tasks load: Claude Code reads a folder's own settings only from these
+ * two files, the sources a trusted folder turns on. A folder on another machine is not read from here, so it is asked.
+ */
+async function hasOwnSettings(repo: RepoRecord): Promise<boolean> {
+  const folder = await inPlaceFolder(repo);
+  if (!folder) return true;
+  const there = (path: string) => stat(join(folder, ".claude", path)).then((s) => s.isFile(), () => false);
+  return (await there("settings.json")) || (await there("settings.local.json"));
+}
+
+/**
+ * A project's trust choice for its page and its tasks': its folder's, or null where no folder of the person's is worked
+ * on itself, or where the folder has no settings of its own, so trusting it would change nothing and nothing is asked.
+ */
 export async function projectTrust(ctx: Pick<OrchestratorContext, "store" | "tenant" | "addedRepos">, repo: RepoRecord): Promise<FolderTrust | null> {
-  return (await trustsOwnFolder(ctx, repo)) ? folderTrust(ctx, repo.id) : null;
+  if (!(await trustsOwnFolder(ctx, repo))) return null;
+  const trust = await folderTrust(ctx, repo.id);
+  return trust === "unasked" && !(await hasOwnSettings(repo)) ? null : trust;
 }

@@ -14,7 +14,8 @@ import { route } from "../route-scopes.js";
 import type { RepoRecord } from "../store.js";
 import { seesTask } from "./guards.js";
 import { inPlaceFolder } from "./folder-trust.js";
-import { detectVerification } from "./verify-detect.js";
+import { detectVerification, namedChecks, namedChecksKey } from "./verify-detect.js";
+import type { ReadFile } from "./verify-detect.js";
 import { approvalScope, approvedVerification, approveVerification, changedSince, commitReader, folderReader, forgetVerification, readEvidence, repoReader } from "./verify.js";
 import type { StepChoice } from "./verify.js";
 
@@ -33,6 +34,23 @@ async function copyIn(repo: RepoRecord, path: string): Promise<{ folder: string 
 
 /** What a project's files name as its checks, read where its tasks will find them: on the machine its folder is on, in the folder worked on in place, or at the commit its mirror is at; with `path`, a repository inside a folder of several, as a task's copy of it has them. */
 async function projectChecks(ctx: OrchestratorContext, repo: RepoRecord, path = ""): Promise<{ detected: DetectedVerification } | { unread: string }> {
+  const found = await filesChecks(ctx, repo, path);
+  if (path || "unread" in found || found.detected.checks.length) return found;
+  // A folder whose files name no check offers what its first task's agent named, held to the files it named.
+  const named = JSON.parse((await ctx.store.getSetting(ctx.tenant, namedChecksKey(repo.id))) ?? "[]") as { command: string; source: string }[];
+  const read = named.length ? await projectReader(ctx, repo) : null;
+  return read ? { detected: { ...found.detected, checks: await namedChecks(read, named) } } : found;
+}
+
+/** Where a project's files are read for checks named in them, when they are read here; null for a folder on a machine. */
+async function projectReader(ctx: OrchestratorContext, repo: RepoRecord): Promise<ReadFile | null> {
+  if (machineFolderOf(repo.url)) return null;
+  const folder = await inPlaceFolder(repo);
+  if (folder) return folderReader(folder);
+  return repo.head ? commitReader(mirrorDir(ctx, repo.id), repo.head) : null;
+}
+
+async function filesChecks(ctx: OrchestratorContext, repo: RepoRecord, path = ""): Promise<{ detected: DetectedVerification } | { unread: string }> {
   if (path) {
     const copy = await copyIn(repo, path);
     if (!copy) return { unread: "that repository is not one of this folder's" };
@@ -43,6 +61,20 @@ async function projectChecks(ctx: OrchestratorContext, repo: RepoRecord, path = 
   if (folder) return { detected: await detectVerification(folderReader(folder)) };
   if (!repo.head) return { unread: "the orchestrator has not read this project yet" };
   return { detected: await detectVerification(commitReader(mirrorDir(ctx, repo.id), repo.head)) };
+}
+
+/**
+ * The first task in a project with no check approved notes the checks its files name, for its review to say once and
+ * point at the approval; nothing found runs until a person approves it. Read after the start, so the task does not wait
+ * on a machine's answer; one that cannot be read notes nothing.
+ */
+export async function noteChecksFound(ctx: OrchestratorContext, repo: RepoRecord, taskId: string): Promise<void> {
+  const key = `checks-offered:${repo.id}`;
+  if (ctx.testCommands?.get(repo.id) || (await approvedVerification(ctx.store, ctx.tenant, approvalScope(repo.id, ""))) || (await ctx.store.getSetting(ctx.tenant, key))) return;
+  const found = await projectChecks(ctx, repo).catch(() => null);
+  if (!found || "unread" in found || !found.detected.checks.length) return;
+  await ctx.store.setSetting(ctx.tenant, key, taskId);
+  await ctx.store.updateTask(ctx.tenant, taskId, { checksFound: found.detected.checks.map((c) => ({ command: c.command, source: c.source })) });
 }
 
 export async function projectVerification(ctx: OrchestratorContext, repo: RepoRecord, path = ""): Promise<ProjectVerification> {
