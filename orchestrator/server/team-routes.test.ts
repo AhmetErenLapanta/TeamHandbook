@@ -33,7 +33,7 @@ describe("what the Team page reads of the team's repositories", () => {
     expect(members).toEqual([]);
   });
 
-  it("given a team repository's skills and MCP servers and tasks started with one of the skills, one of them before the window, when what the team shares is read, then every skill and server is named once with its repository, the skill counts the tasks of the window alone, and a server's count is unknown", async () => {
+  it("given a team repository's skills and MCP servers, tasks started with one of the skills, one whose agent only called it and one before the window, when what the team shares is read, then every skill and server is named once with its repository, the skill counts the tasks of the window that picked or called it, and a server's count is unknown", async () => {
     // given
     const { ctx, root } = await seededContext("orchestrator-team-", ["payments-skills"]);
     dirs.push(root);
@@ -42,13 +42,14 @@ describe("what the Team page reads of the team's repositories", () => {
     const skill = inventory.skills[0]!.slug;
     const now = Date.parse("2026-11-04T12:00:00.000Z");
     const task = (id: string, daysAgo: number): TaskRecord => ({ tenant: ctx.tenant, id, repoId: repo.id, team: repo.team, title: "t", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "needs-review", createdBy: OWNER.email, createdAt: new Date(now - daysAgo * 86_400_000).toISOString(), startedAt: null, finishedAt: null, baseSha: null, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null, skills: [skill] });
-    for (const t of [task("tsk_recent1", 2), task("tsk_recent2", 5), task("tsk_old", 40)]) await ctx.store.createTask(t);
+    for (const t of [task("tsk_recent1", 2), task("tsk_recent2", 5), task("tsk_old", 40), { ...task("tsk_called", 3), skills: [] }]) await ctx.store.createTask(t);
+    await ctx.store.noteUsedSkill(ctx.tenant, "tsk_called", skill);
 
     // when
     const shared = await teamShared(ctx, OWNER, 30, now);
 
     // then
-    expect(shared.skills.map((s) => [s.slug, s.repoId, s.tasks])).toEqual(inventory.skills.map((s) => [s.slug, repo.id, s.slug === skill ? 2 : 0]));
+    expect(shared.skills.map((s) => [s.slug, s.repoId, s.tasks])).toEqual(inventory.skills.map((s) => [s.slug, repo.id, s.slug === skill ? 3 : 0]));
     expect(shared.mcpServers).toEqual(inventory.mcpServers.map((s) => ({ name: s.name, repoId: repo.id, repoName: repo.name, tasks: null })));
     expect(shared.mcpServers.length).toBeGreaterThan(0);
   });

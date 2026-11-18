@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, call, manages, tasksApi } from "../api";
 import type { ActivitySummary, Onboarding, Principal, RepoRecord, RequestRecord } from "../api";
-import { cloudSteps, soloSteps, ownForge } from "../setup-steps";
+import { cloudSteps } from "../setup-steps";
 import type { Step } from "../setup-steps";
 import { PageHead } from "../design/PageHead";
 import { TurnSection } from "../design/TurnSection";
@@ -13,6 +13,7 @@ import { here, navigate } from "../router";
 import { Loading } from "../Status";
 import { CopyText } from "../Confirm";
 import { HandbookRail, HandbookSection, pickKey } from "./Handbook";
+import { MachineHandbooks, YourHandbooks } from "./YourHandbooks";
 import { HandbookPluginCard } from "./PluginCard";
 import { usePersonalSetup } from "./personal";
 import type { Personal } from "./personal";
@@ -120,13 +121,21 @@ function SetupProblemLine({ problem }: { problem: SetupProblem }) {
 export const waiting = (l: Pick<TaskLessonRow, "status">) => l.status === "pending" || l.status === "sent";
 
 /** The person's own lessons, on either kind of orchestrator; an answer that is no list hides the section rather than showing it empty. */
-function useLessons(): [TaskLessonRow[] | null, () => void] {
+/**
+ * The person's own lessons, and how many wait for review in all: on one person's own orchestrator the
+ * plugin's whole queue, not only what tasks taught, so the count says `waiting` where the answer has it.
+ */
+function useLessons(): [TaskLessonRow[] | null, () => void, number | null] {
   const [lessons, setLessons] = useState<TaskLessonRow[] | null>(null);
+  const [waitingAll, setWaitingAll] = useState<number | null>(null);
   const [round, setRound] = useState(0);
   useEffect(() => {
-    call<{ candidates: TaskLessonRow[] }>("GET", "/api/lessons").then((r) => setLessons(r.candidates.filter(waiting)), () => setLessons(null));
+    call<{ candidates: TaskLessonRow[]; waiting?: number }>("GET", "/api/lessons").then((r) => {
+      setLessons(r.candidates.filter(waiting));
+      setWaitingAll(typeof r.waiting === "number" ? r.waiting : null);
+    }, () => setLessons(null));
   }, [round]);
-  return [lessons, () => setRound((n) => n + 1)];
+  return [lessons, () => setRound((n) => n + 1), waitingAll];
 }
 
 /** The setup still open: the next step with its one action, the rest by name. With nothing left the section is not drawn. */
@@ -157,10 +166,12 @@ function PersonTasks({ people }: { people: PersonOutcomes[] }) {
   );
 }
 
-function Lessons({ lessons, picked, onPick }: { lessons: TaskLessonRow[]; picked: string | null; onPick: (lesson: TaskLessonRow) => void }) {
-  if (!lessons.length) return null;
+function Lessons({ lessons, waitingAll, picked, onPick }: { lessons: TaskLessonRow[]; waitingAll: number | null; picked: string | null; onPick: (lesson: TaskLessonRow) => void }) {
+  // The plugin's queue holds lessons from the person's own sessions too; those are reviewed in Claude Code.
+  const more = waitingAll !== null ? Math.max(waitingAll - lessons.length, 0) : 0;
+  if (!lessons.length && !more) return null;
   return (
-    <TurnSection name="Lessons to review" count={lessons.length} why="What a task taught, offered as a skill; keep it and every later task loads it." empty="No lesson waits. A task you correct or finish leaves its lesson here.">
+    <TurnSection name="Lessons to review" count={lessons.length + more} why="What a task taught, offered as a skill; keep it and every later task loads it." empty="No lesson waits. A task you correct or finish leaves its lesson here.">
       <ul className="team-rows">
         {lessons.map((l) => (
           <li key={l.slug} className={l.slug === picked ? "picked" : undefined}>
@@ -170,6 +181,7 @@ function Lessons({ lessons, picked, onPick }: { lessons: TaskLessonRow[]; picked
           </li>
         ))}
       </ul>
+      {more ? <p className="muted">{more === 1 ? "1 more waits" : `${more} more wait`} from your own sessions; review {more === 1 ? "it" : "them"} with <code>/handbook:review</code> in Claude Code.</p> : null}
     </TurnSection>
   );
 }
@@ -259,7 +271,7 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
   const members = useMembers(me);
   const outcomes = useOutcomes(!local);
   const [forges] = useForgeConnections(!local && managing);
-  const [lessons, readLessons] = useLessons();
+  const [lessons, readLessons, waitingAll] = useLessons();
   const shared = useShared();
   const problems = useSetupProblems();
   const loaded = usePersonalSetup(local);
@@ -268,13 +280,15 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
     api.onboarding().then(setOnboarding, () => setOnboarding(null));
   }, []);
   const firstRepo = repos?.find((r) => r.configured !== false)?.id;
-  const steps = summary && onboarding && managing
-    ? onboarding.dismissed ? [] : openSteps(local ? soloSteps(org, summary, repos ?? [], ownForge([]), false) : cloudSteps(org, summary, firstRepo, connectedForge(forges) !== null), onboarding.skipped)
+  // One person's own orchestrator has no setup list on Team: a task finds its folder itself and asks once if it cannot, and a
+  // folder is added under Settings, Where your code lives. The steps are for a team that has not yet got its repositories.
+  const steps = summary && onboarding && managing && !local
+    ? onboarding.dismissed ? [] : openSteps(cloudSteps(org, summary, firstRepo, connectedForge(forges) !== null), onboarding.skipped)
     : [];
   // Only a required step still open is listed; with none the section is not drawn.
   const settingUp = steps.some((s) => s.required) ? steps : [];
   const teamRepos = (repos ?? []).filter((r) => r.kind === "skills" && r.configured !== false);
-  const sentence = teamSentence({ people: local ? null : members.users?.length ?? null, shared: local ? null : shared, lessons: lessons?.length ?? null });
+  const sentence = teamSentence({ people: local ? null : members.users?.length ?? null, shared: local ? null : shared, lessons: waitingAll ?? lessons?.length ?? null });
   const invite = managing && !local ? <button type="button" onClick={() => setPicked({ kind: "invite" })}>Invite members</button> : null;
   return (
     <div className="page">
@@ -285,18 +299,21 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
           {/* Setup still open is the page's empty state; a team that is set up and broke since sees what broke. */}
           {settingUp.length ? <SettingUp steps={settingUp} skipped={onboarding?.skipped ?? []} /> : null}
           {settingUp.length ? null : problems.map((pr) => <SetupProblemLine key={`${pr.repoId}:${pr.title}`} problem={pr} />)}
-          {lessons ? <Lessons lessons={lessons} picked={picked?.kind === "lesson" ? picked.slug : null} onPick={(l) => setPicked({ kind: "lesson", slug: l.slug, task: l.taskId })} /> : null}
+          {lessons ? <Lessons lessons={lessons} waitingAll={waitingAll} picked={picked?.kind === "lesson" ? picked.slug : null} onPick={(l) => setPicked({ kind: "lesson", slug: l.slug, task: l.taskId })} /> : null}
           {/* Whoever sees the members sees each one's last 30 days beside their role; anyone else, the tasks they see. */}
           {local ? null : managing ? <MembersSections me={me} data={members} hideEmpty extra={{ name: "Last 30 days", cell: (u) => outcomesCell(outcomes?.get(u.email)) }} /> : outcomes ? <PersonTasks people={[...outcomes.values()]} /> : <Loading what="tasks by person" />}
-          {repos === null ? <Loading what="the team handbook" /> : teamRepos.length ? (
+          {/* One person's Team is their own Claude Code setup, the team's plugin a row in it; a team's server shows the team repository. */}
+          {local ? <YourHandbooks fallback={<YourSetup personal={loaded} />} /> : repos === null ? <Loading what="the team handbook" /> : teamRepos.length ? (
             <HandbookSection me={me} repos={repos} counts={shared ?? { skills: [], mcpServers: [] }} picked={picked?.kind === "handbook" ? picked.pick : null} proposed={proposed} onPick={(pick) => setPicked({ kind: "handbook", pick })} onProposed={(repoId, sent, request) => {
               const next = new Map(proposed);
-              for (const name of sent.skills) next.set(pickKey(repoId, "skills", name), request);
-              for (const name of sent.mcpServers) next.set(pickKey(repoId, "mcp", name), request);
-              for (const name of sent.commands) next.set(pickKey(repoId, "commands", name), request);
+              for (const name of sent.skills) next.set(pickKey(repoId, "skills", name), { ...request, what: "addition" });
+              for (const name of sent.mcpServers) next.set(pickKey(repoId, "mcp", name), { ...request, what: "addition" });
+              for (const name of sent.commands) next.set(pickKey(repoId, "commands", name), { ...request, what: "addition" });
               setProposed(next);
             }} />
-          ) : local ? <YourSetup personal={loaded} /> : null}
+          ) : null}
+          {/* On a team's server a person's own setup is on their machine, read through it once they have paired one. */}
+          {local || !me.runners ? null : <MachineHandbooks me={me.id} />}
           <PoliciesSection me={me} />
         </div>
         {picked ? (
@@ -304,8 +321,8 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
             {picked.kind === "invite" ? (
               <InviteForm me={me} teams={members.teams} onSent={(sent, skipped) => { members.setSent({ sent, skipped }); members.reload(); setPicked(null); }} onCancel={() => setPicked(null)} />
             ) : picked.kind === "handbook" ? (
-              <HandbookRail key={pickKey(picked.pick.repo.id, picked.pick.tab, picked.pick.name)} pick={picked.pick} onOpened={(request: RequestRecord) => {
-                setProposed(new Map(proposed).set(pickKey(picked.pick.repo.id, picked.pick.tab, picked.pick.name), request));
+              <HandbookRail key={pickKey(picked.pick.repo.id, picked.pick.tab, picked.pick.name)} pick={picked.pick} onOpened={(request: RequestRecord, what) => {
+                setProposed(new Map(proposed).set(pickKey(picked.pick.repo.id, picked.pick.tab, picked.pick.name), { number: request.number, url: request.url, what }));
                 setPicked(null);
               }} />
             ) : (

@@ -42,5 +42,9 @@ export { checkSkillFormat, MAX_BODY_LINES, MAX_DESC, MAX_LISTING, MAX_NAME, MIN_
 export { buildOverlapIndex, overlapIndex } from "../../src/lib/skill-health.js";
 export { claudeDenyRules, mcpToolPart, patternMatches, policiesProblem, policyDenial, POLICY_ACTIONS, POLICY_MAX_RESOURCES, POLICY_MAX_RULES, POLICY_NAME_MAX, POLICY_REASON_MAX, policyRules, ruleProblem } from "../../src/lib/policy.js";
 export type { PolicyAction, PolicyRule, TeamFilePolicy } from "../../src/lib/policy.js";
+// The orchestrator keeps one reader of a person's sources (server/tasks/handbook-sources.ts); what it takes from the plugin is how fresh a plugin is, where it is installed and how a source is labelled.
+export { installedPluginDirs, marketplacePluginRoot, pluginFreshness, pluginLabel } from "../../src/lib/handbook-sources.js";
+export type { Freshness } from "../../src/lib/handbook-sources.js";
+export { listCandidates } from "../../src/lib/queue.js";
 export { hostIdentityOf, keepTaskLesson, queueTaskLesson, readTaskLessonReply, readTaskLessonWire, rejectTaskLesson, signalIsSafe, taskLesson, taskLessonCandidate, taskLessons } from "../../src/lib/task-lesson.js";
 export type { CandidateMeta, TaskLessonSignal, TaskLessonWire } from "../../src/lib/task-lesson.js";

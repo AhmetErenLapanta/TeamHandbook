@@ -67,8 +67,14 @@ function bucketOf(decided: { decision: Decision; rounds: number }[]): OutcomeBuc
   return { tasks, accepted: accepted.length, acceptedWithoutRevision, revisionRoundsMedian: median(decided.map((d) => d.rounds)), rejected, rates: { withoutRevision: rate(acceptedWithoutRevision), rejected: rate(rejected) } };
 }
 
-// Started with it, or the agent called it: a lesson kept as the person's own skill is never picked at a start, only called.
-const usesSkill = (task: TaskRecord, skill: string) => !!task.skills?.includes(skill) || !!task.tools?.skills.some((s) => s.name === skill) || !!task.usedSkills?.includes(skill);
+/**
+ * The skills a task used: started with, or called by its agent. A lesson kept as the person's own
+ * skill and a team plugin's skill are never picked at a start, only called, so a count of starts
+ * alone reads near zero for them.
+ */
+export const skillsOf = (task: TaskRecord): Set<string> => new Set([...(task.skills ?? []), ...(task.tools?.skills ?? []).map((s) => s.name), ...(task.usedSkills ?? [])]);
+
+const usesSkill = (task: TaskRecord, skill: string) => skillsOf(task).has(skill);
 
 /** Where the skill came from: kept from lesson candidates of these tasks, or added to a team repository; null when neither is known. */
 type Pivot = { at: string; lessonTasks: string[] } | { at: string; lessonTasks: null } | null;

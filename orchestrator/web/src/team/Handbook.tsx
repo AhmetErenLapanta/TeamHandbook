@@ -25,7 +25,10 @@ export interface HandbookPick {
 }
 
 /** A change already proposed, by the row it is for. */
-export type Proposed = ReadonlyMap<string, { number: number; url: string | null }>;
+export type ProposedWhat = "addition" | "update" | "removal";
+export type Proposed = ReadonlyMap<string, { number: number; url: string | null; what: ProposedWhat }>;
+
+const PROPOSED_LEAD: Record<ProposedWhat, string> = { addition: "Proposed in", update: "Update proposed in", removal: "Removal proposed in" };
 export const pickKey = (repoId: string, tab: HandbookTab, name: string) => `${repoId}/${tab}/${name}`;
 
 interface Counts { skills: { name: string; tasks: number | null }[]; mcpServers: { name: string; tasks: number | null }[] }
@@ -85,7 +88,7 @@ export function HandbookSection({ me, repos, counts, picked, proposed, onPick, o
             <button type="button" className="row-pick" aria-pressed={on} onClick={() => onPick({ repo, head: inventory.head, tab, name: r.name, sentence: r.sentence, editable })}><span className="mono">{r.name}</span></button>
             {r.sentence ? <span className="muted"> {r.sentence}</span> : null}
             <span className="muted"> from <span className="mono">{repo.name}</span>{taskCount(r.tasks)}</span>
-            {sent ? <span className="muted"> {sent.url && /^https?:\/\//.test(sent.url) ? <a href={sent.url}>Proposed in !{sent.number}</a> : <>Proposed in !{sent.number}</>}, lands once merged</span> : null}
+            {sent ? <span className="muted"> {sent.url && /^https?:\/\//.test(sent.url) ? <a href={sent.url}>{PROPOSED_LEAD[sent.what]} !{sent.number}</a> : <>{PROPOSED_LEAD[sent.what]} !{sent.number}</>}, lands once merged</span> : null}
           </li>
         );
       })}
@@ -118,7 +121,7 @@ export function HandbookSection({ me, repos, counts, picked, proposed, onPick, o
 }
 
 /** The picked row's text, with Update and Remove for whoever can change the repository; each change is a request. */
-export function HandbookRail({ pick, onOpened }: { pick: HandbookPick; onOpened: (r: RequestRecord) => void }) {
+export function HandbookRail({ pick, onOpened }: { pick: HandbookPick; onOpened: (r: RequestRecord, what: ProposedWhat) => void }) {
   const { repo, head, tab, name } = pick;
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -130,11 +133,12 @@ export function HandbookRail({ pick, onOpened }: { pick: HandbookPick; onOpened:
     if (tab === "mcp") return;
     (tab === "skills" ? api.skill(repo.id, name) : api.command(repo.id, name)).then((r) => setText(r.content), (e: Error) => setError(e.message));
   }, [repo.id, tab, name]);
-  const form = { repoId: repo.id, head, onOpened, onCancel: () => setActing(null) };
+  const form = { repoId: repo.id, head, onOpened: (r: RequestRecord) => onOpened(r, acting === "remove" ? "removal" : "update"), onCancel: () => setActing(null) };
   return (
     <>
       <h2 className="mono">{name}</h2>
       {tab === "mcp" ? <p className="muted">{pick.sentence}. Its values stay sealed; the repository holds only the names it needs.</p> : error ? <p className="error" role="alert">{error}</p> : text === null ? <p className="muted">Reading {name}…</p> : <pre className="handbook-text">{text}</pre>}
+      {!pick.editable ? <p className="muted">Only an admin or an owner of {repo.team} proposes changes to this repository.</p> : null}
       {pick.editable && !acting ? (
         <div className="actions">
           <button type="button" className="secondary" onClick={() => setActing("update")}>Update…</button>

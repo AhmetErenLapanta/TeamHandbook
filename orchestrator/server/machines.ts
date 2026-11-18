@@ -76,12 +76,16 @@ export function machineRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
     // Someone else's machine reads as none, so nobody learns which ids are in use.
     if (!machine || (machine.userId !== me.id && !manages(me))) return c.json({ error: "no machine of yours has that id" }, 404);
     await store.revokeMachine(ctx.tenant, machine.id, new Date().toISOString());
+    await store.deleteSetting(ctx.tenant, machineReportKey(machine.userId, machine.id));
     await recordEvent(ctx, me, "machine.disconnected", { subject: `machine:${machine.id}`, detail: `${machine.name} no longer runs tasks; any task it held is interrupted` });
     return c.json({ ok: true });
   });
 
   return app;
 }
+
+/** Where what a machine reported of its person's handbooks is kept (handbook-team.ts); it goes when the machine is disconnected. */
+export const machineReportKey = (userId: string, machineId: string) => `handbook.user.${userId}.machine.${machineId}`;
 
 /** What a machine reaches before it holds a token: who it is talking to, and the claim of a code. */
 export function runnerOpenRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
@@ -119,6 +123,7 @@ export function runnerOpenRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv
     const who = await runnerOf(c, ctx);
     if (who instanceof Response) return who;
     await store.revokeMachine(ctx.tenant, who.machine.id, new Date().toISOString());
+    await store.deleteSetting(ctx.tenant, machineReportKey(who.machine.userId, who.machine.id));
     await recordEvent(ctx, who.user, "machine.disconnected", { subject: `machine:${who.machine.id}`, detail: `${who.machine.name} disconnected itself; any task it held is interrupted` });
     return c.body(null, 204);
   });
