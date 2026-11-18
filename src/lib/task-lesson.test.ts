@@ -123,6 +123,19 @@ describe("task lessons", () => {
     expect("dropped" in clean).toBe(false);
   });
 
+  it("given drafts with no trigger in the description or a body of a line, when the candidate is built, then each is dropped as weak and a plain rule with both is kept", () => {
+    // given
+    const noTrigger = { ...input().draft, description: "Logging conventions for shop-api." };
+    const thin = { ...input().draft, body: "Use logger." };
+
+    // when
+    const built = [taskLessonCandidate(input({ draft: noTrigger }), HOST), taskLessonCandidate(input({ draft: thin }), HOST), taskLessonCandidate(input(), HOST)];
+
+    // then
+    expect(built.slice(0, 2)).toEqual([{ dropped: "weak" }, { dropped: "weak" }]);
+    expect("dropped" in built[2]!).toBe(false);
+  });
+
   it("given a draft whose body holds a credential the model copied, when the candidate is built, then it is dropped", () => {
     // given
     const draft = { ...input().draft, body: `Authenticate with ${TOKEN} before calling the API.` };

@@ -42,7 +42,17 @@ export interface TaskLesson {
   meta: CandidateMeta;
 }
 
-export type TaskLessonDrop = "secret" | "muted" | "duplicate";
+export type TaskLessonDrop = "secret" | "muted" | "duplicate" | "weak";
+
+const MIN_BODY_CHARS = 40;
+const TRIGGER = /^use (when|whenever|for|this when)\b/i;
+
+// A rule a later task can find and follow says when it applies and what to do: the description is what
+// Claude Code lists, so one without a trigger is never picked, and a body of a line says nothing the
+// description did not.
+export function lessonIsWeak(draft: DistilledDraft): boolean {
+  return !TRIGGER.test(draft.description.trim()) || draft.body.trim().length < MIN_BODY_CHARS;
+}
 
 // What a team's orchestrator sends a person's machine: the lesson's makings, never its files. The
 // machine builds the candidate itself, masked with its own account and screened for its own
@@ -100,6 +110,7 @@ export function readTaskLessonReply(text: string): DistilledDraft | "none" | nul
 // whole candidate: masking it would still leave the rule built around it.
 export function taskLessonCandidate(input: TaskLessonInput, host: HostIdentity): TaskLesson | { dropped: TaskLessonDrop } {
   if (input.signals.some((s) => !signalIsSafe(s, input.secretValues))) return { dropped: "secret" };
+  if (lessonIsWeak(input.draft)) return { dropped: "weak" };
   const mask = (text: string) => maskIdentity(text, host);
   const draft: DistilledDraft = { slug: input.draft.slug, description: mask(input.draft.description), body: mask(input.draft.body), expect: mask(input.draft.expect) };
   const fingerprint = lessonFingerprint("correction", draft.slug);

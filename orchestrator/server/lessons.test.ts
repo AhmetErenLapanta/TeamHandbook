@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { MiddlewareHandler } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserRecord } from "./accounts.js";
@@ -34,6 +34,7 @@ const DRAFT = JSON.stringify({
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -213,12 +214,15 @@ describe("lessons from a task's review", () => {
 
   it("given a fresh orchestrator whose first task ends within its first minute, when the sweep started at its start runs again, then that task is read", async () => {
     // given
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     const { ctx, place, asked, task } = await local(DRAFT);
     await ctx.store.setSetting("t", "lessons.since", "");
     await followUp(ctx, "fup_1", "use our logger here, never console.log");
     const stop = startLessonSweep(ctx, place, 3_600_000);
-    await vi.waitFor(async () => expect(await ctx.store.getSetting("t", "lessons.since")).toBeTruthy());
+    await stop.firstSweep;
     stop();
+    expect(await ctx.store.getSetting("t", "lessons.since")).toBeTruthy();
 
     // when
     await ctx.store.updateTask("t", task.id, { finishedAt: new Date(Date.now() + 1_000).toISOString() });
@@ -289,6 +293,25 @@ describe("lessons from a task's review", () => {
     expect(asked).toEqual([]);
   });
 
+  it("given a task whose agent used a team skill and a skill of the project, when its person corrected it, then only the team skill is offered for improving, and a task nobody corrected offers none", async () => {
+    // given
+    const { ctx, place, task } = await local(DRAFT);
+    ctx.lessons = place;
+    await ctx.store.noteUsedSkill("t", task.id, "release-notes");
+    await ctx.store.noteUsedSkill("t", task.id, "repo-conventions");
+    const app = createApp(ctx, as(ADA));
+
+    // when
+    const uncorrected = await (await app.request(`/api/tasks/${task.id}/lessons`)).json();
+    await followUp(ctx, "fup_1", "use our logger here, never console.log");
+    await sweepLessons(ctx, place, NOW);
+    const corrected = await (await app.request(`/api/tasks/${task.id}/lessons`)).json();
+
+    // then
+    expect(uncorrected.improvable).toEqual([]);
+    expect(corrected.improvable).toEqual(["release-notes"]);
+  });
+
   it("given a queued lesson, when its owner reads the task's line and keeps it, then the skill is installed for them, the task row records when, and a second keep is refused", async () => {
     // given
     const { ctx, queue, place, task } = await local(DRAFT);
@@ -303,7 +326,7 @@ describe("lessons from a task's review", () => {
     const twice = await app.request(`/api/tasks/${TASK_ID}/lessons/log-with-the-app-logger/keep`, { method: "POST" });
 
     // then
-    expect(line).toEqual({ skills: { team: ["release-notes"], project: [], used: [] }, candidates: [{ slug: "log-with-the-app-logger", description: expect.stringContaining("Use when adding logging"), status: "pending", createdAt: NOW.toISOString(), taskId: task.id }] });
+    expect(line).toEqual({ skills: { team: ["release-notes"], project: [], used: [] }, improvable: [], candidates: [{ slug: "log-with-the-app-logger", description: expect.stringContaining("Use when adding logging"), status: "pending", createdAt: NOW.toISOString(), taskId: task.id }] });
     expect(kept.status).toBe(200);
     expect(readFileSync(join(queue.skillsDir, "log-with-the-app-logger", "SKILL.md"), "utf8")).toContain("name: log-with-the-app-logger");
     expect((await row(ctx)).candidates).toEqual([{ slug: "log-with-the-app-logger", keptAt: expect.any(String) }]);
@@ -329,6 +352,35 @@ describe("lessons from a task's review", () => {
     expect((await row(ctx)).signals).toEqual(["fup_1", "fup_2"]);
   });
 
+  it("given a lesson from a task in a folder, when its owner keeps it in the folder, then it is written into the folder's own skills, and a lesson holding a credential, an unknown target and a project that is no folder are refused and keep nothing", async () => {
+    // given
+    const { ctx, queue, place, task, asked } = await local(DRAFT);
+    ctx.lessons = place;
+    const folder = join(dirname(queue.home), "shop-api-folder");
+    await ctx.store.upsertRepo({ tenant: "t", id: "shop-api", team: "Payments", name: "shop-api", url: folder });
+    await followUp(ctx, "fup_1", "use our logger here, never console.log");
+    await sweepLessons(ctx, place, NOW);
+    const app = createApp(ctx, as(ADA));
+    const keep = (body: unknown) => app.request(`/api/tasks/${task.id}/lessons/log-with-the-app-logger/keep`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const file = join(queue.home, "candidates", "log-with-the-app-logger", "SKILL.md");
+    const clean = readFileSync(file, "utf8");
+    writeFileSync(file, `${clean}\nUse ${TOKEN} to sign in.\n`);
+
+    // when
+    const leaking = await keep({ target: "folder" });
+    const unknown = await keep({ target: "team" });
+    writeFileSync(file, clean);
+    const kept = await keep({ target: "folder" });
+
+    // then
+    expect(asked).toHaveLength(1);
+    expect([leaking.status, unknown.status, kept.status]).toEqual([409, 400, 200]);
+    expect((await leaking.json()).error).toContain("credential");
+    expect((await kept.json()).lesson).toEqual({ slug: "log-with-the-app-logger", status: "approved", target: "folder" });
+    expect(readFileSync(join(folder, ".claude", "skills", "log-with-the-app-logger", "SKILL.md"), "utf8")).toContain("name: log-with-the-app-logger");
+    expect(existsSync(join(queue.skillsDir, "log-with-the-app-logger"))).toBe(false);
+  });
+
   it("given a queued lesson, when its owner rejects it for good, then it is muted and the screen lists it as rejected", async () => {
     // given
     const { ctx, queue, place } = await local(DRAFT);
@@ -345,6 +397,25 @@ describe("lessons from a task's review", () => {
     expect(rejected).toMatchObject({ muted: true, lesson: { status: "rejected" } });
     expect(listed.candidates.map((c: { status: string }) => c.status)).toEqual(["rejected"]);
     expect(JSON.parse(readFileSync(join(queue.home, "muted.json"), "utf8"))).toHaveLength(1);
+  });
+
+  it("given a lesson from a task and a candidate the plugin harvested waiting in the same queue, when the owner reads the lessons, then the lessons are the task's own and the waiting count is the whole queue", async () => {
+    // given
+    const { ctx, queue, place } = await local(DRAFT);
+    ctx.lessons = place;
+    await followUp(ctx, "fup_1", "use our logger here, never console.log");
+    await sweepLessons(ctx, place, NOW);
+    const harvested = join(queue.home, "candidates", "fix-npm-test");
+    mkdirSync(harvested, { recursive: true });
+    writeFileSync(join(harvested, "SKILL.md"), "---\nname: fix-npm-test\ndescription: Use when npm test fails\n---\n");
+    writeFileSync(join(harvested, "candidate.json"), JSON.stringify({ slug: "fix-npm-test", status: "pending", createdAt: "2026-11-01T00:00:00.000Z", scope: "team", description: "Use when npm test fails", fingerprint: "1111111111111111", sessionId: "ses_1", gate: null, origin: "harvest" }));
+
+    // when
+    const listed = await (await createApp(ctx, as(ADA)).request("/api/lessons")).json();
+
+    // then
+    expect(listed.candidates).toHaveLength(1);
+    expect(listed.waiting).toBe(2);
   });
 
   it("given the owner's API key, when it asks for the queue, then it is refused like anyone else", async () => {
@@ -500,7 +571,7 @@ describe("lessons from a task's review", () => {
 
     // then
     expect(queueRead.status).toBe(404);
-    expect(line).toEqual({ skills: { team: ["release-notes"], project: [], used: [] }, candidates: null });
+    expect(line).toEqual({ skills: { team: ["release-notes"], project: [], used: [] }, improvable: [], candidates: null });
     expect(lessonQueueOf({ ORCHESTRATOR_MODE: "self-hosted", HOME: "/home/someone" }, ["t"])).toBeNull();
   });
 

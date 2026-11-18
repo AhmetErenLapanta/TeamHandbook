@@ -26,7 +26,7 @@ describe("a lesson queued on its person's machine", () => {
 
   it("given makings in shape, when the machine queues them, then the lesson waits in the person's own review queue with the account name masked", () => {
     // given
-    const ask = { nonce: "n1", lesson: makings("Ask octavia before changing the logger.") };
+    const ask = { nonce: "n1", lesson: makings("Ask octavia before changing the logger, and log through it in every new file.") };
 
     // when
     const answer = queueLessonHere(ask, join(home, "octavia"), { USER: "octavia", TEAMHANDBOOK_HOME: join(home, "handbook") });
@@ -35,7 +35,7 @@ describe("a lesson queued on its person's machine", () => {
     expect(answer).toEqual({ slug: "log-with-the-app-logger" });
     const dir = join(home, "handbook", "candidates", "log-with-the-app-logger");
     expect(JSON.parse(readFileSync(join(dir, "candidate.json"), "utf8"))).toMatchObject({ status: "pending", origin: "task", sessionId: "tsk_01example" });
-    expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toContain("Ask <user> before changing the logger.");
+    expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toContain("Ask <user> before changing the logger, and log through it");
   });
 
   it("given makings that hold the value of a credential in the person's environment, when the machine queues them, then nothing is written", () => {
