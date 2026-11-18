@@ -24,6 +24,8 @@ export interface ShadowPlace {
   gitDir: string;
   folder: string;
   where: Where;
+  /** A task's own checkout under the orchestrator's data, which no project rule names and no person moves. */
+  owned?: true;
 }
 
 export const SHADOW_MAX_FILES = 5_000;
@@ -55,6 +57,7 @@ const git = (p: ShadowPlace, args: string[], input?: string) => gitAsync([...fla
 
 /** The folder as the rule finds it now, refused when it is not the one the project was opened on. */
 async function checked(p: ShadowPlace): Promise<string | ShadowRefusal> {
+  if (p.owned) return p.folder;
   const at = await projectFolder(p.folder, p.where);
   if ("refused" in at) return { refused: at.message };
   return at.real === p.folder ? at.real : { refused: "this folder moved or became a link since it was opened; open it again" };

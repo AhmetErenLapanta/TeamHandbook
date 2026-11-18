@@ -113,7 +113,9 @@ export async function runReview(ctx: OrchestratorContext, repo: RepoRecord, req:
       await makeTaskDirs(paths);
       const credentials = deps.model ? [] : [...deps.agent.credentialEnv, ...deps.passEnv];
       held = deps.model ? await openTaskProxy(paths, [], deps.model) : null;
-      const taskSecrets = (await secretsForTask(ctx, repo.id, repo.team)).map((secret) => secret.value);
+      // A request a task opened is masked for what its starter gave that task, too.
+      const [owner] = (await ctx.store.taskPage(ctx.tenant, { repoId: repo.id, requestNumber: req.number }, null, 1)).tasks;
+      const taskSecrets = (await secretsForTask(ctx, repo.id, repo.team, undefined, owner?.id)).map((secret) => secret.value);
       const redactor = new Redactor([...credentials.map((name) => deps.hostEnv[name]).filter((v): v is string => !!v), ...taskSecrets]);
       const setup: AgentSetup = { skills: [], mcpServers: {}, mcpTools: [], deniedTools: ["Edit"] };
       // Never with anyone's own profile: a request from a fork is read by an agent with no one's

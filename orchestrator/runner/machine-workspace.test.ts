@@ -148,6 +148,21 @@ describe("a task in its person's one work folder on their machine", { timeout: 6
     expect(log).toContain("Went on from task/tsk_ws_1 in 1 of the 2 repositories of code, where the request left it; the others start at their last commits.");
   });
 
+  it("given a task going on from its change, when the agent changes nothing more, then it goes back to review with the agent's last words and the branch stays where it was", async () => {
+    // given
+    const before = git(["rev-parse", "HEAD"], join(code, "payments-api"));
+    const first = await run("Task: Add an on-call note\nstand-in: work in payments-api");
+    const head = first.outcome.repos![0]!.head;
+
+    // when
+    const { outcome } = await run("Task: Add an on-call note", { repos: [{ path: "payments-api", head, baseSha: before }] });
+
+    // then
+    expect(outcome).toMatchObject({ status: "needs-review", error: null, repos: [], lastSaid: "Done with turn 1." });
+    expect(outcome.nothingChanged).toBeUndefined();
+    expect(git(["rev-parse", "task/tsk_ws_1"], join(code, "payments-api"))).toBe(head);
+  });
+
   it("given a task's branch its person moved since the request was read, when the task goes on, then nothing is changed and the task fails saying so", async () => {
     // given
     const before = git(["rev-parse", "HEAD"], join(code, "payments-api"));
@@ -179,12 +194,12 @@ describe("a task in its person's one work folder on their machine", { timeout: 6
     expect(log).toEqual(expect.arrayContaining([expect.stringMatching(/^notes: the change was not written to task\/tsk_ws_1 in your repository \(.*\); it is left out of this task\.$/)]));
   });
 
-  it("given an agent that changes no repository, when the run ends, then the task fails and no repository gets a branch", async () => {
+  it("given an agent that changes no repository, when the run ends, then the task ends as having changed nothing with the agent's last words, and no repository gets a branch", async () => {
     // when
     const { outcome } = await run("Task: Add an on-call note");
 
     // then
-    expect(outcome).toMatchObject({ status: "failed", error: "The agent changed nothing, so there is nothing to push." });
+    expect(outcome).toMatchObject({ status: "failed", error: "The agent changed nothing, so there is nothing to push.", nothingChanged: true, lastSaid: "Done with turn 1." });
     for (const name of ["payments-api", "notes"]) expect(git(["branch", "--list", "task/*"], join(code, name))).toBe("");
   });
 });
