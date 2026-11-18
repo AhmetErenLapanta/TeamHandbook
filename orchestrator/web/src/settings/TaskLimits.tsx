@@ -31,6 +31,9 @@ export function TaskLimitsSettings({ me }: { me: Principal }) {
   const [minutes, setMinutes] = useState("");
   const [noUsd, setNoUsd] = useState(false);
   const [noMinutes, setNoMinutes] = useState(false);
+  const [second, setSecond] = useState("");
+  // What was read, so a save sends the second sign-in only when the person changed it; the orchestrator keeps it otherwise.
+  const [readSecond, setReadSecond] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
@@ -41,6 +44,8 @@ export function TaskLimitsSettings({ me }: { me: Principal }) {
     setMinutes(limits.maxMinutes === null ? "" : String(limits.maxMinutes));
     setNoUsd(limits.maxUsd === null);
     setNoMinutes(limits.maxMinutes === null);
+    setSecond(limits.secondSignIn ?? "");
+    setReadSecond(limits.secondSignIn ?? "");
     setLoaded(true);
   };
   const load = () => taskLimitsApi.read().then(show, (e: Error) => setError(e.message));
@@ -54,7 +59,7 @@ export function TaskLimitsSettings({ me }: { me: Principal }) {
     setBusy(true);
     setRefused(null);
     setNotice(null);
-    taskLimitsApi.change({ maxUsd: noUsd ? null : Number(usd), maxMinutes: noMinutes ? null : Number(minutes) }).then((limits) => {
+    taskLimitsApi.change({ maxUsd: noUsd ? null : Number(usd), maxMinutes: noMinutes ? null : Number(minutes), ...(second.trim() !== readSecond ? { secondSignIn: second.trim() || null } : {}) }).then((limits) => {
       show(limits);
       setNotice(limitsSaid(limits));
     }, (err: Error) => setRefused(err.message)).finally(() => setBusy(false));
@@ -73,6 +78,10 @@ export function TaskLimitsSettings({ me }: { me: Principal }) {
           <label>Longest a task runs, in minutes<input type="number" inputMode="numeric" min={1} max={1440} step={1} value={minutes} disabled={noMinutes || !canChange} required={!noMinutes} onChange={(e) => setMinutes(e.target.value)} /></label>
           <label className="check"><input type="checkbox" checked={noMinutes} disabled={!canChange} onChange={(e) => setNoMinutes(e.target.checked)} />No limit</label>
         </div>
+        {me.mode === "local" ? <div className="task-limit">
+          <label>Another Claude Code sign-in<input className="mono" value={second} disabled={!canChange} onChange={(e) => setSecond(e.target.value)} placeholder="/home/ada/.claude-second" spellCheck={false} autoComplete="off" aria-describedby="second-sign-in-note" /></label>
+          <p className="muted small" id="second-sign-in-note">The full path of that Claude Code profile's folder, off until named. A task at your plan's usage limit can go on with it; the orchestrator starts Claude Code with that folder and reads nothing in it.</p>
+        </div> : null}
         {canChange ? <div className="actions"><button type="submit" disabled={busy}>Save</button></div> : null}
       </form>
     </section>
