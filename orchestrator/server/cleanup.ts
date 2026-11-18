@@ -1,7 +1,9 @@
 import type { OrchestratorContext } from "./app.js";
+import { purgeTurns } from "./tasks/turns.js";
+import { sweepTaskSecrets } from "./task-secrets.js";
 import { purgeOldEvents } from "./events.js";
 import { purgeTaskLogs, purgeUsageCounts, readPrivacy } from "./privacy.js";
-import { purgeAttachments } from "./attachments.js";
+import { purgeAttachments, purgeDraftAttachments } from "./attachments.js";
 import type { Store } from "./store.js";
 
 /** Effects settled this long ago are pruned; failed ones are kept for whoever looks into them. */
@@ -51,6 +53,11 @@ export async function cleanupRound(store: Store, served: readonly OrchestratorCo
     await count("taskLogLines", `task log (${ctx.tenant})`, () => purgeTaskLogs(ctx.store, ctx.tenant, now));
     // Attachments go with the task log they belong beside, by the same retention.
     await count("attachments", `attachments (${ctx.tenant})`, async () => purgeAttachments(ctx, new Date(now.getTime() - (await readPrivacy(ctx.store, ctx.tenant)).taskLogDays * 86_400_000).toISOString()));
+    await count("attachments", `files no start took (${ctx.tenant})`, () => purgeDraftAttachments(ctx, now));
+    // A task's turn snapshots are kept as long as its log, and no longer than its task and its starter's account.
+    await purgeTurns(ctx, new Date(now.getTime() - (await readPrivacy(ctx.store, ctx.tenant)).taskLogDays * 86_400_000).toISOString()).catch((err: Error) => warn(`cleanup turn snapshots (${ctx.tenant}): ${err.message}`));
+    // A lease that ran out ends its task in the store alone: what its starter gave it goes at this round.
+    await sweepTaskSecrets(ctx).catch((err: Error) => warn(`cleanup task secrets (${ctx.tenant}): ${err.message}`));
     await count("usageCounts", `skill use (${ctx.tenant})`, () => purgeUsageCounts(ctx.store, ctx.tenant, now));
     await count("events", `event log (${ctx.tenant})`, () => purgeOldEvents(ctx, now));
   }

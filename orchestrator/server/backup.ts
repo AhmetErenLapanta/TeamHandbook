@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writ
 import { join, resolve } from "node:path";
 import { localRepoPath } from "./forge/local.js";
 import { gitAsync, oneAtATime } from "./git.js";
+import { askForBackup, runningAddress } from "./local.js";
 import { SCHEMA_VERSION } from "./store.js";
 import type { RepoRecord, Store } from "./store.js";
 
@@ -32,17 +33,24 @@ const BACKUP_NAME = /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
 
 export class BackupSettingRefused extends Error {}
 
-function wholeNumber(env: NodeJS.ProcessEnv, name: string, min: number, max: number): number | null {
+function wholeNumber(env: NodeJS.ProcessEnv, name: string, min: number, max: number, offAt0 = false): number | null {
   const raw = env[name];
   if (raw === undefined || raw === "") return null;
   const n = Number(raw);
-  if (!/^\d+$/.test(raw) || n < min || n > max) throw new BackupSettingRefused(`${name} is a whole number from ${min} to ${max}`);
+  if (offAt0 && raw === "0") return 0;
+  if (!/^\d+$/.test(raw) || n < min || n > max) throw new BackupSettingRefused(`${name} is a whole number from ${min} to ${max}${offAt0 ? ", or 0 for none" : ""}`);
   return n;
 }
 
-export function backupSettings(env: NodeJS.ProcessEnv, dataDir: string): BackupSettings {
+/** Hours between the copies a local orchestrator takes when nothing is set: its data is its person's only copy. */
+export const LOCAL_BACKUP_HOURS = 24;
+/** How long after a start a copy that is due is taken, so the start itself is not slowed. */
+export const FIRST_COPY_DELAY_MS = 30_000;
+
+export function backupSettings(env: NodeJS.ProcessEnv, dataDir: string, local = false): BackupSettings {
+  const hours = wholeNumber(env, "ORCHESTRATOR_BACKUP_HOURS", 1, 8760, true);
   return {
-    everyHours: wholeNumber(env, "ORCHESTRATOR_BACKUP_HOURS", 1, 8760),
+    everyHours: hours === 0 ? null : (hours ?? (local ? LOCAL_BACKUP_HOURS : null)),
     keep: wholeNumber(env, "ORCHESTRATOR_BACKUP_KEEP", 1, 1000) ?? 7,
     dir: resolve(env.ORCHESTRATOR_BACKUP_DIR || join(dataDir, "backups")),
   };
@@ -117,20 +125,64 @@ export async function takeBackup(store: Store, repos: readonly RepoRecord[], set
  * kill -s SIGUSR2 orchestrator` - so an operator takes one now without stopping anything. One copy
  * runs at a time; a second asked for meanwhile is skipped and says so.
  */
-export function startBackups(store: Store, repos: () => Promise<RepoRecord[]>, settings: BackupSettings, say: (line: string) => void, warn: (line: string) => void): void {
+/** The newest of the orchestrator's own copies, by the time in its name. */
+export function newestBackup(dir: string): Date | null {
+  if (!existsSync(dir)) return null;
+  const times = readdirSync(dir).flatMap((name) => {
+    const m = /^backup-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(name);
+    return m ? [new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`)] : [];
+  });
+  return times.length ? new Date(Math.max(...times.map((t) => t.getTime()))) : null;
+}
+
+/** Starts the schedule and the SIGUSR2 copy; returns how to take a copy now, answering where it was written or null when none was. */
+export function startBackups(store: Store, repos: () => Promise<RepoRecord[]>, settings: BackupSettings, say: (line: string) => void, warn: (line: string) => void): () => Promise<string | null> {
   let running = false;
-  const take = async (reason: string) => {
-    if (running) return say(`backup: one is already being written; the ${reason} one is skipped`);
+  const take = async (reason: string): Promise<string | null> => {
+    if (running) return say(`backup: one is already being written; the ${reason} one is skipped`), null;
     running = true;
     try {
       const done = await takeBackup(store, await repos(), settings, reason);
       say(`backup: ${reason} copy written to ${done.path} (${done.database === "sqlite" ? "the database and " : "no database, pg_dump's; "}${done.repositories} ${done.repositories === 1 ? "repository" : "repositories"})`);
+      return done.path;
     } catch (err) {
       warn(`backup: the ${reason} copy was not written: ${(err as Error).message}`);
+      return null;
     } finally {
       running = false;
     }
   };
   process.on("SIGUSR2", () => void take("asked"));
-  if (settings.everyHours) setInterval(() => void take("scheduled"), settings.everyHours * 3_600_000).unref();
+  if (settings.everyHours) {
+    // A copy is due when the newest is older than the interval, so a person who starts the orchestrator for an hour a day still gets one.
+    const everyMs = settings.everyHours * 3_600_000;
+    const check = () => {
+      const newest = newestBackup(settings.dir);
+      if (!newest || Date.now() - newest.getTime() >= everyMs) void take("scheduled");
+    };
+    setTimeout(check, FIRST_COPY_DELAY_MS).unref();
+    setInterval(check, Math.min(everyMs, 3_600_000)).unref();
+  }
+  return () => take("asked");
+}
+
+/**
+ * `handbook-orchestrator backup`: asks the orchestrator running on this machine for a copy of its
+ * database now and says where it is. It reaches that orchestrator the way a second start does, over
+ * loopback with the secret in the data directory, so no process is signalled and no other user or
+ * page can ask.
+ */
+export async function backupCommand(dataDir: string, say: (line: string) => void = console.log, fetcher: typeof fetch = fetch): Promise<number> {
+  const running = runningAddress(dataDir);
+  if (!running) {
+    say(`backup: no orchestrator is running on ${dataDir}; start it, then run this again`);
+    return 1;
+  }
+  const done = await askForBackup(dataDir, running, fetcher);
+  if ("refused" in done) {
+    say(`backup: ${done.refused}`);
+    return 1;
+  }
+  say(`backup: the copy is in ${done.path}`);
+  return 0;
 }

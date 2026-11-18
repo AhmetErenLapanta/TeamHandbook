@@ -137,15 +137,32 @@ export function reentrySecret(dataDir: string): string {
 }
 
 /** The one route a second local start calls: the reentry secret in, a fresh one-time link out. */
-export function localLinkRoutes(dataDir: string, freshLink: () => Promise<string>): Hono {
+export function localLinkRoutes(dataDir: string, freshLink: () => Promise<string>, copyNow: () => Promise<string | null> = async () => null): Hono {
   const app = new Hono();
+  const asked = (given: string | undefined) => {
+    const [a, b] = [Buffer.from(given ?? ""), Buffer.from(reentrySecret(dataDir))];
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
   app.post("/api/local/link", async (c) => {
-    const given = Buffer.from(c.req.header(REENTRY_HEADER) ?? "");
-    const kept = Buffer.from(reentrySecret(dataDir));
-    if (given.length !== kept.length || !timingSafeEqual(given, kept)) return c.json({ error: "not this machine's orchestrator" }, 403);
+    if (!asked(c.req.header(REENTRY_HEADER))) return c.json({ error: "not this machine's orchestrator" }, 403);
     return c.json({ url: await freshLink() }, 200, { "cache-control": "no-store" });
   });
+  // A copy of its database taken now, for the person's `backup` command: the same secret, the path of the copy out.
+  app.post("/api/local/backup", async (c) => {
+    if (!asked(c.req.header(REENTRY_HEADER))) return c.json({ error: "not this machine's orchestrator" }, 403);
+    const path = await copyNow();
+    return path ? c.json({ path }, 200, { "cache-control": "no-store" }) : c.json({ error: "no copy was written; the orchestrator's log says why" }, 500);
+  });
   return app;
+}
+
+/** Asks the orchestrator already running on this data directory for a copy now; the copy's path, or why not. */
+export async function askForBackup(dataDir: string, running: string, fetcher: typeof fetch = fetch): Promise<{ path: string } | { refused: string }> {
+  const answer = await fetcher(`${running}api/local/backup`, { method: "POST", headers: { [REENTRY_HEADER]: reentrySecret(dataDir) } }).catch(() => null);
+  if (!answer) return { refused: `the orchestrator at ${running} does not answer` };
+  const body = (await answer.json().catch(() => ({}))) as { path?: unknown; error?: unknown };
+  if (answer.ok && typeof body.path === "string") return { path: body.path };
+  return { refused: typeof body.error === "string" ? body.error : `the orchestrator answered ${answer.status}` };
 }
 
 /** Asks the orchestrator already running on this data directory for a fresh link; null when it does not answer. */

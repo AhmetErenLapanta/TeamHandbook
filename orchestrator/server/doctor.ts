@@ -1,14 +1,19 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { backupSettings } from "./backup.js";
+import { backupSettings, newestBackup } from "./backup.js";
+import { localMode } from "./mode.js";
 import type { BackupSettings } from "./backup.js";
 import { orchestratorDataDir, holdDataDir, privateDataDir } from "./data-lock.js";
 import { connectedOrgs, orgDir, profileFile } from "../runner/profile.js";
+import { agentStatus } from "../runner/agent-status.js";
+import { machineAdapters } from "../runner/machine-agents.js";
+import type { MachineAgentStatus } from "./runner-store.js";
+import type { AgentAdapter } from "./tasks/agents.js";
 import { readSecretEnv } from "./secret-env.js";
 import { RUNNER_SERVICE, serviceEnvFile, serviceInstalled } from "./service.js";
-import { GENERATED_KEY_FILE } from "./vault.js";
+import { createVault, GENERATED_KEY_FILE, LOST_SEALED_FIX, lostSealedSay, parseSecretKey, unopenedBy } from "./vault.js";
 import { postgresDriver } from "./store-postgres.js";
 import { newerSchema, readSchemaFloor, readsNewerSchema, SCHEMA_FLOOR_TABLE, SCHEMA_VERSION, SCHEMA_VERSION_TABLE } from "./store.js";
 
@@ -42,35 +47,72 @@ export function schemaFindings(stored: number, floor: number | null, cloud: bool
   return [{ code: "schema", problem: false, say: `the database is at this image's schema, ${SCHEMA_VERSION}` }];
 }
 
-/** The newest of the orchestrator's own copies, by the time in its name. */
-export function newestBackup(dir: string): Date | null {
+export { newestBackup };
+
+/** The newest copy of the orchestrator's own whose database passes SQLite's check, or null. */
+export function newestWholeCopy(dir: string): string | null {
   if (!existsSync(dir)) return null;
-  const times = readdirSync(dir).flatMap((name) => {
-    const m = BACKUP_NAME.exec(name);
-    return m ? [new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`)] : [];
-  });
-  return times.length ? new Date(Math.max(...times.map((t) => t.getTime()))) : null;
+  const names = readdirSync(dir).filter((name) => BACKUP_NAME.test(name)).sort().reverse();
+  for (const name of names) {
+    const file = join(dir, name, "orchestrator.db");
+    if (!existsSync(file)) continue;
+    try {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try {
+        if ((db.prepare("PRAGMA quick_check").all() as { quick_check: string }[]).map((r) => r.quick_check).join() === "ok") return file;
+      } finally {
+        db.close();
+      }
+    } catch {
+      // A copy that does not open is passed over for the one before it.
+    }
+  }
+  return null;
+}
+
+/**
+ * Puts the newest whole copy where a damaged database was. The damaged file and its write-ahead log
+ * are kept beside it, named by the time, so nothing is thrown away; the key and everything else in the
+ * data directory stay as they are, which is why a copy taken here opens here.
+ */
+export function restoreNewestCopy(file: string, backupDir: string, now: Date = new Date()): { from: string; kept: string } | null {
+  const copy = newestWholeCopy(backupDir);
+  if (!copy) return null;
+  const kept = `${file}.damaged-${now.toISOString().replace(/[:.]/g, "-")}`;
+  renameSync(file, kept);
+  for (const suffix of ["-wal", "-shm"]) if (existsSync(file + suffix)) renameSync(file + suffix, kept + suffix);
+  copyFileSync(copy, file);
+  return { from: copy, kept };
 }
 
 /** Whether the orchestrator's copies keep up with the schedule ORCHESTRATOR_BACKUP_HOURS sets. */
 export function backupFindings(settings: Pick<BackupSettings, "everyHours" | "dir">, newest: Date | null, postgres: boolean, now: Date = new Date()): Finding[] {
   const database = postgres ? " (on Postgres the database is pg_dump's, which these copies do not hold)" : "";
   if (!settings.everyHours) {
-    return [{ code: "backup-unscheduled", problem: false, say: `no copy is taken on a schedule${database}`, fix: "set ORCHESTRATOR_BACKUP_HOURS, or take one with SIGUSR2 while the orchestrator runs" }];
+    const held = newest ? `; the newest, asked for, is ${Math.floor((now.getTime() - newest.getTime()) / 3_600_000)} hours old in ${settings.dir}` : "";
+    return [{ code: "backup-unscheduled", problem: false, say: `no copy is taken on a schedule${held}${database}`, fix: "set ORCHESTRATOR_BACKUP_HOURS (0 turns the schedule off), or take one with SIGUSR2 while the orchestrator runs; copies are kept in the data directory unless ORCHESTRATOR_BACKUP_DIR names another folder, such as one on another disk" }];
   }
-  if (!newest) return [{ code: "backup-none", problem: true, say: `ORCHESTRATOR_BACKUP_HOURS is ${settings.everyHours} and ${settings.dir} holds no copy${database}`, fix: "start the orchestrator and send it SIGUSR2, then check the backup lines in its log" }];
+  if (!newest) return [{ code: "backup-none", problem: true, say: `a copy is taken every ${settings.everyHours} hours and ${settings.dir} holds none${database}`, fix: "start the orchestrator and send it SIGUSR2, then check the backup lines in its log" }];
   const hours = (now.getTime() - newest.getTime()) / 3_600_000;
   // Two periods: one missed copy is an orchestrator that was stopped, two is a schedule that is not running.
   if (hours > settings.everyHours * 2) {
-    return [{ code: "backup-stale", problem: true, say: `the newest copy is ${Math.floor(hours)} hours old and ORCHESTRATOR_BACKUP_HOURS is ${settings.everyHours}${database}`, fix: "check the orchestrator's log for backup lines that say the copy was not written" }];
+    return [{ code: "backup-stale", problem: true, say: `the newest copy is ${Math.floor(hours)} hours old and a copy is due every ${settings.everyHours}${database}`, fix: "check the orchestrator's log for backup lines that say the copy was not written" }];
   }
-  return [{ code: "backup", problem: false, say: `the newest copy is ${Math.floor(hours)} hours old${database}` }];
+  return [{ code: "backup", problem: false, say: `the newest copy is ${Math.floor(hours)} hours old, in ${settings.dir}${database}` }];
 }
 
 /** What a SQLite database file says of itself: whether it is whole, and the space a VACUUM gives back. */
-export function sqliteFindings(file: string, fix: boolean, cloud: boolean, say: (line: string) => void): Finding[] {
+export function sqliteFindings(file: string, fix: boolean, cloud: boolean, say: (line: string) => void, backupDir?: string): Finding[] {
   if (!existsSync(file)) return [{ code: "database-none", problem: false, say: `${file} does not exist yet; the first start makes it` }];
-  const damaged = (detail: string): Finding[] => [{ code: "database-damaged", problem: true, say: `${file} fails SQLite's check: ${detail}`, fix: "restore the newest copy from the backup directory" }];
+  const damaged = (detail: string): Finding[] => {
+    const found = `${file} fails SQLite's check: ${detail}`;
+    if (!backupDir) return [{ code: "database-damaged", problem: true, say: found, fix: "restore the newest copy from the backup directory" }];
+    if (!newestWholeCopy(backupDir)) return [{ code: "database-damaged", problem: true, say: found, fix: `${backupDir} holds no whole copy to put back; this orchestrator takes one on a schedule, ORCHESTRATOR_BACKUP_HOURS, or when it is sent SIGUSR2` }];
+    if (!fix) return [{ code: "database-damaged", problem: true, say: found, fix: "run doctor --fix to put the newest whole copy back; the damaged file is kept beside it" }];
+    const put = restoreNewestCopy(file, backupDir)!;
+    say(`doctor: put ${put.from} back; the damaged file is kept as ${put.kept}`);
+    return [{ code: "database-restored", problem: false, say: "the database is the newest whole copy, taken before the damage; whatever happened after it is not in it" }, ...sqliteFindings(file, false, cloud, say)];
+  };
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(file);
@@ -79,10 +121,18 @@ export function sqliteFindings(file: string, fix: boolean, cloud: boolean, say: 
     return damaged((err as Error).message);
   }
   try {
-    const checked = (db.prepare("PRAGMA quick_check").all() as { quick_check: string }[]).map((r) => r.quick_check);
-    if (checked.join() !== "ok") return damaged(checked.slice(0, 3).join("; "));
-    const stored = Number((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null }).v ?? 0);
-    const floorRow = (db.prepare("SELECT MAX(version) AS v FROM schema_floor").get() as { v: number | null }).v;
+    // On a file with a broken page SQLite often throws from the check itself rather than answer it, so a throw here is the damage.
+    let checked: string[];
+    let stored: number;
+    let floorRow: number | null;
+    try {
+      checked = (db.prepare("PRAGMA quick_check").all() as { quick_check: string }[]).map((r) => r.quick_check);
+      if (checked.join() !== "ok") return damaged(checked.slice(0, 3).join("; "));
+      stored = Number((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null }).v ?? 0);
+      floorRow = (db.prepare("SELECT MAX(version) AS v FROM schema_floor").get() as { v: number | null }).v;
+    } catch (err) {
+      return damaged((err as Error).message);
+    }
     const findings = schemaFindings(stored, floorRow === null ? null : Number(floorRow), cloud);
     const page = Number((db.prepare("PRAGMA page_size").get() as { page_size: number }).page_size);
     const free = Number((db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count);
@@ -97,6 +147,39 @@ export function sqliteFindings(file: string, fix: boolean, cloud: boolean, say: 
   } finally {
     db.close();
   }
+}
+
+/**
+ * Whether the sealed values in a SQLite database open with the key a start would use: the one set in the environment, or the
+ * data directory's own. A database restored from a copy, which holds no key, finds a new one made and every token in it lost.
+ */
+export function sealedFindings(file: string, dataDir: string, env: NodeJS.ProcessEnv): Finding[] {
+  if (!existsSync(file)) return [];
+  const rows = (() => {
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      return db.prepare("SELECT tenant, name, sealed FROM secrets").all() as { tenant: string; name: string; sealed: string }[];
+    } catch {
+      return [];
+    } finally {
+      db.close();
+    }
+  })();
+  if (!rows.length) return [];
+  const given = readSecretEnv(env, "ORCHESTRATOR_SECRET_KEY");
+  const keyFile = join(dataDir, GENERATED_KEY_FILE);
+  const raw = given ?? (existsSync(keyFile) ? readFileSync(keyFile, "utf8") : null);
+  const count = `${rows.length} sealed value${rows.length === 1 ? "" : "s"} (forge tokens, task secrets)`;
+  if (raw === null) return [{ code: "sealed-no-key", problem: true, say: `the database holds ${count} and no key is set or kept in ${dataDir}, so a start would make a new one that opens none of them`, fix: LOST_SEALED_FIX }];
+  let lost: number;
+  try {
+    lost = unopenedBy(createVault(parseSecretKey(raw)), rows);
+  } catch (err) {
+    return [{ code: "sealed-key-bad", problem: true, say: (err as Error).message }];
+  }
+  return lost
+    ? [{ code: "sealed-lost", problem: true, say: lostSealedSay(lost, rows.length), fix: LOST_SEALED_FIX }]
+    : [{ code: "sealed", problem: false, say: `the ${count} in the database open with the key in use` }];
 }
 
 /**
@@ -167,7 +250,22 @@ export function runnerFindings(dataDir: string, services: ServiceFacts, isAlive:
   return findings;
 }
 
-export async function doctorCommand(argv: readonly string[], say: (line: string) => void = console.log, env: NodeJS.ProcessEnv = process.env, services: ServiceFacts = thisLoginsServices()): Promise<number> {
+/** The agents this machine would run, in the codes and with the commands the task form gives for the same problem. */
+export function agentFindings(seen: readonly MachineAgentStatus[], adapters: readonly AgentAdapter[]): Finding[] {
+  return adapters.flatMap((adapter) => {
+    const status = seen.find((s) => s.id === adapter.id);
+    if (!status) return [];
+    const probe = adapter.probe;
+    const fix = (command: string | undefined) => (command ? { fix: command } : {});
+    if (!status.installed) return [{ code: "program-missing", problem: false, say: `${adapter.label} is not installed here`, ...fix(probe?.installCommand) }];
+    const findings: Finding[] = [];
+    if (status.supported === "update") findings.push({ code: "version-older", problem: false, say: `${adapter.label} ${status.version} is older than ${probe?.checkedVersion}, the version the orchestrator was checked with`, ...fix(probe?.updateCommand) });
+    if (status.signIn === "signed-out") findings.push({ code: "signin-missing", problem: true, say: `${adapter.label} is not signed in here`, ...fix(probe?.signInCommand) });
+    return findings.length ? findings : [{ code: "agent", problem: false, say: `${adapter.label} ${status.version}${status.signIn === "signed-in" ? ", signed in" : ""}` }];
+  });
+}
+
+export async function doctorCommand(argv: readonly string[], say: (line: string) => void = console.log, env: NodeJS.ProcessEnv = process.env, services: ServiceFacts = thisLoginsServices(), agents: () => Promise<Finding[]> = async () => { const adapters = machineAdapters(env); return agentFindings(await agentStatus(adapters), adapters); }): Promise<number> {
   const unknown = argv.filter((a) => a !== "--fix");
   if (unknown.length) {
     say("doctor: usage: node dist/server.js doctor [--fix]");
@@ -201,14 +299,16 @@ export async function doctorCommand(argv: readonly string[], say: (line: string)
         await db.close().catch(() => undefined);
       }
     } else {
-      findings.push(...sqliteFindings(join(dataDir, "orchestrator.db"), fix, cloud, say));
+      const file = join(dataDir, "orchestrator.db");
+      const found = sqliteFindings(file, fix, cloud, say, backupSettings(env, dataDir).dir);
+      findings.push(...found, ...(found.some((f) => f.code === "database-damaged") ? [] : sealedFindings(file, dataDir, env)));
     }
-    findings.push(...backupFindings(backupSettings(env, dataDir), newestBackup(backupSettings(env, dataDir).dir), Boolean(url)));
+    findings.push(...backupFindings(backupSettings(env, dataDir, localMode(env)), newestBackup(backupSettings(env, dataDir).dir), Boolean(url)));
   } catch (err) {
     say(`doctor: ${(err as Error).message}`);
     return 1;
   }
-  findings.push(...permissionFindings(dataDir), ...leftoverFindings(dataDir), ...runnerFindings(dataDir, services));
+  findings.push(...permissionFindings(dataDir), ...leftoverFindings(dataDir), ...runnerFindings(dataDir, services), ...(await agents()));
   for (const f of findings) say(`doctor: ${f.problem ? "PROBLEM" : "ok     "} ${f.code}: ${f.say}${f.fix ? `; ${f.fix}` : ""}`);
   return findings.some((f) => f.problem) ? 1 : 0;
 }
