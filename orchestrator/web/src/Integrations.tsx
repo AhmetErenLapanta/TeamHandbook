@@ -13,7 +13,8 @@ import { MyMcpServers } from "./MyMcpServers";
 import { TeamMcpServers } from "./TeamMcpServers";
 import { here } from "./router";
 import { Select } from "./Select";
-import { Loading, LoadFailed, RefreshFailed } from "./Status";
+import { lastAnswer, rememberAnswer } from "./last-answer";
+import { Loading, LoadFailed, RefreshFailed, Refreshing } from "./Status";
 import { WORDS } from "./words";
 import { workApi } from "./work/api";
 import type { WorkBoardTeams } from "../../shared/work";
@@ -67,10 +68,12 @@ function slackReturn(): { added: boolean; problem: string | null } {
   return { added: params.get("slack") === "added", problem: params.get("slackProblem") };
 }
 
-function Enabled({ by, at }: { by: string | null; at: string | null }) {
-  if (!by || !at) return null;
+function Enabled({ by, at, local }: { by: string | null; at: string | null; local: boolean }) {
+  if (!by || !at || local) return null;
   return <p className="muted small-print">Enabled by {by} on {day(at)}</p>;
 }
+
+const INTEGRATIONS_READ = "/api/integrations";
 
 /**
  * Integrations: a card for each service the orchestrator works with, its state, and who turned it
@@ -78,7 +81,8 @@ function Enabled({ by, at }: { by: string | null; at: string | null }) {
  * everyone else as it stands.
  */
 export function IntegrationsView({ me, repos }: { me: Principal; repos: RepoRecord[] }) {
-  const [read, setRead] = useState<Integrations | null>(null);
+  const [read, setRead] = useState<Integrations | null>(() => lastAnswer<Integrations>(INTEGRATIONS_READ) ?? null);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   // A forge's connection returns here with the card it was started from to open.
@@ -89,7 +93,8 @@ export function IntegrationsView({ me, repos }: { me: Principal; repos: RepoReco
   const [mineOpen, setMineOpen] = useState(() => /[?&](connected=(?!atlassian\b)|problem=)/.test(window.location.search + window.location.hash));
   const load = () => {
     setError(null);
-    integrationsApi.list().then(setRead, (e: Error) => setError(e.message));
+    setRefreshing(true);
+    integrationsApi.list().then((r) => setRead(rememberAnswer(INTEGRATIONS_READ, r)), (e: Error) => setError(e.message)).finally(() => setRefreshing(false));
   };
   useEffect(() => {
     load();
@@ -141,7 +146,7 @@ export function IntegrationsView({ me, repos }: { me: Principal; repos: RepoReco
         </li>
       );
     }
-    // Slack is one main action once whoever runs the orchestrator has registered a Slack app: Slack's own approval screen picks the channel; the webhook address is under Other ways to connect.
+    // With a Slack app registered, Slack is one main action: Slack's own approval screen picks the channel; the webhook address is under Other ways to connect.
     if (c.id === "slack" && c.state === "off" && read!.canManage && c.addable) {
       return (
         <li key={id} className="panel card">
@@ -149,24 +154,32 @@ export function IntegrationsView({ me, repos }: { me: Principal; repos: RepoReco
         </li>
       );
     }
+    // Unconnected, Slack without a Slack app is drawn like the other services, one sentence and one action, which opens the webhook form below it; the form stays where it is when the card turns connected.
+    const slackSetup = c.id === "slack" && c.state === "off" && read!.canManage;
     return (
       <li key={id} className="panel card">
-        <div className="card-head">
-          <h3 id={`card-${id}`}>{title}</h3>
-          {STATE[c.state].tone ? <span className={`badge ${STATE[c.state].tone}`}>{STATE[c.state].label}</span> : <span className="badge">{STATE[c.state].label}</span>}
-        </div>
-        {forLine}
-        <p>{about(id).text}</p>
-        <Enabled by={c.enabledBy} at={c.enabledAt} />
-        <button type="button" className="secondary" aria-expanded={open === c.id} aria-controls={`body-${id}`} onClick={() => setOpen(open === c.id ? null : c.id)}>
-          {open === c.id ? "Close" : c.state === "off" ? "Set up" : "Manage"}
-        </button>
+        {slackSetup ? (
+          <Connect id="slack" name="Slack" level={3} connected={false} about={ABOUT.slack.text} action={<button type="button" className="secondary" aria-expanded={open === c.id} aria-controls={`body-${id}`} onClick={() => setOpen(open === c.id ? null : c.id)}>{open === c.id ? "Close" : "Set up Slack"}</button>} />
+        ) : (
+          <>
+            <div className="card-head">
+              <h3 id={`card-${id}`}>{title}</h3>
+              {STATE[c.state].tone ? <span className={`badge ${STATE[c.state].tone}`}>{STATE[c.state].label}</span> : <span className="badge">{STATE[c.state].label}</span>}
+            </div>
+            {forLine}
+            <p>{about(id).text}</p>
+            <Enabled by={c.enabledBy} at={c.enabledAt} local={local} />
+            <button type="button" className="secondary" aria-expanded={open === c.id} aria-controls={`body-${id}`} onClick={() => setOpen(open === c.id ? null : c.id)}>
+              {open === c.id ? "Close" : c.state === "off" ? "Set up" : "Manage"}
+            </button>
+          </>
+        )}
         {open === c.id ? (
-          <div id={`body-${id}`} className="card-body" role="region" aria-labelledby={`card-${id}`}>
+          <div id={`body-${id}`} className="card-body" role="region" aria-labelledby={slackSetup ? "slack-h" : `card-${id}`}>
             {c.id === "slack" ? <SlackBody card={c} read={read!} onSaved={load} added={slackBack.added} /> : null}
             {c.id === "tracker" ? <TrackerBody card={c} canManage={read!.canManage} onSaved={load} repos={repos} local={local} /> : null}
             {c.id === "orchestrator-mcp" ? <OrchestratorMcpBody card={c} repos={repos} onOpened={load} /> : null}
-            {c.id === "tracker" && ((c as TrackerCard).config?.kind ?? "jira") === "jira" ? <WritesSwitch on={read!.writes} canManage={read!.canManage} onChanged={load} /> : null}
+            {c.id === "tracker" && ((c as TrackerCard).config?.kind ?? "jira") === "jira" ? <WritesSwitch on={read!.writes} canManage={read!.canManage} local={local} onChanged={load} /> : null}
           </div>
         ) : null}
       </li>
@@ -181,6 +194,7 @@ export function IntegrationsView({ me, repos }: { me: Principal; repos: RepoReco
       </header>
       {/* The forge names only what went wrong; the next step is said here once, as Welcome says it. */}
       {forgeProblem ? <p className="error" role="alert">GitLab or GitHub did not connect: {sentence(forgeProblem)} Press Connect with GitLab or Connect with GitHub to try again.</p> : null}
+      {read && refreshing ? <Refreshing what="integrations" /> : null}
       {!read ? (error ? <LoadFailed what="integrations" reason={error} onRetry={load} panel /> : <Loading what="integrations" panel />) : (
         <>
           <label className="search">
@@ -310,7 +324,7 @@ function CatalogEntry({ service, signIn: returns, onTools }: { service: CatalogS
  * unasked. A task's agent never changes an issue, whatever this says: the switch opens only the
  * orchestrator's own moves, so the tracker's writing tools stay refused to every agent.
  */
-function WritesSwitch({ on, canManage, onChanged }: { on: boolean; canManage: boolean; onChanged: () => void }) {
+function WritesSwitch({ on, canManage, local, onChanged }: { on: boolean; canManage: boolean; local: boolean; onChanged: () => void }) {
   const id = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -328,7 +342,7 @@ function WritesSwitch({ on, canManage, onChanged }: { on: boolean; canManage: bo
         <span className="switch-track" aria-hidden="true"><span className="switch-knob" /></span>
         Move Jira issues when a card moves on Work
       </button>
-      <p id={id} className="muted small">{said}{!canManage ? " An owner or an admin turns it on." : ""}</p>
+      <p id={id} className="muted small">{said}{!canManage && !local ? " An owner or an admin turns it on." : ""}</p>
       {error ? <p className="error" role="alert">{error}</p> : null}
     </div>
   );
@@ -583,7 +597,7 @@ function TrackerBody({ card, canManage, onSaved, repos, local }: { card: Tracker
   const action = useAction(onSaved);
   const errorId = useId();
   const reading = card.token
-    ? <p>Issues are read with a token set by {card.token.setBy} on {day(card.token.setAt)}: a task gets its issue's text, description, acceptance criteria, sub-tasks and latest comments.</p>
+    ? <p>{local ? "Read with your API token" : `Issues are read with a token set by ${card.token.setBy} on ${day(card.token.setAt)}`}: a task gets its issue's text, description, acceptance criteria, sub-tasks and latest comments.</p>
     : <p className="muted">No token is set, so a task gets its issue's link only.</p>;
   if (!canManage) {
     return (
@@ -621,7 +635,7 @@ function TrackerBody({ card, canManage, onSaved, repos, local }: { card: Tracker
       <Problem error={action.error} id={errorId} />
       {action.notice ? <p role="status">{action.notice}</p> : null}
       <div className="actions">
-        <button type="submit" disabled={action.busy}>Save</button>
+        <button type="submit" className="secondary" disabled={action.busy}>Save</button>
         {card.state !== "off" ? (
           <ConfirmAction
             trigger="Disconnect"

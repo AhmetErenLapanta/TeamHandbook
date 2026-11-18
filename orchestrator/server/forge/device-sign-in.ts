@@ -1,23 +1,29 @@
 import type { OrchestratorContext } from "../app.js";
 import type { Principal } from "../auth.js";
 import { readSecret, storeSecret } from "../vault.js";
-import type { AppForge } from "./oauth.js";
+import { FORGES } from "../../shared/forge-def.js";
+import { ConnectionUnusable, ForgeSignInFailed, forgeTokens, lasting, postForm, renewOnce } from "./oauth.js";
+import type { AppForge, ForgeTokens } from "./oauth.js";
 import { LOGIN, said } from "./own-cli.js";
 
 /*
  * A person signs in to GitHub or GitLab.com from the card with a one-time code, through the
  * orchestrator's own registered application, as gh and glab sign in through theirs: the
  * application has no secret, so its id ships with a release and nothing has to be installed or
- * registered by an operator. The token the forge gives back is sealed in the vault under the
- * person's own name and is never shown again.
+ * registered by an operator. The tokens the forge gives back are sealed in the vault under the
+ * person's own name and are never shown again. GitLab.com's access token lapses after two hours,
+ * and GitHub's after eight when the application keeps "Expire user access tokens" ticked, as it is
+ * by default; each then gives a refresh token, which renews it on the person's next press.
  */
 
-/** The orchestrator's own applications, empty until the publisher registers them; the card then keeps today's way. */
-export const RELEASE_DEVICE_CLIENTS: Record<AppForge, string> = { github: "", gitlab: "" };
+/** The orchestrator's own applications, registered by the publisher: an id is public and carries no secret. A forge with none keeps today's way on the card. */
+export const RELEASE_DEVICE_CLIENTS: Record<AppForge, string> = { github: "Ov23liQ8aEvWzyO7lqWs", gitlab: "" };
 
-/** The application a person signs in through: the operator's own when they name one, else the release's; null when there is none. */
+/** The application a person signs in through: the operator's own when they name one, else the release's; null when there is none or the operator set `off`. */
 export function deviceClientId(kind: AppForge, env: Record<string, string | undefined> = process.env): string | null {
-  return env[`ORCHESTRATOR_FORGE_${kind.toUpperCase()}_DEVICE_CLIENT_ID`]?.trim() || RELEASE_DEVICE_CLIENTS[kind] || null;
+  const named = env[`ORCHESTRATOR_FORGE_${kind.toUpperCase()}_DEVICE_CLIENT_ID`]?.trim();
+  if (named?.toLowerCase() === "off") return null;
+  return named || RELEASE_DEVICE_CLIENTS[kind] || null;
 }
 
 /** Where each forge's device sign-in answers, on its public host; a test hands stand-in addresses instead. */
@@ -54,19 +60,133 @@ export const signedInKey = (kind: AppForge, userId: string) => `forge.person.${k
 
 type Ctx = Pick<OrchestratorContext, "store" | "tenant" | "vault">;
 
+/** What the card names the sign-in by; `problem` is why it has to be made again, kept until the person signs in again or out. */
+interface SignedIn {
+  account: string;
+  host: string;
+  problem?: string;
+}
+
+async function signedInOf(ctx: Ctx, userId: string, kind: AppForge): Promise<SignedIn | null> {
+  const kept = await ctx.store.getSetting(ctx.tenant, signedInKey(kind, userId));
+  return kept ? (JSON.parse(kept) as SignedIn) : null;
+}
+
 /** The person's sign-in as it stands: waiting with its code, failed, or the account it holds, which outlives a restart. */
 export async function deviceSignInState(ctx: Ctx, user: Pick<Principal, "id">, kind: AppForge): Promise<DeviceSignIn> {
   const now = pending.get(keyOf(ctx.tenant, user.id, kind))?.state;
   if (now && now.state !== "done") return now;
-  const kept = await ctx.store.getSetting(ctx.tenant, signedInKey(kind, user.id));
+  const kept = await signedInOf(ctx, user.id, kind);
   if (!kept) return { state: "idle" };
-  const { account, host } = JSON.parse(kept) as { account: string; host: string };
-  return { state: "done", account, host };
+  return kept.problem ? { state: "failed", error: kept.problem } : { state: "done", account: kept.account, host: kept.host };
 }
 
-/** The token the person signed in with, for a request opened as them; null when they did not sign in here. */
-export async function personForgeToken(ctx: Ctx, userId: string, kind: AppForge): Promise<string | null> {
-  return readSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName(kind, userId));
+/** The tokens sealed for the person; a token sealed before refresh tokens were kept reads as one that does not lapse. */
+async function sealedTokens(ctx: Ctx, userId: string, kind: AppForge): Promise<ForgeTokens | null> {
+  const raw = await readSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName(kind, userId));
+  if (!raw) return null;
+  const read = (() => {
+    try {
+      return JSON.parse(raw) as Partial<ForgeTokens>;
+    } catch {
+      return null;
+    }
+  })();
+  return typeof read?.accessToken === "string" ? { accessToken: read.accessToken, refreshToken: read.refreshToken ?? null, expiresAt: read.expiresAt ?? null } : { accessToken: raw, refreshToken: null, expiresAt: null };
+}
+
+/**
+ * Whether the person holds a sign-in a press can use, read from what is sealed alone: an offer on a
+ * screen asks nothing of the forge, and a token that lapsed is renewed only when they press. A
+ * forge whose code sign-in the operator turned off offers none, however the person signed in before.
+ */
+export async function personSignedIn(ctx: Ctx, userId: string, kind: AppForge, now = new Date(), clientId: string | null = deviceClientId(kind)): Promise<boolean> {
+  if (!clientId) return false;
+  const kept = await signedInOf(ctx, userId, kind);
+  const tokens = kept && !kept.problem ? await sealedTokens(ctx, userId, kind) : null;
+  return Boolean(tokens && (lasting(tokens, now) || tokens.refreshToken));
+}
+
+/**
+ * The person's token while it lasts, for a read in the background: nothing is renewed and the forge
+ * is not asked, so a token that lapsed stays lapsed until the person presses. Null where the operator
+ * turned the code sign-in off, the person has to sign in again, or the token lapsed.
+ */
+export async function personLastingToken(ctx: Ctx, userId: string, kind: AppForge, now = new Date(), clientId: string | null = deviceClientId(kind)): Promise<string | null> {
+  if (!clientId) return null;
+  const kept = await signedInOf(ctx, userId, kind);
+  const tokens = kept && !kept.problem ? await sealedTokens(ctx, userId, kind) : null;
+  return tokens && lasting(tokens, now) ? tokens.accessToken : null;
+}
+
+/** Where a renewal answers and with which application; a test hands stand-ins and its own clock. */
+export interface Renewal {
+  endpoints?: DeviceEndpoints;
+  clientId?: string | null;
+  send?: typeof fetch;
+  now?: Date;
+}
+
+/**
+ * The token the person signed in with, for a request opened as them because they pressed; null when
+ * they did not sign in here or have to sign in again. One that lapses within minutes is renewed
+ * first with the sealed refresh token, and one the forge answers 401 for is renewed once, before
+ * anything is pushed or opened with it. Both forges spend a refresh token on use, so one renewal
+ * runs at a time per person (renewOnce). A renewal the forge refuses forgets the tokens and the card
+ * says to sign in again; a forge that did not answer leaves them as they were. Where the operator
+ * turned the forge's code sign-in off, no token is used, one that does not lapse included.
+ */
+export async function personForgeToken(ctx: Ctx, user: Pick<Principal, "id" | "email">, kind: AppForge, given: Renewal = {}): Promise<string | null> {
+  const clientId = given.clientId === undefined ? deviceClientId(kind) : given.clientId;
+  if (!clientId) return null;
+  const renewal = { ...given, clientId };
+  const token = await lastingToken(ctx, user, kind, renewal, null);
+  if (!token) return null;
+  const endpoints = renewal.endpoints ?? DEVICE_ENDPOINTS[kind];
+  const asked = await (renewal.send ?? fetch)(endpoints.user, { headers: { accept: "application/json", authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) }).catch(() => null);
+  return asked?.status === 401 ? lastingToken(ctx, user, kind, renewal, token) : token;
+}
+
+async function lastingToken(ctx: Ctx, user: Pick<Principal, "id" | "email">, kind: AppForge, renewal: Renewal & { clientId: string }, refused: string | null): Promise<string | null> {
+  const now = renewal.now ?? new Date();
+  const usable = (tokens: ForgeTokens | null) => (tokens && tokens.accessToken !== refused && lasting(tokens, now) ? tokens.accessToken : null);
+  const kept = await signedInOf(ctx, user.id, kind);
+  const tokens = kept && !kept.problem ? await sealedTokens(ctx, user.id, kind) : null;
+  if (!tokens) return null;
+  const ready = usable(tokens);
+  if (ready) return ready;
+  const sealed = async () => usable(await sealedTokens(ctx, user.id, kind));
+  return renewOnce(ctx, `forge.renewing.person.${kind}.${user.id}`, sealed, () => renewPersonToken(ctx, user, kind, renewal, now, refused), `your ${FORGES[kind].label} sign-in is being renewed; press again in a minute`);
+}
+
+async function renewPersonToken(ctx: Ctx, user: Pick<Principal, "id" | "email">, kind: AppForge, renewal: Renewal & { clientId: string }, now: Date, refused: string | null): Promise<string | null> {
+  const label = FORGES[kind].label;
+  const kept = await signedInOf(ctx, user.id, kind);
+  const tokens = kept && !kept.problem ? await sealedTokens(ctx, user.id, kind) : null;
+  if (!kept || !tokens) return null;
+  if (tokens.accessToken !== refused && lasting(tokens, now)) return tokens.accessToken;
+  const why = refused ? `${label} no longer accepts your sign-in` : `your ${label} sign-in lapsed`;
+  if (!tokens.refreshToken) return signInAgain(ctx, user.id, kind, kept, `${why} and gave no way to renew it; press Sign in again`);
+  const endpoints = renewal.endpoints ?? DEVICE_ENDPOINTS[kind];
+  try {
+    // The application has no secret: a token from the code sign-in is renewed with its id alone.
+    const body = await postForm(endpoints.token, { grant_type: "refresh_token", client_id: renewal.clientId, refresh_token: tokens.refreshToken }, [tokens.refreshToken, tokens.accessToken], renewal.send ?? fetch, label);
+    const fresh = forgeTokens(body, now, tokens.refreshToken, label);
+    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName(kind, user.id), JSON.stringify(fresh), user.email);
+    return fresh.accessToken;
+  } catch (err) {
+    if (!(err instanceof ForgeSignInFailed)) throw err;
+    // An answer naming an error is the forge's refusal: the refresh token is spent, revoked or past its time.
+    if ((err as ForgeSignInFailed & { code?: string }).code) return signInAgain(ctx, user.id, kind, kept, `${why} (${err.message}); press Sign in again`);
+    throw new ConnectionUnusable(`your ${label} sign-in was not renewed: ${err.message}; press again in a minute`);
+  }
+}
+
+/** Forgets tokens the forge will not renew, and keeps why, so the card asks for the sign-in again. */
+async function signInAgain(ctx: Ctx, userId: string, kind: AppForge, kept: SignedIn, problem: string): Promise<null> {
+  await ctx.store.deleteSecret(ctx.tenant, personTokenName(kind, userId));
+  await ctx.store.setSetting(ctx.tenant, signedInKey(kind, userId), JSON.stringify({ ...kept, problem }));
+  return null;
 }
 
 const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString();
@@ -122,7 +242,7 @@ export async function startDeviceSignIn(ctx: Ctx, user: Pick<Principal, "id" | "
     const me = await send(endpoints.user, { headers: { accept: "application/json", authorization: `Bearer ${token}` } }).then(json, () => ({}) as Record<string, unknown>);
     const login = kind === "github" ? me.login : me.username;
     if (typeof login !== "string" || !LOGIN.test(login)) return fail(`${endpoints.host} signed you in but did not say as whom; press Sign in again`);
-    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName(kind, user.id), token, user.email);
+    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName(kind, user.id), JSON.stringify(forgeTokens(answered, new Date(), null, FORGES[kind].label)), user.email);
     await ctx.store.setSetting(ctx.tenant, signedInKey(kind, user.id), JSON.stringify({ account: login, host: endpoints.host }));
     entry.state = { state: "done", account: login, host: endpoints.host };
   };
