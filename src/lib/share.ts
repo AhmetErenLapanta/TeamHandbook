@@ -25,6 +25,7 @@ import { requestNoteLines, unattachedDescriptionLines } from "./branch.js";
 import { overlappingSkills } from "./skill-health.js";
 import { listExistingSkills } from "./skill-index.js";
 import { listSkillFiles } from "./skill-files.js";
+import { readHandbookSources, sourceLabel } from "./handbook-sources.js";
 import { displayPath } from "./display-path.js";
 
 // Taking the setup already on this machine to the team.
@@ -108,10 +109,18 @@ export interface CommandItem extends OnTeam {
   reason?: string;
 }
 
+/** The skills one installed plugin brings, under the label every screen gives that plugin. */
+export interface PluginSkills {
+  label: string;
+  skills: string[];
+}
+
 export interface Inventory {
   skills: SkillItem[];
   servers: ServerItem[];
   commands: CommandItem[];
+  /** Read-only: a plugin's skills are updated by the plugin, so none of them can be picked here. */
+  plugins?: PluginSkills[];
 }
 
 export interface Selection {
@@ -149,6 +158,10 @@ export interface InventoryPaths {
    * warning. Read from disk rather than asked of the repository, so the warning costs no request.
    */
   teamSkills?: string | null;
+  /** The folder Claude Code keeps its settings and installed plugins in; ~/.claude of `userHome` when not given. */
+  configDir?: string;
+  /** The team's marketplace name, so its plugin is labelled as the team's. */
+  teamMarketplace?: string | null;
 }
 
 /**
@@ -285,7 +298,11 @@ export function buildInventory(paths: InventoryPaths = {}, teamHas: TeamAssets |
   const commands = readLocalCommands(paths.userHome ?? homedir(), paths.cwd ?? process.cwd()).map((entry) =>
     onTeam(commandItem(entry, auditCommand(entry.file, entry.name)), teamHas?.commands),
   );
-  return { skills, servers, commands };
+  const configDir = paths.configDir ?? (paths.userHome ? join(paths.userHome, ".claude") : process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
+  const plugins = readHandbookSources(configDir)
+    .filter((source) => source.kind === "plugin" && source.skills.length)
+    .map((source) => ({ label: sourceLabel(source, paths.teamMarketplace ?? null), skills: source.skills }));
+  return { skills, servers, commands, plugins };
 }
 
 // Long enough to tell two skills apart, short enough that twenty-two of them still read
@@ -386,6 +403,10 @@ export function formatInventory(inv: Inventory, forge?: string, duplicates: Dupl
       lines.push(`  ${i + 1}. /${command.name}  [${command.scope}]${state}`);
       if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
     });
+  }
+  if (inv.plugins?.length) {
+    lines.push("", `Plugins (${inv.plugins.length}) - their skills are kept up to date by the plugin, so none of them is offered here`, "");
+    inv.plugins.forEach((plugin) => lines.push(`  ${plugin.label}: ${plugin.skills.join(", ")}`));
   }
   lines.push(
     "",

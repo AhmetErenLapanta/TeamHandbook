@@ -632,8 +632,9 @@ var init_skill_format = __esm({
 // src/lib/status.ts
 init_session_state();
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { readFileSync as readFileSync10 } from "node:fs";
-import { basename as basename6, dirname as dirname6, join as join14, resolve as resolve2 } from "node:path";
+import { readFileSync as readFileSync11 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { basename as basename6, dirname as dirname6, join as join15, resolve as resolve3 } from "node:path";
 
 // src/lib/signals.ts
 init_session_state();
@@ -718,6 +719,17 @@ var CUT_SCOPE_SENTENCE = new RegExp(
 // src/lib/branch.ts
 init_identity();
 init_secrets();
+function versionParts(version) {
+  const parts = version.split(".").map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : null;
+}
+function compareVersions(a, b) {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
 
 // src/lib/init.ts
 init_session_state();
@@ -1140,7 +1152,7 @@ function namer(templates, areas) {
 }
 function resolverFrom(mirrors, templates, areas, compiled, filters) {
   const named = namer(templates, areas);
-  const resolve3 = (path) => {
+  const resolve4 = (path) => {
     const segments = path.split("/");
     if (filters) {
       if (TEST.test(path)) return "test";
@@ -1153,11 +1165,11 @@ function resolverFrom(mirrors, templates, areas, compiled, filters) {
     }
     return named(path);
   };
-  resolve3.mirrors = mirrors;
-  resolve3.templates = templates;
-  resolve3.areas = areas;
-  resolve3.compiled = compiled;
-  return resolve3;
+  resolve4.mirrors = mirrors;
+  resolve4.templates = templates;
+  resolve4.areas = areas;
+  resolve4.compiled = compiled;
+  return resolve4;
 }
 var LOCALES = /* @__PURE__ */ new Set([
   "en",
@@ -1415,8 +1427,8 @@ function readSkillUsage(home = handbookHome()) {
 function dayCounts(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const days = {};
-  for (const [day, count] of Object.entries(value)) {
-    if (DAY.test(day) && typeof count === "number") days[day] = count;
+  for (const [day, count2] of Object.entries(value)) {
+    if (DAY.test(day) && typeof count2 === "number") days[day] = count2;
   }
   return days;
 }
@@ -1431,7 +1443,7 @@ function usesSince(use, now = (/* @__PURE__ */ new Date()).toISOString(), days =
   if (!use?.days) return 0;
   const since = windowStart(now, days);
   const today = dayOf(now);
-  return Object.entries(use.days).reduce((sum, [day, count]) => day >= since && day <= today ? sum + count : sum, 0);
+  return Object.entries(use.days).reduce((sum, [day, count2]) => day >= since && day <= today ? sum + count2 : sum, 0);
 }
 function handbookSkills(home = handbookHome()) {
   const delivered = listCandidates(home, "approved").filter((c) => c.deliveredMode === "personal" || c.deliveredMode === "solo").map((c) => c.deliveredTo ? basename3(c.deliveredTo) : c.slug);
@@ -1576,11 +1588,149 @@ function pipelineLogFile(home = handbookHome()) {
 var LOG_ROTATE_BYTES = 512 * 1024;
 var MARKER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 
+// src/lib/handbook-sources.ts
+import { createHash } from "node:crypto";
+import { existsSync as existsSync4, readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync2 } from "node:fs";
+import { join as join13, resolve as resolve2 } from "node:path";
+var dirsIn = (dir) => {
+  try {
+    return readdirSync5(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+};
+var namesIn = (dir, extension) => {
+  try {
+    return readdirSync5(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(extension)).map((e) => e.name.slice(0, -extension.length)).sort();
+  } catch {
+    return [];
+  }
+};
+var json = (file) => {
+  try {
+    const parsed = JSON.parse(readFileSync9(file, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+function skillDigest(dir) {
+  const hash = createHash("sha256");
+  const walk = (current, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync5(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(join13(current, entry.name), rel);
+      else if (entry.isFile()) hash.update(rel).update("\0").update(readFileSync9(join13(current, entry.name))).update("\0");
+    }
+  };
+  walk(dir, "");
+  return hash.digest("hex");
+}
+function pluginFreshness(installedDir, marketplaceDir) {
+  if (!existsSync4(join13(marketplaceDir, ".claude-plugin", "plugin.json")) || !existsSync4(join13(installedDir, ".claude-plugin", "plugin.json"))) return null;
+  const version = (dir) => {
+    const v = json(join13(dir, ".claude-plugin", "plugin.json"))?.version;
+    return typeof v === "string" ? v : null;
+  };
+  const installed = version(installedDir);
+  const available = version(marketplaceDir);
+  const had = new Map(dirsIn(join13(installedDir, "skills")).map((name) => [name, skillDigest(join13(installedDir, "skills", name))]));
+  const has = new Map(dirsIn(join13(marketplaceDir, "skills")).map((name) => [name, skillDigest(join13(marketplaceDir, "skills", name))]));
+  const added = [...has.keys()].filter((name) => !had.has(name));
+  const removed = [...had.keys()].filter((name) => !has.has(name));
+  const changed = [...has.keys()].filter((name) => had.has(name) && had.get(name) !== has.get(name));
+  const order = installed && available ? compareVersions(available, installed) : null;
+  const behind = order !== null ? order > 0 : added.length + removed.length + changed.length > 0;
+  return { installed, available, behind, added, changed, removed };
+}
+function marketplacePluginRoot(marketplaceDir, pluginName) {
+  const listed = json(join13(marketplaceDir, ".claude-plugin", "marketplace.json"))?.plugins;
+  const entry = Array.isArray(listed) ? listed.find((p) => p?.name === pluginName) : void 0;
+  const source = typeof entry?.source === "string" ? entry.source : null;
+  const candidates = [
+    ...source !== null && source.startsWith("./") && !source.split("/").includes("..") ? [resolve2(marketplaceDir, source)] : [],
+    marketplaceDir,
+    join13(marketplaceDir, pluginName)
+  ];
+  return candidates.find((dir) => existsSync4(join13(dir, ".claude-plugin", "plugin.json"))) ?? null;
+}
+function pluginSource(id, installPath, version, enabled, marketplaceDir) {
+  const at = id.lastIndexOf("@");
+  const mcp = json(join13(installPath, ".mcp.json"));
+  const servers = mcp?.mcpServers ?? mcp;
+  const hooks = json(join13(installPath, "hooks", "hooks.json"))?.hooks;
+  return {
+    kind: "plugin",
+    name: at < 0 ? id : id.slice(0, at),
+    marketplace: at < 0 ? null : id.slice(at + 1),
+    version,
+    enabled,
+    skills: dirsIn(join13(installPath, "skills")),
+    commands: namesIn(join13(installPath, "commands"), ".md"),
+    mcpServers: servers && typeof servers === "object" ? Object.keys(servers).filter((k) => k !== "mcpServers").sort() : [],
+    hooks: hooks && typeof hooks === "object" ? Object.values(hooks).reduce((n, list) => n + (Array.isArray(list) ? list.length : 0), 0) : 0,
+    freshness: marketplaceDir ? pluginFreshness(installPath, marketplaceDir) : null
+  };
+}
+function installedPlugins(pluginsDir) {
+  const record = json(join13(pluginsDir, "installed_plugins.json"));
+  return record?.version === 2 && record.plugins && typeof record.plugins === "object" ? record.plugins : {};
+}
+function installedPluginDirs(pluginsDir, id) {
+  const entries = installedPlugins(pluginsDir)[id];
+  const own = (Array.isArray(entries) ? entries : []).find((e) => (e.scope === "user" || e.scope === "managed") && typeof e.installPath === "string" && statSafe(e.installPath));
+  if (!own) return null;
+  const at = id.lastIndexOf("@");
+  const copy = at < 0 ? null : join13(pluginsDir, "marketplaces", id.slice(at + 1));
+  return { installPath: own.installPath, version: typeof own.version === "string" ? own.version : null, marketplaceDir: copy ? marketplacePluginRoot(copy, id.slice(0, at)) : null };
+}
+function readHandbookSources(configDir, pluginsDir = join13(configDir, "plugins")) {
+  const enabled = json(join13(configDir, "settings.json"))?.enabledPlugins ?? {};
+  const yours = {
+    kind: "yours",
+    name: "Yours",
+    marketplace: null,
+    version: null,
+    enabled: true,
+    skills: dirsIn(join13(configDir, "skills")),
+    commands: namesIn(join13(configDir, "commands"), ".md"),
+    mcpServers: [],
+    hooks: 0,
+    freshness: null
+  };
+  const found = Object.keys(installedPlugins(pluginsDir)).flatMap((id) => {
+    const dirs = installedPluginDirs(pluginsDir, id);
+    return dirs ? [pluginSource(id, dirs.installPath, dirs.version, enabled[id] !== false, dirs.marketplaceDir)] : [];
+  });
+  return [yours, ...found.sort((a, b) => a.name.localeCompare(b.name))];
+}
+var statSafe = (path) => {
+  try {
+    return statSync2(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+function sourceLabel(source, teamMarketplace = null) {
+  if (source.kind === "yours") return source.name === "Yours" ? "yours" : `this folder (${source.name})`;
+  return pluginLabel(source, teamMarketplace);
+}
+function pluginLabel(plugin, teamMarketplace = null) {
+  if (teamMarketplace && plugin.marketplace === teamMarketplace) return `the team's ${plugin.name}`;
+  return plugin.version ? `${plugin.name} ${plugin.version}` : plugin.name;
+}
+
 // src/lib/skill-health.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readFileSync as readFileSync9, realpathSync as realpathSync2 } from "node:fs";
+import { readFileSync as readFileSync10, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename5, dirname as dirname5, join as join13, relative as relative2, sep as sep3 } from "node:path";
+import { basename as basename5, dirname as dirname5, join as join14, relative as relative2, sep as sep3 } from "node:path";
 
 // src/lib/draft.ts
 init_identity();
@@ -1885,7 +2035,7 @@ function* buildOverlapIndex(others, threshold = OVERLAP_THRESHOLD) {
 }
 function readSkill(dir) {
   try {
-    return readFileSync9(join13(dir, "SKILL.md"), "utf8");
+    return readFileSync10(join14(dir, "SKILL.md"), "utf8");
   } catch {
     return null;
   }
@@ -1906,7 +2056,7 @@ function deliveredSkills(home) {
   if (teamDir) {
     for (const skill of listExistingSkills([teamDir])) {
       if (out.has(skill.name)) continue;
-      const text = readSkill(join13(teamDir, skill.name));
+      const text = readSkill(join14(teamDir, skill.name));
       if (text !== null) out.set(skill.name, { name: skill.name, text, repo: null, base: "", shape: null });
     }
   }
@@ -1918,7 +2068,7 @@ function projectBase(checkout, skillDir) {
 }
 function installedSkills(home = handbookHome(), userHome = homedir4(), cwd = process.cwd()) {
   const teamDir = teamSkillsDir(home);
-  return listExistingSkills([join13(cwd, ".claude", "skills"), join13(userHome, ".claude", "skills"), ...teamDir ? [teamDir] : []]);
+  return listExistingSkills([join14(cwd, ".claude", "skills"), join14(userHome, ".claude", "skills"), ...teamDir ? [teamDir] : []]);
 }
 function realRoot(root) {
   try {
@@ -2013,12 +2163,12 @@ var lookupRelease = (args, cwd) => execFileSync3("git", args, {
 });
 function newerRelease(installed, root = pluginRoot(), marketRoot = marketplacesRoot(), git = lookupRelease) {
   if (!root || !versionNumbers(installed)) return null;
-  const versionDir = resolve2(root);
+  const versionDir = resolve3(root);
   if (basename6(dirname6(dirname6(dirname6(versionDir)))) !== "cache") return null;
   const marketplace = basename6(dirname6(dirname6(versionDir)));
   let out;
   try {
-    out = String(git(["ls-remote", "--tags", "origin"], join14(marketRoot, marketplace)) ?? "");
+    out = String(git(["ls-remote", "--tags", "origin"], join15(marketRoot, marketplace)) ?? "");
   } catch {
     return null;
   }
@@ -2046,7 +2196,7 @@ function ledgerStats(home = handbookHome()) {
   const stats = { total: 0, candidates: 0, weak: 0, distinctFingerprints: 0 };
   let raw;
   try {
-    raw = readFileSync10(signalsFile(home), "utf8");
+    raw = readFileSync11(signalsFile(home), "utf8");
   } catch {
     return stats;
   }
@@ -2070,7 +2220,7 @@ function ledgerStats(home = handbookHome()) {
 function lastPipelineRun(home = handbookHome()) {
   let raw;
   try {
-    raw = readFileSync10(pipelineLogFile(home), "utf8");
+    raw = readFileSync11(pipelineLogFile(home), "utf8");
   } catch {
     return null;
   }
@@ -2088,7 +2238,7 @@ function pipelineAggregate(home = handbookHome()) {
   const agg = { runs: 0, written: 0, rejected: 0, errored: 0, sievedOut: 0 };
   let raw;
   try {
-    raw = readFileSync10(pipelineLogFile(home), "utf8");
+    raw = readFileSync11(pipelineLogFile(home), "utf8");
   } catch {
     return agg;
   }
@@ -2106,9 +2256,25 @@ function pipelineAggregate(home = handbookHome()) {
   }
   return agg;
 }
-function gatherStatus(home = handbookHome(), release = newerRelease, health = gatherSkillHealth) {
+function handbookRow(source, teamMarketplace, usage) {
+  const entries = source.skills.flatMap((skill) => [usage[skill], usage[`${source.name}:${skill}`]].filter((u) => !!u));
+  return {
+    label: sourceLabel(source, teamMarketplace),
+    version: source.version,
+    enabled: source.enabled,
+    skills: source.skills.length,
+    commands: source.commands.length,
+    mcpServers: source.mcpServers.length,
+    hooks: source.hooks,
+    uses: entries.reduce((n, e) => n + e.count, 0),
+    lastUsedAt: entries.map((e) => e.lastAt).sort().at(-1) ?? null,
+    freshness: source.freshness
+  };
+}
+var claudeConfigDir = () => process.env.CLAUDE_CONFIG_DIR || join15(homedir5(), ".claude");
+function gatherStatus(home = handbookHome(), release = newerRelease, health = gatherSkillHealth, configDir = claudeConfigDir()) {
   const candidates = listCandidates(home);
-  const count = (status) => candidates.filter((c) => c.status === status).length;
+  const count2 = (status) => candidates.filter((c) => c.status === status).length;
   const score2 = loadScoreConfig(home);
   const harvest = loadHarvestConfig(home);
   const counters = readCounters(home);
@@ -2123,10 +2289,10 @@ function gatherStatus(home = handbookHome(), release = newerRelease, health = ga
     ...newerVersion ? { newerVersion } : {},
     ledger: ledgerStats(home),
     queue: {
-      pending: count("pending"),
-      approved: count("approved"),
-      rejected: count("rejected"),
-      archived: count("archived")
+      pending: count2("pending"),
+      approved: count2("approved"),
+      rejected: count2("rejected"),
+      archived: count2("archived")
     },
     unreadable: unreadableCandidates(home),
     redactionBlocked: counters.redactionBlocked,
@@ -2148,6 +2314,7 @@ function gatherStatus(home = handbookHome(), release = newerRelease, health = ga
     abandoned: counters.gateAbandoned,
     usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length, recording: sessionDetectEnabled(home) },
     skillHealth: health(home),
+    handbooks: readHandbookSources(configDir).map((source) => handbookRow(source, loadTeamConfig(home)?.marketplaceName ?? null, readSkillUsage(home))),
     config: {
       harvestModel: harvest.model,
       harvestEnabled: harvest.enabled,
@@ -2180,6 +2347,22 @@ function unreadableNote(unreadable) {
   ];
   return ` (${parts.join(", ")})`;
 }
+var count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+function formatHandbooks(rows) {
+  if (rows.length <= 1 && !rows[0]?.skills && !rows[0]?.commands) return [];
+  return [
+    "Handbooks:",
+    ...rows.flatMap((row) => {
+      const parts = [count(row.skills, "skill"), ...row.commands ? [count(row.commands, "command")] : [], ...row.mcpServers ? [count(row.mcpServers, "MCP server")] : [], ...row.hooks ? [count(row.hooks, "hook")] : []];
+      const used = row.uses ? `, used ${row.uses}x (last ${row.lastUsedAt?.slice(0, 10)})` : row.skills ? ", never used" : "";
+      const line = `  ${row.label}: ${parts.join(", ")}${used}${row.enabled ? "" : " - turned off"}`;
+      const f = row.freshness;
+      if (!f?.behind) return [line];
+      const changes = [f.added.length ? `added ${f.added.join(", ")}` : "", f.changed.length ? `changed ${f.changed.join(", ")}` : "", f.removed.length ? `removed ${f.removed.join(", ")}` : ""].filter(Boolean).join("; ");
+      return [line, `    a newer copy is in its marketplace${f.installed && f.available ? `: ${f.installed} -> ${f.available}` : ""}${changes ? ` (${changes})` : ""}; update it with \`claude plugin update\``];
+    })
+  ];
+}
 function formatStatus(report) {
   const { ledger, queue, unreadable, lastRun, config } = report;
   const lines = [
@@ -2204,6 +2387,7 @@ function formatStatus(report) {
       // not shown: the health lines below say "usage not recorded", and this line agrees with them.
       !report.usage.recording ? `Skills in use:   usage not recorded while session recording is off` : report.usage.totalUses > 0 ? `Skills in use:   ${report.usage.fired}/${report.usage.known} have fired, ${report.usage.totalUses} time${report.usage.totalUses === 1 ? "" : "s"} total` + (report.usage.topSkill ? ` (most used: ${report.usage.topSkill.slug} \xD7${report.usage.topSkill.count})` : "") : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`
     ] : [],
+    ...formatHandbooks(report.handbooks),
     ...formatSkillHealth(report.skillHealth),
     ...report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) - run /handbook:doctor`] : [],
     ...report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : [],

@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 // share rules as the plugin. buildInventory reads a home only through its defaulted paths, which
 // the orchestrator passes on a one-person orchestrator alone; both modules load with homedir()
 // throwing, measured below.
-const ALLOWED = new Set(["skill-index", "mcp", "secrets", "init", "upgrade", "branch", "join", "commands", "skill-format", "skill-health", "policy", "task-lesson", "share", "queue"]);
+const ALLOWED = new Set(["skill-index", "mcp", "secrets", "init", "upgrade", "branch", "join", "commands", "skill-format", "skill-health", "policy", "task-lesson", "share", "queue", "handbook-sources"]);
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -62,7 +62,7 @@ describe("the orchestrator's imports from the plugin", () => {
 
     try {
       // when
-      const loaded = await Promise.all([import("../../src/lib/skill-format.js"), import("../../src/lib/skill-health.js"), import("../../src/lib/policy.js"), import("../../src/lib/task-lesson.js"), import("../../src/lib/share.js"), import("../../src/lib/queue.js")]);
+      const loaded = await Promise.all([import("../../src/lib/skill-format.js"), import("../../src/lib/skill-health.js"), import("../../src/lib/policy.js"), import("../../src/lib/task-lesson.js"), import("../../src/lib/share.js"), import("../../src/lib/queue.js"), import("../../src/lib/handbook-sources.js")]);
 
       // then
       expect(typeof loaded[0].checkSkillFormat).toBe("function");
@@ -70,6 +70,7 @@ describe("the orchestrator's imports from the plugin", () => {
       expect(typeof loaded[3].queueTaskLesson).toBe("function");
       expect(typeof loaded[4].buildInventory).toBe("function");
       expect(typeof loaded[5].auditSkillDir).toBe("function");
+      expect(typeof loaded[6].pluginFreshness).toBe("function");
       expect(loaded[2].policiesProblem([{ id: "pol_x", name: "x", rules: [{ action: "mcp.use", resource: "mcp:x", effect: "deny", reason: "x" }] }])).toBeNull();
     } finally {
       os.homedir = real;

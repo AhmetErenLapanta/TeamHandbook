@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatStatus, gatherStatus, lastPipelineRun, ledgerStats } from "./status.js";
 import { incrementRedactionBlocked } from "./counters.js";
+import { usageFile } from "./usage.js";
 import { pipelineLogFile } from "./pipeline.js";
 import { archiveCandidate, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta } from "./queue.js";
@@ -13,13 +14,20 @@ import type { Signal } from "./signals.js";
 import { candidatesDir } from "./skill-index.js";
 
 let home: string;
+let configDir: string;
+const realConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "handbook-test-"));
+  configDir = mkdtempSync(join(tmpdir(), "handbook-claude-"));
+  process.env.CLAUDE_CONFIG_DIR = configDir;
 });
 
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
+  if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = realConfigDir;
 });
 
 function signal(overrides: Partial<Signal> = {}): Signal {
@@ -115,6 +123,7 @@ describe("gatherStatus / formatStatus", () => {
       abandoned: 0,
       usage: { fired: 0, totalUses: 0, topSkill: null, known: 0, recording: true },
       skillHealth: [],
+      handbooks: [{ label: "yours", version: null, enabled: true, skills: 0, commands: 0, mcpServers: 0, hooks: 0, uses: 0, lastUsedAt: null, freshness: null }],
       config: {
         harvestModel: "sonnet",
         harvestEnabled: true,
@@ -342,3 +351,39 @@ describe("skill health", () => {
     expect(formatStatus(gatherStatus(home, () => null))).not.toContain("Skill health:");
   });
 });
+
+describe("the handbooks /handbook:status lists", () => {
+  it("given the person's own skills and a team plugin behind its marketplace copy that fired once, when status is shown, then each source is a line with its counts and use, the plugin's newer copy says what changed, and nothing else of the config folder is shown", () => {
+    // given
+    const put = (file: string, content: string) => {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
+    };
+    put(join(configDir, "skills", "review-checklist", "SKILL.md"), "x");
+    const installed = join(configDir, "plugins", "cache", "payments-skills", "1.4.0");
+    const market = join(configDir, "plugins", "marketplaces", "payments-marketplace");
+    for (const [dir, version, skill] of [[installed, "1.4.0", "v1"], [market, "1.5.0", "v2"]] as const) {
+      put(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "payments-skills", version }));
+      put(join(dir, "skills", "add-endpoint", "SKILL.md"), skill);
+    }
+    put(join(configDir, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "payments-skills@payments-marketplace": [{ scope: "user", version: "1.4.0", installPath: installed }] } }));
+    put(join(configDir, "settings.json"), JSON.stringify({ env: { SECRET_THING: "do-not-show-this" } }));
+    put(usageFile(home), JSON.stringify({ "payments-skills:add-endpoint": { count: 3, lastAt: "2026-11-10T09:00:00.000Z" } }));
+    put(join(home, "config.json"), JSON.stringify({ team: { repoUrl: "https://example.invalid/payments-skills.git", marketplaceName: "payments-marketplace", pluginName: "payments-skills" } }));
+
+    // when
+    const text = formatStatus(gatherStatus(home, () => null));
+
+    // then
+    expect(text).toContain("Handbooks:");
+    expect(text).toContain("  yours: 1 skill, never used");
+    expect(text).toContain("  the team's payments-skills: 1 skill, used 3x (last 2026-11-10)");
+    expect(text).toContain("a newer copy is in its marketplace: 1.4.0 -> 1.5.0 (changed add-endpoint)");
+    expect(text).not.toContain("do-not-show-this");
+  });
+
+  it("given a config folder with nothing in it, when status is shown, then there is no Handbooks block", () => {
+    expect(formatStatus(gatherStatus(home, () => null))).not.toContain("Handbooks:");
+  });
+});
+

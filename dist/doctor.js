@@ -1670,9 +1670,9 @@ function loadHarvestConfig(home = handbookHome()) {
 }
 
 // src/lib/status.ts
-init_session_state();
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFileSync as readFileSync9 } from "node:fs";
+init_session_state();
 import { basename as basename3, dirname as dirname6, join as join11, resolve } from "node:path";
 
 // src/lib/signals.ts

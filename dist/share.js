@@ -721,7 +721,7 @@ var init_skill_format = __esm({
 // src/cli/share.ts
 init_config();
 import { resolve as toAbsolutePath } from "node:path";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 
 // src/lib/init.ts
 import { execFileSync as execFileSync3, spawnSync } from "node:child_process";
@@ -1614,10 +1614,10 @@ function pushFailureReason(url, branch, err, branchPrefixFix = INIT_BRANCH_PREFI
 }
 
 // src/lib/share.ts
-import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync10, readdirSync as readdirSync7, statSync as statSync2 } from "node:fs";
+import { createHash as createHash3 } from "node:crypto";
+import { readFileSync as readFileSync11, readdirSync as readdirSync8, statSync as statSync3 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { basename as basename4, join as join11 } from "node:path";
+import { basename as basename4, join as join12 } from "node:path";
 
 // src/lib/mcp.ts
 init_secrets();
@@ -2659,15 +2659,155 @@ function* buildOverlapIndex(others, threshold = OVERLAP_THRESHOLD) {
 // src/lib/share.ts
 init_skill_index();
 init_skill_files();
+
+// src/lib/handbook-sources.ts
+import { createHash as createHash2 } from "node:crypto";
+import { existsSync as existsSync5, readdirSync as readdirSync7, readFileSync as readFileSync10, statSync as statSync2 } from "node:fs";
+import { join as join11, resolve } from "node:path";
+var dirsIn = (dir) => {
+  try {
+    return readdirSync7(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+};
+var namesIn2 = (dir, extension) => {
+  try {
+    return readdirSync7(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(extension)).map((e) => e.name.slice(0, -extension.length)).sort();
+  } catch {
+    return [];
+  }
+};
+var json = (file) => {
+  try {
+    const parsed = JSON.parse(readFileSync10(file, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+function skillDigest(dir) {
+  const hash = createHash2("sha256");
+  const walk = (current, prefix) => {
+    let entries2;
+    try {
+      entries2 = readdirSync7(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    } catch {
+      return;
+    }
+    for (const entry of entries2) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(join11(current, entry.name), rel);
+      else if (entry.isFile()) hash.update(rel).update("\0").update(readFileSync10(join11(current, entry.name))).update("\0");
+    }
+  };
+  walk(dir, "");
+  return hash.digest("hex");
+}
+function pluginFreshness(installedDir, marketplaceDir) {
+  if (!existsSync5(join11(marketplaceDir, ".claude-plugin", "plugin.json")) || !existsSync5(join11(installedDir, ".claude-plugin", "plugin.json"))) return null;
+  const version = (dir) => {
+    const v = json(join11(dir, ".claude-plugin", "plugin.json"))?.version;
+    return typeof v === "string" ? v : null;
+  };
+  const installed = version(installedDir);
+  const available = version(marketplaceDir);
+  const had = new Map(dirsIn(join11(installedDir, "skills")).map((name) => [name, skillDigest(join11(installedDir, "skills", name))]));
+  const has = new Map(dirsIn(join11(marketplaceDir, "skills")).map((name) => [name, skillDigest(join11(marketplaceDir, "skills", name))]));
+  const added = [...has.keys()].filter((name) => !had.has(name));
+  const removed = [...had.keys()].filter((name) => !has.has(name));
+  const changed = [...has.keys()].filter((name) => had.has(name) && had.get(name) !== has.get(name));
+  const order = installed && available ? compareVersions(available, installed) : null;
+  const behind = order !== null ? order > 0 : added.length + removed.length + changed.length > 0;
+  return { installed, available, behind, added, changed, removed };
+}
+function marketplacePluginRoot(marketplaceDir, pluginName) {
+  const listed = json(join11(marketplaceDir, ".claude-plugin", "marketplace.json"))?.plugins;
+  const entry = Array.isArray(listed) ? listed.find((p) => p?.name === pluginName) : void 0;
+  const source = typeof entry?.source === "string" ? entry.source : null;
+  const candidates = [
+    ...source !== null && source.startsWith("./") && !source.split("/").includes("..") ? [resolve(marketplaceDir, source)] : [],
+    marketplaceDir,
+    join11(marketplaceDir, pluginName)
+  ];
+  return candidates.find((dir) => existsSync5(join11(dir, ".claude-plugin", "plugin.json"))) ?? null;
+}
+function pluginSource(id, installPath, version, enabled, marketplaceDir) {
+  const at = id.lastIndexOf("@");
+  const mcp = json(join11(installPath, ".mcp.json"));
+  const servers = mcp?.mcpServers ?? mcp;
+  const hooks = json(join11(installPath, "hooks", "hooks.json"))?.hooks;
+  return {
+    kind: "plugin",
+    name: at < 0 ? id : id.slice(0, at),
+    marketplace: at < 0 ? null : id.slice(at + 1),
+    version,
+    enabled,
+    skills: dirsIn(join11(installPath, "skills")),
+    commands: namesIn2(join11(installPath, "commands"), ".md"),
+    mcpServers: servers && typeof servers === "object" ? Object.keys(servers).filter((k) => k !== "mcpServers").sort() : [],
+    hooks: hooks && typeof hooks === "object" ? Object.values(hooks).reduce((n, list) => n + (Array.isArray(list) ? list.length : 0), 0) : 0,
+    freshness: marketplaceDir ? pluginFreshness(installPath, marketplaceDir) : null
+  };
+}
+function installedPlugins(pluginsDir) {
+  const record = json(join11(pluginsDir, "installed_plugins.json"));
+  return record?.version === 2 && record.plugins && typeof record.plugins === "object" ? record.plugins : {};
+}
+function installedPluginDirs(pluginsDir, id) {
+  const entries2 = installedPlugins(pluginsDir)[id];
+  const own = (Array.isArray(entries2) ? entries2 : []).find((e) => (e.scope === "user" || e.scope === "managed") && typeof e.installPath === "string" && statSafe(e.installPath));
+  if (!own) return null;
+  const at = id.lastIndexOf("@");
+  const copy = at < 0 ? null : join11(pluginsDir, "marketplaces", id.slice(at + 1));
+  return { installPath: own.installPath, version: typeof own.version === "string" ? own.version : null, marketplaceDir: copy ? marketplacePluginRoot(copy, id.slice(0, at)) : null };
+}
+function readHandbookSources(configDir, pluginsDir = join11(configDir, "plugins")) {
+  const enabled = json(join11(configDir, "settings.json"))?.enabledPlugins ?? {};
+  const yours = {
+    kind: "yours",
+    name: "Yours",
+    marketplace: null,
+    version: null,
+    enabled: true,
+    skills: dirsIn(join11(configDir, "skills")),
+    commands: namesIn2(join11(configDir, "commands"), ".md"),
+    mcpServers: [],
+    hooks: 0,
+    freshness: null
+  };
+  const found = Object.keys(installedPlugins(pluginsDir)).flatMap((id) => {
+    const dirs = installedPluginDirs(pluginsDir, id);
+    return dirs ? [pluginSource(id, dirs.installPath, dirs.version, enabled[id] !== false, dirs.marketplaceDir)] : [];
+  });
+  return [yours, ...found.sort((a, b) => a.name.localeCompare(b.name))];
+}
+var statSafe = (path) => {
+  try {
+    return statSync2(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+function sourceLabel(source, teamMarketplace = null) {
+  if (source.kind === "yours") return source.name === "Yours" ? "yours" : `this folder (${source.name})`;
+  return pluginLabel(source, teamMarketplace);
+}
+function pluginLabel(plugin, teamMarketplace = null) {
+  if (teamMarketplace && plugin.marketplace === teamMarketplace) return `the team's ${plugin.name}`;
+  return plugin.version ? `${plugin.name} ${plugin.version}` : plugin.name;
+}
+
+// src/lib/share.ts
 function localSkillDirs(paths = {}) {
   return [
-    { dir: join11(paths.userHome ?? homedir7(), ".claude", "skills"), scope: "personal" },
-    { dir: join11(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
+    { dir: join12(paths.userHome ?? homedir7(), ".claude", "skills"), scope: "personal" },
+    { dir: join12(paths.cwd ?? process.cwd(), ".claude", "skills"), scope: "project" }
   ];
 }
 function isDirectory(path) {
   try {
-    return statSync2(path).isDirectory();
+    return statSync3(path).isDirectory();
   } catch {
     return false;
   }
@@ -2718,13 +2858,13 @@ function buildInventory(paths = {}, teamHas = null) {
   for (const { dir, scope } of localSkillDirs(paths)) {
     let entries2;
     try {
-      entries2 = readdirSync7(dir);
+      entries2 = readdirSync8(dir);
     } catch {
       continue;
     }
     for (const entry of entries2.sort()) {
-      if (!isDirectory(join11(dir, entry))) continue;
-      byName.set(entry, onTeam(readSkillDir(join11(dir, entry), scope), teamHas?.skills));
+      if (!isDirectory(join12(dir, entry))) continue;
+      byName.set(entry, onTeam(readSkillDir(join12(dir, entry), scope), teamHas?.skills));
     }
   }
   const skills = [...byName.values()];
@@ -2740,7 +2880,9 @@ function buildInventory(paths = {}, teamHas = null) {
   const commands = readLocalCommands(paths.userHome ?? homedir7(), paths.cwd ?? process.cwd()).map(
     (entry) => onTeam(commandItem(entry, auditCommand(entry.file, entry.name)), teamHas?.commands)
   );
-  return { skills, servers, commands };
+  const configDir = paths.configDir ?? (paths.userHome ? join12(paths.userHome, ".claude") : process.env.CLAUDE_CONFIG_DIR || join12(homedir7(), ".claude"));
+  const plugins = readHandbookSources(configDir).filter((source) => source.kind === "plugin" && source.skills.length).map((source) => ({ label: sourceLabel(source, paths.teamMarketplace ?? null), skills: source.skills }));
+  return { skills, servers, commands, plugins };
 }
 var DESCRIPTION_CHARS = 150;
 function oneLine(text) {
@@ -2803,6 +2945,10 @@ function formatInventory(inv, forge, duplicates = NO_DUPLICATES) {
       lines.push(`  ${i + 1}. /${command.name}  [${command.scope}]${state}`);
       if (command.shareable) lines.push(`     ${oneLine(command.description) || "(no description)"}`);
     });
+  }
+  if (inv.plugins?.length) {
+    lines.push("", `Plugins (${inv.plugins.length}) - their skills are kept up to date by the plugin, so none of them is offered here`, "");
+    inv.plugins.forEach((plugin) => lines.push(`  ${plugin.label}: ${plugin.skills.join(", ")}`));
   }
   lines.push(
     "",
@@ -2967,29 +3113,29 @@ function formatPick(result) {
 var NO_DUPLICATES = { copies: [], release: null };
 function pluginRelease(pluginDir) {
   try {
-    const manifest = JSON.parse(readFileSync10(join11(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync11(join12(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
     return typeof manifest?.name === "string" && typeof manifest?.version === "string" ? { name: manifest.name, version: manifest.version } : null;
   } catch {
     return null;
   }
 }
 function digest(parts) {
-  const hash = createHash2("sha256");
+  const hash = createHash3("sha256");
   for (const part of parts) hash.update(part).update("\0");
   return hash.digest("hex");
 }
-function skillDigest(dir) {
+function skillDigest2(dir) {
   const { files, skipped } = listSkillFiles(dir);
   if (skipped.length || !files.length) return null;
   try {
-    return digest(files.flatMap((file) => [file, readFileSync10(join11(dir, file))]));
+    return digest(files.flatMap((file) => [file, readFileSync11(join12(dir, file))]));
   } catch {
     return null;
   }
 }
 function fileDigest(file) {
   try {
-    return digest([readFileSync10(file)]);
+    return digest([readFileSync11(file)]);
   } catch {
     return null;
   }
@@ -3007,16 +3153,16 @@ function duplicateCopies(inv, pluginDir, paths = {}) {
   const found = [];
   for (const skill of inv.skills) {
     if (skill.scope !== "personal") continue;
-    const theirs = join11(pluginDir, "skills", skill.name);
+    const theirs = join12(pluginDir, "skills", skill.name);
     if (!isDirectory(theirs)) continue;
-    const mine = skillDigest(skill.dir);
-    if (mine && mine === skillDigest(theirs)) {
+    const mine = skillDigest2(skill.dir);
+    if (mine && mine === skillDigest2(theirs)) {
       found.push({ kind: "skill", name: skill.name, remove: `rm -r ${shown(skill.dir)}` });
     }
   }
   let declared = {};
   try {
-    declared = declaredServers(readFileSync10(join11(pluginDir, ".mcp.json"), "utf8"));
+    declared = declaredServers(readFileSync11(join12(pluginDir, ".mcp.json"), "utf8"));
   } catch {
   }
   for (const server of inv.servers) {
@@ -3028,7 +3174,7 @@ function duplicateCopies(inv, pluginDir, paths = {}) {
   for (const command of inv.commands) {
     if (command.scope !== "personal") continue;
     const mine = fileDigest(command.file);
-    if (mine && mine === fileDigest(join11(pluginDir, "commands", commandFile(command.name)))) {
+    if (mine && mine === fileDigest(join12(pluginDir, "commands", commandFile(command.name)))) {
       found.push({ kind: "command", name: command.name, remove: `rm ${shown(command.file)}` });
     }
   }
@@ -3232,7 +3378,7 @@ function formatShareResult(result, marketplaceName, duplicates = NO_DUPLICATES) 
 
 // src/cli/share.ts
 function duplicatesOf(inv, team) {
-  return team ? duplicateCopies(inv, join12(marketplacesRoot(), team.marketplaceName)) : void 0;
+  return team ? duplicateCopies(inv, join13(marketplacesRoot(), team.marketplaceName)) : void 0;
 }
 function usage() {
   console.error(
@@ -3240,7 +3386,7 @@ function usage() {
   );
   process.exit(2);
 }
-function resolve(available, wanted) {
+function resolve2(available, wanted) {
   if (available.includes(wanted)) return wanted;
   const loose = available.filter((name) => name.toLowerCase() === wanted.toLowerCase());
   return loose.length === 1 ? loose[0] : wanted;
@@ -3280,7 +3426,7 @@ function parseUpdates(args, inv) {
     if (args[i] !== UPDATE) continue;
     const value = args[i + 1];
     if (!value || value.startsWith("--")) usage();
-    names.push(resolve(available, value.replace(/^\//, "")));
+    names.push(resolve2(available, value.replace(/^\//, "")));
   }
   return names;
 }
@@ -3292,9 +3438,9 @@ function parseSelection(args, inv) {
     if (!FLAGS.includes(flag) && flag !== SKILL_PATH) continue;
     if (!value || value.startsWith("--")) usage();
     if (flag === SKILL_PATH) selection.skillPaths.push(toAbsolutePath(value));
-    else if (flag === "--skill") selection.skills.push(resolve(inv.skills.map((s) => s.name), value));
-    else if (flag === "--mcp") selection.servers.push(resolve(inv.servers.map((s) => s.name), value));
-    else selection.commands.push(resolve(inv.commands.map((c) => c.name), value.replace(/^\//, "")));
+    else if (flag === "--skill") selection.skills.push(resolve2(inv.skills.map((s) => s.name), value));
+    else if (flag === "--mcp") selection.servers.push(resolve2(inv.servers.map((s) => s.name), value));
+    else selection.commands.push(resolve2(inv.commands.map((c) => c.name), value.replace(/^\//, "")));
     i++;
   }
   return selection;
@@ -3320,7 +3466,7 @@ function main() {
   if (cmd === "list" && (selected || update || messaged)) usage();
   if (cmd === "list") {
     const config = loadTeamConfig();
-    const inv2 = buildInventory({ teamSkills: teamSkillsDir() }, config ? teamAssets(config) : null);
+    const inv2 = buildInventory({ teamSkills: teamSkillsDir(), teamMarketplace: config?.marketplaceName ?? null }, config ? teamAssets(config) : null);
     console.log(formatInventory(inv2, forgeLine(config), duplicatesOf(inv2, config)));
     if (!config) {
       console.log(
