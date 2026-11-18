@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, call, manages } from "../api";
 import type { Principal, RepoRecord } from "../api";
 import { FolderPicker } from "../projects/FolderPicker";
+import { FolderChecks } from "./FolderChecks";
 import { homeRelative, projectsRead } from "../projects-read";
 import type { WorkFolder } from "../projects-read";
 import { TaskTools } from "../repo/TaskTools";
@@ -64,11 +65,11 @@ function ConnectedRepositories() {
 }
 
 function OwnFolders({ me }: { me: Principal }) {
-  const [read, setRead] = useState<{ folders: WorkFolder[]; last: string | null; home: string | null } | null>(null);
+  const [read, setRead] = useState<{ folders: WorkFolder[]; last: string | null; home: string | null; projectOf: Map<string, string> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const load = () => Promise.all([projectsRead.workFolders(), projectsRead.list()]).then(
-    ([{ folders }, { last, home }]) => setRead({ folders, last, home: home ?? null }),
+    ([{ folders }, { projects, last, home }]) => setRead({ folders, last, home: home ?? null, projectOf: new Map(projects.map((p) => [p.url, p.id])) }),
     (e: Error) => setError(e.message),
   );
   useEffect(() => {
@@ -86,6 +87,7 @@ function OwnFolders({ me }: { me: Principal }) {
               <li key={f.path}>
                 <strong dir="auto">{f.name}</strong> <span className="mono" dir="auto">{homeRelative(f.path, read.home)}</span>
                 {f.usedAt ? <span className="muted"> last used {whenShort(f.usedAt)}</span> : null}
+                {read.projectOf.has(f.path) ? <FolderChecks project={read.projectOf.get(f.path)!} canChange={manages(me)} /> : null}
               </li>
             ))}
           </ul>

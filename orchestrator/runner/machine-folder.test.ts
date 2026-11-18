@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,10 +6,11 @@ import { fakeAgentAdapter, opencodeAdapter } from "../server/tasks/agents.js";
 import type { AgentAdapter } from "../server/tasks/agents.js";
 import type { FolderWork, RunnerEvent, RunnerTask, TaskProgress } from "./link.js";
 import { undoInFolder } from "./folders.js";
-import { machineExecutor } from "./machine-executor.js";
+import { machineExecutor, sourcedAt } from "./machine-executor.js";
 import { STOPPED } from "./task.js";
 import type { ExecutorHooks } from "./task.js";
 import type { CheckSandbox } from "../server/tasks/check-sandbox.js";
+import { QUESTION_REASON } from "../server/tasks/profile.js";
 
 const FAKE_AGENT = join(import.meta.dirname, "..", "demo", "fake-agent.mjs");
 
@@ -202,6 +203,59 @@ describe("a task in a folder without git on its person's machine", { timeout: 60
     expect(nothing).toMatchObject({ status: "interrupted" });
   });
 
+  it("given an agent that changes nothing in the folder, when the run ends, then the task ends as having changed nothing with the agent's last words", async () => {
+    // given
+    mkdirSync(join(home, "elsewhere"));
+
+    // when
+    const { outcome } = await run(work({}, "Task: Add an on-call note\nstand-in: work in ../elsewhere"));
+
+    // then
+    expect(outcome).toMatchObject({ status: "failed", error: "The agent changed nothing in the folder.", nothingChanged: true, lastSaid: "Done with turn 1." });
+  });
+
+  it("given a task started with a file and a follow-up that brings another of the same name, when the follow-up reaches the agent, then its file is fetched into the task's attachments first under a name that keeps both, and a run started with no files fetches none mid-run", async () => {
+    // given
+    const folder = join(dataDir, "runner", "machines", "acme", "tasks", "tsk_folder_more", "attachments");
+    const followUp = { id: "fup_1", source: "person" as const, text: "Use this one too.", quotes: null, createdBy: "max@example.invalid", attachments: [{ id: "att_2", name: "notes.txt", kind: "text" as const }] };
+    const run = async (id: string, attachments: FolderWork["attachments"]) => {
+      const asked: string[] = [];
+      let waiting = [followUp];
+      let seen: string[] = [];
+      const hooks: ExecutorHooks = {
+        signal: new AbortController().signal,
+        onEvent: () => {},
+        log: () => {},
+        record: () => {},
+        onProcess: () => {},
+        decide: async () => ({ decision: "deny" }),
+        leaseHeld: async () => true,
+        followUps: () => waiting,
+        delivered: () => {
+          waiting = [];
+          seen = existsSync(folder) ? readdirSync(folder).sort() : [];
+        },
+        attachment: async (file) => {
+          asked.push(file);
+          return new TextEncoder().encode(`${file}\n`);
+        },
+      };
+      const executor = machineExecutor({ dataDir, org: "acme", machineId: "mch_here", adapters: [fakeAgentAdapter(FAKE_AGENT)], hostEnv: { PATH: process.env.PATH, HOME: home } });
+      const outcome = await executor.run({ id, title: "Add an on-call note", agent: "fake", nativeSession: null, work: { ...work(), mode: "approval-required", ...(attachments ? { attachments } : {}) } }, hooks);
+      return { outcome, asked, seen };
+    };
+
+    // when
+    const withFiles = await run("tsk_folder_more", [{ id: "att_1", name: "notes.txt", kind: "text" }]);
+    const without = await run("tsk_folder_none", undefined);
+
+    // then
+    expect(withFiles.outcome.status).toBe("needs-review");
+    expect(withFiles.asked).toEqual(["att_1", "att_2"]);
+    expect(withFiles.seen).toEqual(["att_2-notes.txt", "notes.txt"]);
+    expect(without.asked).toEqual([]);
+  });
+
   it("given a person whose machine runs OpenCode, when a task in their folder runs, then it runs as them on a server of its own under the session's rules, never the OpenCode first on the path, and its change is kept for review", async () => {
     // given
     const bin = join(root, "bin");
@@ -294,6 +348,110 @@ describe("a task in a folder without git on its person's machine", { timeout: 60
     expect(undone).toEqual({ undone: ["skills/add-an-on-call-note/SKILL.md"], kept: ["env-HOME.txt"] });
     expect(existsSync(join(home, "notes", "skills"))).toBe(false);
     expect(readFileSync(join(home, "notes", "env-HOME.txt"), "utf8")).toBe("edited since\n");
+  });
+
+  it("given a task whose person sent a follow-up while it worked in a folder, when the run ends, then each turn reaches the orchestrator with the files it changed, and an undo from a turn puts back that turn and the ones after it and says what of the change is left", async () => {
+    // given
+    const events: RunnerEvent[] = [];
+    let waiting = [{ id: "fup_1", source: "person" as const, text: "Now add the rota too.\nwith the weekends", quotes: null, createdBy: "max@example.invalid" }];
+    const hooks: ExecutorHooks = { signal: new AbortController().signal, onEvent: (event) => void events.push(event), log: () => {}, record: () => {}, onProcess: () => {}, decide: async () => ({ decision: "deny" }), leaseHeld: async () => true, followUps: () => waiting, delivered: () => void (waiting = []) };
+    const executor = machineExecutor({ dataDir, org: "acme", machineId: "mch_here", adapters: [fakeAgentAdapter(FAKE_AGENT)], hostEnv: { PATH: process.env.PATH, HOME: home } });
+    const outcome = await executor.run({ id: "tsk_folder_turns", title: "Add an on-call note", agent: "fake", nativeSession: null, work: { ...work(), mode: "approval-required" } }, hooks);
+    const turns = events.filter((event) => event.type === "turn");
+    const where = { home, dataDir, shadows: join(dataDir, "runner", "machines", "acme", "shadow") };
+    const ask = { nonce: "n-1", projectId: "prj_notes", path: "~/notes", before: outcome.changes!.before, after: outcome.changes!.after };
+
+    // when
+    const fromSecond = await undoInFolder({ ...ask, from: { start: turns[1]!.start, end: turns[1]!.end } }, where);
+    const fromFirst = await undoInFolder({ ...ask, from: { start: turns[0]!.start, end: turns[1]!.end } }, where);
+
+    // then
+    expect(turns).toEqual([
+      { type: "turn", n: 1, said: "Add an on-call note", start: expect.any(String), end: turns[1]!.start, files: 1 },
+      { type: "turn", n: 2, said: "Now add the rota too.", start: expect.any(String), end: expect.any(String), files: 0 },
+    ]);
+    expect(fromSecond).toEqual({ undone: [], kept: [], left: 1, after: expect.any(String), files: [expect.objectContaining({ path: "skills/add-an-on-call-note/SKILL.md" })] });
+    expect(fromFirst).toEqual({ undone: ["skills/add-an-on-call-note/SKILL.md"], kept: [], left: 0, after: expect.any(String), files: [] });
+    expect(existsSync(join(home, "notes", "skills"))).toBe(false);
+  });
+
+  it("given a skill of the folder and a server of the person turned off for the task, the folder named as a machine names it, when an agent that cannot leave them out would run, then the task does not run and says what it could not leave out", async () => {
+    // given
+    mkdirSync(join(home, "notes", ".claude", "skills", "rota-check"), { recursive: true });
+    writeFileSync(join(home, "notes", ".claude", "skills", "rota-check", "SKILL.md"), "---\nname: rota-check\n---\nCheck the rota.\n");
+    const given = { ...work(), setup: { ...work().setup, off: { sources: ["folder:~/notes"], skills: [], mcpServers: [{ source: "yours", name: "tracker" }] } } };
+
+    // when
+    const { outcome, log } = await run(given);
+
+    // then
+    expect(outcome).toMatchObject({ status: "failed", error: "The task did not run: Demo agent cannot be started without rota-check, MCP server tracker." });
+    expect(log.some((line) => line.startsWith("Turned off"))).toBe(false);
+  });
+
+  it("given a question asked of a folder on the machine, when it runs, then the run's guard closes every tool that writes, an MCP server's included, with the question's reason", async () => {
+    // given
+    let guard = "";
+    const hooks: ExecutorHooks = {
+      signal: new AbortController().signal,
+      onEvent: () => {},
+      log: () => {},
+      record: () => {},
+      onProcess: () => {
+        guard = readFileSync(join(dataDir, "runner", "machines", "acme", "tasks", "tsk_folder_question", "guard", "personal-guard.mjs"), "utf8");
+      },
+      decide: async () => ({ decision: "deny" }),
+      leaseHeld: async () => true,
+    };
+    const executor = machineExecutor({ dataDir, org: "acme", machineId: "mch_here", adapters: [fakeAgentAdapter(FAKE_AGENT)], hostEnv: { PATH: process.env.PATH, HOME: home } });
+
+    // when
+    await executor.run({ id: "tsk_folder_question", title: "What does the rota say?", agent: "fake", nativeSession: null, work: { ...work(), readOnly: true } }, hooks);
+
+    // then
+    expect(guard).toContain(QUESTION_REASON);
+  });
+
+  it("given a skill of the folder turned off for an OpenCode task, when it runs on the machine, then the session denies that skill and the log says it was turned off for this task alone", async () => {
+    // given
+    mkdirSync(join(home, "notes", ".claude", "skills", "rota-check"), { recursive: true });
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "opencode-standin"), `#!/bin/sh\nexec "${process.execPath}" "${join(import.meta.dirname, "opencode-serve.fake.mjs")}" "$@"\n`);
+    chmodSync(join(bin, "opencode-standin"), 0o755);
+    const log: string[] = [];
+    const given = { ...work(), setup: { ...work().setup, off: { sources: ["folder:~/notes"], skills: [], mcpServers: [] } } };
+    const hooks: ExecutorHooks = { signal: new AbortController().signal, onEvent: () => {}, log: (text) => void log.push(text), record: () => {}, onProcess: () => {}, decide: async () => ({ decision: "deny" }), leaseHeld: async () => true };
+    const executor = machineExecutor({ dataDir, org: "acme", machineId: "mch_here", adapters: [opencodeAdapter(join(bin, "opencode-standin"))], hostEnv: { PATH: `${bin}:${process.env.PATH}`, HOME: home } });
+
+    // when
+    const outcome = await executor.run({ id: "tsk_folder_oc_off", title: "Add an on-call note", agent: "opencode", nativeSession: null, work: given }, hooks);
+
+    // then
+    expect(outcome.status).toBe("needs-review");
+    expect(log).toContain("Turned off for this task alone: rota-check.");
+    expect(readFileSync(join(home, "opencode-seen.jsonl"), "utf8")).toMatch(/"permission":"skill","pattern":"rota-check","action":"deny"/);
+  });
+
+  it("given the person's own skills, a folder's skill and server, and a plugin they installed, when the agent calls each, then each call carries the source read on the machine, a folder named from the home, and a name nothing holds carries none", async () => {
+    // given
+    mkdirSync(join(home, ".claude", "skills", "review-checklist"), { recursive: true });
+    mkdirSync(join(home, "notes", ".claude", "skills", "rota-check"), { recursive: true });
+    writeFileSync(join(home, "notes", ".mcp.json"), JSON.stringify({ mcpServers: { docs: { command: "docs-server" } } }));
+    const place = { home, folder: join(home, "notes"), plugins: [{ name: "payments-skills", marketplace: "acme-market", version: "1.4.0" }], team: null };
+    const call = (tool: string, target: string | null, mcp?: { server: string; tool: string }) => ({ type: "tool_call" as const, tool, target, status: "started" as const, ...(mcp ? { mcp } : {}) });
+
+    // when
+    const sourced = await Promise.all([call("Skill", "review-checklist"), call("Skill", "rota-check"), call("Skill", "payments-skills:add-endpoint"), call("mcp__docs__search", null, { server: "docs", tool: "search" }), call("Skill", "nowhere")].map(sourcedAt(place)));
+
+    // then
+    expect(sourced.map((e) => (e.type === "tool_call" ? [e.source ?? null, e.sourceLabel ?? null] : null))).toEqual([
+      ["yours", "Yours"],
+      ["folder:~/notes", "notes"],
+      ["plugin:payments-skills@acme-market", "payments-skills 1.4.0"],
+      ["folder:~/notes", "notes"],
+      [null, null],
+    ]);
   });
 
   it("given a task working in a folder, when an undo of an earlier task there arrives, then the machine refuses it until the task ends, and then puts the earlier change back", async () => {

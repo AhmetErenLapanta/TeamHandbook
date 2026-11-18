@@ -83,4 +83,12 @@ describe("the rules an OpenCode session run as its person holds the agent to", (
     expect(decides(rules, "grep", "anything")).toBe("deny");
     expect(rules.some((rule) => rule.pattern.includes("deploy"))).toBe(false);
   });
+
+  it("given two skills turned off for the task, when the agent calls one of them or another skill, then only the turned-off ones are denied", () => {
+    // when
+    const rules = personalRules("full-access", [], [], [], ["add-endpoint", "review-checklist"]);
+
+    // then
+    expect([decides(rules, "skill", "add-endpoint"), decides(rules, "skill", "review-checklist"), decides(rules, "skill", "write-runbook")]).toEqual(["deny", "deny", "ask"]);
+  });
 });

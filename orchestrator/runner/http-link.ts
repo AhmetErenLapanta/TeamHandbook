@@ -118,6 +118,9 @@ export function httpLink(profile: RunnerProfile, fetchImpl: Fetch = fetch): Runn
     async push(nonce, answer) {
       await call(RUNNER_PATHS.pushes(nonce), { answer });
     },
+    async setup(nonce, answer) {
+      await call(RUNNER_PATHS.setups(nonce), { answer });
+    },
     async forgeRequest(taskId, leaseId, opened) {
       // A request the orchestrator does not take answers 409 with why: that is a verdict, not a failed call.
       const response = await signedCall(profile, "POST", RUNNER_PATHS.forgeRequest(taskId), { leaseId, ...opened }, fetchImpl);

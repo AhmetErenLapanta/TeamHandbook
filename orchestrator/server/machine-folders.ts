@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
+import type { ChangedFile } from "./forge/request-diff.js";
 import { Hono } from "hono";
 import type { FolderEntry, FolderList, FolderRefusal, GitState } from "../shared/projects.js";
 import { FOLDER_ENTRIES_MAX, FOLDER_MARKERS_MAX, FOLDER_TEXT_MAX, POLL_WAIT_MAX_MS } from "../shared/runner-wire.js";
-import type { ChecksAnswer, ChecksAsk, FolderAnswer as Answer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, UndoAnswer, UndoAsk } from "../runner/link.js";
+import type { ChecksAnswer, ChecksAsk, FolderAnswer as Answer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, SetupAnswer, SetupAsk, SetupWant, UndoAnswer, UndoAsk } from "../runner/link.js";
 import type { CheckKind, DetectedStep, DetectedVerification } from "../shared/verification.js";
 import type { OrchestratorContext } from "./app.js";
 import type { OrchestratorEnv } from "./auth.js";
@@ -10,6 +11,9 @@ import { detectSecret } from "./plugin.js";
 import { folderRefusalStatus, machineFolderOf } from "./projects.js";
 import { WORKING_COPIES_MAX } from "../runner/workspace.js";
 import { route } from "./route-scopes.js";
+import { SKILL_READ_MAX } from "./tasks/handbook-sources.js";
+import type { HandbookSource } from "./tasks/handbook-sources.js";
+import { SOURCE_ID } from "./tasks/handbook-use.js";
 import type { MachineRecord } from "./runner-store.js";
 
 /*
@@ -31,6 +35,7 @@ export const CHECKS_ASK_WAIT_MS = 10_000;
 /** How long the person's screen waits for the machine to read or decide one of its lessons. */
 export const LESSON_OP_WAIT_MS = 15_000;
 export const PUSH_ASK_WAIT_MS = 60_000;
+export const SETUP_ASK_WAIT_MS = 150_000;
 /** A machine with no poll waiting and none for this long is not connected now. */
 const ONLINE_MS = POLL_WAIT_MAX_MS + 10_000;
 /** Asks one machine has open at once; past it the screen is told to wait. */
@@ -44,12 +49,13 @@ interface Kinds {
   checks: { ask: ChecksAsk; answer: ChecksAnswer };
   lessonOps: { ask: LessonOpAsk; answer: LessonOpAnswer };
   pushes: { ask: PushAsk; answer: PushAnswer };
+  setups: { ask: SetupAsk; answer: SetupAnswer };
 }
 type Kind = keyof Kinds;
 
 interface Pending {
   kind: Kind;
-  ask: FolderAsk | UndoAsk | LessonAsk | ChecksAsk | LessonOpAsk | PushAsk;
+  ask: FolderAsk | UndoAsk | LessonAsk | ChecksAsk | LessonOpAsk | PushAsk | SetupAsk;
   machineId: string;
   handed: boolean;
   settle: (answer: unknown) => void;
@@ -62,7 +68,7 @@ interface Polls {
 
 export interface MachineAsks {
   /** A poll of this machine starting: it ends early when an ask arrives, and hands the asks waiting for it. */
-  polling(machineId: string): { signal: AbortSignal; take(): { folders: FolderAsk[]; undos: UndoAsk[]; lessons: LessonAsk[]; checks: ChecksAsk[]; lessonOps: LessonOpAsk[]; pushes: PushAsk[] }; end(): void };
+  polling(machineId: string): { signal: AbortSignal; take(): { folders: FolderAsk[]; undos: UndoAsk[]; lessons: LessonAsk[]; checks: ChecksAsk[]; lessonOps: LessonOpAsk[]; pushes: PushAsk[]; setups: SetupAsk[] }; end(): void };
   /** Whether the machine polls now, or did within the last ONLINE_MS; an ask of one that does not is answered "offline". */
   online(machineId: string): boolean;
   /** Asks the machine; null when it did not answer in time. */
@@ -80,7 +86,7 @@ function machineAsks(now: () => number = Date.now): MachineAsks {
     return found;
   };
   const take = (machineId: string) => {
-    const asks = { folders: [] as FolderAsk[], undos: [] as UndoAsk[], lessons: [] as LessonAsk[], checks: [] as ChecksAsk[], lessonOps: [] as LessonOpAsk[], pushes: [] as PushAsk[] };
+    const asks = { folders: [] as FolderAsk[], undos: [] as UndoAsk[], lessons: [] as LessonAsk[], checks: [] as ChecksAsk[], lessonOps: [] as LessonOpAsk[], pushes: [] as PushAsk[], setups: [] as SetupAsk[] };
     for (const p of pending.values()) {
       if (p.machineId !== machineId || p.handed) continue;
       p.handed = true;
@@ -89,6 +95,7 @@ function machineAsks(now: () => number = Date.now): MachineAsks {
       else if (p.kind === "lessons") asks.lessons.push(p.ask as LessonAsk);
       else if (p.kind === "checks") asks.checks.push(p.ask as ChecksAsk);
       else if (p.kind === "pushes") asks.pushes.push(p.ask as PushAsk);
+      else if (p.kind === "setups") asks.setups.push(p.ask as SetupAsk);
       else asks.lessonOps.push(p.ask as LessonOpAsk);
     }
     return asks;
@@ -118,13 +125,13 @@ function machineAsks(now: () => number = Date.now): MachineAsks {
       if ([...pending.values()].filter((p) => p.machineId === machineId).length >= ASKS_PER_MACHINE) return Promise.resolve("busy");
       const nonce = randomBytes(18).toString("base64url");
       return new Promise((resolve) => {
-        const timer = setTimeout(() => settle(null), kind === "undos" ? UNDO_ASK_WAIT_MS : kind === "lessons" ? LESSON_ASK_WAIT_MS : kind === "checks" ? CHECKS_ASK_WAIT_MS : kind === "lessonOps" ? LESSON_OP_WAIT_MS : kind === "pushes" ? PUSH_ASK_WAIT_MS : FOLDER_ASK_WAIT_MS);
+        const timer = setTimeout(() => settle(null), kind === "undos" ? UNDO_ASK_WAIT_MS : kind === "lessons" ? LESSON_ASK_WAIT_MS : kind === "checks" ? CHECKS_ASK_WAIT_MS : kind === "lessonOps" ? LESSON_OP_WAIT_MS : kind === "pushes" ? PUSH_ASK_WAIT_MS : kind === "setups" ? SETUP_ASK_WAIT_MS : FOLDER_ASK_WAIT_MS);
         const settle = (answer: unknown) => {
           clearTimeout(timer);
           pending.delete(nonce);
           resolve(answer as Kinds[typeof kind]["answer"] | "invalid" | null);
         };
-        pending.set(nonce, { kind, ask: { nonce, ...fields } as FolderAsk | UndoAsk | LessonAsk | ChecksAsk | LessonOpAsk | PushAsk, machineId, handed: false, settle });
+        pending.set(nonce, { kind, ask: { nonce, ...fields } as FolderAsk | UndoAsk | LessonAsk | ChecksAsk | LessonOpAsk | PushAsk | SetupAsk, machineId, handed: false, settle });
         for (const waiting of mine.waiting) waiting.abort();
       });
     },
@@ -208,7 +215,17 @@ export function undoAnswer(value: unknown): UndoAnswer | null {
   if ("refused" in a) return text(a.refused) ? { refused: a.refused } : null;
   const lists = [a.undone, a.kept];
   if (!lists.every((l) => Array.isArray(l) && l.every(insideFolder)) || (a.undone as unknown[]).length + (a.kept as unknown[]).length > UNDO_PATHS_MAX) return null;
-  return { undone: a.undone as string[], kept: a.kept as string[] };
+  const undone = { undone: a.undone as string[], kept: a.kept as string[] };
+  if (a.left === undefined) return undone;
+  // An undo from a turn: what is left of the change, and the snapshot the folder is at after it.
+  if (!Number.isInteger(a.left) || (a.left as number) < 0 || typeof a.after !== "string" || !/^[0-9a-f]{40}$/.test(a.after) || !Array.isArray(a.files) || a.files.length > UNDO_PATHS_MAX) return null;
+  const files: ChangedFile[] = [];
+  for (const f of a.files as Record<string, unknown>[]) {
+    const count = (v: unknown) => v === null || (Number.isInteger(v) && (v as number) >= 0);
+    if (!f || !insideFolder(f.path) || !["added", "modified", "deleted", "renamed"].includes(f.status as string) || !(f.previousPath === null || insideFolder(f.previousPath)) || !count(f.additions) || !count(f.deletions) || typeof f.binary !== "boolean" || typeof f.test !== "boolean") return null;
+    files.push({ path: f.path, status: f.status as ChangedFile["status"], previousPath: f.previousPath as string | null, additions: f.additions as number | null, deletions: f.deletions as number | null, binary: f.binary, test: f.test });
+  }
+  return { ...undone, left: a.left as number, after: a.after, files };
 }
 
 const CHECKS_MAX = 8;
@@ -259,6 +276,80 @@ export function pushAnswer(value: unknown): PushAnswer | null {
   return a.pushed === true ? { pushed: true } : null;
 }
 
+const SOURCE_KINDS = new Set(["yours", "folder", "plugin", "team-repo"]);
+const names = (value: unknown, max: number): { name: string }[] | null => (Array.isArray(value) && value.length <= max && value.every((v) => text(v?.name, 200)) ? value.map((v) => ({ name: v.name as string })) : null);
+
+function handbookSource(value: unknown): HandbookSource | null {
+  if (!value || typeof value !== "object") return null;
+  const s = value as Record<string, unknown>;
+  const optional = (v: unknown, max: number) => v === undefined || text(v, max);
+  const skills = Array.isArray(s.skills) && s.skills.length <= 300 && s.skills.every((k) => text(k?.name, 200) && optional(k?.description, 1000)) ? (s.skills as { name: string; description?: string }[]).map((k) => ({ name: k.name, ...(k.description ? { description: k.description } : {}) })) : null;
+  const commands = names(s.commands, 300);
+  const mcpServers = names(s.mcpServers, 300);
+  const hooks = Array.isArray(s.hooks) && s.hooks.length <= 50 && s.hooks.every((h) => text(h?.name, 200) && Array.isArray(h.commands) && h.commands.length <= 50 && h.commands.every((c: unknown) => text(c, 400))) ? (s.hooks as { name: string; commands: string[] }[]).map((h) => ({ name: h.name, commands: [...h.commands] })) : null;
+  if (!text(s.id, 4000) || !SOURCE_ID.test(s.id) || s.id.startsWith("folder:/") || !SOURCE_KINDS.has(s.kind as string) || !text(s.name, 200) || typeof s.enabled !== "boolean" || !skills || !commands || !mcpServers || !hooks) return null;
+  if (![s.version, s.marketplace, s.scope].every((v) => optional(v, 200)) || !optional(s.whyNot, 500) || (s.claudeMd !== undefined && typeof s.claudeMd !== "boolean")) return null;
+  return {
+    id: s.id,
+    kind: s.kind as HandbookSource["kind"],
+    name: s.name,
+    ...(s.version ? { version: s.version as string } : {}),
+    ...(s.marketplace ? { marketplace: s.marketplace as string } : {}),
+    ...(s.scope ? { scope: s.scope as string } : {}),
+    enabled: s.enabled,
+    ...(s.whyNot ? { whyNot: s.whyNot as string } : {}),
+    skills,
+    commands,
+    mcpServers,
+    hooks,
+    ...(typeof s.claudeMd === "boolean" ? { claudeMd: s.claudeMd } : {}),
+  };
+}
+
+const DIGEST = /^[0-9a-f]{64}$/;
+
+const fits = (want: SetupWant, answer: SetupAnswer): boolean => {
+  if ("refused" in answer) return true;
+  if (want.want === "sources") return "sources" in answer;
+  if (want.want === "skill") return "content" in answer && !("digest" in answer);
+  if (want.want === "plugin") return "ok" in answer;
+  if (want.act === "read") return "content" in answer && "digest" in answer;
+  return want.act === "write" ? "digest" in answer && !("content" in answer) : "deleted" in answer;
+};
+
+export function setupAnswer(value: unknown): SetupAnswer | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const a = value as Record<string, unknown>;
+  if ("refused" in a) return text(a.refused, 500) && (a.detail === undefined || text(a.detail, 1000)) ? { refused: a.refused, ...(a.detail ? { detail: a.detail as string } : {}) } : null;
+  if ("sources" in a) {
+    const sources = Array.isArray(a.sources) && a.sources.length <= 50 ? a.sources.map(handbookSource) : null;
+    return sources && !sources.includes(null) ? { sources: sources as HandbookSource[] } : null;
+  }
+  if ("content" in a) {
+    const content = a.content === null || (typeof a.content === "string" && a.content.length <= SKILL_READ_MAX) ? (a.content as string | null) : undefined;
+    if (content === undefined) return null;
+    if (!("digest" in a)) return content === null ? null : { content };
+    return a.digest === null || (typeof a.digest === "string" && DIGEST.test(a.digest)) ? { content, digest: a.digest as string | null } : null;
+  }
+  if ("ok" in a) {
+    if (typeof a.ok !== "boolean" || !text(a.command, 300)) return null;
+    if (a.ok) return { ok: true, command: a.command };
+    return text(a.why, 500) ? { ok: false, command: a.command, why: a.why } : null;
+  }
+  if ("digest" in a) return typeof a.digest === "string" && DIGEST.test(a.digest) ? { digest: a.digest } : null;
+  return a.deleted === true ? { deleted: true } : null;
+}
+
+export async function setupOnMachine(ctx: OrchestratorContext, machineId: string, want: SetupWant): Promise<SetupAnswer | { unread: string }> {
+  const name = (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === machineId)?.name ?? "the machine";
+  const answer = await machineAsksOf(ctx).ask(machineId, "setups", want as Omit<SetupAsk, "nonce">);
+  if (answer === "offline") return { unread: `${name} is not connected now; start its runner and try again` };
+  if (answer === "busy") return { unread: `${name} is still answering earlier asks; try again in a moment` };
+  if (answer === null) return { unread: `${name} did not answer; its runner is stopped or older than this orchestrator, so update it and try again` };
+  if (answer === "invalid" || !fits(want, answer)) return { unread: `${name} answered with something other than what was asked` };
+  return answer;
+}
+
 export async function pushOnMachine(ctx: OrchestratorContext, project: { name: string; url: string; id: string }, entry: { path: string; branch: string; head: string }): Promise<{ pushed: true } | { unread: string }> {
   const folder = machineFolderOf(project.url);
   if (!folder) return { unread: `${project.name} is not a folder on a person's machine` };
@@ -272,13 +363,13 @@ export async function pushOnMachine(ctx: OrchestratorContext, project: { name: s
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
-const DROPS = new Set(["secret", "muted", "duplicate"]);
+const DROPS = new Set(["secret", "muted", "duplicate", "weak"]);
 
 export function lessonAnswer(value: unknown): LessonAnswer | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const a = value as Record<string, unknown>;
   if ("refused" in a) return text(a.refused) ? { refused: a.refused } : null;
-  if ("dropped" in a) return typeof a.dropped === "string" && DROPS.has(a.dropped) ? { dropped: a.dropped as "secret" | "muted" | "duplicate" } : null;
+  if ("dropped" in a) return typeof a.dropped === "string" && DROPS.has(a.dropped) ? { dropped: a.dropped as "secret" | "muted" | "duplicate" | "weak" } : null;
   return typeof a.slug === "string" && SLUG.test(a.slug) ? { slug: a.slug } : null;
 }
 

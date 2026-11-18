@@ -190,7 +190,7 @@ function main(): void {
     // the manager picks knowing, and a repository that cannot be reached simply means no
     // labels rather than a screen that will not open.
     const config = loadTeamConfig();
-    const inv = buildInventory({ teamSkills: teamSkillsDir() }, config ? teamAssets(config) : null);
+    const inv = buildInventory({ teamSkills: teamSkillsDir(), teamMarketplace: config?.marketplaceName ?? null }, config ? teamAssets(config) : null);
     console.log(formatInventory(inv, forgeLine(config), duplicatesOf(inv, config)));
     if (!config) {
       console.log(

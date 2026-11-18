@@ -1161,6 +1161,24 @@ describe("a merge cut off, and the start after it", () => {
     expect((await ctx.store.getRequest(ctx.tenant, repo.id, request.number))!.status).toBe("merged");
   });
 
+  it("given two requests of one branch, one into develop and one into the default branch, when the branch reached develop alone and the orchestrator starts, then only the one into develop is recorded as merged", async () => {
+    // given
+    const { ctx } = await seeded();
+    const { repo, bare } = await repoOf(ctx);
+    const request = await opened(ctx);
+    git(["branch", "develop", "main"], bare);
+    await ctx.store.saveRequest({ ...request, number: 99, targetBranch: "develop" });
+    const { mergeLocalBranch, inLocalTurn } = await import("./forge/local.js");
+    await inLocalTurn(repo, () => mergeLocalBranch(join(ctx.dataDir, "work"), repo, request.branch, { name: "Pat", email: "pat@example.invalid" }, undefined, "develop"));
+
+    // when
+    await reconcileLocalRequests(ctx);
+
+    // then
+    expect((await ctx.store.getRequest(ctx.tenant, repo.id, 99))!).toMatchObject({ status: "merged", targetBranch: "develop" });
+    expect((await ctx.store.getRequest(ctx.tenant, repo.id, request.number))!.status).toBe("open");
+  });
+
   it("given an orchestrator branch no request names, a branch a person made, and scratch directories, when the orchestrator starts, then only the orchestrator's own leftovers go", async () => {
     // given
     const { ctx } = await seeded();

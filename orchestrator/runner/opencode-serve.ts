@@ -33,6 +33,15 @@ export function routeOf(call: OpencodeCall): { method: "POST"; path: string; bod
       return { method: "POST", path: `/question/${id("requestID")}/reply`, body: { answers: call.args.answers } };
     case "question.reject":
       return { method: "POST", path: `/question/${id("requestID")}/reject`, body: {} };
+    case "session.summarize": {
+      // A model's id can hold a dot or a slash (a provider's own naming); it goes in the body, never the path.
+      const named = (key: string) => {
+        const value = call.args[key];
+        if (typeof value !== "string" || !value || value.length > 200) throw new Error(`OpenCode call ${call.op} has no usable ${key}`);
+        return value;
+      };
+      return { method: "POST", path: `/session/${id("sessionID")}/summarize`, body: { providerID: named("providerID"), modelID: named("modelID") } };
+    }
   }
 }
 
@@ -67,8 +76,9 @@ const defaultSpawn: Spawner = (program, args, { cwd, env }) => nodeSpawn(program
 export interface OpencodeServe {
   readonly url: string;
   readonly pgid: number | null;
-  request(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown>;
+  request(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<unknown>;
   createSession(permission: unknown): Promise<string>;
+  resumeSession(id: string, permission: unknown): Promise<string>;
   /** The transport a session of the shared codec runs over: the event stream in, its calls out. */
   transport(): AgentTransport;
   stop(): void;
@@ -106,7 +116,7 @@ export async function startOpencodeServe({ program, cwd, env, spawn = defaultSpa
   child.stdout?.resume();
   child.stderr?.resume();
 
-  const request = async (method: "GET" | "POST", path: string, body?: unknown) => {
+  const request = async (method: "GET" | "POST" | "PATCH", path: string, body?: unknown) => {
     const response = await fetch(`${url}${path}`, { method, redirect: "error", headers: { authorization: auth, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     if (!response.ok) throw new Error(`OpenCode answered ${method} ${path.split("/")[1]} with ${response.status}`);
     const text = await response.text();
@@ -121,6 +131,13 @@ export async function startOpencodeServe({ program, cwd, env, spawn = defaultSpa
       const created = (await request("POST", "/session", { permission })) as { id?: unknown } | null;
       if (typeof created?.id !== "string") throw new Error("OpenCode made no session");
       return created.id;
+    },
+    async resumeSession(id, permission) {
+      if (!/^[\w-]{1,200}$/.test(id)) throw new Error("the session to go on in has no usable id");
+      const found = (await request("GET", `/session/${id}`).catch(() => null)) as { id?: unknown } | null;
+      if (found?.id !== id) throw new Error("OpenCode no longer has the session this task worked in");
+      await request("PATCH", `/session/${id}`, { permission });
+      return id;
     },
     transport: () => serveTransport(url, auth, request, () => stopGroup(child), exit, silenceMs),
     stop: () => stopGroup(child),

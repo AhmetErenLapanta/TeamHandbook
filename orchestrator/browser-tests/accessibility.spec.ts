@@ -420,3 +420,21 @@ test.describe("at 390 pixels wide", () => {
     });
   }
 });
+
+for (const theme of THEMES) {
+  test(`given the agent's answer holds highlighted code, when the task page is read in the ${theme} theme, then the colours of comments, strings, numbers and keywords pass the contrast rules`, async ({ page }) => {
+    // given
+    await page.emulateMedia({ colorScheme: theme });
+    const at = new Date().toISOString();
+    const lastSaid = ["Use this:", "", "```ts", "// total of the lines", "const total = lines.length + 42;", "return \"done\";", "```"].join("\n");
+    await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: { id: "t1", title: "Retry a failed capture", status: "failed", phase: "failed", state: "finished-nothing-changed", repoId: "payments-skills", team: "Payments", description: "", issueUrl: null, issueKey: null, agent: "fake", createdBy: "ada@example.invalid", createdAt: at, startedAt: at, finishedAt: at, baseSha: null, tests: null, cost: { usd: null }, requestNumber: null, error: null, template: null, queuePosition: null, request: null, lastSaid }, log: [], outputCut: false } }));
+    await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+    // when
+    await page.goto("/demo/tasks/t1");
+    await expect(page.locator(".markdown .tok-keyword").first()).toBeVisible();
+
+    // then
+    expect(await violations(page)).toEqual([]);
+  });
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { againInput, endReasonOf, waitedMs, waitSaid, findLines, formStart, issueLine, LOG_WINDOW, ordinal, resetDay, shownStatus, splitWork, startLink, startSummary, STATUS_TEXT, reviewSummary, targetNames, taskFacts, taskTitle, windowStart } from "./Tasks";
+import { againInput, contextLine, limitLeftLine, costRangeLine, discardSaid, endReasonOf, waitedMs, waitSaid, findLines, formStart, issueLine, LOG_WINDOW, ordinal, resetDay, shownStatus, splitWork, startLink, startSummary, STATUS_TEXT, reviewSummary, targetNames, taskFacts, taskTitle, windowStart } from "./Tasks";
 import type { TaskRecord } from "./api";
 
 describe("resetDay", () => {
@@ -444,5 +444,43 @@ describe("waitSaid", () => {
   it("given waits of seven minutes exactly, an hour, two and a half hours and ninety seconds, when each is said, then none carries seconds", () => {
     // then
     expect([7 * 60_000, 60 * 60_000, 150 * 60_000, 90_000].map(waitSaid)).toEqual(["7m", "1h", "2h 30m", "2m"]);
+  });
+});
+
+describe("discardSaid", () => {
+  it("given a first run and a run after a Keep, when each Discard is explained, then the first drops the agent's change and the second leaves what was kept", () => {
+    // then
+    expect(discardSaid(false)).toBe("This drops the agent's change; your checkout stays as it is.");
+    expect(discardSaid(true)).toBe("This drops this run's change; what you kept before stays, and your checkout stays as it is.");
+  });
+});
+
+describe("costRangeLine", () => {
+  it("given a range with numbers, one without and none, when the line is said, then only the first says anything", () => {
+    // then
+    expect(costRangeLine({ lowUsd: 0.3, highUsd: 1.2 })).toBe("Tasks like this have cost $0.30 to $1.20.");
+    expect(costRangeLine({ lowUsd: null, highUsd: null })).toBeNull();
+    expect(costRangeLine(null)).toBeNull();
+  });
+});
+
+describe("limitLeftLine", () => {
+  it("given a week with a third spent, one nearly spent, a reading without the week and none, when the line is said, then only a week speaks and a low one warns", () => {
+    // then
+    expect(limitLeftLine([{ window: "seven_day", used: 0.66 }])).toEqual({ text: "34% of this week's Claude limit is left.", low: false });
+    expect(limitLeftLine([{ window: "seven_day", used: 0.94 }])).toEqual({ text: "6% of this week's Claude limit is left; a task stops when it is reached.", low: true });
+    expect(limitLeftLine([{ window: "five_hour", used: 0.2 }])).toBeNull();
+    expect(limitLeftLine([])).toBeNull();
+  });
+});
+
+describe("contextLine", () => {
+  it("given a running task, an ended one, one whose window is unknown and one with only its start, when the context is said, then each says what is known", () => {
+    // then
+    expect(contextLine(48_000, { tokens: 124_000, window: 200_000 }, false)).toBe("62% used");
+    expect(contextLine(48_000, { tokens: 142_000, window: 200_000 }, true)).toBe("48k at its start, 71% at its end");
+    expect(contextLine(null, { tokens: 51_000, window: null }, false)).toBe("51k tokens");
+    expect(contextLine(48_000, null, false)).toBe("48k tokens at its start");
+    expect(contextLine(null, null, true)).toBeNull();
   });
 });

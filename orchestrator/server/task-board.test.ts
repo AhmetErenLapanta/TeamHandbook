@@ -127,4 +127,27 @@ describe("the Tasks board, by whose turn it is", () => {
     expect(owners.folders.map((f) => f.name)).toEqual(["retry-tool"]);
     expect(members.folders).toEqual([]);
   });
+
+  it("given a running task whose card waited five minutes and an ended one no run counted, when the board is read, then each says the agent's time with the wait left out, as the task's page does", async () => {
+    // given
+    const store = openSqliteStore(":memory:");
+    const owner = await principalOf(store, await setupFirstOwner(store, TENANT, "code", { code: "code", email: "ada@example.invalid", password: "correct horse battery" }));
+    const ctx: OrchestratorContext = { store, mode: "self-hosted", dataDir: mkdtempSync(join(tmpdir(), "th-board-ran-")), tenant: TENANT, allowedHosts: null };
+    dirs.push(ctx.dataDir);
+    const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
+    await store.createTask(task("tsk_running", { status: "running", createdBy: "ada@example.invalid", startedAt: minutesAgo(10) }));
+    await store.createTask(task("tsk_ended", { status: "failed", createdBy: "ada@example.invalid", startedAt: minutesAgo(30), finishedAt: minutesAgo(20) }));
+    for (const [id, taskId] of [["req_run", "tsk_running"], ["req_end", "tsk_ended"]] as const) {
+      const from = taskId === "tsk_running" ? 8 : 28;
+      await store.recordTaskRequest({ tenant: TENANT, id, taskId, targetPosition: null, sourceKey: id, kind: "command", payload: { tool: "Bash", summary: "npm test" }, createdAt: minutesAgo(from), expiresAt: null });
+      await store.answerTaskRequest(TENANT, id, { decision: "allow_once" }, "ada@example.invalid", "web", minutesAgo(from - 5));
+    }
+
+    // when
+    const board = await taskBoard(ctx, owner, NOW);
+    const ranOf = (id: string) => [...board.sections.agents, ...board.sections.yours, ...board.sections.done].find((c) => c.id === id)?.ranMs;
+
+    // then
+    expect([ranOf("tsk_running"), ranOf("tsk_ended")]).toEqual([5 * 60_000, 5 * 60_000]);
+  });
 });

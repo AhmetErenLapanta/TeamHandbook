@@ -175,6 +175,7 @@ export async function propose(ctx: OrchestratorContext, repo: RepoRecord, user: 
     provider: provider.kind,
     createdAt: new Date().toISOString(),
     createdBy: user.email,
+    ...(change.target ? { targetBranch: change.target } : {}),
   };
   try {
     await ctx.store.saveRequest(record);
@@ -216,7 +217,7 @@ export async function mergeRequest(ctx: OrchestratorContext, repo: RepoRecord, n
     const now = await localRequest(ctx, repo, number, "merge");
     if (now.heldHead) throw new RequestRefused(now.heldReason || "this request is held until a later push passes its check");
     // Only the head the check last passed merges; a request no task opened has none and merges as it stands.
-    await mergeLocalBranch(join(ctx.dataDir, "work"), repo, now.branch, { name: user.name, email: user.email }, now.checkedHead);
+    await mergeLocalBranch(join(ctx.dataDir, "work"), repo, now.branch, { name: user.name, email: user.email }, now.checkedHead, now.targetBranch);
     await ctx.store.transitionRequest(repo.tenant, repo.id, number, "open", "merged");
   });
   await recordEvent(ctx, user, "request.merged", { repoId: repo.id, subject: `request:${number}`, detail: `merged "${request.title}" on the local forge` });
@@ -278,16 +279,17 @@ export async function reconcileLocalRequests(ctx: OrchestratorContext): Promise<
     // folder without git, worked on in place, has no branches to settle.
     if (!inConfiguration(ctx, repo.id) || !bare || !path || !existsSync(bare) || !(await isGitFolder(bare))) return;
     await inLocalTurn(repo, async () => {
-      const target = (await gitAsync(["symbolic-ref", "--short", "HEAD"], bare)).trim();
-      // Two listings per repository rather than two git processes per request: a team with
-      // thousands of requests on record otherwise held the start for minutes.
+      const checkedOut = (await gitAsync(["symbolic-ref", "--short", "HEAD"], bare)).trim();
+      // A listing per target rather than two git processes per request: a team with thousands of
+      // requests on record otherwise held the start for minutes. A target since deleted holds nothing.
       const active = (await ctx.store.listRequests(ctx.tenant, repo.id)).filter((r) => r.provider === "local" && r.status !== "closed");
-      const [branches, inTarget] = active.length
-        ? await Promise.all([branchNames(bare), branchNames(bare, `--merged=refs/heads/${target}`)])
-        : [new Set<string>(), new Set<string>()];
+      const mergedInto = async (target: string) => ((await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${target}`], bare)) ? branchNames(bare, `--merged=refs/heads/${target}`) : new Set<string>());
+      const targets = [...new Set(active.map((r) => r.targetBranch ?? checkedOut))];
+      const [branches, inTargets] = active.length ? await Promise.all([branchNames(bare), Promise.all(targets.map(async (t) => [t, await mergedInto(t)] as const)).then((pairs) => new Map(pairs))]) : [new Set<string>(), new Map<string, Set<string>>()];
       for (const request of active) {
         if (!branches.has(request.branch)) continue;
-        const truth = inTarget.has(request.branch) ? "merged" : "open";
+        const target = request.targetBranch ?? checkedOut;
+        const truth = inTargets.get(target)?.has(request.branch) ? "merged" : "open";
         if (truth !== request.status && (await ctx.store.transitionRequest(repo.tenant, repo.id, request.number, request.status, truth))) {
           said.push(`${repo.id} request #${request.number} was recorded ${request.status} but its branch is ${truth === "merged" ? "" : "not "}in ${target}; now ${truth}`);
           await recordEvent(ctx, ORCHESTRATOR_ACTOR, `request.${truth === "open" ? "reopened" : truth}`, { repoId: repo.id, subject: `request:${request.number}`, detail: said.at(-1)! });

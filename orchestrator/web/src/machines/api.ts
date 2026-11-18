@@ -16,6 +16,8 @@ export interface MachineAgent {
 /** A machine that runs its person's tasks; on a local orchestrator the one row is this machine. */
 export interface Machine {
   id: string;
+  /** The person it belongs to, by id: only that person's setup is read through it. */
+  userId?: string;
   name: string;
   platform: string;
   runnerVersion: string | null;

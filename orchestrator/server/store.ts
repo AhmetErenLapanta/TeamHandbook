@@ -13,15 +13,19 @@ import type { DailyUsage, UsageCount, UsageStore } from "./usage.js";
 import type { SecretStore } from "./vault.js";
 import { taskWritten } from "./tasks/log-bus.js";
 import { USED_SKILLS_MAX } from "./tasks/types.js";
-import type { TaskChanges, TaskFilter, TaskLoaded, TaskLogLine, TaskPatch, TaskRecord, TaskStatus, TaskStore, TaskTarget, TaskTargetPatch, TaskShare, TaskTargetStatus, TaskToolChoice, TestOutcome } from "./tasks/types.js";
+import type { TaskChanges, TaskFilter, TaskLoaded, TaskLogLine, TaskPatch, TaskRecord, TaskStatus, TaskStore, TaskTarget, TaskTargetPatch, TaskShare, TaskTargetStatus, TaskToolChoice, TaskTurn, TestOutcome } from "./tasks/types.js";
 import type { IdentityLogin, IdentityRecord, IdentitySessionRecord, IdentityStore, OrgRecord, PendingAccount, PendingSignIn, Plan, Quotas } from "./identities.js";
 import type { CommandReceipt, EffectRecord, EffectReplay, EffectStatus, EffectStore } from "./effects.js";
 import { answerProblem } from "./task-requests.js";
 import type { IdentityEvent, IdentityEventStore } from "./identity-funnel.js";
 import type { AttachmentRecord, AttachmentStore } from "./attachment-store.js";
+import type { RepeatStore, TaskRepeat } from "./tasks/repeats.js";
+import { calledIn, withUse, withUseAt } from "./tasks/handbook-use.js";
+import type { TaskStartedWith, TaskOff, TaskSetupSource, TaskUsed } from "./tasks/handbook-use.js";
 import type { ResponseCapability, TaskAnswer, TaskRequestKind, TaskRequestRecord, TaskRequestStatus, TaskRequestStore } from "./task-requests.js";
 import type { MachineAgentStatus, MachineFeature, MachineRecord, RunnerStore, TaskLease } from "./runner-store.js";
-import type { FollowUpQuote, FollowUpRecord, FollowUpSource, FollowUpStatus, FollowUpStore } from "./task-followups.js";
+import type { FollowUpAttachment, FollowUpQuote, FollowUpRecord, FollowUpSource, FollowUpStatus, FollowUpStore } from "./task-followups.js";
+import type { PushStore, PushSubscriptionRecord } from "./push.js";
 import { Redactor } from "./tasks/redact.js";
 import { detectSecret } from "./plugin.js";
 import { newId } from "./ids.js";
@@ -56,7 +60,7 @@ export interface PolicyRecord {
   updatedBy: string;
 }
 
-export interface Store extends UsageStore, AccountStore, SecretStore, ForgeConfigStore, TaskStore, EventStore, PrivacyStore, IdentityStore, EffectStore, TaskRequestStore, IdentityEventStore, AttachmentStore, RunnerStore, FollowUpStore {
+export interface Store extends UsageStore, AccountStore, SecretStore, ForgeConfigStore, TaskStore, EventStore, PrivacyStore, IdentityStore, EffectStore, TaskRequestStore, IdentityEventStore, AttachmentStore, RunnerStore, FollowUpStore, PushStore, RepeatStore {
   listPolicies(tenant: string): Promise<PolicyRecord[]>;
   /** Inserts or replaces the policy with this tenant and id. */
   putPolicy(policy: PolicyRecord): Promise<void>;
@@ -536,6 +540,48 @@ function toEvent(row: EventRow): OrchestratorEvent {
 
 const REQUEST_CHECK_COLUMNS = ["checked_head", "held_head", "held_reason"];
 
+const REPEATS_TABLE = `CREATE TABLE IF NOT EXISTS task_repeats (
+  tenant TEXT NOT NULL,
+  id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  start TEXT NOT NULL,
+  title TEXT NOT NULL,
+  every TEXT NOT NULL,
+  at_time TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_at TEXT,
+  skipped TEXT,
+  stopped_at TEXT,
+  PRIMARY KEY (tenant, id)
+);`;
+
+const TURNS_TABLE = `CREATE TABLE IF NOT EXISTS task_turns (
+  tenant TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  said TEXT NOT NULL,
+  place TEXT NOT NULL,
+  start_sha TEXT NOT NULL,
+  end_sha TEXT,
+  files INTEGER,
+  undone_at TEXT,
+  PRIMARY KEY (tenant, task_id, n)
+);`;
+
+const PUSH_TABLE = `CREATE TABLE IF NOT EXISTS push_subscriptions (
+  tenant TEXT NOT NULL,
+  id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_ok_at TEXT,
+  PRIMARY KEY (tenant, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint ON push_subscriptions (tenant, user_id, endpoint);`;
+
 const TASK_SHARES_TABLE = `CREATE TABLE IF NOT EXISTS task_shares (
   tenant TEXT NOT NULL,
   task_id TEXT NOT NULL,
@@ -575,6 +621,7 @@ async function settleTaskChanges(db: SqlDriver, tenant: string, id: string, sett
 
 interface RequestRow {
   merged_at?: string | null;
+  target_branch?: string | null;
   checked_head?: string | null;
   held_head?: string | null;
   held_reason?: string | null;
@@ -605,6 +652,7 @@ function toRequest(row: RequestRow): RequestRecord {
     createdAt: row.created_at,
     createdBy: row.created_by,
     ...(row.merged_at ? { mergedAt: row.merged_at } : {}),
+    ...(row.target_branch ? { targetBranch: row.target_branch } : {}),
     ...(row.checked_head ? { checkedHead: row.checked_head } : {}),
     ...(row.held_head ? { heldHead: row.held_head, heldReason: row.held_reason ?? "" } : {}),
   };
@@ -642,13 +690,26 @@ interface TaskRow {
   loaded?: string | null;
   used_skills?: string | null;
   context_tokens?: number | string | null;
+  context_used?: string | null;
   run_started_at?: string | null;
   routing?: string | null;
   question?: string | null;
   mcp_needs_sign_in?: string | null;
   plan_first?: number | null;
+  base_branch?: string | null;
+  read_only?: number | null;
+  checks_found?: string | null;
+  seed_from?: string | null;
+  second_sign_in?: number | null;
+  off?: string | null;
+  used?: string | null;
+  setup?: string | null;
+  off_changes?: number | string | null;
+  started_with?: string | null;
+  kept_before?: number | null;
   limit_reset_at?: string | null;
   ran_ms?: number | string | null;
+  last_said?: string | null;
   mode?: string | null;
   parent_id?: string | null;
   result?: string | null;
@@ -808,13 +869,26 @@ function toTask(row: TaskRow): TaskRecord {
     ...(row.loaded ? { loaded: JSON.parse(row.loaded) as TaskLoaded } : {}),
     ...(row.used_skills ? { usedSkills: JSON.parse(row.used_skills) as string[] } : {}),
     ...(row.context_tokens !== null && row.context_tokens !== undefined ? { context: { tokens: Number(row.context_tokens) } } : {}),
+    ...(row.context_used ? { contextUsed: JSON.parse(row.context_used) as { tokens: number; window: number | null } } : {}),
     ...(row.run_started_at ? { runStartedAt: row.run_started_at } : {}),
     ...(row.routing ? { routing: JSON.parse(row.routing) as NonNullable<TaskRecord["routing"]> } : {}),
     ...(row.question ? { question: JSON.parse(row.question) as NonNullable<TaskRecord["question"]> } : {}),
     ...(row.mcp_needs_sign_in ? { mcpNeedsSignIn: JSON.parse(row.mcp_needs_sign_in) as string[] } : {}),
     ...(row.plan_first ? { planFirst: true } : {}),
+    ...(row.base_branch ? { baseBranch: row.base_branch } : {}),
+    ...(row.read_only ? { readOnly: true as const } : {}),
+    ...(row.seed_from ? { seedFrom: JSON.parse(row.seed_from) as { taskId: string; n: number } } : {}),
+    ...(row.second_sign_in ? { secondSignIn: true as const } : {}),
+    ...(row.off ? { off: JSON.parse(row.off) as TaskOff } : {}),
+    ...(row.used ? { used: JSON.parse(row.used) as TaskUsed } : {}),
+    ...(row.setup ? { setup: JSON.parse(row.setup) as TaskSetupSource[] } : {}),
+    ...(row.off_changes ? { offChanges: Number(row.off_changes) } : {}),
+    ...(row.started_with ? { startedWith: JSON.parse(row.started_with) as TaskStartedWith } : {}),
+    ...(row.checks_found ? { checksFound: JSON.parse(row.checks_found) as { command: string; source: string }[] } : {}),
+    ...(row.kept_before ? { keptBefore: true } : {}),
     ...(row.limit_reset_at ? { limitResetAt: row.limit_reset_at } : {}),
     ...(row.ran_ms !== null && row.ran_ms !== undefined ? { ranMs: Number(row.ran_ms) } : {}),
+    ...(row.last_said ? { lastSaid: row.last_said } : {}),
     ...(row.mode ? { mode: row.mode as NonNullable<TaskRecord["mode"]> } : {}),
     ...(row.parent_id ? { parentId: row.parent_id, depth: Number(row.depth) } : {}),
     ...(row.runner === "local" ? { runner: "local" as const } : {}),
@@ -870,6 +944,15 @@ function taskColumns(patch: TaskPatch): Record<string, SqlValue> {
   if (patch.question !== undefined) columns.question = patch.question ? JSON.stringify(patch.question) : null;
   if (patch.mcpNeedsSignIn !== undefined) columns.mcp_needs_sign_in = patch.mcpNeedsSignIn.length ? JSON.stringify(patch.mcpNeedsSignIn) : null;
   if (patch.planFirst !== undefined) columns.plan_first = patch.planFirst ? 1 : 0;
+  if (patch.keptBefore !== undefined) columns.kept_before = patch.keptBefore ? 1 : 0;
+  if (patch.lastSaid !== undefined) columns.last_said = patch.lastSaid;
+  if (patch.ranMs !== undefined) columns.ran_ms = Math.round(patch.ranMs);
+  if (patch.checksFound !== undefined) columns.checks_found = patch.checksFound.length ? JSON.stringify(patch.checksFound) : null;
+  if (patch.secondSignIn !== undefined) columns.second_sign_in = patch.secondSignIn ? 1 : null;
+  if (patch.setup !== undefined) columns.setup = JSON.stringify(patch.setup);
+  if (patch.off !== undefined) columns.off = JSON.stringify(patch.off);
+  if (patch.offChanges !== undefined) columns.off_changes = patch.offChanges;
+  if (patch.startedWith !== undefined) columns.started_with = JSON.stringify(patch.startedWith);
   if (patch.cost !== undefined) {
     columns.cost_usd = patch.cost.usd;
     columns.input_tokens = patch.cost.inputTokens;
@@ -1075,9 +1158,9 @@ export function createStore(db: SqlDriver): Store {
     },
     async saveRequest(r) {
       await db.run(
-        `INSERT INTO requests (tenant, repo_id, number, provider, url, branch, head_sha, title, status, created_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [r.tenant, r.repoId, r.number, r.provider, r.url, r.branch, r.headSha, r.title, r.status, r.createdAt, r.createdBy],
+        `INSERT INTO requests (tenant, repo_id, number, provider, url, branch, head_sha, title, status, created_at, created_by, target_branch)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [r.tenant, r.repoId, r.number, r.provider, r.url, r.branch, r.headSha, r.title, r.status, r.createdAt, r.createdBy, r.targetBranch ?? null],
       );
     },
     async listRequests(tenant, repoId) {
@@ -1250,6 +1333,7 @@ export function createStore(db: SqlDriver): Store {
         await tx.run("DELETE FROM member_groups WHERE tenant = ? AND user_id = ?", [tenant, id]);
         await tx.run("DELETE FROM member_tags WHERE tenant = ? AND user_id = ?", [tenant, id]);
         await tx.run("DELETE FROM task_shares WHERE tenant = ? AND user_id = ?", [tenant, id]);
+        await tx.run("DELETE FROM push_subscriptions WHERE tenant = ? AND user_id = ?", [tenant, id]);
         // Their own MCP servers and the credentials sealed for them, and every app they approved
         // with the tokens it holds: a deleted account keeps nothing that still opens something.
         const own = `mcp.personal.${id}`;
@@ -1261,8 +1345,18 @@ export function createStore(db: SqlDriver): Store {
           await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `forge.person.${kind}.${id}`]);
         }
         await dropGrants(tx, tenant, id);
+        // The values they gave their own tasks' agents (task-secrets.ts): none stays in the vault after them.
+        const email = (await one<{ email: string }>(tx, "SELECT email FROM users WHERE tenant = ? AND id = ?", [tenant, id]))?.email ?? id;
+        await tx.run("DELETE FROM secrets WHERE tenant = ? AND EXISTS (SELECT 1 FROM tasks t WHERE t.tenant = secrets.tenant AND (t.created_by = ? OR t.created_by = ?) AND secrets.name LIKE 'task.secret.task.' || t.id || '.%')", [tenant, email, id]);
+        // What their machines reported of their handbooks (handbook-team.ts).
+        await tx.run("DELETE FROM settings WHERE tenant = ? AND substr(key, 1, ?) = ?", [tenant, `handbook.user.${id}.`.length, `handbook.user.${id}.`]);
+        // Their repeating tasks: none starts again as an account made later with the same address.
+        await tx.run("DELETE FROM task_repeats WHERE tenant = ? AND (created_by = ? OR created_by = ?)", [tenant, email, id]);
         await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `scim.user.${id}`]);
         await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `${OFF_PREFIX}${id}`]);
+        await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `${HANDBOOK_OFF_PREFIX}${id}`]);
+        await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `${HANDBOOK_NOTICED_PREFIX}${id}`]);
+        await tx.run("DELETE FROM settings WHERE tenant = ? AND key = ?", [tenant, `${HANDBOOK_CONTEXT_PREFIX}${id}`]);
         await tx.run("DELETE FROM users WHERE tenant = ? AND id = ?", [tenant, id]);
         return true;
       });
@@ -1861,6 +1955,35 @@ export function createStore(db: SqlDriver): Store {
     async setTaskChanges(tenant, id, changes) {
       await db.run("UPDATE tasks SET result = 'changes', changes = ? WHERE tenant = ? AND id = ?", [JSON.stringify(changes), tenant, id]);
     },
+    async addRepeat(r) {
+      await db.run("INSERT INTO task_repeats (tenant, id, created_by, start, title, every, at_time, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [r.tenant, r.id, r.createdBy, JSON.stringify(r.start), r.title, r.every, r.at, r.createdAt]);
+    },
+    async listRepeats(tenant) {
+      const rows = await db.all<{ tenant: string; id: string; created_by: string; start: string; title: string; every: string; at_time: string; created_at: string; last_at: string | null; skipped: string | null; stopped_at: string | null }>("SELECT * FROM task_repeats WHERE tenant = ? ORDER BY created_at, id", [tenant]);
+      return rows.map((r) => ({ tenant: r.tenant, id: r.id, createdBy: r.created_by, start: JSON.parse(r.start) as Record<string, unknown>, title: r.title, every: r.every as TaskRepeat["every"], at: r.at_time, createdAt: r.created_at, lastAt: r.last_at, skipped: r.skipped ? (JSON.parse(r.skipped) as { at: string; reason: string }) : null, stoppedAt: r.stopped_at }));
+    },
+    async reachRepeat(tenant, id, at, skipped) {
+      await db.run("UPDATE task_repeats SET last_at = ?, skipped = ? WHERE tenant = ? AND id = ?", [at, skipped ? JSON.stringify(skipped) : null, tenant, id]);
+    },
+    async stopRepeat(tenant, id, at) {
+      return (await db.run("UPDATE task_repeats SET stopped_at = ? WHERE tenant = ? AND id = ? AND stopped_at IS NULL", [at, tenant, id])) > 0;
+    },
+    async openTaskTurn(t) {
+      await db.run("INSERT INTO task_turns (tenant, task_id, n, at, said, place, start_sha) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tenant, task_id, n) DO NOTHING", [t.tenant, t.taskId, t.n, t.at, t.said, t.place, t.start]);
+    },
+    async endTaskTurn(tenant, taskId, n, end, files) {
+      await db.run("UPDATE task_turns SET end_sha = ?, files = ? WHERE tenant = ? AND task_id = ? AND n = ?", [end, files, tenant, taskId, n]);
+    },
+    async taskTurns(tenant, taskId) {
+      const rows = await db.all<{ tenant: string; task_id: string; n: number | string; at: string; said: string; place: string; start_sha: string; end_sha: string | null; files: number | string | null; undone_at: string | null }>("SELECT * FROM task_turns WHERE tenant = ? AND task_id = ? ORDER BY n", [tenant, taskId]);
+      return rows.map((r) => ({ tenant: r.tenant, taskId: r.task_id, n: Number(r.n), at: r.at, said: r.said, place: r.place as TaskTurn["place"], start: r.start_sha, end: r.end_sha, files: r.files === null ? null : Number(r.files), undoneAt: r.undone_at }));
+    },
+    async deleteTaskTurns(tenant, taskId) {
+      return db.run("DELETE FROM task_turns WHERE tenant = ? AND task_id = ?", [tenant, taskId]);
+    },
+    async undoTaskTurns(tenant, taskId, from, at) {
+      return db.run("UPDATE task_turns SET undone_at = ? WHERE tenant = ? AND task_id = ? AND n >= ? AND undone_at IS NULL", [at, tenant, taskId, from]);
+    },
     async taskChangeSnapshots(tenant, id) {
       const row = await one<{ changes: string | null }>(db, "SELECT changes FROM tasks WHERE tenant = ? AND id = ?", [tenant, id]);
       if (!row?.changes) return null;
@@ -1880,8 +2003,19 @@ export function createStore(db: SqlDriver): Store {
         await tx.run("UPDATE tasks SET used_skills = ? WHERE tenant = ? AND id = ?", [JSON.stringify([...held, name]), tenant, id]);
       });
     },
+    async noteTaskUse(tenant, id, kind, name, ref) {
+      await db.transaction(async (tx) => {
+        const row = await one<{ used: string | null }>(tx, "UPDATE tasks SET id = id WHERE tenant = ? AND id = ? RETURNING used", [tenant, id]);
+        if (!row) return;
+        const next = withUse(row.used ? (JSON.parse(row.used) as TaskUsed) : undefined, kind, name, ref);
+        if (next) await tx.run("UPDATE tasks SET used = ? WHERE tenant = ? AND id = ?", [JSON.stringify(next), tenant, id]);
+      });
+    },
     async noteTaskContext(tenant, id, tokens) {
       await db.run("UPDATE tasks SET context_tokens = ? WHERE tenant = ? AND id = ? AND context_tokens IS NULL", [tokens, tenant, id]);
+    },
+    async noteTaskContextUsed(tenant, id, used) {
+      await db.run("UPDATE tasks SET context_used = ? WHERE tenant = ? AND id = ?", [JSON.stringify({ tokens: Math.round(used.tokens), window: used.window === null ? null : Math.round(used.window) }), tenant, id]);
     },
     async markTaskFilesUndone(tenant, id, paths, undone) {
       return db.transaction(async (tx) => {
@@ -2003,8 +2137,8 @@ export function createStore(db: SqlDriver): Store {
           [tenant, taskId, leaseId, end.status],
         );
         const ended = await tx.run(
-          `UPDATE tasks SET status = CASE WHEN ? = 'interrupted' AND stop_requested_at IS NOT NULL THEN 'cancelled' ELSE ? END, error = CASE WHEN stop_requested_at IS NOT NULL AND stop_reason IS NOT NULL THEN stop_reason ELSE ? END, stop_reason = NULL, native_session = CASE WHEN ${cutOff} THEN COALESCE(?, native_session) ELSE NULL END, branch = COALESCE(?, branch), stage = CASE WHEN ? = 'needs-review' THEN 'request' ELSE NULL END, finished_at = CASE WHEN ${cutOff} THEN NULL ELSE ? END, lease_id = NULL, lease_until = NULL, stop_requested_at = NULL, turn_estimate_usd = NULL, ran_ms = COALESCE(ran_ms, 0) + ?, limit_reset_at = CASE WHEN ${cutOff} THEN ? ELSE NULL END, limit_at = CASE WHEN ${cutOff} THEN ? ELSE NULL END WHERE tenant = ? AND id = ? AND lease_id = ? AND status = 'running'`,
-          [end.status, end.status, end.error, end.status, interrupted ? end.nativeSession : null, end.branch, end.status, end.status, now, Math.round(end.ranMs ?? 0), end.status, limit, end.status, limit ? now : null, tenant, taskId, leaseId],
+          `UPDATE tasks SET status = CASE WHEN ? = 'interrupted' AND stop_requested_at IS NOT NULL THEN 'cancelled' ELSE ? END, error = CASE WHEN stop_requested_at IS NOT NULL AND stop_reason IS NOT NULL THEN stop_reason ELSE ? END, stop_reason = NULL, native_session = CASE WHEN ${cutOff} THEN COALESCE(?, native_session) ELSE NULL END, branch = COALESCE(?, branch), stage = CASE WHEN ? = 'needs-review' THEN 'request' ELSE NULL END, finished_at = CASE WHEN ${cutOff} THEN NULL ELSE ? END, lease_id = NULL, lease_until = NULL, stop_requested_at = NULL, turn_estimate_usd = NULL, last_said = ?, ran_ms = COALESCE(ran_ms, 0) + ?, limit_reset_at = CASE WHEN ${cutOff} THEN ? ELSE NULL END, limit_at = CASE WHEN ${cutOff} THEN ? ELSE NULL END WHERE tenant = ? AND id = ? AND lease_id = ? AND status = 'running'`,
+          [end.status, end.status, end.error, end.status, interrupted ? end.nativeSession : null, end.branch, end.status, end.status, now, end.lastSaid ?? null, Math.round(end.ranMs ?? 0), end.status, limit, end.status, limit ? now : null, tenant, taskId, leaseId],
         );
         // The agent that asked has stopped with the run, so nobody is left to hear an answer.
         if (ended) await tx.run("UPDATE task_requests SET status = 'expired', response_capability = 'not_resumable', answered_at = ? WHERE tenant = ? AND task_id = ? AND status = 'pending'", [now, tenant, taskId]);
@@ -2055,9 +2189,28 @@ export function createStore(db: SqlDriver): Store {
           const secret = detectSecret(data);
           const text = secret ? `[redacted:${secret}] the event was withheld` : redactor.line(e.text);
           await tx.run("INSERT INTO task_log (tenant, task_id, seq, at, text, kind, data, source_n) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [tenant, taskId, last + i + 1, at, text, e.kind, secret ? null : data, e.n]);
+          if (!secret) await noteCallLine(tx, tenant, taskId, e.kind, e.data, last + i + 1);
         }
         return true;
       }));
+    },
+    async addPushSubscription(sub) {
+      return (await db.run("INSERT INTO push_subscriptions (tenant, id, user_id, endpoint, p256dh, auth, created_at, last_ok_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL) ON CONFLICT (tenant, user_id, endpoint) DO NOTHING", [sub.tenant, sub.id, sub.userId, sub.endpoint, sub.p256dh, sub.auth, sub.createdAt])) > 0;
+    },
+    async listPushSubscriptions(tenant, userId) {
+      return db.all<PushSubscriptionRecord>('SELECT tenant, id, user_id AS "userId", endpoint, p256dh, auth, created_at AS "createdAt", last_ok_at AS "lastOkAt" FROM push_subscriptions WHERE tenant = ? AND user_id = ? ORDER BY created_at, id', [tenant, userId]);
+    },
+    async removePushSubscription(tenant, userId, id) {
+      return (await db.run("DELETE FROM push_subscriptions WHERE tenant = ? AND user_id = ? AND id = ?", [tenant, userId, id])) > 0;
+    },
+    async dropPushEndpoint(tenant, endpoint) {
+      await db.run("DELETE FROM push_subscriptions WHERE tenant = ? AND endpoint = ?", [tenant, endpoint]);
+    },
+    async countPushSubscriptions(tenant) {
+      return Number((await one<{ n: number | string }>(db, "SELECT COUNT(*) AS n FROM push_subscriptions WHERE tenant = ?", [tenant]))?.n ?? 0);
+    },
+    async markPushOk(tenant, id, at) {
+      await db.run("UPDATE push_subscriptions SET last_ok_at = ? WHERE tenant = ? AND id = ?", [at, tenant, id]);
     },
     async addFollowUp(f) {
       const quotes = f.quotes ? JSON.stringify(f.quotes) : null;
@@ -2065,8 +2218,8 @@ export function createStore(db: SqlDriver): Store {
       const secret = detectSecret(f.text) ?? (quotes ? detectSecret(quotes) : null);
       if (secret) throw new Error(`the follow-up holds what looks like a ${secret}; it is kept masked, never with a secret`);
       const created = await db.run(
-        "INSERT INTO task_followups (tenant, id, task_id, source, key, text, quotes, status, created_at, delivered_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) ON CONFLICT (tenant, task_id, key) DO NOTHING",
-        [f.tenant, f.id, f.taskId, f.source, f.key, f.text, quotes, f.source === "reviewer" ? "proposed" : "pending", f.createdAt, f.createdBy],
+        "INSERT INTO task_followups (tenant, id, task_id, source, key, text, quotes, status, created_at, delivered_at, created_by, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) ON CONFLICT (tenant, task_id, key) DO NOTHING",
+        [f.tenant, f.id, f.taskId, f.source, f.key, f.text, quotes, f.source === "reviewer" ? "proposed" : "pending", f.createdAt, f.createdBy, f.attachments?.length ? JSON.stringify(f.attachments) : null],
       );
       const row = (await one<FollowUpRow>(db, "SELECT * FROM task_followups WHERE tenant = ? AND task_id = ? AND key = ?", [f.tenant, f.taskId, f.key]))!;
       return { created: created > 0, followUp: toFollowUp(row) };
@@ -2083,10 +2236,14 @@ export function createStore(db: SqlDriver): Store {
       if (secret) throw new Error(`the follow-up holds what looks like a ${secret}; it is kept masked, never with a secret`);
       // Quotes left out stay as they were: a change of the words alone keeps what they point at.
       const [set, values] = quotes === undefined ? ["text = ?", [text]] : ["text = ?, quotes = ?", [text, kept]];
-      return (await db.run(`UPDATE task_followups SET ${set} WHERE tenant = ? AND task_id = ? AND id = ? AND source = 'person' AND status = 'pending'`, [...values, tenant, taskId, id])) === 1;
+      return (await db.run(`UPDATE task_followups SET ${set} WHERE tenant = ? AND task_id = ? AND id = ? AND source = 'person' AND status = 'pending' AND handed_lease IS NULL`, [...values, tenant, taskId, id])) === 1;
     },
     async dropFollowUp(tenant, taskId, id) {
-      return (await db.run("UPDATE task_followups SET status = 'dismissed' WHERE tenant = ? AND task_id = ? AND id = ? AND source = 'person' AND status = 'pending'", [tenant, taskId, id])) === 1;
+      return (await db.run("UPDATE task_followups SET status = 'dismissed' WHERE tenant = ? AND task_id = ? AND id = ? AND source = 'person' AND status = 'pending' AND handed_lease IS NULL", [tenant, taskId, id])) === 1;
+    },
+    async handFollowUps(tenant, ids, leaseId) {
+      if (!ids.length) return 0;
+      return db.run(`UPDATE task_followups SET handed_lease = ? WHERE tenant = ? AND status = 'pending' AND id IN (${ids.map(() => "?").join(", ")})`, [leaseId, tenant, ...ids]);
     },
     async markFollowUpsDelivered(tenant, ids, at) {
       if (!ids.length) return 0;
@@ -2158,6 +2315,10 @@ export function createStore(db: SqlDriver): Store {
     },
     async taskAttachments(tenant, taskId) {
       return (await db.all<AttachmentRow>("SELECT * FROM task_attachments WHERE tenant = ? AND task_id = ? ORDER BY created_at, id", [tenant, taskId])).map(toAttachment);
+    },
+    async bindAttachments(tenant, ids, from, taskId) {
+      if (!ids.length) return 0;
+      return db.run(`UPDATE task_attachments SET task_id = ? WHERE tenant = ? AND task_id = ? AND id IN (${ids.map(() => "?").join(", ")})`, [taskId, tenant, from, ...ids]);
     },
     async deleteAttachment(tenant, id) {
       return (await db.run("DELETE FROM task_attachments WHERE tenant = ? AND id = ?", [tenant, id])) > 0;
@@ -2289,9 +2450,15 @@ export function createStore(db: SqlDriver): Store {
           const data = JSON.stringify(line.data);
           const secret = detectSecret(data);
           await tx.run("INSERT INTO task_log (tenant, task_id, seq, at, text, kind, data) VALUES (?, ?, ?, ?, ?, ?, ?)", [tenant, id, last + i + 1, at, secret ? `[redacted:${secret}] the event was withheld` : line.text, line.kind, secret ? null : data]);
+          if (!secret) await noteCallLine(tx, tenant, id, line.kind, line.data, last + i + 1);
         }
       });
       taskWritten(tenant, id);
+    },
+    async findInTaskLog(tenant, id, words, limit) {
+      // The words are matched as plain text: a % or _ in them matches nothing but itself, on both stores.
+      const rows = await db.all<{ seq: number | string; text: string }>("SELECT seq, text FROM task_log WHERE tenant = ? AND task_id = ? AND LOWER(text) LIKE ? ESCAPE '\\' ORDER BY seq LIMIT ?", [tenant, id, `%${words.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`, limit]);
+      return rows.map((r) => ({ seq: Number(r.seq), text: r.text }));
     },
     async taskLog(tenant, id, afterSeq) {
       const rows = await db.all<{ seq: number | string; at: string; text: string; kind: string; data: string | null }>("SELECT seq, at, text, kind, data FROM task_log WHERE tenant = ? AND task_id = ? AND seq > ? ORDER BY seq", [tenant, id, afterSeq]);
@@ -2435,6 +2602,24 @@ async function dropGrants(tx: SqlDriver, tenant: string, userId: string): Promis
 
 /** The settings row that says the directory turned an account off; the owner count leaves such owners out. */
 export const OFF_PREFIX = "scim.off.";
+/** A person's skills, commands and MCP servers turned off for every agent started here (handbook-defaults.ts). */
+export const HANDBOOK_OFF_PREFIX = "handbook-off:";
+/** The plugins whose hooks and servers a person has closed the notice about (handbook-defaults.ts), deleted with their account like their off list. */
+export const HANDBOOK_NOTICED_PREFIX = "handbook-noticed:";
+/** What a person's last task counted of the context their setup takes (handbook-context.ts), deleted with their account too. */
+export const HANDBOOK_CONTEXT_PREFIX = "handbook-context:";
+
+/**
+ * A log line that starts a skill's or an MCP server's call is where the task's record of that use points: its first
+ * call's line, kept as the line is written, inside the write that numbered it and holds the task's row.
+ */
+async function noteCallLine(tx: SqlDriver, tenant: string, taskId: string, kind: string | undefined, data: unknown, seq: number): Promise<void> {
+  const call = calledIn(kind, data);
+  if (!call) return;
+  const row = await one<{ used: string | null }>(tx, "SELECT used FROM tasks WHERE tenant = ? AND id = ?", [tenant, taskId]);
+  const next = row ? withUseAt(row.used ? (JSON.parse(row.used) as TaskUsed) : undefined, call.kind, call.name, seq) : null;
+  if (next) await tx.run("UPDATE tasks SET used = ? WHERE tenant = ? AND id = ?", [JSON.stringify(next), tenant, taskId]);
+}
 
 /**
  * Owners the directory has not turned off. One turned off cannot sign in or change a role, so
@@ -2476,6 +2661,8 @@ interface FollowUpRow {
   created_at: string;
   delivered_at: string | null;
   created_by: string;
+  handed_lease?: string | null;
+  attachments?: string | null;
 }
 
 function toFollowUp(row: FollowUpRow): FollowUpRecord {
@@ -2491,6 +2678,8 @@ function toFollowUp(row: FollowUpRow): FollowUpRecord {
     createdAt: row.created_at,
     deliveredAt: row.delivered_at,
     createdBy: row.created_by,
+    ...(row.handed_lease ? { handedLease: row.handed_lease } : {}),
+    ...(row.attachments ? { attachments: JSON.parse(row.attachments) as FollowUpAttachment[] } : {}),
   };
 }
 
@@ -2549,11 +2738,11 @@ async function countMembers(db: SqlDriver, tenant: string): Promise<number> {
 async function insertTask(db: SqlDriver, t: TaskRecord): Promise<void> {
   await db.run(
     `INSERT INTO tasks (tenant, id, repo_id, team, title, description, issue_url, issue_key, agent, status, created_by, created_at,
-       started_at, finished_at, base_sha, tests, cost_usd, input_tokens, output_tokens, request_number, error, template, target_mode, stage, skills, mode, parent_id, depth, runner, choices, tools, plan_first)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       started_at, finished_at, base_sha, tests, cost_usd, input_tokens, output_tokens, request_number, error, template, target_mode, stage, skills, mode, parent_id, depth, runner, choices, tools, plan_first, base_branch, read_only, seed_from, off)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [t.tenant, t.id, t.repoId, t.team, t.title, t.description, t.issueUrl, t.issueKey, t.agent, t.status, t.createdBy, t.createdAt,
       t.startedAt, t.finishedAt, t.baseSha, t.tests, t.cost.usd, t.cost.inputTokens, t.cost.outputTokens, t.requestNumber, t.error,
-      t.template ? JSON.stringify(t.template) : null, t.targetMode ?? null, t.stage ?? null, t.skills ? JSON.stringify(t.skills) : null, t.mode ?? null, t.parentId ?? null, t.parentId ? (t.depth ?? 1) : 0, t.runner ?? "server", t.choices && Object.keys(t.choices).length ? JSON.stringify(t.choices) : null, t.tools && (t.tools.skills.length || t.tools.mcpServers.length) ? JSON.stringify(t.tools) : null, t.planFirst ? 1 : null],
+      t.template ? JSON.stringify(t.template) : null, t.targetMode ?? null, t.stage ?? null, t.skills ? JSON.stringify(t.skills) : null, t.mode ?? null, t.parentId ?? null, t.parentId ? (t.depth ?? 1) : 0, t.runner ?? "server", t.choices && Object.keys(t.choices).length ? JSON.stringify(t.choices) : null, t.tools && (t.tools.skills.length || t.tools.mcpServers.length) ? JSON.stringify(t.tools) : null, t.planFirst ? 1 : null, t.baseBranch ?? null, t.readOnly ? 1 : null, t.seedFrom ? JSON.stringify(t.seedFrom) : null, t.off ? JSON.stringify(t.off) : null],
   );
 }
 
@@ -3543,6 +3732,198 @@ export const MIGRATIONS: Migration[] = [
       if (!have.has("forge_request")) db.exec("ALTER TABLE task_targets ADD COLUMN forge_request TEXT");
     },
     postgres: (db) => db.exec("ALTER TABLE task_targets ADD COLUMN IF NOT EXISTS forge_request TEXT"),
+  },  {
+    // What the agent said last in a run that changed nothing, shown as the task's answer.
+    version: 48,
+    kind: "expand",
+    name: "the answer of a run that changed nothing",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("last_said")) db.exec("ALTER TABLE tasks ADD COLUMN last_said TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS last_said TEXT"),
+  },
+  {
+    // The lease whose first message carried a follow-up, so a command does not hand it to the agent a second time.
+    version: 49,
+    kind: "expand",
+    name: "the lease a follow-up was handed to",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(task_followups)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("handed_lease")) db.exec("ALTER TABLE task_followups ADD COLUMN handed_lease TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE task_followups ADD COLUMN IF NOT EXISTS handed_lease TEXT"),
+  },
+  {
+    // A task that went on after its person kept an earlier run's change, so its page says a discard drops the latest run alone.
+    version: 50,
+    kind: "expand",
+    name: "a task that went on after a change was kept",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("kept_before")) db.exec("ALTER TABLE tasks ADD COLUMN kept_before INTEGER");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kept_before INTEGER"),
+  },
+  {
+    // A person's browsers the push service wakes when a task needs them: an opt-in, kept for the person who made it.
+    version: 51,
+    kind: "expand",
+    name: "a person's push subscriptions",
+    sqlite: (db) => db.exec(PUSH_TABLE),
+    postgres: (db) => db.exec(PUSH_TABLE),
+  },
+  {
+    // The branch a request goes into when its task started from one other than the repository's default.
+    version: 52,
+    kind: "expand",
+    name: "the branch a request goes into",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(requests)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("target_branch")) db.exec("ALTER TABLE requests ADD COLUMN target_branch TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE requests ADD COLUMN IF NOT EXISTS target_branch TEXT"),
+  },
+  {
+    // The task's files a person sent with a follow-up, so the agent is told of them with the words.
+    version: 53,
+    kind: "expand",
+    name: "the files sent with a follow-up",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(task_followups)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("attachments")) db.exec("ALTER TABLE task_followups ADD COLUMN attachments TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE task_followups ADD COLUMN IF NOT EXISTS attachments TEXT"),
+  },
+  {
+    // How much of its context window a task's agent took at its last request, for the task's meter.
+    version: 54,
+    kind: "expand",
+    name: "the context a task's agent takes now",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("context_used")) db.exec("ALTER TABLE tasks ADD COLUMN context_used TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_used TEXT"),
+  },
+  {
+    // The branch a task starts from when its person picked one other than the repository's default.
+    version: 55,
+    kind: "expand",
+    name: "the branch a task starts from",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("base_branch")) db.exec("ALTER TABLE tasks ADD COLUMN base_branch TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS base_branch TEXT"),
+  },
+  {
+    // A task's turns: where its agent's place stood as each of the person's asks began and ended, for undoing from one.
+    version: 56,
+    kind: "expand",
+    name: "a task's turns",
+    sqlite: (db) => db.exec(TURNS_TABLE),
+    postgres: (db) => db.exec(TURNS_TABLE),
+  },
+  {
+    // A question asked about an issue: a task whose agent reads and changes nothing.
+    version: 57,
+    kind: "expand",
+    name: "a task that only reads",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("read_only")) db.exec("ALTER TABLE tasks ADD COLUMN read_only INTEGER");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS read_only INTEGER"),
+  },
+  {
+    // The checks a folder's files name, said once on the review of the first task there with none approved.
+    version: 58,
+    kind: "expand",
+    name: "the checks a folder's first task found",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("checks_found")) db.exec("ALTER TABLE tasks ADD COLUMN checks_found TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS checks_found TEXT"),
+  },
+  {
+    // A person's tasks that start again on a schedule, at most once a day.
+    version: 59,
+    kind: "expand",
+    name: "a person's repeating tasks",
+    sqlite: (db) => db.exec(REPEATS_TABLE),
+    postgres: (db) => db.exec(REPEATS_TABLE),
+  },
+  {
+    // The task and turn a task was started from, so its first run starts from the files as that turn left them.
+    version: 60,
+    kind: "expand",
+    name: "the turn a task was started from",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("seed_from")) db.exec("ALTER TABLE tasks ADD COLUMN seed_from TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS seed_from TEXT"),
+  },
+  {
+    // A task its person continued at a usage limit with their second Claude Code sign-in.
+    version: 61,
+    kind: "expand",
+    name: "a task continued with a second sign-in",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("second_sign_in")) db.exec("ALTER TABLE tasks ADD COLUMN second_sign_in INTEGER");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS second_sign_in INTEGER"),
+  },
+  {
+    // What a task's person turned off for it, and what its agent used, each with its source.
+    version: 62,
+    kind: "expand",
+    name: "the handbooks a task turned off and used",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("off")) db.exec("ALTER TABLE tasks ADD COLUMN off TEXT");
+      if (!have.has("used")) db.exec("ALTER TABLE tasks ADD COLUMN used TEXT");
+    },
+    postgres: async (db) => {
+      await db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS off TEXT");
+      await db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS used TEXT");
+    },
+  },
+  {
+    // The handbook sources as they stood when a task started, names alone.
+    version: 63,
+    kind: "expand",
+    name: "the handbooks a task started with",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("setup")) db.exec("ALTER TABLE tasks ADD COLUMN setup TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS setup TEXT"),
+  },
+  {
+    // How far a task's start moved from its person's own list of what agents start without.
+    version: 64,
+    kind: "expand",
+    name: "how many items a task's start turned off or on against its person's own list",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("off_changes")) db.exec("ALTER TABLE tasks ADD COLUMN off_changes INTEGER");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS off_changes INTEGER"),
+  },
+  {
+    // The names an agent said it loaded as its session opened, for the task's page to hold against what it was to load.
+    version: 65,
+    kind: "expand",
+    name: "what a task's agent said it started with",
+    sqlite(db) {
+      const have = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("started_with")) db.exec("ALTER TABLE tasks ADD COLUMN started_with TEXT");
+    },
+    postgres: (db) => db.exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_with TEXT"),
   },
 ];
 

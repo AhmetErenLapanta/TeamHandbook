@@ -136,7 +136,7 @@ export function createGitLabForge(config: ForgeConfig, token: string, fetchImpl:
     async open(repo: RepoRecord, change: ChangeRequest): Promise<OpenedRequest> {
       checkBranch(change.branch);
       if (!change.files.length) throw new Error("the change has no files");
-      const { default_branch: target } = await http.request<Project>("GET", project);
+      const target = change.target ?? (await http.request<Project>("GET", project)).default_branch;
       if (await exists(`${project}/repository/branches/${encodeURIComponent(change.branch)}`)) {
         throw new ForgeRefusal(`branch ${change.branch} already exists in ${repo.name}; remove it on GitLab, then try again`);
       }

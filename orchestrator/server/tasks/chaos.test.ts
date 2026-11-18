@@ -142,7 +142,7 @@ describe("an agent that breaks its own workspace", () => {
     const { task, log, left, branches } = await run(ctx, runner(ctx, make(root)));
 
     // then
-    expect(task).toMatchObject({ status: "failed", error: "The agent deleted its working directory, so nothing was left to read back; no request was opened." });
+    expect(task).toMatchObject({ status: "failed", error: "The agent deleted its working directory, so nothing was left to read back; nothing was kept for review." });
     expect(JSON.stringify(log)).not.toContain(ctx.dataDir);
     expect([left, branches]).toEqual([[], []]);
   });

@@ -284,8 +284,9 @@ export async function listItems(ctx: Ctx, user: Principal, given: { sprint: stri
     columns(opened, native, deps, fresh),
   ]);
   const raw = read.value.items.map((i) => cleanItem(i, opened.secrets, user));
-  const links = await taskLinks(ctx, user, raw.map((i) => i.key));
-  const items: WorkItem[] = raw.map((i) => ({ ...i, column: columnOf(cols, i.status.name), tasks: links.get(i.key) ?? [] }));
+  const asked = new Map<string, { taskId: string; at: string }>();
+  const links = await taskLinks(ctx, user, raw.map((i) => i.key), asked);
+  const items: WorkItem[] = raw.map((i) => ({ ...i, column: columnOf(cols, i.status.name), tasks: links.get(i.key) ?? [], ...(asked.has(i.key) ? { asked: asked.get(i.key)! } : {}) }));
   const estimated = items.filter((i) => i.storyPoints !== null);
   return {
     columns: cols,

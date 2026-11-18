@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { tasksApi } from "../api";
+import { CopyText } from "../Confirm";
 import type { CheckStatus, Readiness } from "../api";
 
 const CHECK_TONE: Record<CheckStatus, string> = { ok: "ok", warn: "warn", fail: "error", unknown: "warn" };
@@ -30,7 +31,7 @@ export function AgentReadinessSettings() {
                 <td className="rc-wide">
                   <ul className="checks">
                     {agent.checks.map((check) => (
-                      <li key={check.name}><span className={`badge ${CHECK_TONE[check.status]}`}>{check.status}</span><strong>{check.name}</strong> {check.detail}</li>
+                      <li key={check.name}><span className={`badge ${CHECK_TONE[check.status]}`}>{check.status}</span><strong>{check.name}</strong> {check.detail}{check.fix ? <> <CopyText text={check.fix} label="Copy the command" /></> : null}</li>
                     ))}
                   </ul>
                 </td>

@@ -54,6 +54,8 @@ export function maskEvent(event: RunnerEvent, mask: (text: string) => string): R
       return { type: "context", tokens: event.tokens };
     case "spend":
       return { type: "spend", usd: event.usd };
+    case "context_used":
+      return { type: "context_used", tokens: event.tokens, window: event.window };
     case "mcp_status":
       return { type: "mcp_status", needsSignIn: event.needsSignIn.map(mask) };
     case "turn_finished":
@@ -61,9 +63,13 @@ export function maskEvent(event: RunnerEvent, mask: (text: string) => string): R
     case "error":
       return { type: "error", failure: maskFailure(event.failure, mask) };
     case "limit":
-      return { type: "limit", window: event.window, status: event.status, ...(event.resetAt === undefined ? {} : { resetAt: event.resetAt }) };
+      return { type: "limit", window: event.window, status: event.status, ...(event.resetAt === undefined ? {} : { resetAt: event.resetAt }), ...(event.used === undefined ? {} : { used: event.used }) };
     case "background":
       return { type: "background", pending: event.pending };
+    case "loaded":
+      return { type: "loaded", plugins: event.plugins?.map(mask) ?? null, skills: event.skills?.map(mask) ?? null, mcpServers: event.mcpServers?.map((server) => ({ name: mask(server.name), state: server.state })) ?? null };
+    case "context_parts":
+      return { type: "context_parts", mcpServers: event.mcpServers.map((part) => ({ name: mask(part.name), tokens: part.tokens })), skills: event.skills.map((part) => ({ name: mask(part.name), tokens: part.tokens })), ...(Number.isInteger(event.window) && event.window! >= 1 ? { window: event.window } : {}) };
     case "terminal":
       return {
         type: "terminal",

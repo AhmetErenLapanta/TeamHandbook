@@ -178,6 +178,28 @@ describe("buildInventory", () => {
     expect(inv.servers.map((s) => [s.name, s.shareable])).toEqual([["gitlab", true]]);
   });
 
+  it("given a plugin installed for the person, when the inventory is read and shown, then its skills are listed under its label, none of them can be picked, and the team's own plugin says so", () => {
+    // given
+    const config = join(userHome, ".claude");
+    const installed = join(config, "plugins", "cache", "payments-skills", "1.4.0");
+    mkdirSync(join(installed, ".claude-plugin"), { recursive: true });
+    mkdirSync(join(installed, "skills", "add-endpoint"), { recursive: true });
+    writeFileSync(join(installed, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "payments-skills", version: "1.4.0" }));
+    writeFileSync(join(installed, "skills", "add-endpoint", "SKILL.md"), "---\nname: add-endpoint\ndescription: Add an endpoint\n---\n");
+    writeFileSync(join(config, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "payments-skills@payments-marketplace": [{ scope: "user", version: "1.4.0", installPath: installed }] } }));
+    writeSkill(userHome, "deploy-runbook");
+
+    // when
+    const own = buildInventory(paths());
+    const team = buildInventory({ ...paths(), teamMarketplace: "payments-marketplace" });
+
+    // then
+    expect(own.plugins).toEqual([{ label: "payments-skills 1.4.0", skills: ["add-endpoint"] }]);
+    expect(own.skills.map((s) => s.name)).toEqual(["deploy-runbook"]);
+    expect(formatInventory(own)).toContain("payments-skills 1.4.0: add-endpoint");
+    expect(formatInventory(team)).toContain("the team's payments-skills: add-endpoint");
+  });
+
   it("given a skill carrying a credential, when the inventory is read, then it is listed and the reason names the file", () => {
     writeSkill(userHome, "deploy-runbook", { "scripts/seed.sh": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n" });
     writeSkill(userHome, "repo-conventions");

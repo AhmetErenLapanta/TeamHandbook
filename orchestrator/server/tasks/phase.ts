@@ -2,7 +2,7 @@ import type { RequestStatus } from "../forge/types.js";
 import type { TaskRecord } from "./types.js";
 
 /** Where a task stands as a board shows it: its agent's stage, then its request's as the forge has it. */
-export type TaskPhase = "planned" | "working" | "tests" | "request" | "review" | "merged" | "failed";
+export type TaskPhase = "planned" | "working" | "tests" | "request" | "review" | "merged" | "failed" | "finished";
 
 /**
  * A task's phase, derived at every read and never stored. Review and merged come from the
@@ -13,6 +13,8 @@ export type TaskPhase = "planned" | "working" | "tests" | "request" | "review" |
  * no request: its person keeping the changes merges it, and undoing them fails it.
  */
 export function taskPhase(task: Pick<TaskRecord, "status" | "stage" | "repoId" | "requestNumber" | "targets" | "result" | "changes">, requestStatus: (repoId: string, number: number) => RequestStatus | null): TaskPhase {
+  // A run that changed nothing is done, with nothing to review or settle.
+  if (task.status === "nothing-changed") return "finished";
   if (task.status === "failed" || task.status === "cancelled") return "failed";
   // Changes made in a folder without git are settled by their person: kept reads as merged, undone as a closed request does.
   if (task.status === "needs-review" && task.result === "changes") return task.changes?.kept ? "merged" : task.changes?.undone ? "failed" : "review";
@@ -28,7 +30,7 @@ export function taskPhase(task: Pick<TaskRecord, "status" | "stage" | "repoId" |
     if (opened.includes("closed")) return "failed";
     return opened.length && opened.every((s) => s === "merged") ? "merged" : "review";
   }
-  if (task.status === "running") return task.stage ?? "working";
+  if (task.status === "running") return task.stage === "stopped" ? "working" : task.stage ?? "working";
   const request = task.requestNumber !== null ? requestStatus(task.repoId, task.requestNumber) : null;
   return request === "merged" ? "merged" : request === "closed" ? "failed" : "review";
 }

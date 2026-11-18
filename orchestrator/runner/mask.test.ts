@@ -19,8 +19,12 @@ describe("an event as it leaves the machine", () => {
       { type: "usage", cost: { usd: null, inputTokens: 10, outputTokens: 2 } },
       { type: "context", tokens: 18_400 },
       { type: "spend", usd: 0.42 },
+      { type: "context_used", tokens: 41_000, window: 200_000 },
+      { type: "limit", window: "five_hour", status: "warning", used: 0.8 },
       { type: "mcp_status", needsSignIn: ["stand-in-secret-value-server", "notion"] },
       { type: "steer", text: "use stand-in-secret-value", by: "Ada" },
+      { type: "loaded", plugins: ["payments-skills@acme-market"], skills: null, mcpServers: [{ name: "stand-in-secret-value-server", state: "connected" }] },
+      { type: "context_parts", mcpServers: [{ name: "stand-in-secret-value-server", tokens: 4_200 }], skills: [{ name: "rota-check", tokens: 310 }], window: 200_000 },
     ];
 
     // when
@@ -37,8 +41,12 @@ describe("an event as it leaves the machine", () => {
       { type: "usage", cost: { usd: null, inputTokens: 10, outputTokens: 2 } },
       { type: "context", tokens: 18_400 },
       { type: "spend", usd: 0.42 },
+      { type: "context_used", tokens: 41_000, window: 200_000 },
+      { type: "limit", window: "five_hour", status: "warning", used: 0.8 },
       { type: "mcp_status", needsSignIn: ["[masked]-server", "notion"] },
       { type: "steer", text: "use [masked]", by: "Ada" },
+      { type: "loaded", plugins: ["payments-skills@acme-market"], skills: null, mcpServers: [{ name: "[masked]-server", state: "connected" }] },
+      { type: "context_parts", mcpServers: [{ name: "[masked]-server", tokens: 4_200 }], skills: [{ name: "rota-check", tokens: 310 }], window: 200_000 },
     ]);
   });
 

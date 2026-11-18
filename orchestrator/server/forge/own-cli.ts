@@ -444,7 +444,7 @@ export function createOwnCliForge(config: ForgeConfig & { kind: CliForge }, work
     async open(repo: RepoRecord, change: ChangeRequest): Promise<OpenedRequest> {
       checkBranch(change.branch);
       const { as } = await signedIn(kind, new URL(repo.url).host, run);
-      const target = await targetOf(repo);
+      const target = change.target ?? (await targetOf(repo));
       const work = await scratch(workRoot, "own-cli-");
       try {
         const headSha = await changeCommit(mirror(repo), work, change, repo.name);

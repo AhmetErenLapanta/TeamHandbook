@@ -5,7 +5,7 @@ import type { TaskPhase } from "./work.js";
 
 export type RequestStatus = "open" | "merged" | "closed";
 /** `interrupted`: stopped part way, by a closed machine, a usage limit or a sign-in; the person continues or cancels it. */
-export type TaskStatus = "queued" | "running" | "needs-review" | "failed" | "cancelled" | "interrupted";
+export type TaskStatus = "queued" | "running" | "needs-review" | "failed" | "cancelled" | "interrupted" | "nothing-changed";
 
 /** An organization this browser holds a session in, with the person's name and role there. */
 /** `name` and `role` are the signed-in person's in that org; `orgName` is the name the org is shown by. */

@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MiddlewareHandler } from "hono";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import type { OrchestratorContext } from "./app.js";
-import { attachmentPath, attachmentProblem, byteRange, cleanAttachmentName, contentDisposition } from "./attachments.js";
+import { attachmentPath, attachmentProblem, byteRange, cleanAttachmentName, contentDisposition, DRAFT_LIFETIME_MS, draftOf, purgeDraftAttachments, startAttachments } from "./attachments.js";
 import type { OrchestratorEnv, Principal } from "./auth.js";
 import { restrictedKey } from "./accounts.js";
 import { openSqliteStore } from "./store.js";
@@ -137,6 +137,51 @@ describe("a task's attachments over HTTP", () => {
     const res = await createApp(ctx, as(ADA)).request("/api/tasks/tsk_a/attachments", { method: "POST", body: big, headers: { "content-type": "image/png" }, duplex: "half" } as RequestInit);
     expect(res.status).toBe(413);
     expect(await ctx.store.taskAttachments("acme", "tsk_a")).toEqual([]);
+  });
+
+  it("given files two people upload before they start a task, when a start names them, then only its starter's own recent ones are taken, an hour-old one is gone at their next upload, and each removes only their own", async () => {
+    // given
+    const draft = (user: Principal, name: string) => createApp(ctx, as(user)).request("/api/attachments", { method: "POST", body: new Uint8Array(PNG), headers: { "content-type": "image/png", "x-attachment-name": name } });
+    const mine = (await (await draft(ADA, "mine.png")).json()).attachment.id as string;
+    const old = (await (await draft(ADA, "old.png")).json()).attachment.id as string;
+    const theirs = (await (await draft(BO, "theirs.png")).json()).attachment.id as string;
+    await ctx.store.deleteAttachment("acme", old);
+    await ctx.store.insertAttachment({ ...(await ctx.store.getAttachment("acme", mine))!, id: old, createdAt: new Date(Date.now() - DRAFT_LIFETIME_MS - 1000).toISOString() }, { perTask: 20, tenantBytes: 1024 ** 3 });
+    writeFileSync(attachmentPath(dir, "acme", old), PNG);
+
+    // when
+    const taken = await startAttachments(ctx, ADA, [mine]);
+    const refused = await Promise.all([[theirs], [old], ["att_unknown"], [mine, mine], "att_x"].map((ids) => startAttachments(ctx, ADA, ids)));
+    await draft(ADA, "later.png");
+    const removals = [await createApp(ctx, as(ADA)).request(`/api/attachments/${theirs}`, { method: "DELETE" }), await createApp(ctx, as(BO)).request(`/api/attachments/${theirs}`, { method: "DELETE" })];
+
+    // then
+    expect(taken).toEqual([mine]);
+    expect(refused).toEqual([null, null, null, null, null]);
+    expect(await ctx.store.getAttachment("acme", old)).toBeNull();
+    expect(() => statSync(attachmentPath(dir, "acme", old))).toThrow();
+    expect((await ctx.store.taskAttachments("acme", draftOf(ADA))).map((a) => a.name).sort()).toEqual(["later.png", "mine.png"]);
+    expect(removals.map((r) => r.status)).toEqual([404, 200]);
+    expect(await ctx.store.getAttachment("acme", theirs)).toBeNull();
+  });
+
+  it("given an upload no start took for over an hour, a recent one and a task's old file, when the cleanup runs, then only the stale upload and its bytes are gone", async () => {
+    // given
+    const old = new Date(Date.now() - DRAFT_LIFETIME_MS - 60_000).toISOString();
+    const file = (id: string, taskId: string, createdAt: string) => ({ tenant: "acme", id, taskId, name: `${id}.png`, mime: "image/png", size: PNG.length, sha256: "0".repeat(64), createdBy: ADA.email, createdAt });
+    mkdirSync(join(dir, "attachments", "acme"), { recursive: true });
+    for (const [id, taskId, at] of [["att_stale", draftOf(ADA), old], ["att_fresh", draftOf(ADA), new Date().toISOString()], ["att_task", "tsk_a", old]] as const) {
+      await ctx.store.insertAttachment(file(id, taskId, at), { perTask: 20, tenantBytes: 1024 ** 3 });
+      writeFileSync(attachmentPath(dir, "acme", id), PNG);
+    }
+
+    // when
+    const removed = await purgeDraftAttachments(ctx, new Date());
+
+    // then
+    expect(removed).toBe(1);
+    expect(await Promise.all(["att_stale", "att_fresh", "att_task"].map(async (id) => Boolean(await ctx.store.getAttachment("acme", id))))).toEqual([false, true, true]);
+    expect(() => statSync(attachmentPath(dir, "acme", "att_stale"))).toThrow();
   });
 
   it("given a task at its limit, when one more is uploaded, then it is refused and no file is left behind", async () => {

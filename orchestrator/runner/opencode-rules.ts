@@ -30,7 +30,7 @@ const GIT_PATHS = [".git", ".git/*", "*/.git", "*/.git/*"];
  * writes is refused, and one of those it cannot name is refused too. A rule cannot tell them apart,
  * since OpenCode names a tool `<server>_<tool>` in one word.
  */
-export function personalRules(mode: PermissionMode, deniedTools: readonly string[], rules: readonly PolicyRule[], readDirs: readonly string[] = []): OpencodeRule[] {
+export function personalRules(mode: PermissionMode, deniedTools: readonly string[], rules: readonly PolicyRule[], readDirs: readonly string[] = [], offSkills: readonly string[] = []): OpencodeRule[] {
   const set = (permission: string, action: OpencodeRule["action"], pattern = "*"): OpencodeRule => ({ permission, pattern, action });
   const edits = mode === "approval-required" ? "ask" : "allow";
   const team = rules.flatMap((rule) => {
@@ -51,5 +51,6 @@ export function personalRules(mode: PermissionMode, deniedTools: readonly string
     ...team,
     ...deniedTools.flatMap((tool) => FILE_TOOLS[tool] ?? []).map((permission) => set(permission, "deny")),
     ...readDirs.map((dir) => set("edit", "deny", `${dir}/*`)),
+    ...offSkills.map((name) => set("skill", "deny", name)),
   ];
 }

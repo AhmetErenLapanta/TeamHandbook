@@ -155,3 +155,65 @@ test("given the board's turns, when the task list opens, then what waits on the 
   await expect(page.getByRole("region", { name: /^Done this week/ })).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Which tasks" })).toHaveCount(0);
 });
+
+test("given the account menu's notice switch, when it is off, on, and the browser blocks notices, then one muted line under it says what each state means", async ({ page }) => {
+  // given
+  await page.addInitScript(() => {
+    let permission = "default";
+    const Notice = function Notice() {};
+    Object.defineProperty(Notice, "permission", { get: () => permission });
+    Object.defineProperty(Notice, "requestPermission", { value: () => Promise.resolve((permission = (window as unknown as { __answer?: string }).__answer ?? "granted")) });
+    Object.defineProperty(window, "Notification", { configurable: true, value: Notice });
+  });
+  await page.goto("/demo/tasks");
+  await page.getByRole("button", { name: /^Account:/ }).click();
+  const line = page.locator(".notify-switch .muted");
+
+  // then
+  await expect(line).toHaveText("A notice says only that a task needs you, failed or stopped; it opens the task.");
+
+  // when
+  await page.getByLabel("Notify me when my tasks need me").click();
+
+  // then
+  await expect(page.getByLabel("Notify me when my tasks need me")).toBeChecked();
+  await expect(line).toHaveText("On in this browser while this page is open.");
+
+  // when
+  await page.getByLabel("Notify me when my tasks need me").click();
+  await expect(page.getByLabel("Notify me when my tasks need me")).not.toBeChecked();
+  await page.evaluate(() => { (window as unknown as { __answer?: string }).__answer = "denied"; });
+  await page.getByLabel("Notify me when my tasks need me").click();
+
+  // then
+  await expect(line).toHaveText("This browser blocks notices; allow them in its site settings to turn this on.");
+  await expect(page.getByLabel("Notify me when my tasks need me")).toBeDisabled();
+});
+
+test("given the orchestrator, when the push worker is asked for at the root, then it is served as script", async ({ request }) => {
+  // when
+  const res = await request.get("/sw.js");
+
+  // then
+  expect(res.ok()).toBe(true);
+  expect(res.headers()["content-type"]).toMatch(/javascript/);
+  expect(await res.text()).toContain("notificationclick");
+});
+
+test("given one person's own orchestrator with no folder and no task yet, when Team opens, then it has no Getting set up list and says nothing of a team that works here", async ({ page }) => {
+  // given
+  await page.route(/\/api\/(orgs\/demo\/)?me$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+  });
+  await page.route("**/api/activity/summary*", (route) => route.fulfill({ json: { repos: 0, tasks: { total: 0, recent: [] }, tracker: false, requests: { open: 0, merged: 0 }, people: 1 } }));
+
+  // when
+  await page.goto("/demo/team");
+  await expect(page.getByRole("heading", { level: 1, name: "Team" })).toBeVisible();
+
+  // then
+  await expect(page.getByRole("region", { name: /^Getting set up/ })).toHaveCount(0);
+  await expect(page.getByText("before the team works here")).toHaveCount(0);
+});

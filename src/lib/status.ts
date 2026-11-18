@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { handbookHome } from "./session-state.js";
 import { signalsFile } from "./signals.js";
@@ -14,7 +15,10 @@ import { loadNotifyConfig } from "./notify.js";
 import { pipelineLogFile } from "./pipeline.js";
 import type { PipelineSummary } from "./pipeline.js";
 import { displayPath } from "./display-path.js";
-import { marketplacesRoot, nonInteractiveEnv } from "./init.js";
+import { loadTeamConfig, marketplacesRoot, nonInteractiveEnv } from "./init.js";
+import { readHandbookSources, sourceLabel } from "./handbook-sources.js";
+import type { Freshness, HandbookSource } from "./handbook-sources.js";
+import type { SkillUsage } from "./usage.js";
 import { recentWorkflowSessions, sessionDetectEnabled } from "./session-workflow.js";
 import { formatSkillHealth, gatherSkillHealth } from "./skill-health.js";
 import type { SkillHealth } from "./skill-health.js";
@@ -209,6 +213,8 @@ export interface StatusReport {
   };
   // what became of each of those skills since: stale map, calls, fit to new work, overlaps
   skillHealth: SkillHealth[];
+  // where the skills this machine loads come from: the person's own folder and each installed plugin
+  handbooks: HandbookRow[];
   config: {
     harvestModel: string;
     harvestEnabled: boolean;
@@ -219,10 +225,43 @@ export interface StatusReport {
   };
 }
 
+export interface HandbookRow {
+  label: string;
+  version: string | null;
+  enabled: boolean;
+  skills: number;
+  commands: number;
+  mcpServers: number;
+  hooks: number;
+  uses: number;
+  lastUsedAt: string | null;
+  freshness: Freshness | null;
+}
+
+// A plugin's skill fires under its own name or as `plugin:name`; the person's own under the bare name.
+export function handbookRow(source: HandbookSource, teamMarketplace: string | null, usage: SkillUsage): HandbookRow {
+  const entries = source.skills.flatMap((skill) => [usage[skill], usage[`${source.name}:${skill}`]].filter((u): u is NonNullable<typeof u> => !!u));
+  return {
+    label: sourceLabel(source, teamMarketplace),
+    version: source.version,
+    enabled: source.enabled,
+    skills: source.skills.length,
+    commands: source.commands.length,
+    mcpServers: source.mcpServers.length,
+    hooks: source.hooks,
+    uses: entries.reduce((n, e) => n + e.count, 0),
+    lastUsedAt: entries.map((e) => e.lastAt).sort().at(-1) ?? null,
+    freshness: source.freshness,
+  };
+}
+
+const claudeConfigDir = () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+
 export function gatherStatus(
   home: string = handbookHome(),
   release: (installed: string) => string | null = newerRelease,
   health: (home: string) => SkillHealth[] = gatherSkillHealth,
+  configDir: string = claudeConfigDir(),
 ): StatusReport {
   const candidates = listCandidates(home);
   const count = (status: string) => candidates.filter((c) => c.status === status).length;
@@ -267,6 +306,7 @@ export function gatherStatus(
     abandoned: counters.gateAbandoned,
     usage: { ...summarizeUsage(readSkillUsage(home), known), known: known.length, recording: sessionDetectEnabled(home) },
     skillHealth: health(home),
+    handbooks: readHandbookSources(configDir).map((source) => handbookRow(source, loadTeamConfig(home)?.marketplaceName ?? null, readSkillUsage(home))),
     config: {
       harvestModel: harvest.model,
       harvestEnabled: harvest.enabled,
@@ -307,6 +347,25 @@ function unreadableNote(unreadable: UnreadableCandidate[]): string {
   return ` (${parts.join(", ")})`;
 }
 
+const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// One line a source, and a second only for a plugin that has a newer copy in its marketplace.
+export function formatHandbooks(rows: HandbookRow[]): string[] {
+  if (rows.length <= 1 && !rows[0]?.skills && !rows[0]?.commands) return [];
+  return [
+    "Handbooks:",
+    ...rows.flatMap((row) => {
+      const parts = [count(row.skills, "skill"), ...(row.commands ? [count(row.commands, "command")] : []), ...(row.mcpServers ? [count(row.mcpServers, "MCP server")] : []), ...(row.hooks ? [count(row.hooks, "hook")] : [])];
+      const used = row.uses ? `, used ${row.uses}x (last ${row.lastUsedAt?.slice(0, 10)})` : row.skills ? ", never used" : "";
+      const line = `  ${row.label}: ${parts.join(", ")}${used}${row.enabled ? "" : " - turned off"}`;
+      const f = row.freshness;
+      if (!f?.behind) return [line];
+      const changes = [f.added.length ? `added ${f.added.join(", ")}` : "", f.changed.length ? `changed ${f.changed.join(", ")}` : "", f.removed.length ? `removed ${f.removed.join(", ")}` : ""].filter(Boolean).join("; ");
+      return [line, `    a newer copy is in its marketplace${f.installed && f.available ? `: ${f.installed} -> ${f.available}` : ""}${changes ? ` (${changes})` : ""}; update it with \`claude plugin update\``];
+    }),
+  ];
+}
+
 export function formatStatus(report: StatusReport): string {
   const { ledger, queue, unreadable, lastRun, config } = report;
   const lines = [
@@ -340,6 +399,7 @@ export function formatStatus(report: StatusReport): string {
               : `Skills in use:   none of your ${report.usage.known} skill${report.usage.known === 1 ? " has" : "s have"} fired yet - they load by description, so this fills in as the situations come up`,
         ]
       : []),
+    ...formatHandbooks(report.handbooks),
     ...formatSkillHealth(report.skillHealth),
     ...(report.abandoned > 0 ? [`Abandoned:       ${report.abandoned} session harvest(s) given up after repeated failures (kept in abandoned.jsonl) - run /handbook:doctor`] : []),
     ...(report.scoringNow > 0 ? [`Harvesting now:  ${report.scoringNow} session(s) queued for the background harvest`] : []),

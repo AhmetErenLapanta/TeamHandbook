@@ -10,6 +10,8 @@ describe("one task's OpenCode server", () => {
   it("given each call the shared codec writes, when it is routed, then it goes to OpenCode's own route with its body, and an id that could leave the route is refused", () => {
     expect(routeOf({ op: "session.promptAsync", args: { sessionID: "ses_1", parts: [{ type: "text", text: "go" }] } })).toEqual({ method: "POST", path: "/session/ses_1/prompt_async", body: { parts: [{ type: "text", text: "go" }] } });
     expect(routeOf({ op: "session.abort", args: { sessionID: "ses_1" } })).toEqual({ method: "POST", path: "/session/ses_1/abort", body: {} });
+    expect(routeOf({ op: "session.summarize", args: { sessionID: "ses_1", providerID: "openrouter", modelID: "anthropic/claude-sonnet-5.5" } })).toEqual({ method: "POST", path: "/session/ses_1/summarize", body: { providerID: "openrouter", modelID: "anthropic/claude-sonnet-5.5" } });
+    expect(() => routeOf({ op: "session.summarize", args: { sessionID: "ses_1", providerID: "openrouter" } })).toThrow(/modelID/);
     expect(routeOf({ op: "permission.reply", args: { requestID: "per_9", reply: "once" } })).toEqual({ method: "POST", path: "/permission/per_9/reply", body: { reply: "once" } });
     expect(() => routeOf({ op: "session.abort", args: { sessionID: "../config" } })).toThrow(/no usable sessionID/);
   });

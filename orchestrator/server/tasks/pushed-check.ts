@@ -71,7 +71,7 @@ export interface BranchRules {
 export async function branchRules(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, base: string, gitDir: string = mirrorDir(ctx, repo.id)): Promise<BranchRules | { refused: string }> {
   let secrets: { name: string; value: string }[];
   try {
-    secrets = await secretsForTask(ctx, repo.id, repo.team);
+    secrets = await secretsForTask(ctx, repo.id, repo.team, undefined, task.id);
   } catch (err) {
     if (err instanceof UnreadTaskSecret) return { refused: err.message };
     throw err;
@@ -140,10 +140,10 @@ export async function branchRefusal(gitDir: string, branch: string, head: string
 export async function headRefusal(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, branch: string, head: string): Promise<Checked | { refused: string }> {
   if (!task.baseSha) return { refused: "the task has no base commit on record to hold the branch to" };
   const mirror = mirrorDir(ctx, repo.id);
-  // The request's target is the repository's default branch, which every orchestrator request is opened on.
-  const target = (await gitAsyncMaybe(["--git-dir", mirror, "symbolic-ref", "--short", "HEAD"], mirror))?.trim();
+  // The request goes into the branch the task started from: the one its person picked, or the repository's default.
+  const target = task.baseBranch ?? (await gitAsyncMaybe(["--git-dir", mirror, "symbolic-ref", "--short", "HEAD"], mirror))?.trim();
   const targetHead = target ? (await gitAsyncMaybe(["--git-dir", mirror, "rev-parse", "--verify", "--quiet", `refs/heads/${target}^{commit}`], mirror))?.trim() : null;
-  if (!target || !targetHead) return { refused: "the repository's default branch cannot be read" };
+  if (!target || !targetHead) return { refused: `the branch the task started from${target ? `, ${target},` : ""} cannot be read` };
   const held = await branchRules(ctx, task, repo, task.baseSha);
   if ("refused" in held) return held;
   return branchRefusal(mirror, branch, head, task.baseSha, { name: target, head: targetHead }, held);
@@ -186,9 +186,9 @@ async function versionWarning(mirror: string, baseSha: string, files: FileChange
  * of a request at a time; a request no task opened is left as it is.
  */
 export async function recheckRequest(ctx: OrchestratorContext, repo: RepoRecord, request: RequestRecord, head: string, target?: string): Promise<"passed" | "held" | "unchanged"> {
-  // A request is opened on the repository's default branch; one the forge now merges elsewhere is held, its head moved or not.
+  // A request is opened on the branch its task started from; one the forge now merges elsewhere is held, its head moved or not.
   const mirror = mirrorDir(ctx, repo.id);
-  const opened = (await gitAsyncMaybe(["--git-dir", mirror, "symbolic-ref", "--short", "HEAD"], mirror))?.trim();
+  const opened = request.targetBranch ?? (await gitAsyncMaybe(["--git-dir", mirror, "symbolic-ref", "--short", "HEAD"], mirror))?.trim();
   const retargeted = Boolean(target && opened && target !== opened);
   if (head === request.heldHead || (!retargeted && head === request.checkedHead)) return "unchanged";
   return oneAtATime(join(ctx.dataDir, "request-checks", ctx.tenant, repo.id, String(request.number)), async () => {

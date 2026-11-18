@@ -19,7 +19,7 @@ const reasonOf = (error: string | null): { reason?: string } => {
  * read from the orchestrator's own records on every call, never from the tracker cache, so a board
  * shows a task's progress as it happens. A task this person may not read is not counted.
  */
-export async function taskLinks(ctx: Pick<OrchestratorContext, "store" | "tenant">, user: Principal, keys: readonly string[]): Promise<Map<string, WorkTaskLink[]>> {
+export async function taskLinks(ctx: Pick<OrchestratorContext, "store" | "tenant">, user: Principal, keys: readonly string[], asked?: Map<string, { taskId: string; at: string }>): Promise<Map<string, WorkTaskLink[]>> {
   const unique = [...new Set(keys)];
   const tasks: TaskRecord[] = [];
   const visible = visibleTasks(user);
@@ -29,6 +29,11 @@ export async function taskLinks(ctx: Pick<OrchestratorContext, "store" | "tenant
   tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   const links = new Map<string, WorkTaskLink[]>();
   for (const task of tasks) {
+    // A question about the issue is its card's last line, not a task working on it; the newest one is kept.
+    if (task.readOnly) {
+      if (asked && !asked.has(task.issueKey!)) asked.set(task.issueKey!, { taskId: task.id, at: task.createdAt });
+      continue;
+    }
     const link = await taskLink(ctx, task);
     links.set(task.issueKey!, [...(links.get(task.issueKey!) ?? []), link]);
   }

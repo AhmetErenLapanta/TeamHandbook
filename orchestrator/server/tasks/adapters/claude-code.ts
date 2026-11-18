@@ -2,14 +2,14 @@ import { resolve, sep } from "node:path";
 
 import { MODE_LABEL } from "../../../shared/permission-mode.js";
 import type { PermissionMode } from "../../../shared/permission-mode.js";
-import type { AgentCapabilities, AgentChoices, AgentCodec, AgentDecoder, AgentEvent, AgentFailure, AgentOption, AgentQuestion, Refusal, RequestKind } from "./contract.js";
+import type { AgentCapabilities, AgentChoices, AgentCodec, AgentDecoder, AgentEvent, AgentFailure, AgentLoaded, AgentOption, AgentQuestion, Refusal, RequestKind } from "./contract.js";
 import { choicesProblem } from "./contract.js";
 import { failure, httpFailure, resetAtFrom } from "./failure.js";
 import { FORGE_REASON, TRACKER_REASON } from "../profile.js";
 import { MANIFEST } from "./manifest.js";
 import { answerValues, QUESTION_NOT_SHOWN, showable, UNSHOWN_QUESTION } from "./questions.js";
 import { claudeReplyCost } from "./prices.js";
-import { claudeMcp, createdPatch, editOf, firstContext, inFolder, num, tokensOf, outputLine, outputLines, parseLine, refusedCalls, shownTarget, signInEvents, todosOf } from "./frames.js";
+import { claudeMcp, contextMeter, createdPatch, editOf, firstContext, inFolder, num, tokensOf, outputLine, outputLines, parseLine, refusedCalls, shownTarget, signInEvents, todosOf } from "./frames.js";
 
 /** Claude Code's `--model` aliases and `--effort` levels, from the manifest. */
 export const CLAUDE_OPTIONS: readonly AgentOption[] = MANIFEST["claude-code"].options;
@@ -105,6 +105,12 @@ export function claudeCodeDecoder(asked: PermissionMode | null = null, work?: st
   const denied = new Set<string>();
   const tasks = new Map<string, { content: string; status: string }>();
   const context = firstContext();
+  // The init frame comes with every turn; what loaded is said for the first alone.
+  let loadedSaid = false;
+  const meter = contextMeter();
+  // Each model's context window as Claude Code reports it at a turn's end (modelUsage), and the model of the main thread's last request.
+  const windows = new Map<string, number>();
+  let lastRequest: { model: string | null; tokens: number | null } = { model: null, tokens: null };
   // This turn's estimated cost by reply: one reply comes in several frames that repeat its usage, the last one whole.
   const replies = new Map<string, number>();
   let model: string | null = null;
@@ -142,16 +148,25 @@ export function claudeCodeDecoder(asked: PermissionMode | null = null, work?: st
         const status = LIMIT_STATUS[String(info.status)];
         const reset = resetAtFrom(info.resetsAt);
         if (info.status === "rejected") resetAt = reset;
-        if (!status || typeof info.rateLimitType !== "string" || !LIMIT_WINDOWS.has(info.rateLimitType)) return [];
-        return [{ type: "limit", window: info.rateLimitType, status, ...(reset ? { resetAt: reset } : {}) }];
+        // The top-level utilization is the limiting window's, the one rateLimitType names; each other window Claude Code tracks comes beside it.
+        const limiting = status && typeof info.rateLimitType === "string" && LIMIT_WINDOWS.has(info.rateLimitType) ? info.rateLimitType : null;
+        return [...(limiting && status ? [limitEvent(limiting, status, reset, info.utilization)] : []), ...otherWindows(info.unifiedWindows, limiting)];
       }
       if (frame.type === "system" && frame.subtype === "api_retry") {
         const status = num(frame.error_status);
         return [{ type: "error", failure: failure("Claude Code", "provider_retrying", { ...(status === null ? {} : { code: `HTTP ${status}` }), retryable: true }) }];
       }
+      // After a compaction the context in use is the summary's: compact_boundary says its size.
+      if (frame.type === "system" && frame.subtype === "compact_boundary") {
+        const after = num((frame.compact_metadata as Record<string, unknown> | undefined)?.post_tokens);
+        if (after === null) return [];
+        lastRequest = { ...lastRequest, tokens: after };
+        return meter(after, lastRequest.model ? (windows.get(lastRequest.model) ?? null) : null);
+      }
       if (frame.type === "system" && frame.subtype === "init") {
         if (typeof frame.model === "string") model = frame.model;
-        const notices: AgentEvent[] = [...signInNotice(frame.mcp_servers)];
+        const notices: AgentEvent[] = [...(loadedSaid ? [] : loadedOf(frame)), ...signInNotice(frame.mcp_servers)];
+        loadedSaid = true;
         if (asked && !told && frame.permissionMode !== undefined && frame.permissionMode !== opened) {
           told = true;
           const running = orchestratorMode(frame.permissionMode);
@@ -164,8 +179,14 @@ export function claudeCodeDecoder(asked: PermissionMode | null = null, work?: st
         const content = (frame.message as { content?: unknown })?.content;
         if (!Array.isArray(content)) return [];
         const usage = ((frame.message as { usage?: unknown })?.usage ?? {}) as Record<string, unknown>;
-        const loaded = context(tokensOf(usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens));
-        return [...loaded, ...spend(frame), ...content.flatMap((part: Record<string, unknown>): AgentEvent[] => {
+        const tokens = tokensOf(usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens);
+        const loaded = context(tokens);
+        // A helper agent's frames name the call that started it; its context is its own.
+        const main = frame.parent_tool_use_id === null || frame.parent_tool_use_id === undefined;
+        const model = typeof (frame.message as { model?: unknown })?.model === "string" ? ((frame.message as { model: string }).model) : lastRequest.model;
+        if (main) lastRequest = { model, tokens };
+        const filled = main ? meter(tokens, model ? (windows.get(model) ?? null) : null) : [];
+        return [...loaded, ...filled, ...spend(frame), ...content.flatMap((part: Record<string, unknown>): AgentEvent[] => {
           if (part?.type === "text" && typeof part.text === "string" && part.text.trim()) return [{ type: "message", text: part.text.trim() }];
           if (part?.type === "tool_use" && typeof part.name === "string") {
             const input = part.input && typeof part.input === "object" ? (part.input as Record<string, unknown>) : {};
@@ -198,6 +219,11 @@ export function claudeCodeDecoder(asked: PermissionMode | null = null, work?: st
       }
       if (frame.type !== "result") return [];
       replies.clear();
+      for (const [model, use] of Object.entries((frame.modelUsage ?? {}) as Record<string, Record<string, unknown> | null>)) {
+        const window = num(use?.contextWindow);
+        if (window !== null && window > 0) windows.set(model, window);
+      }
+      const known = lastRequest.model ? meter(lastRequest.tokens, windows.get(lastRequest.model) ?? null) : [];
       const usage = (frame.usage ?? {}) as Record<string, unknown>;
       const input = [usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(num);
       const total = num(frame.total_cost_usd);
@@ -215,6 +241,7 @@ export function claudeCodeDecoder(asked: PermissionMode | null = null, work?: st
         turns: num(frame.num_turns),
       };
       return [
+        ...known,
         ...refusedCalls(frame.permission_denials, (e) => e.tool_name, (e) => e.tool_input, (e) => e.tool_use_id)
           .filter((e) => !(e.type === "tool_call" && e.id && denied.has(e.id)))
           .map((e) => ({ ...e, refusal: NOT_ALLOWED_REFUSAL }) as AgentEvent),
@@ -363,6 +390,28 @@ function signInNotice(servers: unknown): AgentEvent[] {
   return signInEvents(servers.flatMap((s: Record<string, unknown> | null) => (s?.status === "needs-auth" && typeof s.name === "string" && s.name ? [s.name.replace(/^plugin_[^_]+_(?=.)/, "")] : [])));
 }
 
+const MCP_STATE: Record<string, NonNullable<AgentLoaded["mcpServers"]>[number]["state"]> = { connected: "connected", pending: "starting", "needs-auth": "needs-sign-in", failed: "failed", disabled: "off" };
+
+/**
+ * What Claude Code loaded, from its init frame (2.1.322's schema): its plugins by `name@marketplace`
+ * where the frame gives it, its skills by name, and its MCP servers with where each stands; none
+ * for a frame that names none of them. A server in a state this does not know counts as starting,
+ * so one left out is never missed.
+ */
+function loadedOf(frame: Record<string, unknown>): AgentEvent[] {
+  const rows = (value: unknown) => (Array.isArray(value) ? (value as (Record<string, unknown> | null)[]) : null);
+  const plugins = rows(frame.plugins);
+  const servers = rows(frame.mcp_servers);
+  // A frame that names none of the three says nothing of what loaded.
+  if (!plugins && !servers && !Array.isArray(frame.skills)) return [];
+  return [{
+    type: "loaded",
+    plugins: plugins && plugins.flatMap((p) => (typeof p?.source === "string" && p.source ? [p.source] : typeof p?.name === "string" && p.name ? [p.name] : [])),
+    skills: Array.isArray(frame.skills) ? frame.skills.filter((name): name is string => typeof name === "string") : null,
+    mcpServers: servers && servers.flatMap((s) => (typeof s?.name === "string" && s.name ? [{ name: s.name, state: MCP_STATE[String(s.status)] ?? "starting" }] : [])),
+  }];
+}
+
 /** Claude Code's tool for asking the person, routed to the permission prompt in a mode that asks. */
 export const ASK_TOOL = "AskUserQuestion";
 
@@ -395,6 +444,32 @@ function askedOf(raw: unknown): { question: AgentQuestion; text: string }[] | nu
 }
 const NOT_ALLOWED = "This task does not allow this tool.";
 
+const CONTEXT_PARTS_ID = "context-parts";
+
+/**
+ * Claude Code's answer to `get_context_usage` (2.1.322's schema): each MCP tool with its server and
+ * tokens, added up by server, and each skill's listing with its tokens. The server's name is as
+ * that answer spells it, which can differ from the configured one in its punctuation. Any other
+ * answer, or one that failed, says nothing.
+ */
+function contextParts(frame: Record<string, unknown>): AgentEvent[] {
+  const response = (frame.response ?? {}) as Record<string, unknown>;
+  if (response.request_id !== CONTEXT_PARTS_ID || response.subtype !== "success") return [];
+  const answer = (response.response ?? {}) as Record<string, unknown>;
+  const rows = (value: unknown) => (Array.isArray(value) ? (value as (Record<string, unknown> | null)[]) : []);
+  const servers = new Map<string, number>();
+  for (const tool of rows(answer.mcpTools)) {
+    const tokens = num(tool?.tokens);
+    if (typeof tool?.serverName === "string" && tool.serverName && tokens !== null && tokens >= 0) servers.set(tool.serverName, (servers.get(tool.serverName) ?? 0) + tokens);
+  }
+  const skills = rows(((answer.skills ?? {}) as Record<string, unknown>).skillFrontmatter).flatMap((skill) => {
+    const tokens = num(skill?.tokens);
+    return typeof skill?.name === "string" && skill.name && tokens !== null && tokens >= 0 ? [{ name: skill.name, tokens }] : [];
+  });
+  const window = num(answer.rawMaxTokens);
+  return [{ type: "context_parts", mcpServers: [...servers].map(([name, tokens]) => ({ name, tokens })), skills, ...(window !== null && window > 0 ? { window } : {}) }];
+}
+
 /** Claude Code's tool for putting its plan to the person, the one way out of its plan mode. */
 const PLAN_TOOL = "ExitPlanMode";
 /** The tools Claude Code writes a plan file with. */
@@ -424,6 +499,24 @@ export interface ClaudePlan {
 const LIMIT_WINDOWS = new Set(["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included", "overage"]);
 const LIMIT_STATUS: Record<string, "allowed" | "warning" | "refused"> = { allowed: "allowed", allowed_warning: "warning", rejected: "refused" };
 
+const limitEvent = (window: string, status: "allowed" | "warning" | "refused", resetAt: string | undefined, utilization: unknown): AgentEvent => {
+  const used = num(utilization);
+  return { type: "limit", window, status, ...(resetAt ? { resetAt } : {}), ...(used !== null && used >= 0 ? { used } : {}) };
+};
+
+/**
+ * The windows Claude Code tracks besides the limiting one (`unifiedWindows`, 2.1.322: the 5-hour, the
+ * weekly and the weekly with overage), each with how much of it is spent; absent for an API key. A
+ * window without a status it can read is left out.
+ */
+function otherWindows(raw: unknown, limiting: string | null): AgentEvent[] {
+  if (!raw || typeof raw !== "object") return [];
+  return Object.entries(raw as Record<string, Record<string, unknown> | null>).flatMap(([window, info]) => {
+    const status = LIMIT_STATUS[String(info?.status)];
+    return window === limiting || !LIMIT_WINDOWS.has(window) || !status ? [] : [limitEvent(window, status, resetAtFrom(info?.resetsAt), info?.utilization)];
+  });
+}
+
 /** The limit reasons Claude Code ends a turn with when the account's usage runs out. */
 const LIMIT_REASONS = new Set(["blocking_limit", "rapid_refill_breaker"]);
 
@@ -452,7 +545,7 @@ function turnFailure(status: number | null, reason: string | null, signIn: boole
  * person as a card and their answers go back in its input's `answers`, keyed by each question's
  * text; without it, it is refused like any tool the task does not name.
  */
-export function claudeCodeCodec(asked: PermissionMode, permitted: (tool: string, input: Record<string, unknown>) => boolean = () => false, work?: string, questions = false, opened: string = CLAUDE_MODE[asked], plan?: ClaudePlan): AgentCodec {
+export function claudeCodeCodec(asked: PermissionMode, permitted: (tool: string, input: Record<string, unknown>) => boolean = () => false, work?: string, questions = false, opened: string = CLAUDE_MODE[asked], plan?: ClaudePlan, measure = false): AgentCodec {
   const decoder = claudeCodeDecoder(asked, work, opened);
   const held = new Map<string, { tool: string; input: Record<string, unknown>; asked?: { question: AgentQuestion; text: string }[]; plan?: { call: string | null } }>();
   let planning = plan !== undefined;
@@ -483,10 +576,17 @@ export function claudeCodeCodec(asked: PermissionMode, permitted: (tool: string,
   const refused = new Set<string>();
   const outbox: string[] = [];
   let interrupts = 0;
+  let measured = false;
   const response = (requestId: string, answer: Record<string, unknown>) => JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: requestId, response: answer } });
   return {
     decode(line) {
       const frame = parseLine(line);
+      // Asked once, as the session's first init frame comes: Claude Code answers from its own counts, with no model call.
+      if (measure && !measured && frame?.type === "system" && frame.subtype === "init") {
+        measured = true;
+        outbox.push(JSON.stringify({ type: "control_request", request_id: CONTEXT_PARTS_ID, request: { subtype: "get_context_usage", detail: "summary" } }));
+      }
+      if (frame?.type === "control_response") return contextParts(frame);
       if (frame?.type === "control_cancel_request" && typeof frame.request_id === "string") {
         return held.delete(frame.request_id) ? [{ type: "request_withdrawn", requestId: frame.request_id }] : [];
       }
@@ -539,6 +639,8 @@ export function claudeCodeCodec(asked: PermissionMode, permitted: (tool: string,
     },
     finish: decoder.finish,
     turn: (text) => JSON.stringify({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null }),
+    // Claude Code's own /compact, which a print-mode session takes as a command (2.1.322: supportsNonInteractive).
+    compact: () => JSON.stringify({ type: "user", message: { role: "user", content: "/compact" }, parent_tool_use_id: null }),
     interrupt: () => JSON.stringify({ type: "control_request", request_id: `interrupt-${++interrupts}`, request: { subtype: "interrupt" } }),
     answer(requestId, decision, note) {
       const call = held.get(requestId);

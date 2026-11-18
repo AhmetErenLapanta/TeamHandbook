@@ -4,6 +4,8 @@ import type { OrchestratorContext } from "../app.js";
 import type { PolicyRule } from "../plugin.js";
 import { guardHookSource } from "./guard-hook.js";
 import type { TaskPaths } from "./isolation.js";
+import { claudeOffSettings } from "./adapters/claude-off.js";
+import type { AgentOff } from "./adapters/contract.js";
 import { runProcess, taskEnv } from "./isolation.js";
 
 export const PERSONAL_NOTE = "Runs as you: your own Claude Code, with your skills, plugins, MCP servers and memory, plus the team's skills.";
@@ -98,6 +100,16 @@ function hooksSwitchedOff(settings: Record<string, unknown>): string | null {
  * be read refuses too: a switch nobody could read would leave the guard off unseen.
  */
 export async function personalHooksRefusal(places: ManagedSettingsPlaces): Promise<string | null> {
+  for (const { from, settings } of await readManagedSettings(places)) {
+    if (settings === null) return `the managed Claude Code settings in ${from} cannot be read, so whether they switch off the orchestrator's guard is not known; ${ISOLATED_ACTION}`;
+    const off = hooksSwitchedOff(settings);
+    if (off) return `the managed Claude Code settings in ${from} ${off}, which switches off the orchestrator's guard for a task that runs as you; ${ISOLATED_ACTION}`;
+  }
+  return null;
+}
+
+/** Each managed settings file, drop-in and profile there is, parsed, or null for one that cannot be read. */
+export async function readManagedSettings(places: ManagedSettingsPlaces): Promise<{ from: string; settings: Record<string, unknown> | null }[]> {
   const found: { from: string; text: string }[] = [];
   const named = async (file: string) => {
     const text = await readFile(file, "utf8").catch((err: NodeJS.ErrnoException) => (err.code === "ENOENT" || err.code === "ENOTDIR" ? null : ""));
@@ -113,17 +125,14 @@ export async function personalHooksRefusal(places: ManagedSettingsPlaces): Promi
     const read = await runProcess({ program: "/usr/bin/plutil", args: ["-convert", "json", "-o", "-", "--", plist], env: { PATH: "/usr/bin:/bin" }, cwd: "/" }, { timeoutMs: 10_000, signal: new AbortController().signal, onLine: () => {} });
     found.push({ from: plist, text: read.code === 0 ? read.stdout : "" });
   }
-  for (const { from, text } of found) {
-    let settings: unknown;
+  return found.map(({ from, text }) => {
     try {
-      settings = JSON.parse(text);
+      const settings = JSON.parse(text) as unknown;
+      return { from, settings: settings && typeof settings === "object" && !Array.isArray(settings) ? (settings as Record<string, unknown>) : null };
     } catch {
-      return `the managed Claude Code settings in ${from} cannot be read, so whether they switch off the orchestrator's guard is not known; ${ISOLATED_ACTION}`;
+      return { from, settings: null };
     }
-    const off = settings && typeof settings === "object" && !Array.isArray(settings) ? hooksSwitchedOff(settings as Record<string, unknown>) : null;
-    if (off) return `the managed Claude Code settings in ${from} ${off}, which switches off the orchestrator's guard for a task that runs as you; ${ISOLATED_ACTION}`;
-  }
-  return null;
+  });
 }
 
 /**
@@ -307,7 +316,16 @@ export function teamPathDenies(rules: readonly PolicyRule[]): string[] {
  */
 export interface GuardOptions {
   servers?: Record<string, unknown>;
+  /** The task is a question: every MCP tool that does not read is refused, the person's own allow rules aside. */
+  readOnly?: boolean;
+  /** What the task leaves out of the person's own setup, for this run alone: it goes into this layer, never into their profile. */
+  off?: AgentOff;
 }
+
+export const QUESTION_REASON = "This task is a question: it reads only, and a tool that writes, an MCP server's included, is closed to it.";
+
+/** Whether an MCP tool reads, by its name alone, a product's prefix read past: a question's agent keeps only these. */
+export const readsOnly = (tool: string): boolean => READING_TOOL.test(tool.replace(PRODUCT_PREFIX, ""));
 
 export const personalMcpFile = (paths: Pick<TaskPaths, "root">) => join(personalGuardDir(paths), "mcp.json");
 
@@ -320,7 +338,7 @@ export async function writePersonalGuard(paths: Pick<TaskPaths, "root" | "work">
   const script = join(dir, "personal-guard.mjs");
   await writeFile(
     script,
-    guardHookSource({ work, editTools: EDIT_TOOLS, readingTool: READING_TOOL, refused: { families: REFUSED_FAMILIES, prefix: PRODUCT_PREFIX }, readReason: PERSONAL_READ_REASON, editReason: PERSONAL_EDIT_REASON, gitReason: PERSONAL_GIT_REASON, unreadReason: PERSONAL_UNREAD_REASON }),
+    guardHookSource({ work, editTools: EDIT_TOOLS, readingTool: READING_TOOL, refused: { families: REFUSED_FAMILIES, prefix: PRODUCT_PREFIX }, readReason: PERSONAL_READ_REASON, ...(guard.readOnly ? { closedReason: QUESTION_REASON } : {}), editReason: PERSONAL_EDIT_REASON, gitReason: PERSONAL_GIT_REASON, unreadReason: PERSONAL_UNREAD_REASON }),
     { mode: 0o400 },
   );
   const settings = personalSettingsFile(paths);
@@ -331,7 +349,7 @@ export async function writePersonalGuard(paths: Pick<TaskPaths, "root" | "work">
   if (Object.keys(guard.servers ?? {}).length) await writeFile(personalMcpFile(paths), JSON.stringify({ mcpServers: guard.servers }, null, 2) + "\n", { mode: 0o400 });
   // The person's own settings now load beside this layer, and a disableAllHooks of theirs would
   // switch this hook off with every other; layers merge in order and this one comes after theirs.
-  await writeFile(settings, JSON.stringify({ disableAllHooks: false, plansDirectory: CLAUDE_PLANS_DIR, permissions: { deny: [...GUARD_DENIES, ...teamPathDenies(rules)] }, hooks: { PreToolUse: [{ matcher: `mcp__.*|${EDIT_TOOLS.join("|")}`, hooks: [{ type: "command", command }] }] }, ...off }, null, 2) + "\n", { mode: 0o400 });
+  await writeFile(settings, JSON.stringify({ ...(guard.off ? claudeOffSettings(guard.off) : {}), disableAllHooks: false, plansDirectory: CLAUDE_PLANS_DIR, permissions: { deny: [...GUARD_DENIES, ...teamPathDenies(rules)] }, hooks: { PreToolUse: [{ matcher: `mcp__.*|${EDIT_TOOLS.join("|")}`, hooks: [{ type: "command", command }] }] }, ...off }, null, 2) + "\n", { mode: 0o400 });
   await chmod(dir, 0o500);
   return settings;
 }

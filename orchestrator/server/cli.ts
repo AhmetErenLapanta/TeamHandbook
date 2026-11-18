@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 
 export const USAGE = `usage: handbook-orchestrator [--port <n>] [--data-dir <dir>] [--no-open] [--env-file <file>]
        handbook-orchestrator doctor [--fix]
+       handbook-orchestrator backup
        handbook-orchestrator service install | status | restart | uninstall
        handbook-orchestrator update [--check | --prepare | --apply] [--to <version>] [--allow-downgrade] [--yes]
        handbook-orchestrator runner connect <address> <code> | start [<org>] | status | disconnect <org>
@@ -21,6 +22,7 @@ in your system's place for application data and opens it in your browser.
   --no-open         print the address and leave the browser closed
   --env-file <file> settings to start with, one KEY=value a line, in a file only you can read
   doctor [--fix]    look a stopped orchestrator's data over and say what is wrong
+  backup            copy the database of the orchestrator that is running now, and say where the copy is
   service ...       run it whenever you are logged in (launchd on macOS, systemd on Linux)
   update            move to the newest release, checked against its SHA256SUMS; --prepare places
                     it beside this one and --apply makes it current later
@@ -30,7 +32,7 @@ in your system's place for application data and opens it in your browser.
 /** What the command line asks for: text to print and an exit code, or the orchestrator started with these settings and arguments. */
 export type CliPlan = { print: string; code: number } | { env: Record<string, string>; args: string[]; envFile?: string };
 
-const SUBCOMMANDS = new Set(["doctor", "service", "update", "runner"]);
+const SUBCOMMANDS = new Set(["doctor", "backup", "service", "update", "runner"]);
 
 export function parseCli(argv: readonly string[], version: string, cwd: string = process.cwd()): CliPlan {
   const env: Record<string, string> = {};

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FORGE_REASON, releasePersonalGuard, TRACKER_REASON } from "../server/tasks/profile.js";
@@ -15,7 +15,7 @@ import { newId } from "../server/ids.js";
 import { organizationRunners } from "../server/runner-routes.js";
 import { createRunnerService } from "../server/runner-service.js";
 import { openSqliteStore } from "../server/store.js";
-import { fakeAgentAdapter } from "../server/tasks/agents.js";
+import { fakeAgentAdapter, opencodeAdapter } from "../server/tasks/agents.js";
 import type { AgentAdapter } from "../server/tasks/agents.js";
 import { createTaskRunner } from "../server/tasks/runner.js";
 import type { TaskRecord } from "../server/tasks/types.js";
@@ -497,7 +497,7 @@ describe("a task on a team's repository that ends early on its person's machine"
     writeFileSync(join(home, ".gitconfig"), "[user]\n\tname = Max Example\n\temail = max@example.invalid\n");
     const work: CheckoutWork = { prompt: "Task: Add a note\nstand-in: wait 30 seconds", mode: "auto", choices: null, setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null, verification: null }, rules: [], repo: { url: FORGE, baseBranch: "main", baseSha }, branch: "task/tsk_stop_1" };
     const executor = (agent: AgentAdapter) => machineExecutor({ dataDir: join(root, "data"), org: "acme", machineId: "mch_here", adapters: [agent], hostEnv: { PATH: process.env.PATH, HOME: home }, gitConfig: ["-c", `url.${bare}.insteadOf=${FORGE}`, "-c", "protocol.file.allow=always"], gitEnv: { GIT_ALLOW_PROTOCOL: "https:ssh:file" } });
-    return { bare, baseSha, work, executor };
+    return { bare, baseSha, work, executor, home };
   }
 
   it("given an agent that changed the checkout and is still working, when its person stops the task, then the change is pushed on the task's branch with their git and the task waits for review with why it stopped", async () => {
@@ -524,6 +524,53 @@ describe("a task on a team's repository that ends early on its person's machine"
     expect(outcome).toMatchObject({ status: "needs-review", error: STOPPED, branch: "task/tsk_stop_1" });
     expect(git(["show", "task/tsk_stop_1:ON-CALL.md"], bare)).toBe("Page the on-call engineer.");
     expect(git(["rev-parse", "task/tsk_stop_1^"], bare)).toBe(baseSha);
+  });
+
+  it("given a task going on from its open request, when the agent changes nothing more, then it goes back to review with the agent's last words and nothing is pushed", async () => {
+    // given
+    const { bare, baseSha, work, executor } = teamRepository();
+    git(["-C", bare, "branch", "task/tsk_stop_1", baseSha], root);
+    const hooks: ExecutorHooks = { signal: new AbortController().signal, onEvent: () => {}, log: () => {}, record: () => {}, onProcess: () => {}, decide: async () => ({ decision: "deny" }), leaseHeld: async () => true };
+
+    // when
+    const outcome = await executor(fakeAgentAdapter(FAKE_AGENT)).run({ id: "tsk_stop_1", title: "Add a note", agent: "fake", nativeSession: null, work: { ...work, prompt: "Task: Add a note\nstand-in: work in ../home", continues: { branch: "task/tsk_stop_1", head: baseSha } } }, hooks);
+
+    // then
+    expect(outcome).toMatchObject({ status: "needs-review", error: null, branch: null, request: null, lastSaid: "Done with turn 1." });
+    expect(outcome.nothingChanged).toBeUndefined();
+    expect(git(["rev-parse", "task/tsk_stop_1"], bare)).toBe(baseSha);
+  });
+
+  it("given a task OpenCode worked on until its person stopped it, when they press Continue, then OpenCode goes on in that same session with the task's rules set on it again, and the task reaches review", async () => {
+    // given
+    const { work, executor, home } = teamRepository();
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "opencode-standin"), `#!/bin/sh\nexec "${process.execPath}" "${join(import.meta.dirname, "opencode-serve.fake.mjs")}" "$@"\n`);
+    chmodSync(join(bin, "opencode-standin"), 0o755);
+    const resuming = opencodeAdapter(join(bin, "opencode-standin"));
+    const recorded: (string | null | undefined)[] = [];
+    const controller = new AbortController();
+    const first: ExecutorHooks = { signal: controller.signal, onEvent: () => {}, log: () => {}, record: (progress) => void (progress.nativeSession !== undefined && recorded.push(progress.nativeSession)), onProcess: () => {}, decide: async () => ({ decision: "deny" }), leaseHeld: async () => true };
+    const machine = executor(resuming);
+    const stopped = machine.run({ id: "tsk_stop_1", title: "Add a note", agent: "opencode", nativeSession: null, work: { ...work, prompt: "Task: Add a note\nstand-in: wait 30 seconds" } }, first);
+    for (let i = 0; i < 200 && !recorded.length; i++) await new Promise((r) => setTimeout(r, 50));
+    controller.abort(new Error("This machine's runner stopped."));
+    const cut = await stopped;
+    const second: ExecutorHooks = { ...first, signal: new AbortController().signal };
+
+    // when
+    const outcome = await machine.run({ id: "tsk_stop_1", title: "Add a note", agent: "opencode", nativeSession: recorded[0]!, work: { ...work, prompt: "Go on." } }, second);
+
+    // then
+    const seen = readFileSync(join(home, "opencode-seen.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { method: string; path: string; body: { permission?: unknown[] } | null });
+    expect(cut.status).toBe("interrupted");
+    expect(recorded).toEqual(["ses_standin1"]);
+    expect(seen.filter((r) => r.method === "POST" && r.path === "/session")).toHaveLength(1);
+    expect(seen.find((r) => r.method === "GET" && r.path === `/session/${recorded[0]}`)).toBeDefined();
+    expect(seen.find((r) => r.method === "PATCH" && r.path === `/session/${recorded[0]}`)?.body?.permission).toEqual(expect.arrayContaining([{ permission: "bash", pattern: "*", action: "deny" }]));
+    expect(outcome).toMatchObject({ status: "needs-review", nativeSessionId: recorded[0] });
+    await releasePersonalGuard(join(root, "data", "runner", "machines", "acme", "tasks", "tsk_stop_1"));
   });
 
   it.each([

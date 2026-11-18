@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createUser } from "../accounts.js";
 import type { MiddlewareHandler } from "hono";
-import { createApp } from "../app.js";
+import { createApp, syncRepo } from "../app.js";
 import type { OrchestratorContext } from "../app.js";
 import type { OrchestratorEnv, Principal } from "../auth.js";
 import { localRepoPath, readLocalDescription } from "../forge/local.js";
@@ -70,6 +70,13 @@ function hooksFor(held = true) {
   return { hooks, seen };
 }
 
+/** Keeps a task's branch as Keep does on a repository nobody has checked out: its default branch moves to the branch's head. */
+function keepBranch(bare: string, branch: string): string {
+  const head = git(["rev-parse", `refs/heads/${branch}`], bare).trim();
+  git(["update-ref", git(["symbolic-ref", "HEAD"], bare).trim(), head], bare);
+  return head;
+}
+
 describe("a task leased to a runner on this machine", { timeout: 120_000 }, () => {
   it("given a task on a repository held by path, when the runner runs it, then its branch lands in that repository, every write reaches the hooks, and the request's title and description come back for the orchestrator", async () => {
     // given
@@ -127,6 +134,84 @@ describe("a task leased to a runner on this machine", { timeout: 120_000 }, () =
     expect(await ctx.store.pendingFollowUps(ctx.tenant, task.id)).toEqual([]);
     const description = (await readLocalDescription((await ctx.store.getRepo(ctx.tenant, task.repoId))!, first.branch!))!;
     expect(description.split("\n## Verification\n").length).toBe(2);
+  });
+
+  it("given a task a runner here took to review whose request its starter kept, when they ask for more and the runner takes it again, then the run starts from the repository holding the kept change, pushes a branch of its own and opens a second request the task now shows, the kept one left as it was", async () => {
+    // given
+    const { ctx, task, bare } = await leasedTask();
+    const script = join(dirs[dirs.length - 1]!, "going-on-kept.mjs");
+    writeFileSync(script, `import { existsSync, readFileSync, writeFileSync } from "node:fs";\nconst prompt = readFileSync(0, "utf8");\nif (prompt.includes("Also name the escalation lead.")) writeFileSync("LEAD.md", existsSync("ON-CALL.md") && prompt.includes("The person kept the change") ? "after the kept note\\n" : "from scratch\\n");\nelse writeFileSync("ON-CALL.md", "Page the on-call engineer.\\n");\nconsole.log(JSON.stringify({ type: "result", summary: "Done." }));\n`);
+    ctx.tasks = createTaskRunner(ctx, { agents: [fakeAgentAdapter(script)], isolation: { mode: "process", network: "open" }, testCommand: () => null, hostEnv: { PATH: process.env.PATH } });
+    await ctx.tasks.ready();
+    const lease = { id: task.id, title: task.title, agent: "fake", nativeSession: null };
+    const firstRun = hooksFor();
+    const first = await ctx.tasks.leased().run(lease, firstRun.hooks);
+    await ctx.store.updateTask(ctx.tenant, task.id, { status: "needs-review", baseSha: firstRun.seen.progress.find((p) => p.baseSha)!.baseSha! });
+    await ctx.store.setTaskBranch(ctx.tenant, task.id, first.branch!);
+    await openPushedRequest(ctx, task.id, first);
+    const number = (await ctx.store.getTask(ctx.tenant, task.id))!.requestNumber!;
+    const kept = keepBranch(bare, first.branch!);
+    await ctx.store.setRequestStatus(ctx.tenant, task.repoId, number, "merged", new Date().toISOString());
+
+    const before = (await (await createApp(ctx, as(ADA)).request(`/api/tasks/${task.id}`)).json()).task.keptBefore;
+
+    // when
+    const asked = await createApp(ctx, as(ADA)).request(`/api/tasks/${task.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Also name the escalation lead.", commandId: "go-on-kept-1" }) });
+    const secondRun = hooksFor();
+    const second = await ctx.tasks.leased().run(lease, secondRun.hooks);
+    await ctx.store.updateTask(ctx.tenant, task.id, { status: "needs-review", baseSha: secondRun.seen.progress.find((p) => p.baseSha)!.baseSha! });
+    await ctx.store.setTaskBranch(ctx.tenant, task.id, second.branch!);
+    await openPushedRequest(ctx, task.id, second);
+
+    // then
+    expect(asked.status).toBe(202);
+    expect([before, (await (await createApp(ctx, as(ADA)).request(`/api/tasks/${task.id}`)).json()).task.keptBefore]).toEqual([undefined, true]);
+    expect(second).toMatchObject({ status: "needs-review", branch: `${first.branch}-2` });
+    const head = git(["rev-parse", `refs/heads/${first.branch}-2`], bare).trim();
+    expect(git(["rev-parse", `${head}^`], bare).trim()).toBe(kept);
+    expect(git(["show", `${head}:LEAD.md`], bare)).toBe("after the kept note\n");
+    expect(git(["rev-parse", `refs/heads/${first.branch}`], bare).trim()).toBe(kept);
+    expect(secondRun.seen.logs).toContain(`Went on from the change kept in request #${number}: ${(await ctx.store.getRepo(ctx.tenant, task.repoId))!.name} at ${kept.slice(0, 7)}.`);
+    const now = (await ctx.store.getTask(ctx.tenant, task.id))!;
+    expect(now.requestNumber).not.toBe(number);
+    expect(await ctx.store.getRequest(ctx.tenant, task.repoId, now.requestNumber!)).toMatchObject({ status: "open", branch: `${first.branch}-2` });
+    expect(await ctx.store.getRequest(ctx.tenant, task.repoId, number)).toMatchObject({ status: "merged", branch: first.branch });
+    expect(await ctx.store.pendingFollowUps(ctx.tenant, task.id)).toEqual([]);
+  });
+
+  it("given a repository with a release branch ahead of its default, when its person starts a task on it and a runner here takes it, then the run starts from that branch's head, its pushed branch is checked against it, its request goes into it, and a start naming no such branch or an option starts nothing", async () => {
+    // given
+    const { ctx, bare } = await leasedTask();
+    const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
+    const work = join(dirs[dirs.length - 1]!, "release-work");
+    git(["clone", "--quiet", bare, work], dirs[dirs.length - 1]!);
+    git(["checkout", "--quiet", "-b", "release"], work);
+    writeFileSync(join(work, "RELEASE.md"), "Release notes.\n");
+    git(["add", "-A"], work);
+    git(["-c", "user.name=Ada Example", "-c", "user.email=ada@example.invalid", "commit", "--quiet", "-m", "release notes"], work);
+    git(["fetch", "--quiet", work, "release:release"], bare);
+    await syncRepo(ctx, repo.id);
+    const releaseHead = git(["rev-parse", "refs/heads/release"], bare).trim();
+    const app = createApp(ctx, as(ADA));
+    const start = (baseBranch: string) => app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repoId: repo.id, title: "Add an on-call note", agent: "fake", baseBranch }) });
+
+    // when
+    const unknown = await start("no-such-branch");
+    const optionLike = await start("--upload-pack=x");
+    const started = (await (await start("release")).json()).task as TaskRecord;
+    const run = hooksFor();
+    const outcome = await ctx.tasks!.leased().run({ id: started.id, title: started.title, agent: "fake", nativeSession: null }, run.hooks);
+    await ctx.store.updateTask(ctx.tenant, started.id, { status: "needs-review", baseSha: run.seen.progress.find((p) => p.baseSha)!.baseSha! });
+    await ctx.store.setTaskBranch(ctx.tenant, started.id, outcome.branch!);
+    await openPushedRequest(ctx, started.id, outcome);
+
+    // then
+    expect([unknown.status, (await unknown.json()).code, optionLike.status, (await optionLike.json()).code]).toEqual([400, "unknown-base-branch", 400, "unknown-base-branch"]);
+    expect(started.baseBranch).toBe("release");
+    expect(run.seen.progress.find((p) => p.baseSha)!.baseSha).toBe(releaseHead);
+    expect(git(["rev-parse", `${outcome.branch}^`], bare).trim()).toBe(releaseHead);
+    const done = (await ctx.store.getTask(ctx.tenant, started.id))!;
+    expect(await ctx.store.getRequest(ctx.tenant, repo.id, done.requestNumber!)).toMatchObject({ status: "open", targetBranch: "release" });
   });
 
   it("given a runner that lost the lease by the time the change is ready, when it would push, then nothing reaches the repository and the task reads as interrupted", async () => {
@@ -208,7 +293,7 @@ describe("a branch a machine pushed, checked before its request opens", { timeou
     await ctx.store.setTaskBranch(ctx.tenant, task.id, named ?? branch);
     const outcome = { status: "needs-review" as const, error: null, nativeSessionId: null, branch, position: null, request: { title: "Add an on-call note", body } };
     const said = async () => ({ task: (await ctx.store.getTask(ctx.tenant, task.id))!, log: (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text) });
-    return { ctx, task, outcome, said, clone };
+    return { ctx, task, outcome, said, clone, bare };
   }
 
   it("given a branch that meets the team's rules, when the task is done, then its request opens", async () => {
@@ -695,19 +780,26 @@ describe("a branch a machine pushed, checked before its request opens", { timeou
       expect((await said()).task).toMatchObject({ status: "needs-review", requestNumber: number });
     });
 
-    it("given a task whose request was merged, when the starter asks for more, then it is refused and the task stays as it was", async () => {
+    it("given a task whose request its starter kept, when they ask for more and a machine takes it, then it goes on from the repository that holds the kept change, on a branch of its own, with their words after the kept lead", async () => {
       // given
-      const { ctx, task, outcome, said } = await pushed([{ "ON-CALL.md": "Page the on-call engineer.\n" }]);
+      const { ctx, task, outcome, said, bare } = await pushed([{ "ON-CALL.md": "Page the on-call engineer.\n" }]);
+      ctx.memberUrls = new Map([["payments-skills", "https://git.example.invalid/acme/payments-skills.git"]]);
       await openPushedRequest(ctx, task.id, outcome);
-      await ctx.store.setRequestStatus(ctx.tenant, task.repoId, (await said()).task.requestNumber!, "merged", new Date().toISOString());
+      const number = (await said()).task.requestNumber!;
+      const kept = keepBranch(bare, outcome.branch!);
+      await ctx.store.setRequestStatus(ctx.tenant, task.repoId, number, "merged", new Date().toISOString());
 
       // when
       const answer = await say(ctx, task.id, "go-on-0002");
+      const work = (await ctx.tasks!.describeWork(task.id)) as CheckoutWork;
 
       // then
-      expect(answer.status).toBe(409);
-      expect(await answer.json()).toMatchObject({ code: "follow-up-not-offered" });
-      expect((await said()).task).toMatchObject({ status: "needs-review" });
+      expect(answer.status).toBe(202);
+      expect(work).toMatchObject({ branch: `task/${task.id}-2`, repo: { baseSha: kept } });
+      expect(work.continues).toBeUndefined();
+      expect(work.prompt).toContain("The person kept the change the last run made, and it is in the repository now; they ask for more, so start from the repository as it is:");
+      expect(work.prompt).toContain("Also name the escalation lead.");
+      expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.name} asked for more; the task goes on from the change kept in request #${number}, on a branch of its own.`);
     });
   });
 });

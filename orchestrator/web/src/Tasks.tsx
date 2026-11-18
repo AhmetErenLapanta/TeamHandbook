@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { api, ApiError, integrationsApi, issuesApi, manages, MOST_SKILLS, taskLimitsApi, tasksApi } from "./api";
+import { api, ApiError, attachmentsApi, branchesApi, costApi, integrationsApi, limitApi, issuesApi, manages, MOST_SKILLS, taskLimitsApi, tasksApi } from "./api";
 import { ConfirmAction, CopyText } from "./Confirm";
 import { FORGE, ForgeReach, useForgeReach } from "./ForgeReach";
-import type { AgentChoices, AgentSummary, CurrentBudgets, IssuePreview, Principal, RepoRecord, RequestStatus, SkillSuggestions, TaskLimits, TaskLogLine, TaskOptions, TaskRecord, TaskStartInput, TaskStatus, TaskTarget, TaskTargets, TaskTemplate } from "./api";
+import type { AgentChoices, AgentSummary, CostRange, TaskRepeat, TaskRepeatEvery, LimitWindow, CurrentBudgets, IssuePreview, Principal, RepoRecord, RequestStatus, SkillSuggestions, TaskLimits, TaskLogLine, TaskOptions, TaskRecord, TaskStartInput, TaskStatus, TaskTarget, TaskTargets, TaskTemplate } from "./api";
 import { here, navigate, placeOf } from "./router";
 import { PROMISE } from "./words";
 import { Select } from "./Select";
@@ -13,11 +13,16 @@ import { ATTENTION, decisionOf, taskRows } from "./attention";
 import { ChangeCounts } from "./ChangeCounts";
 import { ChangeWeight } from "./design/ChangeWeight";
 import { PageHead } from "./design/PageHead";
+import { useRail } from "./design/RailHandle";
 import { TurnSection } from "./design/TurnSection";
 import { stateOf, stateSaid } from "./task-state";
 import type { Decided } from "./attention";
 import { NotifyAsk, readSeen } from "./AttentionWatcher";
 import { HandbookPluginCard } from "./team/PluginCard";
+import type { ChosenFile } from "./attachments";
+import { FileChips, uploadChosen } from "./FileChips";
+import { TaskFiles } from "./TaskFiles";
+import { Markdown } from "./Markdown";
 import { QuoteSelection } from "./QuoteSelection";
 import { ForgeState } from "./ForgeState";
 import { SignInLine } from "./machines/SignIn";
@@ -51,11 +56,21 @@ import { addQuote, QueuedMessages, TaskFollowUp } from "./TaskFollowUp";
 import { limitsLine } from "./settings/TaskLimits";
 import { McpSignIn } from "./McpSignIn";
 import { TaskQuestion } from "./TaskQuestion";
+import { OnForgeLine } from "./OnForgeLine";
+import { foundSaid } from "./settings/FolderChecks";
+import { REPEAT_DAYS, REPEATS_CHANGED, repeatSaid, repeatWhen, TaskRepeats } from "./TaskRepeats";
+import { TaskTurns, TurnSelect, useTaskTurns } from "./TaskTurns";
+import { TaskSetup } from "./handbook/TaskSetup";
+import { TaskUsed } from "./handbook/TaskUsed";
+import { UsedCorrected } from "./handbook/UsedCorrected";
+import { NOTHING_OFF } from "./handbook/handbook-read";
+import type { Off } from "./handbook/handbook-read";
 import { TaskWhere } from "./TaskWhere";
 import { TaskSuggestions } from "./TaskSuggestions";
 import type { Quote } from "./diff-quote";
 import type { SelectOption } from "./Select";
 import { Loading, LoadFailed, RefreshFailed } from "./Status";
+import { FIND_IN_TASK, SHOW_LOG_LINE } from "./find-in-task";
 
 const ACTIVE: TaskStatus[] = ["queued", "running"];
 const AGAIN: TaskStatus[] = ["failed", "cancelled"];
@@ -67,6 +82,7 @@ export const STATUS_TEXT: Record<ShownStatus, string> = {
   failed: "failed",
   cancelled: "cancelled",
   interrupted: "interrupted",
+  "nothing-changed": "finished, nothing changed",
   merged: "merged",
   closed: "closed",
   undone: "changes undone",
@@ -140,6 +156,26 @@ export function waitedMs(task: Pick<TaskRecord, "startedAt" | "finishedAt" | "re
   return Math.max(0, total);
 }
 
+/** What discarding a run's change does, told by whether an earlier run of the task was kept. */
+export function discardSaid(keptBefore: boolean): string {
+  return keptBefore ? "This drops this run's change; what you kept before stays, and your checkout stays as it is." : "This drops the agent's change; your checkout stays as it is.";
+}
+
+const kilo = (tokens: number) => (tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${tokens}`);
+
+/**
+ * How much of the agent's context a task holds: a share of the window while it runs ("62% used"), and once it
+ * ended where it began and where it ended ("48k at its start, 71% at its end"); tokens alone where the window is not known.
+ */
+export function contextLine(start: number | null, used: { tokens: number; window: number | null } | null, ended: boolean): string | null {
+  const share = used && used.window ? Math.round((used.tokens / used.window) * 100) : null;
+  const now = used ? (share !== null ? `${share}% used` : `${kilo(used.tokens)} tokens`) : null;
+  if (!ended && now) return now;
+  const first = start ? `${kilo(start)} tokens at its start` : null;
+  const last = used ? (share !== null ? `${share}% at its end` : `${kilo(used.tokens)} tokens at its end`) : null;
+  return last ? [start ? `${kilo(start)} at its start` : null, last].filter(Boolean).join(", ") : first;
+}
+
 /** A wait as people round it: whole minutes, and hours past the first, never the seconds. */
 export function waitSaid(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -193,12 +229,32 @@ function AgentNote({ agent, details }: { agent: TaskOptions["agents"][number] | 
   const notReady = readiness.state === "not-ready";
   const { text, tone } = READINESS_STATE[readiness.state];
   return (
+    <>
     <p className="muted" role={notReady ? "alert" : "note"} aria-label={`${agent.label} readiness`}>
       <span className={`state ${tone}`}>{text}</span>
       {/* The first warning or failure arrives as a few fixed words; beside the badge it reads as one sentence. */}
       {readiness.first ? <> {sentence(readiness.first)}</> : notReady ? " A task started now fails." : null}
       {details && readiness.state !== "ready" ? <> <a href={here("settings", "agents")}>See details</a></> : notReady ? <> <Hint label={`why ${agent.label} is not ready`}>A task started now fails. An admin sees why on Agent readiness.</Hint></> : null}
     </p>
+    {readiness.fix ? <CopyText text={readiness.fix} label="Copy the command" /> : null}
+    </>
+  );
+}
+
+/** Ends the agent's current step without stopping the task: it waits for what the person says next. */
+function StopStep({ id, onStopped }: { id: string; onStopped: (task: TaskRecord) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const press = () => {
+    setBusy(true);
+    setProblem(null);
+    tasksApi.stopStep(id).then(onStopped, (e: Error) => setProblem(e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <>
+      <button type="button" className="secondary" disabled={busy} onClick={press}>Stop this step</button>
+      {problem ? <span className="error small" role="alert">{problem}</span> : null}
+    </>
   );
 }
 
@@ -216,6 +272,21 @@ function usd(amount: number): string {
 export function resetDay(month: string): string {
   const [year, m] = month.split("-").map(Number) as [number, number];
   return new Date(Date.UTC(year, m, 1)).toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
+}
+
+/** What tasks like this have cost, only where the numbers are known: "Tasks like this have cost $0.30 to $1.20." */
+export function costRangeLine(range: { lowUsd: number | null; highUsd: number | null } | null): string | null {
+  if (!range || range.lowUsd === null || range.highUsd === null) return null;
+  const usd = (n: number) => `$${n.toFixed(2)}`;
+  return `Tasks like this have cost ${usd(range.lowUsd)} to ${usd(range.highUsd)}.`;
+}
+
+/** What is left of this week's limit, said once a reading holds it; below a tenth it says the task stops when it is reached. */
+export function limitLeftLine(windows: { window: string; used: number | null }[]): { text: string; low: boolean } | null {
+  const week = windows.find((w) => w.window === "seven_day" && w.used !== null);
+  if (!week) return null;
+  const left = Math.max(0, Math.round((1 - week.used!) * 100));
+  return left < 10 ? { text: `${left}% of this week's Claude limit is left; a task stops when it is reached.`, low: true } : { text: `${left}% of this week's Claude limit is left.`, low: false };
 }
 
 /** The monthly budgets the next task counts against, and the one that stops it once reached. */
@@ -280,8 +351,10 @@ export function taskFacts(task: TaskRecord, agent: string, me: Pick<Principal, "
   // What a run cost, the context it opened with and what it loaded sit side by side, so the reader sees what drove the cost without the page claiming it.
   if (task.cost.usd !== null) run.push({ term: "Cost", value: `$${task.cost.usd.toFixed(task.cost.usd < 0.01 ? 4 : 2)}${task.costPartial ? ", some parts unreported" : ""}` });
   else if (task.startedAt && task.finishedAt && task.cost.inputTokens === null && task.cost.outputTokens === null) run.push({ term: "Cost", value: "Not reported" });
-  if (task.context?.tokens) run.push({ term: "Context", value: `${task.context.tokens >= 1000 ? `${Math.round(task.context.tokens / 1000)}k` : task.context.tokens} tokens at its start` });
-  if (task.loaded && loadedList(task.loaded)) run.push({ term: "Loaded", value: loadedList(task.loaded)! });
+  const contextSaid = contextLine(task.context?.tokens ?? null, task.contextUsed ?? null, Boolean(task.finishedAt));
+  if (contextSaid) run.push({ term: "Context", value: contextSaid });
+  // Where the task kept its setup, "Used in this task" says what it loaded, by name; a count here would be a second, different number.
+  if (!task.setup && task.loaded && loadedList(task.loaded)) run.push({ term: "Loaded", value: loadedList(task.loaded)! });
   if (task.template?.kind === "scaffold.refresh") run.push({ term: "Does", value: task.template.commitVersioning ? "Refreshes the scaffold and switches to versioning by commit" : "Refreshes the scaffold" });
   else if (task.template) run.push({ term: "Does", value: `${task.template.kind === "skill.write" ? "Writes" : "Improves"} the skill ${task.template.skill}` });
   if (task.skills?.length) run.push({ term: "Reads first", value: task.skills.join(", ") });
@@ -504,6 +577,48 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
   const targets: TaskTargets | undefined = !routed && mode === "code" && options.multiRepo && issue && (spread === "orchestrator" || picked.length > 1) ? (spread === "orchestrator" ? "orchestrator" : picked) : undefined;
   const repoId = routed ? "" : mode === "skills" ? skillRepo : spread === "chosen" ? picked[0] ?? "" : codeRepos[0]?.id ?? "";
   const startRepo = options.repos.find((r) => r.id === repoId);
+  // What tasks like this one have cost, read for the repository and the agent picked; nothing is said while too few are known.
+  const [costRange, setCostRange] = useState<CostRange | null>(null);
+  useEffect(() => {
+    setCostRange(null);
+    if (!repoId || !agent) return;
+    let current = true;
+    costApi.range(repoId, agent).then((r) => current && setCostRange(r), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [repoId, agent]);
+  // The branch the work starts from, offered where the repository's branches are read; the default one is not sent.
+  const [branches, setBranches] = useState<{ default: string | null; branches: string[] } | null>(null);
+  const [baseBranch, setBaseBranch] = useState("");
+  const [every, setEvery] = useState<"" | TaskRepeatEvery>("");
+  // What this task leaves out of the setup an agent loads, for this task alone; the list is read where the orchestrator reads handbooks.
+  const [off, setOff] = useState<Off>(NOTHING_OFF);
+  const [setupRead, setSetupRead] = useState(false);
+  const rail = useRail();
+  const [repeatAt, setRepeatAt] = useState("09:00");
+  useEffect(() => {
+    setBranches(null);
+    setBaseBranch("");
+    if (!repoId || spread !== "chosen") return;
+    let current = true;
+    branchesApi.of(repoId).then((b) => current && setBranches(b), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [repoId, spread]);
+  const [windows, setWindows] = useState<LimitWindow[]>([]);
+  useEffect(() => {
+    setWindows([]);
+    if (!agent) return;
+    let current = true;
+    limitApi.windows(agent).then((w) => current && setWindows(w), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [agent]);
+  const left = limitLeftLine(windows);
+  const costLine = [costRangeLine(costRange)?.replace(/\.$/, ""), left && !left.low ? left.text.replace(/\.$/, "") : null].filter(Boolean).join("; ");
   // A code project's checks are said here only while this Start would approve them; one project at a time.
   // A folder on a person's own machine has its checks approved by that person, whatever their role; the orchestrator answers its checks to nobody else.
   const checks = useProjectChecks(mode === "code" && !several && startRepo?.kind === "code" ? repoId : null, "needed", approver || Boolean(startRepo?.machine));
@@ -525,6 +640,7 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
   // Where the orchestrator was not sure which folder the words point to, it asks once; the person picks or types one and the same start goes again with it.
   // Where the agent can plan first, the person can ask to see its plan before it changes anything; off until they do.
   const [planFirst, setPlanFirst] = useState(false);
+  const [files, setFiles] = useState<ChosenFile[]>([]);
   const [asking, setAsking] = useState<{ question: string; folders: WorkFolder[] } | null>(null);
   // Where nothing reads the issue, the agent sees only its link: the person signs in to the tracker, or starts on the link alone.
   const [unread, setUnread] = useState<string | null>(null);
@@ -550,19 +666,31 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
     setError(null);
     integrationsApi.signInService(id).then((url) => window.location.assign(url), (e: Error) => setError(e.message));
   };
+  // A task set to repeat starts nothing now: it answers the repeat it made, which the form says before it clears.
+  const [repeated, setRepeated] = useState<TaskRepeat | null>(null);
+  const startOrRepeat = (input: TaskStartInput) => input.repeat
+    ? tasksApi.startRepeating(input).then((r) => {
+      setRepeated(r);
+      setEvery("");
+      window.dispatchEvent(new Event(REPEATS_CHANGED));
+      return null;
+    })
+    : tasksApi.start(input);
   const begin = (path?: string, alone = false) => {
     if (missing) return;
     setBusy(true);
     setError(null);
-    checks.consent().then(() => tasksApi.start({ title: named, description: asked, issueUrl: issue, ...(repoId ? { repoId } : {}), ...(path ? { path } : {}), ...(linkAlone || alone ? { withoutIssueText: true } : {}), ...(planFirst && options.agents.find((a) => a.id === agent)?.plan ? { planFirst: true } : {}), agent, template, ...(targets ? { targets } : {}), ...(useSkills.length ? { skills: useSkills } : {}), ...(chosen(choices) ? { choices: chosen(choices) } : {}), ...(tools.projectSkills.length ? { projectSkills: tools.projectSkills } : {}),
+    // The files go first, each to the person's own hour-long keeping; the start names them, and they join the task before it queues.
+    checks.consent().then(() => (files.length ? uploadChosen(files, (f) => attachmentsApi.uploadFree(f), setFiles) : Promise.resolve([] as string[]))).then((attachments) => startOrRepeat({ ...(setupRead ? { off } : {}), ...(every && repeatAt ? { repeat: { every, at: repeatAt } } : {}), ...(attachments.length ? { attachments } : {}), ...(baseBranch ? { baseBranch } : {}), title: named, description: asked, issueUrl: issue, ...(repoId ? { repoId } : {}), ...(path ? { path } : {}), ...(linkAlone || alone ? { withoutIssueText: true } : {}), ...(planFirst && options.agents.find((a) => a.id === agent)?.plan ? { planFirst: true } : {}), agent, template, ...(targets ? { targets } : {}), ...(useSkills.length ? { skills: useSkills } : {}), ...(chosen(choices) ? { choices: chosen(choices) } : {}), ...(tools.projectSkills.length ? { projectSkills: tools.projectSkills } : {}),
       // Every pick is named, none as well; a command server ticked on a team's orchestrator goes as the person's own confirmation of its command.
       mcpServers: tools.mcpServers, ...(!local && tools.commands.length ? { mcpConfirmed: tools.commands } : {}) })).then(
       (task) => {
         writePref(draftKey, null);
+        setFiles([]);
         setWork("");
         setTitle("");
         setNotes("");
-        onStarted(task);
+        if (task) onStarted(task);
       },
       (err: Error) => {
         if (err instanceof ApiError && err.code === "issue-unread") {
@@ -598,7 +726,8 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
     return <p className="muted" role="note">You cannot start tasks: starting one takes the admin role or ownership of the team whose project it changes.</p>;
   }
   return (
-    <div className="with-rail new-task">
+    <div className="with-rail new-task" style={rail.style}>
+      {rail.handle}
       <form className="task-form" onSubmit={submit} aria-label="New task">
         {options.profile.personal ? (
           <p className={options.profile.refused ? "error" : "muted"} role="note">{options.profile.refused ? `Tasks do not run: ${options.profile.refused}.` : options.profile.note}</p>
@@ -617,6 +746,7 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
         ) : null}
         <label htmlFor={workId} className="work-label">What needs doing?</label>
         <textarea id={workId} className={first ? "work" : "work compact"} value={work} onChange={(e) => setWork(e.target.value)} rows={first ? 3 : 2} maxLength={8500} placeholder="https://… or what needs to change" autoFocus={focus} {...described} />
+        <FileChips files={files} onChange={setFiles} disabled={busy} onRetry={() => document.querySelector<HTMLFormElement>("form.task-form")?.requestSubmit()} />
         {options.agents.find((a) => a.id === agent)?.plan ? (
           <label className="check"><input type="checkbox" checked={planFirst} onChange={(e) => setPlanFirst(e.target.checked)} />Show me the plan before it changes anything</label>
         ) : null}
@@ -635,7 +765,7 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
             </ul>
           </div>
         ) : null}
-        {local ? <McpSignIn names={lastNeeds} /> : null}
+        {local ? <McpSignIn names={lastNeeds} onePerson /> : null}
         {issue ? (
           <div className="issue-card" role="status" aria-label="Issue">
             {previewError ? <p className="error">{previewError}</p> : !preview ? <p className="muted">Reading the issue…</p> : (
@@ -694,7 +824,7 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
         </div>
         <div className="agent-lines">
           {byOrchestrator ? null : <AgentNote agent={options.agents.find((a) => a.id === agent)} details={options.readinessReport} />}
-          {byOrchestrator || startRepo?.ownSetup === false ? null : <AgentLoaded label={options.agents.find((a) => a.id === agent)?.label ?? ""} personal={options.agents.find((a) => a.id === agent)?.personal} />}
+          {byOrchestrator || startRepo?.ownSetup === false ? null : <>{setupRead ? null : <AgentLoaded label={options.agents.find((a) => a.id === agent)?.label ?? ""} personal={options.agents.find((a) => a.id === agent)?.personal} />}</>}
           {byOrchestrator || !local || !agent ? null : <SignInLine agentId={agent} />}
         </div>
         {!template && work.trim() && repoId && agent ? (
@@ -713,6 +843,9 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
             <summary>More options</summary>
             <div className="task-form">
               {compact ? agentPicker : null}
+              {branches && branches.branches.length > 1 ? <Select label="Start from branch" value={baseBranch || branches.default || ""} onChange={(v) => setBaseBranch(v === branches.default ? "" : v)} options={branches.branches.map((b) => ({ value: b, label: b, ...(b === branches.default ? { hint: "default" } : {}) }))} /> : null}
+              {local ? <Select label="Repeat" value={every} onChange={(v) => setEvery(v as "" | TaskRepeatEvery)} options={[{ value: "", label: "Once" }, { value: "day", label: "Every day" }, { value: "weekday", label: "Every weekday" }, ...REPEAT_DAYS.map((d) => ({ value: d, label: `Every ${d.charAt(0).toUpperCase()}${d.slice(1)}` }))]} /> : null}
+              {every ? <label>Time of day<input type="time" value={repeatAt} onChange={(e) => setRepeatAt(e.target.value)} required /></label> : null}
               {mode === "skills" ? <Select label="Kind of task" value={kind} onChange={(v) => { setKind(v as SkillKind); setSkill(""); }} options={SKILL_KINDS} /> : null}
             <label>Title<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder={named || "From the issue"} {...described} /></label>
               {issue ? <label>Notes for the agent<textarea className="short" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={8000} /></label> : null}
@@ -757,12 +890,16 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
         ) : null}
         {checks.view}
         <div className="actions start">
+          {repeated ? <p className="muted" role="status">It repeats {repeatSaid(repeated.every, repeated.at)}; the first run is {repeatWhen(repeated.next)}. It is listed under Repeats.</p> : null}
           <button type="submit" disabled={busy || budgetReached || blank || Boolean(missing)}>Start task</button>
           {onCancel ? <button type="button" className="secondary" onClick={onCancel} disabled={busy}>Cancel</button> : null}
           <span className="muted" aria-live="polite">{missing ?? summary}</span>
         </div>
+        {left?.low ? <p className="warn-note small">{left.text}</p> : costLine ? <p className="muted small">{costLine}.</p> : null}
         {error ? <p className="error" role="alert" id={errorId}>{error}<NextStep {...refusal} /></p> : null}
       </form>
+      {/* Where the screen is wide it stands to the form's right, a panel of its own; narrow, it is a fold under the form. */}
+      {byOrchestrator || startRepo?.ownSetup === false ? null : <TaskSetup off={off} onOff={setOff} onRead={setSetupRead} />}
       {/* Before a start, what the person agrees to: where the agent works, how the change is taken back, and what limits it. */}
       {/* Beside a list of tasks the rail folds on a narrow screen, so the list is not pushed below the first screen; it opens on asking. */}
       {first ? (
@@ -772,6 +909,12 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
             <p dir="auto">{routed ? "The folder the orchestrator picks from what you ask; the run's first line says which, and Change moves it." : targets === "orchestrator" ? "The repositories the orchestrator picks from the issue" : several ? picked.map((id) => options.repos.find((r) => r.id === id)?.name ?? id).join(", ") : startRepo ? `${startRepo.name}${startRepo.machine ? `, on ${startRepo.machine}` : local ? "" : `, ${startRepo.team}`}` : "No repository picked yet"}</p>
             {startRepo?.result && !several ? <p className="muted">{startRepo.result === "changes" ? "The agent edits its files in place; Undo puts every file back." : "Nothing lands until a reviewer merges the change."}</p> : null}
           </section>
+          {every ? (
+            <section aria-labelledby={`${workId}-repeat`}>
+              <h2 id={`${workId}-repeat`}>Repeats</h2>
+              <p>Runs {repeatSaid(every, repeatAt)} on this machine, under the same limits; a run this machine is off for is skipped and said.</p>
+            </section>
+          ) : null}
           {budgets?.budgets.length || limits ? (
             <section aria-labelledby={`${workId}-limits`}>
               <h2 id={`${workId}-limits`}>Limits</h2>
@@ -789,6 +932,12 @@ function NewTask({ options, budgets, limits = null, start, local, approver, defa
             <p dir="auto">{routed ? "The folder the orchestrator picks from what you ask; the run's first line says which, and Change moves it." : targets === "orchestrator" ? "The repositories the orchestrator picks from the issue" : several ? picked.map((id) => options.repos.find((r) => r.id === id)?.name ?? id).join(", ") : startRepo ? `${startRepo.name}${startRepo.machine ? `, on ${startRepo.machine}` : local ? "" : `, ${startRepo.team}`}` : "No repository picked yet"}</p>
             {startRepo?.result && !several ? <p className="muted">{startRepo.result === "changes" ? "The agent edits its files in place; Undo puts every file back." : "Nothing lands until a reviewer merges the change."}</p> : null}
           </section>
+          {every ? (
+            <section aria-labelledby={`${workId}-repeat`}>
+              <h2 id={`${workId}-repeat`}>Repeats</h2>
+              <p>Runs {repeatSaid(every, repeatAt)} on this machine, under the same limits; a run this machine is off for is skipped and said.</p>
+            </section>
+          ) : null}
           {budgets?.budgets.length || limits ? (
             <section aria-labelledby={`${workId}-limits`}>
               <h2 id={`${workId}-limits`}>Limits</h2>
@@ -831,7 +980,8 @@ function FolderChanges({ task, local, starter, onChanged, onQuote }: { task: Tas
             <>
               {local ? null : <p className="muted">Its work reaches {t.name} only through a review, which a person merges.</p>}
               {local ? null : <p>{changeSaid(t.forge, t.request.number, t.request.status)}</p>}
-              {local && t.request.status === "open" ? <LocalRequestGroup repoId={t.repoId} number={t.request.number} starter={starter} only={waiting === 1} onAnswered={onChanged} /> : null}
+              {starter && t.forge && t.request.url.startsWith("http") ? <OnForgeLine load={() => tasksApi.targetOnForge(task.id, task.targets!.indexOf(t))} /> : null}
+              {local && t.request.status === "open" && !ACTIVE.includes(task.status) ? <LocalRequestGroup repoId={t.repoId} number={t.request.number} starter={starter} only={waiting === 1} keptBefore={task.keptBefore === true} onAnswered={onChanged} /> : null}
               <RequestDiff reads={requestReads(t.repoId, t.request.number)} bare {...(onQuote ? { onQuote } : {})} />
             </>
           ) : t.status === "local" && t.branch ? (
@@ -850,7 +1000,7 @@ function FolderChanges({ task, local, starter, onChanged, onQuote }: { task: Tas
 }
 
 /** One repository's change in a folder task on one person's own orchestrator: where it reaches, then its answers in one line, kept into their checkout, discarded, or opened on its forge. */
-function LocalRequestGroup({ repoId, number, starter, only, onAnswered }: { repoId: string; number: number; starter: boolean; only: boolean; onAnswered: () => void }) {
+function LocalRequestGroup({ repoId, number, starter, only, keptBefore = false, onAnswered }: { repoId: string; number: number; starter: boolean; only: boolean; keptBefore?: boolean; onAnswered: () => void }) {
   const reach = useForgeReach(repoId, number);
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
@@ -869,7 +1019,7 @@ function LocalRequestGroup({ repoId, number, starter, only, onAnswered }: { repo
           {starter ? (
             <>
               <button type="button" className={only ? undefined : "secondary"} disabled={busy} onClick={keep}>Keep these changes</button>
-              <ConfirmAction trigger="Discard these changes…" consequence="The task's branch is dropped; your checkout does not change." confirm="Discard changes" keep="Keep them for now" onConfirm={() => answer("close")} />
+              <ConfirmAction trigger="Discard these changes…" consequence={discardSaid(keptBefore)} confirm="Discard changes" keep="Keep them for now" onConfirm={() => answer("close")} />
             </>
           ) : null}
           {reach.action}
@@ -957,6 +1107,13 @@ const TURNS: { id: Turn; name: string; why: string; empty: string }[] = [
   { id: "waiting", name: "Waiting for a computer", why: "Each starts by itself when its computer is back.", empty: "No task waits for a computer. A task started while its computer sleeps lands here." },
 ];
 
+/** The Repeats section above Done this week, or at the end where nothing is done yet. */
+function withRepeats(sections: ReactNode[]): ReactNode[] {
+  const done = sections.findIndex((s) => (s as { key?: string }).key === "done");
+  const repeats = <TaskRepeats key="repeats" />;
+  return done < 0 ? [...sections, repeats] : [...sections.slice(0, done), repeats, ...sections.slice(done)];
+}
+
 /** One section's rows: the state, the title with where and by whom under it, the change's weight, then time and cost. */
 function BoardRows({ cards, me, agents }: { cards: BoardCard[]; me: Principal; agents: TaskOptions["agents"] | null }) {
   const seen = readSeen();
@@ -977,10 +1134,11 @@ function BoardRows({ cards, me, agents }: { cards: BoardCard[]; me: Principal; a
                 {unread ? <span className="visually-hidden"> (new)</span> : null}
                 {c.issueKey ? <> <span className="muted mono">{c.issueKey}</span></> : null}
                 {c.reason && (c.next === "retry" || c.next === "continue") ? <div className="small" dir="auto"><span className="error">{c.reason}</span> <a href={here("tasks", c.id)}>{c.next === "retry" ? "Run again" : "Continue"}</a></div> : null}
+                {c.waitingBehind ? <div className="small" dir="auto">Starts once you answer <a href={here("tasks", c.waitingBehind.id)}>{c.waitingBehind.title}</a>, which works in the same folder.</div> : null}
                 <div className="muted small" dir="auto">{meta}</div>
               </td>
               <td className="rc-extra rc-weight">{c.changes ? <><ChangeWeight added={c.changes.additions} removed={c.changes.deletions} /> <span className="diff-stat"><ChangeCounts added={c.changes.additions} removed={c.changes.deletions} /></span></> : null}</td>
-              <td className="rc-extra num">{c.startedAt ? (c.finishedAt ? duration(c) : `${duration(c)} so far`) : null}</td>
+              <td className="rc-extra num">{c.startedAt ? (c.finishedAt ? (c.ranMs !== undefined ? duration(c) : "—") : `${c.ranMs !== undefined ? spoken(c.ranMs) : duration(c)} so far`) : null}</td>
               <td className="rc-extra num">{c.cost.usd !== null ? `$${c.cost.usd.toFixed(2)}` : null}</td>
               <td className="rc-extra num">{whenShort(c.finishedAt ?? c.createdAt)}</td>
             </tr>
@@ -1031,7 +1189,7 @@ function AllTasks({ me, agents, picked = null }: { me: Principal; agents: TaskOp
                 <td className="mono rc-meta">{targetNames(t)}</td>
                 <td className="rc-meta"><AgentName id={t.agent} known={agents} /></td>
                 <td className="rc-status">{call ? <span className={`state ${ATTENTION[call].tone}`}>{ATTENTION[call].label}</span> : wait ? <><span className="state warn">{wait.badge}</span> <a href={here("settings", "machines")} onClick={(e) => e.stopPropagation()}>{wait.link}</a></> : <StatusBadge task={t} />}</td>
-                <td className="rc-extra num">{t.startedAt ? duration(t) : null}</td>
+                <td className="rc-extra num">{t.startedAt ? (t.finishedAt && t.ranMs === undefined ? "—" : duration(t)) : null}</td>
                 {costed ? <td className="rc-extra num">{cost(t) === "unknown" ? null : cost(t)}</td> : null}
               </tr>
             ))}
@@ -1104,8 +1262,18 @@ export function TaskList({ me, start, repos = null, picked = null, onRepos }: { 
   // While an agent works or a task waits for its computer, the board is read again so a row moves to its turn as it happens.
   useEffect(() => {
     if (!board || (!board.counts.agents && !board.counts.waiting)) return;
-    const timer = setInterval(reload, 1500);
-    return () => clearInterval(timer);
+    // A tab nobody is looking at is not read; it is read once when it comes back.
+    const timer = setInterval(() => {
+      if (!document.hidden) reload();
+    }, 1500);
+    const back = () => {
+      if (!document.hidden) reload();
+    };
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", back);
+    };
   }, [board]);
   // The rows wait for the agents' names as well, so no row is drawn without its agent and filled a moment later.
   const listed = Boolean(board && ((options && railRead >= 2) || optionsError));
@@ -1154,8 +1322,8 @@ export function TaskList({ me, start, repos = null, picked = null, onRepos }: { 
       ) : null}
       {/* A refresh that fails keeps the rows last read under the line that says so. */}
       {error && board ? <RefreshFailed what="tasks" reason={error} onRetry={reload} /> : null}
-      {error && !board ? <LoadFailed what="tasks" reason={error} onRetry={reload} /> : !listed ? ((options && railRead >= 2) || optionsError ? <Loading what="tasks" /> : null) : empty ? null : (
-        turns.filter((t) => board!.counts[t.id] > 0).map((t) => {
+      {error && !board ? <LoadFailed what="tasks" reason={error} onRetry={reload} /> : !listed ? ((options && railRead >= 2) || optionsError ? <Loading what="tasks" /> : null) : empty ? <TaskRepeats /> : (
+        withRepeats(turns.filter((t) => board!.counts[t.id] > 0).map((t) => {
           const cards = board!.sections[t.id];
           const more = board!.counts[t.id] - cards.length;
           return (
@@ -1164,7 +1332,7 @@ export function TaskList({ me, start, repos = null, picked = null, onRepos }: { 
               {more > 0 ? <p className="muted small">{more} more; All tasks below holds them.</p> : null}
             </TurnSection>
           );
-        })
+        }))
       )}
       {(local && empty) || !((options && railRead >= 2) || optionsError) ? null : <AllTasks me={me} agents={options?.agents ?? null} picked={picked} />}
     </>
@@ -1210,6 +1378,8 @@ function marked(text: string, query: string): ReactNode {
 
 /** Log lines on the page at once: a long run stays quick to scroll, and earlier lines are a press away. */
 export const LOG_WINDOW = 1500;
+/** How long a task page in a tab nobody is looking at waits between reads of a running task. */
+const HIDDEN_POLL_MS = 15_000;
 // How near the bottom of the page counts as following the log as it runs.
 const AT_END_PX = 48;
 /** Where each task's page was scrolled to, for this tab's visit: coming back to a task lands where it was left. */
@@ -1288,7 +1458,13 @@ function TaskLog({ id, log, outputCut, live }: { id: string; log: TaskLogLine[];
               step(e.shiftKey ? -1 : 1);
             }} />
           </label>
-          {query.trim() ? <span className="muted small" role="status">{hits.length ? `${hits.indexOf(current!) + 1} of ${hits.length}` : "No line matches."}</span> : null}
+          {query.trim() ? (
+            <>
+              <span className="muted small" role="status">{hits.length ? `${hits.indexOf(current!) + 1} of ${hits.length}` : "No line matches."}</span>
+              {hits.length > 1 ? <><button type="button" className="secondary small" onClick={() => step(-1)}>Previous</button> <button type="button" className="secondary small" onClick={() => step(1)}>Next</button></> : null}
+              <button type="button" className="ghost small" aria-label="Close find" onClick={() => { setQuery(""); setAt(0); }}>×</button>
+            </>
+          ) : null}
         </div>
       ) : null}
       {from > 0 ? <p><button type="button" className="secondary small" onClick={() => setEarlier(earlier + 1)}>Show earlier lines ({from})</button></p> : null}
@@ -1324,8 +1500,40 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
   const [offered, setOffered] = useState<{ editable: string[]; agents: TaskOptions["agents"] } | null>(null);
   const fallbackLabel = useAgentLabel(task?.agent ?? "");
   const [logPref, setLogPref] = usePref(LOG_OPEN_KEY);
+  const turnPick = useTaskTurns(id);
+  const rail = useRail();
+  useEffect(() => {
+    const find = () => {
+      setLogPref(`open:${id}`);
+      setTimeout(() => document.querySelector<HTMLInputElement>("main [data-page-search]")?.focus(), 50);
+    };
+    // A line of the stream if the page shows one, else the log's, the log opened first.
+    const show = (e: Event) => {
+      const seq = (e as CustomEvent<number>).detail;
+      const inStream = document.querySelector<HTMLElement>(`main [data-seq="${seq}"]`);
+      if (inStream) return inStream.scrollIntoView({ block: "center" });
+      setLogPref(`open:${id}`);
+      setTimeout(() => document.getElementById(`log-line-${seq}`)?.scrollIntoView({ block: "center" }), 50);
+    };
+    window.addEventListener(FIND_IN_TASK, find);
+    window.addEventListener(SHOW_LOG_LINE, show);
+    return () => {
+      window.removeEventListener(FIND_IN_TASK, find);
+      window.removeEventListener(SHOW_LOG_LINE, show);
+    };
+  }, [id]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const after = useRef(0);
+  // Whether a fold that shows the log is open, and the read that goes on with an ended task's log once one is.
+  const logWanted = useRef(false);
+  const restOfLog = useRef<(() => void) | null>(null);
+  const [historyRead, setHistoryRead] = useState(false);
+  useEffect(() => {
+    if (!logWanted.current || !restOfLog.current) return;
+    const go = restOfLog.current;
+    restOfLog.current = null;
+    go();
+  });
   useEffect(() => {
     after.current = 0;
     setLog([]);
@@ -1334,6 +1542,7 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
     setStale(null);
     setOutputCut(false);
     setRefused(null);
+    restOfLog.current = null;
     let stopped = false;
     let loaded = false;
     let failures = 0;
@@ -1351,9 +1560,14 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
             after.current = next ?? log[log.length - 1]!.seq;
             setLog((prev) => [...prev, ...log]);
           }
-          // A long log comes a page at a time: the next page is read at once, a finished task's too.
+          // A long log comes a page at a time: a running task's next page is read at once; an ended one's waits until a
+          // fold that shows the log is opened, so a long task's page opens on its first page alone.
           const more = next !== undefined && next !== null;
-          if (more || ACTIVE.includes(task.status)) timer = setTimeout(poll, more ? 0 : 1000);
+          if (more && !ACTIVE.includes(task.status) && !logWanted.current) {
+            restOfLog.current = poll;
+            return;
+          }
+          if (more || ACTIVE.includes(task.status)) timer = setTimeout(poll, more ? 0 : document.hidden ? HIDDEN_POLL_MS : 1000);
         },
         (e: Error) => {
           if (stopped) return;
@@ -1470,7 +1684,11 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
   const requestOpen = task.requestNumber !== null && !task.targets;
   // On one person's own orchestrator the request is its own copy's: the page answers it, keeping or discarding the change, and never names it.
   const ownCopy = me.mode === "local" && requestOpen && request?.provider === "local";
-  const answer = (action: "merge" | "close") => api.requestAction(task.repoId, task.requestNumber!, action).then((r) => request && setTask({ ...task, request: { ...request, status: r.status as typeof request.status } }));
+  const answer = (action: "merge" | "close") => api.requestAction(task.repoId, task.requestNumber!, action).then((r) => {
+    if (request) setTask({ ...task, request: { ...request, status: r.status as typeof request.status } });
+    // The head's word and the list's come from the orchestrator: read the task again for what the answer made of it.
+    void reread();
+  });
   // The log leads only while there is no change to read; once the person opens or folds it, that stays.
   // A change whose checks still fail says so in its head, in the server's one sentence.
   const failing = checks.map((c) => c.verification).find((v) => v.verdict === "broken" || v.verdict === "failing-before") ?? null;
@@ -1483,14 +1701,18 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
   const live = run.stream.length > 0 || run.plan.length > 0 || Boolean(task.routing);
   // Where the task works heads its run on a person's own orchestrator; only its starter moves it, and only while it runs.
   const where = (moves: boolean) => (task.routing ? <TaskWhere task={task} routing={task.routing} canMove={moves && task.createdBy === me.email} checked={[...new Set(checks.flatMap((c) => c.verification.checks.map((k) => k.command)))]} onChecksOff={() => void verificationRead.task(id).then(setChecks, () => setChecks([]))} /> : null);
+  // Words in the stream the reader sent: all of them on one person's own orchestrator, else the ones under the reader's name.
+  const mine = (by: string) => me.mode === "local" || by === me.name;
   const spent = run.costUsd ?? task.cost.usd;
   // The newest of the agent's own words, for the announcer while it works.
   const lastSaid = [...run.stream].reverse().find((l) => l.kind === "say")?.text ?? "";
   // The log leads only while there is no stream or change to read; once the person opens or folds it, that stays.
   // A closed Log is remembered for every task; an open one only for the task it was opened on.
   const logOpen = logPref === `open:${id}` || (logPref !== "closed" && !asking && ((!live && (working || task.status === "failed" || task.status === "interrupted")) || (task.status === "needs-review" && nothingHere)));
+  const historyOpen = Boolean(!working && live && stoppedBare && !asking);
+  logWanted.current = logOpen || historyOpen || historyRead;
   // Stopping sits at the foot of the run, with the steer field when there is one, whenever the reader can stop the task.
-  const stop = ACTIVE.includes(task.status) && canEdit ? (
+  const stopTask = ACTIVE.includes(task.status) && canEdit ? (
     <ConfirmAction
       danger
       trigger="Stop…"
@@ -1502,6 +1724,8 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
       onConfirm={() => tasksApi.cancel(id).then(setTask)}
     />
   ) : null;
+  const stopStep = task.status === "running" && canEdit && task.stage !== "stopped" && !asksNow(task) ? <StopStep id={id} onStopped={setTask} /> : null;
+  const stop = stopStep || stopTask ? <>{stopStep}{stopTask}</> : null;
   const jump = working && live && !following ? <button type="button" className="run-jump secondary small" onClick={() => {
     setFollowing(true);
     window.scrollTo(0, document.documentElement.scrollHeight);
@@ -1513,30 +1737,34 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
       {/* The answers stay in view: the header holds the state and the one thing to do next. */}
       <PageHead
         sticky
+        mainAtFoot={task.status === "needs-review" && (ownCopy || requestOpen)}
         title={task.title}
         below={working && run.plan.length ? <RunPlan plan={run.plan} /> : null}
-        {...(asking ? { summary: `The agent stopped to ask ${task.createdBy === me.email ? "you" : task.createdBy}.` } : working && task.startedAt && task.waitingFor ? (spent !== null ? { summary: `The agent has spent $${spent.toFixed(2)} so far.` } : {}) : working && task.startedAt ? { summary: <RunSummary task={task} spent={spent} /> } : failing ? { summary: <span className="error">{failing.reason}</span> } : status === "needs-review" ? { summary: reviewSummary(task) } : stoppedBare && task.startedAt ? { summary: `The agent stopped after ${duration(task)}${endReasonOf(task.error)}` } : {})}
+        {...(asking ? { summary: `The agent stopped to ask ${task.createdBy === me.email ? "you" : task.createdBy}.` } : working && task.startedAt && task.waitingFor ? (spent !== null ? { summary: `The agent has spent $${spent.toFixed(2)} so far.` } : {}) : working && task.startedAt ? { summary: <RunSummary task={task} spent={spent} /> } : failing ? { summary: <span className="error">{failing.reason}</span> } : status === "needs-review" ? { summary: reviewSummary(task) } : state === "finished-nothing-changed" && task.startedAt ? { summary: `The agent finished in ${duration(task)} without changing a file.` } : stoppedBare && task.startedAt ? { summary: `The agent stopped after ${duration(task)}${endReasonOf(task.error)}` } : {})}
         actions={(
           <>
             {review.actions}
-            {ownCopy ? (request?.status === "open" && canEdit ? (
+            {/* While its agent works on the change again, the change is not answered: Keep and Discard come back when the run ends. */}
+            {ownCopy ? (request?.status === "open" && canEdit && !ACTIVE.includes(task.status) ? (
               <>
                 {request.heldReason === undefined ? <button type="button" disabled={busy} onClick={() => act(() => answer("merge"))}>Keep these changes</button> : null}
-                <ConfirmAction trigger="Discard these changes…" consequence="The task's branch is dropped; your checkout does not change." confirm="Discard changes" keep="Keep them for now" onConfirm={() => answer("close")} />
+                <ConfirmAction trigger="Discard these changes…" consequence={discardSaid(task.keptBefore === true)} confirm="Discard changes" keep="Keep them for now" onConfirm={() => answer("close")} />
               </>
             ) : null) : requestOpen ? <a className={`button${task.status === "needs-review" ? "" : " secondary"}`} href={here("repositories", task.repoId, "requests")}>Open the request</a> : null}
             {heldPlan && canEdit && !asking ? <button type="button" onClick={approveHeldPlan} disabled={busy} title="The task goes on from the plan the agent made, which nobody had answered yet.">Approve the plan and continue</button> : null}
-            {AGAIN.includes(task.status) && canEdit && !asking ? <button type="button" className={heldPlan ? "secondary" : undefined} onClick={again} disabled={busy} title="Starts a new task with the same work, project, agent and options; this one stays as it is.">Run again</button> : null}
-            {canShare && !sharing ? <button type="button" className="secondary" onClick={() => setSharing(true)}>Share…</button> : null}
+            {(AGAIN.includes(task.status) || state === "finished-nothing-changed") && canEdit && !asking ? <button type="button" className={heldPlan || state === "finished-nothing-changed" ? "secondary" : undefined} onClick={again} disabled={busy} title="Starts a new task with the same work, project, agent and options; this one stays as it is.">Run again</button> : null}
           </>
         )}
+        also={canShare && !sharing ? <button type="button" className="secondary" onClick={() => setSharing(true)}>Share…</button> : null}
       >
         <span className={`state ${stateWord.tone}`} data-status={state}>{stateWord.word}{task.queuePosition !== null ? `, #${task.queuePosition} in line` : ""}</span>
       </PageHead>
+      {task.waitingBehind ? <p role="note">Starts once you answer <a href={here("tasks", task.waitingBehind.id)}>{task.waitingBehind.title}</a>, which works in the same folder.</p> : null}
       {ACTIVE.includes(task.status) && task.createdBy === me.email ? <NotifyAsk /> : null}
       {quote ? <QuoteSelection onQuote={quote} /> : null}
       {/* The change is the page; what was asked and how the run went sit beside it in the rail. */}
-      <div className="with-rail">
+      <div className="with-rail" style={rail.style}>
+        {rail.handle}
         <div className="task-main">
           {stale ? <p className="error" role="status">{stale.line} <Hint label="why the task did not refresh">{stale.reason}</Hint></p> : null}
           {task.error && !(task.question && !task.question.answer) && !(stoppedBare && task.startedAt) ? (task.status === "needs-review" ? <p className="muted" role="note">{task.error}</p> : <p className="error" role="alert">{task.error}</p>) : null}
@@ -1546,15 +1774,18 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
           }} />
           {refused ? <p className="error" role="alert">{mergeCommand(refused) ? <>{mergeCommand(refused)!.said}: <CopyText text={mergeCommand(refused)!.command} /></> : refused}</p> : null}
           <WaitingNote task={task} me={me} onContinued={() => setAttempt((n) => n + 1)} />
-          <McpSignIn names={task.mcpNeedsSignIn ?? []} />
-          {working && live ? <section className="section" aria-label="The agent at work"><LiveRun run={run} withPlan={false} first={where(true)} working={task.status === "running" && !task.waitingFor} /></section> : null}
+          <McpSignIn names={task.mcpNeedsSignIn ?? []} onePerson={me.mode === "local" && manages(me)} />
+          {working && live ? <section className="section" aria-label="The agent at work"><LiveRun run={run} withPlan={false} isMine={mine} first={where(true)} working={task.status === "running" && !task.waitingFor} /></section> : null}
           {/* A card waits where the agent stopped for it: right after what it did so far. */}
+          {task.stage === "stopped" ? <p className="waiting" role="status">You stopped the agent's step; tell it what to do next.</p> : null}
           <TaskRequests task={task} me={me} agent={agentLabel} onAnswered={reread} />
           {task.targets ? (inFolder(task) ? <FolderChanges task={task} local={me.mode === "local"} starter={task.createdBy === me.email} onChanged={() => void reread()} {...(quote ? { onQuote: quote } : {})} /> : <TargetCards task={task} />) : null}
+          {task.checksFound?.length ? <p className="muted">{foundSaid(task.checksFound.map((c) => c.command))} <a href={here("settings", "code")}>Review them</a></p> : null}
           {review.section}
+          <UsedCorrected task={task} />
           {requestOpen ? (
             <section className="section" aria-labelledby="task-req-h">
-              <h2 id="task-req-h">Changes</h2>
+              <div className="heading-row"><h2 id="task-req-h">Changes</h2><TurnSelect pick={turnPick} /></div>
               {/* The request and where the forge has it are one statement: two lines held together, not two paragraphs. */}
               {ownCopy ? null : (
                 <div className="request-state">
@@ -1564,7 +1795,14 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
               )}
               {request?.status === "open" && request.provider !== "local" && canEdit ? <p><button type="button" className="secondary small" onClick={refresh} disabled={busy}>Refresh from {request.provider}</button></p> : null}
               {me.mode === "local" && request?.status === "open" && request.provider === "local" ? <ForgeReach repoId={task.repoId} number={task.requestNumber!} /> : null}
-              <RequestDiff key={`${task.id}:${dropped}`} reads={requestReads(task.repoId, task.requestNumber!)} bare {...(quote ? { onQuote: quote } : {})} {...(drops ? { onDrop: drop } : {})} ownCopy={ownCopy} />
+              <TaskTurns taskId={task.id} pick={turnPick} canUndo={drops} onUndone={() => { setDropped((n) => n + 1); void reread(); }} {...(quote ? { onQuote: quote } : {})} all={<RequestDiff key={`${task.id}:${dropped}`} reads={requestReads(task.repoId, task.requestNumber!)} bare {...(quote ? { onQuote: quote } : {})} {...(drops ? { onDrop: drop } : {})} ownCopy={ownCopy} />} />
+            </section>
+          ) : null}
+          {state === "finished-nothing-changed" && task.lastSaid ? (
+            <section className="section" aria-labelledby="task-answer-h">
+              {task.description && task.description !== task.title ? <p className="small" dir="auto"><strong>You asked:</strong> {task.description}</p> : null}
+              <h2 id="task-answer-h">The agent's answer</h2>
+              <Markdown text={task.lastSaid} />
             </section>
           ) : null}
           {/* While the agent waits on a card, the card's own words go to it: a second box at the foot only covered it. */}
@@ -1574,8 +1812,8 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
             else void reread();
           }} />
           {followUp && task.messages?.length ? <QueuedMessages task={task.id} messages={task.messages} onChanged={() => void reread()} /> : null}
-          {followUp && !(followUp !== "continue" && asksNow(task)) ? (
-            <TaskFollowUp task={task} kind={followUp} jump={jump} stop={stop} quotes={quotes} onQuotes={setQuotes} onSent={() => {
+          {followUp && !task.changes?.undone && !(followUp !== "continue" && asksNow(task)) ? (
+            <TaskFollowUp personal={me.mode === "local"} task={task} kind={followUp} jump={jump} stop={stop} quotes={quotes} onQuotes={setQuotes} onSent={() => {
               // A continued run is a new turn on the same task, followed from its start; anything else reads where the task stands now.
               if (followUp === "continue") setAttempt((n) => n + 1);
               else void reread();
@@ -1585,10 +1823,23 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
           ) : stop ? (
             <form className="run-steer" aria-label="Stop the task" onSubmit={(e) => e.preventDefault()}>{jump}{stop}</form>
           ) : null}
+          {/* On a phone the review's main action stands here, at the foot of the main surface, as the steer line does; the head keeps it for a wider screen. */}
+          {task.status === "needs-review" && (ownCopy || requestOpen) ? (
+            <div className="foot-actions">
+              {ownCopy ? (request?.status === "open" && canEdit ? (
+                <>
+                  {request.heldReason === undefined ? <button type="button" disabled={busy} onClick={() => act(() => answer("merge"))}>Keep these changes</button> : null}
+                  <ConfirmAction trigger="Discard these changes…" consequence={discardSaid(task.keptBefore === true)} confirm="Discard changes" keep="Keep them for now" onConfirm={() => answer("close")} />
+                </>
+              ) : null) : <a className="button" href={here("repositories", task.repoId, "requests")}>Open the request</a>}
+            </div>
+          ) : null}
           {!working && live ? (
-            <details className="section log-fold" open={stoppedBare && !asking}>
+            <details className="section log-fold" open={stoppedBare && !asking} onToggle={(e) => {
+              if ((e.currentTarget as HTMLDetailsElement).open) setHistoryRead(true);
+            }}>
               <summary>How the agent got here</summary>
-              <LiveRun run={run} first={where(false)} />
+              <LiveRun run={run} isMine={mine} first={where(false)} />
             </details>
           ) : null}
           <details className="section log-fold" open={logOpen} onToggle={(e) => {
@@ -1607,6 +1858,7 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
               <p className="pre" dir="auto">{task.description}</p>
             </section>
           ) : null}
+          <TaskFiles id={task.id} reads={attempt} />
           <section aria-labelledby="task-where-h">
             <h2 id="task-where-h">Where</h2>
             <Facts facts={facts.where} />
@@ -1626,7 +1878,8 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
             <h2 id="task-run-h">Run</h2>
             <Facts facts={facts.run} />
           </section>
-          {working ? null : <TaskLearned key={task.id} task={task.id} finishedAt={task.finishedAt} />}
+          {task.setup || task.used ? <TaskUsed {...(task.setup ? { setup: task.setup } : {})} off={{ ...NOTHING_OFF, ...task.off }} {...(task.used ? { used: task.used } : {})} {...(task.startedWith ? { report: task.startedWith } : {})} /> : null}
+          {working ? null : <TaskLearned key={task.id} task={task.id} finishedAt={task.finishedAt} usedShown={Boolean(task.setup || task.used)} folder={me.mode === "local" ? task.routing?.path.split("/").filter(Boolean).pop() ?? task.repoId : null} />}
         </aside>
       </div>
     </div>
@@ -1710,7 +1963,10 @@ function RunSummary({ task, spent }: { task: TaskRecord; spent: number | null })
     const timer = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
   }, []);
-  return <>The agent has worked {duration(task)}{spent !== null ? `; $${spent.toFixed(2)} so far` : ""}.</>;
+  const waiting = (task.requests ?? []).some((r) => r.status === "pending" && r.responseCapability === "live");
+  const cost = spent !== null ? `; $${spent.toFixed(2)} so far` : "";
+  // While a card waits the clock stands still: the time is the agent's own, and the page says whose move it is.
+  return waiting ? <>Waiting for you. The agent has worked {duration(task)} so far{cost}.</> : <>The agent has worked {duration(task)}{cost}.</>;
 }
 
 function Facts({ facts }: { facts: TaskFact[] }) {

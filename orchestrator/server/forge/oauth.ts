@@ -172,7 +172,7 @@ export interface ForgeConnection {
   manageUrl?: string;
 }
 
-export interface GitLabTokens {
+export interface ForgeTokens {
   accessToken: string;
   refreshToken: string | null;
   expiresAt: string | null;
@@ -213,7 +213,7 @@ const MESSAGE_MAX = 200;
 
 type Json = Record<string, unknown>;
 
-async function postForm(url: string, form: Record<string, string>, secrets: string[], send: typeof fetch = fetch): Promise<Json> {
+export async function postForm(url: string, form: Record<string, string>, secrets: string[], send: typeof fetch = fetch, refusedBy = "GitLab"): Promise<Json> {
   let res: Response;
   try {
     res = await send(url, { method: "POST", headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(form).toString(), redirect: "manual", signal: AbortSignal.timeout(30_000) });
@@ -223,7 +223,7 @@ async function postForm(url: string, form: Record<string, string>, secrets: stri
   const body = (await res.json().catch(() => ({}))) as Json;
   if (!res.ok || typeof body.error === "string") {
     const said = typeof body.error_description === "string" ? body.error_description : typeof body.error === "string" ? body.error : `answered ${res.status}`;
-    const failure = new ForgeSignInFailed(maskSecrets(`GitLab refused: ${said}`, secrets).replace(/\p{C}+/gu, " ").slice(0, MESSAGE_MAX));
+    const failure = new ForgeSignInFailed(maskSecrets(`${refusedBy} refused: ${said}`, secrets).replace(/\p{C}+/gu, " ").slice(0, MESSAGE_MAX));
     (failure as ForgeSignInFailed & { code?: string }).code = typeof body.error === "string" ? body.error : undefined;
     throw failure;
   }
@@ -241,8 +241,9 @@ export async function apiGet<T>(url: string, headers: Record<string, string>, se
   return (await res.json()) as T;
 }
 
-function gitlabTokens(body: Json, now: Date, previous: string | null): GitLabTokens {
-  if (typeof body.access_token !== "string" || !body.access_token) throw new ForgeSignInFailed("GitLab's sign-in returned no access token");
+/** The tokens a forge's token endpoint answered: a refresh token it did not send again keeps the one before, and a token with no lifetime does not lapse. */
+export function forgeTokens(body: Json, now: Date, previous: string | null, label = "GitLab"): ForgeTokens {
+  if (typeof body.access_token !== "string" || !body.access_token) throw new ForgeSignInFailed(`${label}'s sign-in returned no access token`);
   const seconds = Number(body.expires_in);
   return {
     accessToken: body.access_token,
@@ -258,9 +259,9 @@ export function gitlabAuthorizeUrl(app: GitLabApp, redirectUri: string, state: s
   return url.toString();
 }
 
-export async function gitlabExchange(app: GitLabApp, code: string, verifier: string, redirectUri: string, now = new Date()): Promise<GitLabTokens> {
+export async function gitlabExchange(app: GitLabApp, code: string, verifier: string, redirectUri: string, now = new Date()): Promise<ForgeTokens> {
   const body = await postForm(`${app.webUrl}/oauth/token`, { grant_type: "authorization_code", client_id: app.clientId, client_secret: app.clientSecret, code, redirect_uri: redirectUri, code_verifier: verifier }, [app.clientSecret, code], app.send);
-  return gitlabTokens(body, now, null);
+  return forgeTokens(body, now, null);
 }
 
 /** The username the tokens sign in as: what the card names the connection by. */
@@ -271,18 +272,18 @@ export async function gitlabAccount(app: GitLabApp, accessToken: string): Promis
 }
 
 /** Asks GitLab to forget the tokens. Best effort: the orchestrator forgets them either way. */
-export async function gitlabRevoke(app: GitLabApp, tokens: GitLabTokens): Promise<void> {
+export async function gitlabRevoke(app: GitLabApp, tokens: ForgeTokens): Promise<void> {
   await postForm(`${app.webUrl}/oauth/revoke`, { client_id: app.clientId, client_secret: app.clientSecret, token: tokens.accessToken }, [app.clientSecret, tokens.accessToken], app.send).catch(() => undefined);
 }
 
 /** A GitLab token is renewed this long before it lapses, so a fetch or a request never starts on one about to. */
 export const RENEW_AHEAD_MS = 5 * 60_000;
 
-const renewing = new Map<string, Promise<string>>();
+const renewing = new Map<string, Promise<unknown>>();
 
-export async function readGitLabTokens(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">): Promise<GitLabTokens | null> {
+export async function readGitLabTokens(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">): Promise<ForgeTokens | null> {
   const raw = await readSecret(ctx.store, ctx.vault ?? null, ctx.tenant, connectionKey("gitlab"));
-  return raw ? (JSON.parse(raw) as GitLabTokens) : null;
+  return raw ? (JSON.parse(raw) as ForgeTokens) : null;
 }
 
 /** Why a connection gave no token, in words for a log or a screen; a route answers it as a conflict the card tells how to fix. */
@@ -293,7 +294,7 @@ export class ConnectionUnusable extends OrchestratorError {
 }
 
 /** Whether sealed tokens last long enough to start a fetch or a request on. */
-function lasting(tokens: GitLabTokens | null, now: Date): boolean {
+export function lasting(tokens: ForgeTokens | null, now: Date): boolean {
   return Boolean(tokens && (!tokens.expiresAt || Date.parse(tokens.expiresAt) - now.getTime() > RENEW_AHEAD_MS));
 }
 
@@ -312,49 +313,67 @@ export async function gitlabToken(ctx: ForgeAppContext, now = new Date()): Promi
   const tokens = await readGitLabTokens(ctx);
   if (!tokens) throw new ConnectionUnusable("the GitLab connection holds no token; an owner or an admin connects GitLab again under Integrations");
   if (lasting(tokens, now)) return tokens.accessToken;
-  const key = `${ctx.tenant}:gitlab`;
-  const running = renewing.get(key);
+  const sealed = async () => {
+    const again = await readGitLabTokens(ctx);
+    return again && lasting(again, now) ? again.accessToken : null;
+  };
+  return renewOnce(ctx, RENEW_LEASE, sealed, () => renewGitLab(ctx, app, now), "the GitLab token is being renewed; try again in a minute");
+}
+
+const RENEW_LEASE = "forge.renewing.gitlab";
+/** Long enough for one call to a forge's token endpoint, which gives up after thirty seconds. */
+const LEASE_MS = 45_000;
+const LEASE_POLL_MS = 250;
+
+/**
+ * One renewal at a time of a token whose refresh the forge spends on use: in this process by a
+ * shared promise, across the web and task-runner processes by a lease in the database. A process
+ * that finds the lease held waits for what its holder seals (`sealed`); the holder's `renew` reads
+ * the sealed tokens again before it spends one.
+ */
+export async function renewOnce<T>(ctx: Pick<OrchestratorContext, "store" | "tenant">, lease: string, sealed: () => Promise<T | null>, renew: () => Promise<T>, busy: string): Promise<T> {
+  const key = `${ctx.tenant}:${lease}`;
+  const running = renewing.get(key) as Promise<T> | undefined;
   if (running) return running;
-  const renewal = renewGitLab(ctx, app, now).finally(() => renewing.delete(key));
+  const renewal = underLease(ctx, lease, sealed, renew, busy).finally(() => renewing.delete(key));
   renewing.set(key, renewal);
   return renewal;
 }
 
-const RENEW_LEASE = "forge.renewing.gitlab";
-/** Long enough for one call to GitLab's token endpoint, which gives up after thirty seconds. */
-const LEASE_MS = 45_000;
-const LEASE_POLL_MS = 250;
-
-async function renewGitLab(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, app: GitLabApp, now: Date): Promise<string> {
+async function underLease<T>(ctx: Pick<OrchestratorContext, "store" | "tenant">, lease: string, sealed: () => Promise<T | null>, renew: () => Promise<T>, busy: string): Promise<T> {
   const holder = randomBytes(9).toString("base64url");
   for (let waited = 0; ; waited += LEASE_POLL_MS) {
     const at = new Date();
-    if (await ctx.store.claimLease(ctx.tenant, RENEW_LEASE, holder, new Date(at.getTime() + LEASE_MS).toISOString(), at.toISOString())) break;
+    if (await ctx.store.claimLease(ctx.tenant, lease, holder, new Date(at.getTime() + LEASE_MS).toISOString(), at.toISOString())) break;
     // Another process is renewing: what it seals is the token to use.
     await new Promise((resolve) => setTimeout(resolve, LEASE_POLL_MS));
-    const sealed = await readGitLabTokens(ctx);
-    if (sealed && lasting(sealed, now)) return sealed.accessToken;
-    if (waited > LEASE_MS) throw new ConnectionUnusable("the GitLab token is being renewed; try again in a minute");
+    const ready = await sealed();
+    if (ready) return ready;
+    if (waited > LEASE_MS) throw new ConnectionUnusable(busy);
   }
   try {
-    const record = await readConnection(ctx, "gitlab");
-    const tokens = await readGitLabTokens(ctx);
-    if (!record || !tokens) throw new ConnectionUnusable("GitLab is not connected for this organization; an owner or an admin connects it under Integrations");
-    if (record.problem) throw new ConnectionUnusable(`the GitLab connection needs to be made again: ${record.problem}; an owner or an admin connects GitLab again under Integrations`);
-    if (lasting(tokens, now)) return tokens.accessToken;
-    if (!tokens.refreshToken) return await markBroken(ctx, "gitlab", record, "GitLab gave no refresh token, and the token has lapsed");
-    try {
-      const body = await postForm(`${app.webUrl}/oauth/token`, { grant_type: "refresh_token", client_id: app.clientId, client_secret: app.clientSecret, refresh_token: tokens.refreshToken, redirect_uri: record.redirectUri ?? "" }, [app.clientSecret, tokens.refreshToken, tokens.accessToken], app.send);
-      const fresh = gitlabTokens(body, now, tokens.refreshToken);
-      await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, connectionKey("gitlab"), JSON.stringify(fresh), record.byEmail);
-      return fresh.accessToken;
-    } catch (err) {
-      if (!(err instanceof ForgeSignInFailed)) throw err;
-      if ((err as ForgeSignInFailed & { code?: string }).code === "invalid_grant") return await markBroken(ctx, "gitlab", record, "GitLab no longer accepts its sign-in (it was revoked, or the application changed)");
-      throw new ConnectionUnusable(`the GitLab token was not renewed: ${err.message}; try again, and if it repeats, an owner or an admin connects GitLab again under Integrations`);
-    }
+    return await renew();
   } finally {
-    await ctx.store.deleteSetting(ctx.tenant, RENEW_LEASE);
+    await ctx.store.deleteSetting(ctx.tenant, lease);
+  }
+}
+
+async function renewGitLab(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, app: GitLabApp, now: Date): Promise<string> {
+  const record = await readConnection(ctx, "gitlab");
+  const tokens = await readGitLabTokens(ctx);
+  if (!record || !tokens) throw new ConnectionUnusable("GitLab is not connected for this organization; an owner or an admin connects it under Integrations");
+  if (record.problem) throw new ConnectionUnusable(`the GitLab connection needs to be made again: ${record.problem}; an owner or an admin connects GitLab again under Integrations`);
+  if (lasting(tokens, now)) return tokens.accessToken;
+  if (!tokens.refreshToken) return await markBroken(ctx, "gitlab", record, "GitLab gave no refresh token, and the token has lapsed");
+  try {
+    const body = await postForm(`${app.webUrl}/oauth/token`, { grant_type: "refresh_token", client_id: app.clientId, client_secret: app.clientSecret, refresh_token: tokens.refreshToken, redirect_uri: record.redirectUri ?? "" }, [app.clientSecret, tokens.refreshToken, tokens.accessToken], app.send);
+    const fresh = forgeTokens(body, now, tokens.refreshToken);
+    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, connectionKey("gitlab"), JSON.stringify(fresh), record.byEmail);
+    return fresh.accessToken;
+  } catch (err) {
+    if (!(err instanceof ForgeSignInFailed)) throw err;
+    if ((err as ForgeSignInFailed & { code?: string }).code === "invalid_grant") return await markBroken(ctx, "gitlab", record, "GitLab no longer accepts its sign-in (it was revoked, or the application changed)");
+    throw new ConnectionUnusable(`the GitLab token was not renewed: ${err.message}; try again, and if it repeats, an owner or an admin connects GitLab again under Integrations`);
   }
 }
 
@@ -368,7 +387,7 @@ export async function markBroken(ctx: Pick<OrchestratorContext, "store" | "tenan
   throw new ConnectionUnusable(`the ${kind === "gitlab" ? "GitLab" : "GitHub"} connection needs to be made again: ${problem}; ${step}`);
 }
 
-export async function sealGitLabTokens(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, tokens: GitLabTokens, by: string): Promise<void> {
+export async function sealGitLabTokens(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, tokens: ForgeTokens, by: string): Promise<void> {
   await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, connectionKey("gitlab"), JSON.stringify(tokens), by);
 }
 

@@ -412,10 +412,10 @@ export function ForgeConnectCard({ card, repos, other, onChanged }: { card: Forg
           ? `Connected as ${flow.account} on ${flow.host}; the orchestrator opens the requests of the tasks you start as you, and nothing else.`
           : flow.state === "failed"
             ? sentence(flow.error)
-            : `Sign in to ${forge} with a one-time code, nothing to install; it lets the orchestrator write to the repositories you can, which it uses only for the requests of the tasks you start.`;
+            : `Open the requests of the tasks you start on ${forge} as you. You sign in with a one-time code, nothing to install; the sign-in can write to the repositories you can, and is used only for those requests.`;
       const status = flow.state === "waiting" ? <SignInCode forge={forge} code={flow.code} url={flow.url} /> : null;
       // The page's one filled button is Start here's; while a code waits the card shows only what to do with it.
-      const action = flow.state === "done" ? <button type="button" className="secondary" disabled={busy} onClick={signOut}>Sign out</button> : flow.state === "waiting" ? null : <button type="button" className="secondary" disabled={busy} onClick={start}>Sign in with {forge}</button>;
+      const action = flow.state === "done" ? <button type="button" className="secondary" disabled={busy} onClick={signOut}>Sign out</button> : flow.state === "waiting" ? null : <button type="button" className="secondary" disabled={busy} onClick={start}>{flow.state === "failed" ? "Sign in again" : `Sign in with ${forge}`}</button>;
       return <Connect id={kind} name={forge} level={3} connected={flow.state === "done"} about={deviceAbout} status={status} action={action} other={other} error={error} />;
     }
     const about = c
@@ -423,7 +423,7 @@ export function ForgeConnectCard({ card, repos, other, onChanged }: { card: Forg
       : !read.org
         ? sentence(read.why ?? `An owner or an admin connects ${forge}`)
         : read.org.available
-          ? `Connect ${forge} once for the organization: the orchestrator reads the repositories you pick and opens their requests there.`
+          ? `Work on the repositories you pick on ${forge} and open their requests there, connected once for the organization.`
           : read.why
             ? sentence(`${read.why}; connect with a token under Other ways to connect`)
             : (
@@ -440,7 +440,7 @@ export function ForgeConnectCard({ card, repos, other, onChanged }: { card: Forg
   const about = cli.signedIn
     ? `Connected as ${cli.account ?? "you"} on ${cli.host}.`
     : cli.installed
-      ? `Sign in with your own ${cli.tool} through the browser; its sign-in stays with ${cli.tool}, and requests open on ${forge} as you.`
+      ? `Open the requests of your tasks on ${forge} as you, through your own ${cli.tool}; its sign-in stays with ${cli.tool}.`
       : `${cli.name} is not on this machine. Install it, then check again.`;
   const status = flow.state === "waiting" ? <SignInCode forge={forge} code={flow.code} url={flow.url} note={flow.note} /> : null;
   const action = cli.signedIn ? null : !cli.installed ? (

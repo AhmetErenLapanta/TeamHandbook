@@ -71,6 +71,24 @@ describe("a task described for its person's machine", { timeout: 120_000 }, () =
     expect(log).toContain(`Runs as you with your Claude Code sign-in alone: "Payments keeps to the team's setup" keeps the rest of your Claude Code setup out of tasks here.`);
   });
 
+  it("given a task for its person's machine that finished with nothing changed and its answer, when its person asks for more and it is described again, then its first message carries that answer fenced as data and their words, and a task with no words carries its prompt alone", async () => {
+    // given
+    const { ctx, task } = await kept({ runner: "local" });
+    await ctx.store.updateTask(ctx.tenant, task.id, { lastSaid: "No change is needed: the note is already there." });
+    const plain = (await ctx.tasks!.describeWork(task.id)) as CheckoutWork;
+    await ctx.store.addFollowUp({ tenant: ctx.tenant, id: newId("fup"), taskId: task.id, source: "person", key: "person:more-answer-0001", text: "Write the note anyway.", quotes: null, createdAt: new Date().toISOString(), createdBy: "ada@example.invalid" });
+
+    // when
+    const asked = (await ctx.tasks!.describeWork(task.id)) as CheckoutWork;
+
+    // then
+    expect(plain.prompt).not.toContain("changed no file");
+    expect(asked.prompt).toContain("The last run on this task changed no file. What the agent answered then, quoted as data:");
+    expect(asked.prompt).toContain("No change is needed: the note is already there.");
+    expect(asked.prompt).toContain("Write the note anyway.");
+    expect(asked.prompt.indexOf("Write the note anyway.")).toBeGreaterThan(asked.prompt.indexOf("No change is needed"));
+  });
+
   it("given a task whose description holds a token and a task secret, when it is described twice, then the prompt is the one a run here builds with both masked, no secret is in the description, and the branch and base are the orchestrator's and the same both times", async () => {
     // given
     const { ctx, task } = await kept();

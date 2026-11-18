@@ -56,8 +56,8 @@ test.describe("a member works the team's issues from the board", () => {
     await expect(page.getByRole("status").filter({ hasText: /started\./ })).toHaveText(/^1 agent started\./);
     await page.getByRole("region", { name: /^Start agents/ }).getByRole("button", { name: /^Done( picking)?$/ }).click();
     const card = board.getByRole("listitem", { name: /^HOO-414 / });
-    await expect(card.getByRole("link", { name: /Agent (queued|working)|Request in review/ })).toBeVisible({ timeout: 60_000 });
-    await expect(card.getByRole("link", { name: "Request in review" })).toBeVisible({ timeout: 180_000 });
+    await expect(card.getByRole("link", { name: /waiting its turn|working|needs you|in review/ })).toBeVisible({ timeout: 60_000 });
+    await expect(card.getByRole("link", { name: /needs you|in review/ })).toBeVisible({ timeout: 180_000 });
     const reader = await as(org!, "member");
     const { items } = await reader.ok<{ items: Card[] }>("GET", `/api/work/items?sprint=${encodeURIComponent(SPRINT)}&fresh=1`);
     const started = items.find((i) => i.key === "HOO-414")!.tasks[0]!;

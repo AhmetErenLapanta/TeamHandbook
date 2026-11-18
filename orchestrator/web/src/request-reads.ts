@@ -26,6 +26,11 @@ export function requestReads(repoId: string, number: number): ChangeReads {
   return changeReads(`/api/repos/${encodeURIComponent(repoId)}/requests/${number}/changes`);
 }
 
+/** What one turn of a task changed. */
+export function turnReads(taskId: string, n: number): ChangeReads {
+  return changeReads(`/api/tasks/${encodeURIComponent(taskId)}/turns/${n}/changes`);
+}
+
 /** What a task changed in a folder without Git, kept by the orchestrator's own copy of it. */
 export function taskChangeReads(taskId: string): ChangeReads {
   return changeReads(`/api/tasks/${encodeURIComponent(taskId)}/changes`);

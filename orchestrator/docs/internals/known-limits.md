@@ -29,6 +29,18 @@
   version is refused, not undone, so a backup taken before the upgrade is the way back.
 - **Issues.** `tracker.writeBack` is not built, and OpenCode gets MCP servers only behind
   `ORCHESTRATOR_OPENCODE_MCP=1`.
+- **Built on the server, not yet on a page.** The cost range of tasks like the next one
+  (`GET /api/tasks/cost-range`), how full the agent's context and its usage window are (they reach the
+  task's log as "context in use" and "plan limit" lines), a repository's branches
+  (`GET /api/repos/:id/branches`, kept as a request's target branch) and the subscribe and
+  unsubscribe calls for notices with the page closed have no control or text on a page yet; a
+  start form has no base branch picker, a request's forge state is a design decision with no line on the page yet, and there is no undo from one turn. One-click sign-in to a
+  person's own Claude Code MCP server is a stub in the runner: the page keeps the command to run.
+  A secret the agent asks for can be given on its card, but the task does not read, mask or
+  delete the given value yet.
+- **Handbooks.** Claude Code has no off for one MCP server or one hook, so Your handbooks gives them no
+  switch; adding an MCP server is done in the terminal, and on a team's server a person's handbooks are
+  read and changed only through their paired computer, where an update previews no changes.
 - **Connecting a machine.** On a team's or the cloud's orchestrator a person connects a machine
   from Settings > **Your machines**: `handbook-orchestrator runner connect` pairs it and runs the
   person's tasks until Ctrl-C, and `runner service install` keeps it running whenever they are
@@ -37,7 +49,8 @@
   scaffold refresh, a repository without `memberUrl`, or one whose `.teamhandbook/environment.json`
   runs a setup or keeps the agent to a list of domains: such a task fails when the machine takes
   it, with the reason in its log, unless `ORCHESTRATOR_SERVER_TASKS=1` runs every task on the
-  orchestrator itself. A task in a folder without Git on a machine lists the files it changed and
+  orchestrator itself. A machine runner older than the follow-up on a folder of several repositories
+  does not say it can go on from a kept change, so that task is offered no follow-up. A task in a folder without Git on a machine lists the files it changed and
   their line counts but not their diff, as their content stays on the machine, and its undo needs
   the machine's runner to be running. A local orchestrator runs its own tasks, a folder without Git
   included.

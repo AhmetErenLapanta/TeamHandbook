@@ -8,7 +8,7 @@ import type { UserRecord } from "./accounts.js";
 import { localRepoPath } from "./forge/local.js";
 import { isId, OLDER_IDS } from "./ids.js";
 import { localMode } from "./mode.js";
-import { hostIdentityOf, keepTaskLesson, queueTaskLesson, readTaskLessonReply, rejectTaskLesson, signalIsSafe, taskLesson, taskLessonCandidate, taskLessons } from "./plugin.js";
+import { detectSecret, hostIdentityOf, listCandidates, keepTaskLesson, queueTaskLesson, readTaskLessonReply, rejectTaskLesson, signalIsSafe, taskLesson, taskLessonCandidate, taskLessons } from "./plugin.js";
 import type { CandidateMeta, TaskLessonSignal, TaskLessonWire } from "./plugin.js";
 import { route } from "./route-scopes.js";
 import { secretsForTask } from "./task-secrets.js";
@@ -182,7 +182,7 @@ export async function reviewTask(ctx: OrchestratorContext, place: LessonPlace, o
   if (place.kind === "machine" && !machineId) return "waiting";
   const outcome = await (async (): Promise<{ outcome: LessonOutcome; slug?: string; machineId?: string }> => {
     // The redactor's floor: a shorter value matches ordinary words.
-    const secretValues = (await secretsForTask(ctx, task.repoId, task.team)).map((s) => s.value).filter((v) => v.length >= MIN_LITERAL);
+    const secretValues = (await secretsForTask(ctx, task.repoId, task.team, undefined, task.id)).map((s) => s.value).filter((v) => v.length >= MIN_LITERAL);
     const safe = fresh.map((s) => s.signal);
     if (!safe.every((s) => signalIsSafe(s, secretValues))) return { outcome: "dropped" };
     const skills = [...(task.skills ?? []), ...(task.tools?.skills ?? []).map((s) => s.name)];
@@ -258,22 +258,22 @@ export async function sweepLessons(ctx: OrchestratorContext, place: LessonPlace,
 // ended in between would otherwise fall before that mark and never be read.
 // Every 15 seconds: a person who just ended a task waits for the lesson on its page, and a pass over
 // tasks already read is one query.
-export function startLessonSweep(ctx: OrchestratorContext, place: LessonPlace, everyMs = 15_000): () => void {
+export function startLessonSweep(ctx: OrchestratorContext, place: LessonPlace, everyMs = 15_000): (() => void) & { firstSweep: Promise<void> } {
   let running = false;
   const seen = new Map<string, string | null>();
-  const sweep = () => {
-    if (running) return;
+  const sweep = (): Promise<void> => {
+    if (running) return Promise.resolve();
     running = true;
-    sweepLessons(ctx, place, new Date(), seen)
-      .catch((err: Error) => console.error(`lessons: ${err.message}`))
+    return sweepLessons(ctx, place, new Date(), seen)
+      .then(() => undefined, (err: Error) => console.error(`lessons: ${err.message}`))
       .finally(() => {
         running = false;
       });
   };
-  sweep();
+  const firstSweep = sweep();
   const timer = setInterval(sweep, everyMs);
   timer.unref();
-  return () => clearInterval(timer);
+  return Object.assign(() => clearInterval(timer), { firstSweep });
 }
 
 function shownLesson(meta: CandidateMeta) {
@@ -304,12 +304,15 @@ export function lessonRoutes(ctx: OrchestratorContext, place: LessonPlace | null
     const startedIt = !user.key && (task.createdBy === user.email || task.createdBy === user.id);
     const candidates =
       queue && (await isOwner(user)) ? taskLessons(queue.home).filter((m) => m.sessionId === task.id).map(shownLesson) : place?.kind === "machine" && startedIt ? await sentLessons(ctx, user, task) : null;
-    return c.json({ skills, candidates });
+    // A team skill the agent used on a task its person then corrected is one worth improving; a plugin's or a folder's skill is not the team repository's to change.
+    const corrected = ((await readRow(ctx, task.id))?.signals.length ?? 0) > 0;
+    const improvable = corrected ? skills.used.filter((name) => skills.team.includes(name)) : [];
+    return c.json({ skills, improvable, candidates });
   });
 
   route(app, "GET /api/lessons", async (c) => {
     const user = c.get("user");
-    if (queue) return (await isOwner(user)) ? c.json({ candidates: taskLessons(queue.home).map(shownLesson) }) : c.json(notHere, 404);
+    if (queue) return (await isOwner(user)) ? c.json({ candidates: taskLessons(queue.home).map(shownLesson), waiting: listCandidates(queue.home, "pending").length }) : c.json(notHere, 404);
     if (place?.kind !== "machine" || user.key) return c.json(notHere, 404);
     const mine = [];
     for (const setting of await ctx.store.listSettings(ctx.tenant, ROW(""))) {
@@ -366,16 +369,30 @@ export function lessonRoutes(ctx: OrchestratorContext, place: LessonPlace | null
     if (found instanceof Response) return found;
     const { task, slug, machineId } = found;
     const at = new Date().toISOString();
+    const body = (await c.req.json().catch(() => ({}))) as { target?: unknown };
+    const target = body.target === undefined ? "yours" : body.target;
+    if (target !== "yours" && target !== "folder") return c.json({ error: "a lesson is kept as yours or in this folder; sharing it with the team is the team handbook's Add" }, 400);
     if (!machineId) {
-      const kept = keepTaskLesson(queue!.home, slug, queue!.skillsDir, at, queue!.host);
+      // The folder's own skills are committed with its repository, so a lesson goes there only once kept, and only clean.
+      let into = queue!.skillsDir;
+      if (target === "folder") {
+        const repo = await ctx.store.getRepo(ctx.tenant, task.repoId);
+        const folder = repo ? localRepoPath(repo.url) : null;
+        if (!folder) return c.json({ error: "this task's project is not a folder on this machine, so the lesson cannot be kept there" }, 409);
+        const lesson = taskLesson(queue!.home, slug);
+        if (!lesson || detectSecret(lesson.skillMd) || (lesson.quote && detectSecret(lesson.quote))) return c.json({ error: "the lesson holds what looks like a credential, so it stays out of the folder; keep it as yours" }, 409);
+        into = join(folder, ".claude", "skills");
+      }
+      const kept = keepTaskLesson(queue!.home, slug, into, at, queue!.host);
       if (!kept.ok || !("meta" in kept) || !kept.meta) return c.json({ error: kept.error ?? "not kept" }, 409);
     } else {
+      if (target === "folder") return c.json({ error: "a lesson on your machine is kept as yours; keep it in a folder from that machine with /handbook:review" }, 409);
       const answer = await onMachine(c, machineId, { taskId: task.id, slug, op: "keep" });
       if (answer instanceof Response) return answer;
       if (!("decided" in answer) || answer.decided !== "approved") return c.json({ error: "your machine answered something else" }, 502);
     }
     await marked(task.id, slug, "keptAt", at);
-    return c.json({ lesson: { slug, status: "approved" } });
+    return c.json({ lesson: { slug, status: "approved", target } });
   });
 
   route(app, "POST /api/tasks/:id/lessons/:slug/reject", async (c) => {

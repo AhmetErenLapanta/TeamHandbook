@@ -54,7 +54,7 @@ export function createGitHubForge(config: ForgeConfig, token: string, fetchImpl:
     async open(repo: RepoRecord, change: ChangeRequest): Promise<OpenedRequest> {
       checkBranch(change.branch);
       if (!change.files.length) throw new Error("the change has no files");
-      const { default_branch: base } = await http.request<{ default_branch: string }>("GET", repoPath);
+      const base = change.target ?? (await http.request<{ default_branch: string }>("GET", repoPath)).default_branch;
       // Asked before anything is written: found only when the ref is created, a taken name
       // leaves a tree and a commit on GitHub that nothing points at.
       const taken = await http.request("GET", `${repoPath}/git/ref/heads/${refPath(change.branch)}`).then(

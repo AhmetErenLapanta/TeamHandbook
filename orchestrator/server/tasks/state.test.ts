@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RequestRecord } from "../forge/types.js";
 import { taskForge, taskState } from "./state.js";
 import type { TaskRecord } from "./types.js";
+import { taskPhase } from "./phase.js";
 
 const one = (status: TaskRecord["status"], more: Partial<TaskRecord> = {}) => ({ status, repoId: "payments", requestNumber: null, ...more }) as TaskRecord;
 const request = (number: number, status: RequestRecord["status"], provider: RequestRecord["provider"]) => ({ repoId: "payments", number, status, provider, url: provider === "local" ? "" : `https://gitlab.example.com/acme/payments/-/merge_requests/${number}` }) as RequestRecord;
@@ -41,6 +42,17 @@ describe("where a task stands, in one word", () => {
     // then
     expect(states).toEqual(["waiting", "waiting-machine", "usage-limit", "working", "needs-you", "needs-you", "failed", "failed", "stopped", "stopped", "usage-limit", "needs-you", "kept", "undone", "in-review", "merged", "undone", "kept", "needs-you"]);
     expect(forges).toEqual([{ kind: "gitlab", number: 1, url: "https://gitlab.example.com/acme/payments/-/merge_requests/1" }, null]);
+  });
+
+  it("given a task that finished without changing anything, when it is read, then it finished with nothing changed and its phase is finished", () => {
+    // given
+    const task = one("nothing-changed", { lastSaid: "No change is needed." });
+
+    // when
+    const read = [taskState(task, requestOf, null), taskPhase(task, () => null)];
+
+    // then
+    expect(read).toEqual(["finished-nothing-changed", "finished"]);
   });
 
   it("given a change kept on a person's machine that its person opened a request for on a forge the organization never connected, when the task is read, then it is in review and its forge is that request", () => {

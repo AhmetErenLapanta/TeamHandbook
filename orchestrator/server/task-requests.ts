@@ -23,7 +23,7 @@ export type TaskDecision = "allow_once" | "allow_for_task" | "deny";
  * value goes to the runner over its own channel and is never kept here.
  */
 /** A plan is approved as it came or as its person changed it (`plan`, with allow_once alone). */
-export type TaskAnswer = { decision: TaskDecision; note?: string; plan?: string } | { answers: QuestionAnswers } | { provided: true };
+export type TaskAnswer = { decision: TaskDecision; note?: string; plan?: string } | { answers: QuestionAnswers } | { provided: boolean };
 
 /** One question's answer: the option values chosen, and the person's own words when they wrote some. */
 export type QuestionAnswers = Record<string, { chosen: string[]; other: string | null }>;
@@ -112,7 +112,7 @@ export function answerProblem(asked: { kind: TaskRequestKind; payload: Record<st
     return typeof answer.note === "string" && answer.note.length <= NOTE_MAX ? null : shape(`a deny's note is text of at most ${NOTE_MAX} characters`);
   }
   if (kind === "question") return questionProblem(asked.payload.questions, answer);
-  return keys.length === 1 && "provided" in answer && answer.provided === true ? null : shape("a secret is answered only with whether it was provided; its value never reaches the orchestrator's store");
+  return keys.length === 1 && "provided" in answer && typeof answer.provided === "boolean" ? null : shape("a secret is answered only with whether it was given; its value goes to the vault from its card, never in an answer");
 }
 
 /** A plan goes ahead once, as it came or changed, or is declined; it is never allowed for the rest of the task. */

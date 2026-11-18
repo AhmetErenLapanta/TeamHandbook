@@ -1,3 +1,4 @@
+import { handbookReads } from "../short-memory.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { OrchestratorContext } from "../app.js";
@@ -26,7 +27,8 @@ import type { CliRun, OwnCliStatus } from "../forge/own-cli.js";
 import { localMode } from "../mode.js";
 import { saveWrites, writesOn } from "../work/writes.js";
 import { atlassianServer, beginSlackAdd, catalogFor, OAUTH_CALLBACK, signsIn } from "./personal-mcp.js";
-import { claudeCodeServers } from "./claude-code-servers.js";
+import { claudeCodeServers, claudeMcpName, claudeOwner } from "./claude-code-servers.js";
+import { cleanMcpAdd, cleanMcpName, cleanScope, commandLine, folderPath, mcpAddArgs, mcpRemoveArgs } from "./claude-mcp-write.js";
 import { cleanTracker, sameTracker, TRACKER, TRACKER_TOKEN_SECRET } from "./tracker.js";
 import type { TrackerConfig } from "./tracker.js";
 
@@ -244,6 +246,79 @@ export function integrationRoutes(ctx: OrchestratorContext): Hono<OrchestratorEn
     } catch (err) {
       return refused(c, err);
     }
+  });
+
+  // Signing a server of the person's own Claude Code in from the page, which Claude Code answers on its own local address: only the owner of an orchestrator only they reach, and only when they press it.
+  app.post("/api/me/claude-mcp/:name/sign-in", async (c) => {
+    const user = c.get("user");
+    const name = await claudeMcpName(ctx, user, c.req.param("name"));
+    if (!name || !ctx.tasks) return c.json({ error: "no such server" }, 404);
+    handbookReads.forget();
+    const started = await ctx.tasks.startMcpSignIn(name).finally(() => handbookReads.forget());
+    if ("failed" in started) return c.json({ error: started.failed }, 409);
+    await auditChange(ctx, user, "mcp.claude.sign-in.started", { subject: `claude-mcp:${name}`, detail: "began signing in a server of their own Claude Code, which Claude Code finishes on this machine" });
+    return c.json(started);
+  });
+
+  // The write path to the person's own Claude Code: Claude Code's own `mcp` commands, run as them, one at a time, only on a click. Its output is not shown or kept: the answer is the orchestrator's own sentence and the command with every value as dots.
+  const claudeFolder = async (id: string | null): Promise<string | undefined> => (id ? folderPath((await ctx.store.listRepos(ctx.tenant)).find((r) => r.id === id)) : undefined);
+
+  app.post("/api/me/claude-mcp/preview", async (c) => {
+    if (!(await claudeOwner(ctx, c.get("user")))) return c.json({ error: "no such server" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    try {
+      if (body.action === "remove") return c.json({ line: commandLine(mcpRemoveArgs(cleanMcpName(body.name), cleanScope(body.scope))) });
+      return c.json({ line: commandLine(mcpAddArgs(cleanMcpAdd(body), true)) });
+    } catch (err) {
+      return refused(c, err);
+    }
+  });
+
+  app.post("/api/me/claude-mcp", async (c) => {
+    const user = c.get("user");
+    if (!(await claudeOwner(ctx, user))) return c.json({ error: "no such server" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    let line: string;
+    try {
+      const input = cleanMcpAdd(body);
+      const cwd = await claudeFolder(input.folder);
+      line = commandLine(mcpAddArgs(input, true));
+      if (!ctx.tasks?.runClaudeMcp) return c.json({ error: "this orchestrator cannot ask Claude Code to add a server yet", command: line }, 409);
+      const ran = await ctx.tasks.runClaudeMcp(mcpAddArgs(input), cwd);
+      if (!ran.ok) return c.json({ error: `Claude Code did not add ${input.name}.`, command: line }, 409);
+      await auditChange(ctx, user, "mcp.claude.added", { subject: `claude-mcp:${input.name}`, detail: `added ${input.name} (${input.reach}) to their own Claude Code for ${input.scope === "user" ? "every folder" : "one folder"}, as ${input.scope}` });
+      return c.json({ added: true, name: input.name, command: line });
+    } catch (err) {
+      return refused(c, err);
+    }
+  });
+
+  app.delete("/api/me/claude-mcp/:name", async (c) => {
+    const user = c.get("user");
+    if (!(await claudeOwner(ctx, user))) return c.json({ error: "no such server" }, 404);
+    try {
+      const name = cleanMcpName(c.req.param("name"));
+      const scope = cleanScope(c.req.query("scope"));
+      const folder = c.req.query("folder") ?? null;
+      if (scope !== "user" && !folder) return c.json({ error: "choose the folder it is for" }, 400);
+      // The scopes the probe reads are checked against what it read; the private one is not read, and the command itself touches only the scope named.
+      const held = ctx.tasks?.lastPersonalSetup()?.mcpServers ?? [];
+      if (scope !== "local" && !held.some((s) => s.name === name && s.scope === scope)) return c.json({ error: "no such server" }, 404);
+      const cwd = await claudeFolder(folder);
+      if (!ctx.tasks?.runClaudeMcp) return c.json({ error: "this orchestrator cannot ask Claude Code to remove a server yet" }, 409);
+      const ran = await ctx.tasks.runClaudeMcp(mcpRemoveArgs(name, scope), cwd);
+      if (!ran.ok) return c.json({ error: `Claude Code did not remove ${name}.` }, 409);
+      await auditChange(ctx, user, "mcp.claude.removed", { subject: `claude-mcp:${name}`, detail: `removed ${name} from their own Claude Code, from ${scope}` });
+      return c.json({ removed: true, name });
+    } catch (err) {
+      return refused(c, err);
+    }
+  });
+
+  app.get("/api/me/claude-mcp/:name/sign-in", async (c) => {
+    const name = await claudeMcpName(ctx, c.get("user"), c.req.param("name"));
+    if (!name || !ctx.tasks) return c.json({ error: "no such server" }, 404);
+    return c.json(ctx.tasks.mcpSignInState(name));
   });
 
   app.post("/api/integrations/slack/add", async (c) => {

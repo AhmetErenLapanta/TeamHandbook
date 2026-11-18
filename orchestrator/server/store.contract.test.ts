@@ -662,14 +662,22 @@ describe.each(drivers)("the %s store", (_name, fresh) => {
         { userId: u.id, team: "Platform" },
       ]);
 
-      // when it is removed
-      await store.insertUser(user("acme", "second@example.invalid", { role: "owner" }));
+      // when it is removed, with the skills it turned off for every agent started here
+      const second = user("acme", "second@example.invalid", { role: "owner" });
+      await store.insertUser(second);
+      await store.setSetting("acme", `handbook-off:${u.id}`, JSON.stringify({ skills: [{ source: "yours", name: "review-checklist" }], commands: [], mcpServers: [] }));
+      await store.setSetting("acme", `handbook-off:${second.id}`, "{}");
+      await store.setSetting("acme", `handbook-noticed:${u.id}`, JSON.stringify(["docs-kit@payments-market@2.0.0"]));
+      await store.setSetting("acme", `handbook-context:${u.id}`, JSON.stringify({ at: "2026-01-01T00:00:00.000Z", mcpServers: [], skills: [] }));
       expect(await store.deleteUser("acme", u.id)).toBe(true);
 
       // then
       expect(await store.getUser("acme", u.id)).toBeNull();
       expect(await store.getSession("h1")).toBeNull();
       expect(await store.ownedTeams("acme", u.id)).toEqual([]);
+      expect([await store.getSetting("acme", `handbook-off:${u.id}`), await store.getSetting("acme", `handbook-off:${second.id}`)]).toEqual([null, "{}"]);
+      expect(await store.getSetting("acme", `handbook-noticed:${u.id}`)).toBeNull();
+      expect(await store.getSetting("acme", `handbook-context:${u.id}`)).toBeNull();
     });
   });
 
@@ -1282,6 +1290,23 @@ describe.each(drivers)("the %s store's record of the skills a task's agent calle
 
       // then
       expect([...(await store.getTask("a", "tsk_a"))!.usedSkills!].sort()).toEqual(["add-field", "db-query", "release-notes"]);
+    });
+  });
+
+  it("given a task whose log gets a skill's call twice and a server's tool's call, when the source of each use is noted before or after its line, then each use holds its source and the line of its first call, and a line that starts no call marks nothing", async () => {
+    await using(fresh, async (store) => {
+      // given
+      await store.createTask(task("a", "tsk_a", "running"));
+      const call = (tool: string, target: string | null, mcp?: { server: string; tool: string }) => ({ text: `tool ${tool}`, kind: "tool_call", data: { type: "tool_call", tool, target, status: "started", ...(mcp ? { mcp } : {}) } });
+      const yours = { source: "yours", sourceLabel: "Yours" };
+
+      // when
+      await store.noteTaskUse("a", "tsk_a", "skills", "review-checklist", yours);
+      await store.appendTaskLog("a", "tsk_a", ["Started.", call("Skill", "review-checklist"), call("Skill", "review-checklist"), call("mcp__docs__search", null, { server: "docs", tool: "search" }), { text: "tool Read", kind: "tool_call", data: { type: "tool_call", tool: "Read", target: "notes.md", status: "started" } }]);
+      await store.noteTaskUse("a", "tsk_a", "mcpServers", "docs", yours);
+
+      // then
+      expect((await store.getTask("a", "tsk_a"))!.used).toEqual({ skills: [{ name: "review-checklist", ...yours, seq: 2 }], mcpServers: [{ name: "docs", ...yours, seq: 4 }] });
     });
   });
 
@@ -1939,6 +1964,20 @@ describe.each(drivers)("the %s store's machines and the tasks they lease", (_nam
     });
   });
 
+  it("given a run on a machine that changed nothing, when it ends with its answer, then the task finished with nothing changed and keeps the answer", async () => {
+    await using(fresh, async (store) => {
+      // given
+      await store.createTask(local("a", "tsk_none", at));
+      await store.claimLocalTask("a", "ada@example.invalid", "mch_1", "lease_none", later(90), at);
+
+      // when
+      await store.finishLeasedTask("a", "tsk_none", "lease_none", { status: "nothing-changed", error: null, nativeSession: null, branch: null, lastSaid: "No change is needed." }, later(10));
+
+      // then
+      expect(await store.getTask("a", "tsk_none")).toMatchObject({ status: "nothing-changed", error: null, lastSaid: "No change is needed.", finishedAt: later(10) });
+    });
+  });
+
   it("given runs on a machine that end for review, fail and are cut off, when each ends, then only the one for review reads as still opening its request", async () => {
     await using(fresh, async (store) => {
       // given
@@ -2187,6 +2226,32 @@ describe.each(drivers)("the %s store's tasks in a folder without git", (_name, f
     });
   });
 
+  it("given two people's browsers, one endpoint offered twice by one person and also by the other, when they are listed, one is removed by its person and by someone else, and a member is deleted, then each endpoint is kept once per person, the lists are their own, only the owner removes theirs, a gone endpoint goes for everyone, and a deleted member's go with them", async () => {
+    await using(fresh, async (store) => {
+      // given
+      const bo = user("a", "bo@example.invalid", { role: "member" });
+      await store.insertMember(bo, 10);
+      const sub = (id: string, userId: string, endpoint: string) => ({ tenant: "a", id, userId, endpoint, p256dh: "p", auth: "q", createdAt: `2026-11-12T10:0${id.slice(-1)}:00.000Z` });
+
+      // when
+      const added = [await store.addPushSubscription(sub("psh_1", "usr_ada", "https://push.example.invalid/one")), await store.addPushSubscription(sub("psh_2", "usr_ada", "https://push.example.invalid/one")), await store.addPushSubscription(sub("psh_3", "usr_ada", "https://push.example.invalid/two")), await store.addPushSubscription(sub("psh_4", bo.id, "https://push.example.invalid/one"))];
+      const adas = (await store.listPushSubscriptions("a", "usr_ada")).map((r) => r.id);
+      const count = await store.countPushSubscriptions("a");
+      await store.markPushOk("a", "psh_1", "2026-11-12T11:00:00.000Z");
+      const stolen = await store.removePushSubscription("a", bo.id, "psh_1");
+      const own = await store.removePushSubscription("a", "usr_ada", "psh_1");
+      await store.dropPushEndpoint("a", "https://push.example.invalid/two");
+      await store.deleteUser("a", bo.id);
+
+      // then
+      expect(added).toEqual([true, false, true, true]);
+      expect([adas, count]).toEqual([["psh_1", "psh_3"], 3]);
+      expect([stolen, own]).toEqual([false, true]);
+      expect(await store.listPushSubscriptions("a", "usr_ada")).toEqual([]);
+      expect(await store.countPushSubscriptions("a")).toBe(0);
+    });
+  });
+
   it("given a task shared with two members and one not, when it is shared again, read, listed by who sees it, unshared and a member is deleted, then each share is kept once, the task names who it is shared with, a share lets that member find it, and a deleted member's share goes with them", async () => {
     await using(fresh, async (store) => {
       // given
@@ -2311,6 +2376,25 @@ describe.each(drivers)("the %s store's follow-ups for a running task", (_name, f
         ["fup_w", "dismissed", "also update the readme and the index", [{ path: "README.md", lines: "1-2", text: "old" }]],
         ["fup_x", "pending", "also update the changelog", null],
       ]);
+    });
+  });
+
+  it("given a person's follow-up a lease's first message carried, when its person changes it or takes it back, then both are refused and it still waits, kept to that lease, until it is delivered", async () => {
+    await using(fresh, async (store) => {
+      // given
+      const carried = (await store.addFollowUp(followUp("fup_c", "c"))).followUp.id;
+      await store.handFollowUps("a", [carried], "lease_1");
+
+      // when
+      const changed = await store.editFollowUp("a", "tsk_1", carried, "something else", null);
+      const dropped = await store.dropFollowUp("a", "tsk_1", carried);
+      const waiting = await store.pendingFollowUps("a", "tsk_1");
+      await store.markFollowUpsDelivered("a", [carried], at);
+
+      // then
+      expect([changed, dropped]).toEqual([false, false]);
+      expect(waiting.map((f) => [f.id, f.status, f.handedLease])).toEqual([["fup_c", "pending", "lease_1"]]);
+      expect(await store.pendingFollowUps("a", "tsk_1")).toEqual([]);
     });
   });
 
@@ -2922,6 +3006,24 @@ describe("the schema's shape and the orchestrator that opens it", () => {
       [45, "ea95434da31e"],
       [46, "78cbdff6dfff"],
       [47, "a97e538589ab"],
+      [48, "ad98866be3f6"],
+      [49, "c942e0f85bf9"],
+      [50, "69617708b458"],
+      [51, "6fe75188f9b8"],
+      [52, "34aada533483"],
+      [53, "900d5b11bdc7"],
+      [54, "d49a17552397"],
+      [55, "3e06be6a95ea"],
+      [56, "501f9f4f78c7"],
+      [57, "24edb613c1f3"],
+      [58, "d639f8384a6f"],
+      [59, "1b9c07d1893e"],
+      [60, "67553b181eb0"],
+      [61, "347ab122b38c"],
+      [62, "7832e73b5233"],
+      [63, "c67a18fdc5be"],
+      [64, "b20e4fb5cb0a"],
+      [65, "1be915c21dc2"],
     ]);
   });
 });

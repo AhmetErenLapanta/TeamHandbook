@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { backupSettings, BackupSettingRefused, takeBackup } from "./backup.js";
+import { backupCommand, backupSettings, BackupSettingRefused, LOCAL_BACKUP_HOURS, newestBackup, takeBackup } from "./backup.js";
+import { localLinkRoutes, writeLocalAddress } from "./local.js";
 import { oneAtATime } from "./git.js";
 import { newId } from "./ids.js";
 import { openSqliteStore, SCHEMA_VERSION } from "./store.js";
@@ -64,9 +65,27 @@ describe("the backup settings", () => {
     expect(settings).toEqual({ everyHours: null, keep: 7, dir: "/srv/orchestrator-data/backups" });
   });
 
-  it("given an interval of zero, one written with a unit, or no copies kept, when they are read, then each is refused by name", () => {
+  it("given none set on a local orchestrator and a team's, one set, and zero, when they are read, then a local one takes a copy a day, a team's none, a set one as set, and zero turns the schedule off on either", () => {
+    // when
+    const read = (env: NodeJS.ProcessEnv, local: boolean) => backupSettings(env, "/srv/data", local).everyHours;
+
+    // then
+    expect([read({}, true), read({}, false), read({ ORCHESTRATOR_BACKUP_HOURS: "6" }, true), read({ ORCHESTRATOR_BACKUP_HOURS: "0" }, true), read({ ORCHESTRATOR_BACKUP_HOURS: "0" }, false)]).toEqual([LOCAL_BACKUP_HOURS, null, 6, null, null]);
+  });
+
+  it("given a folder of copies and files that are none, when the newest is read, then it is the latest by name and a missing folder has none", () => {
     // given
-    const cases = [{ ORCHESTRATOR_BACKUP_HOURS: "0" }, { ORCHESTRATOR_BACKUP_HOURS: "24h" }, { ORCHESTRATOR_BACKUP_KEEP: "0" }];
+    const dir = scratch();
+    for (const name of ["backup-2026-11-10T08-00-00-000Z", "backup-2026-11-12T09-30-00-000Z", "notes", "backup-partial"]) mkdirSync(join(dir, name));
+
+    // then
+    expect(newestBackup(dir)?.toISOString()).toBe("2026-11-12T09:30:00.000Z");
+    expect(newestBackup(join(dir, "nowhere"))).toBeNull();
+  });
+
+  it("given an interval written with a unit, or no copies kept, when they are read, then each is refused by name", () => {
+    // given
+    const cases = [{ ORCHESTRATOR_BACKUP_HOURS: "24h" }, { ORCHESTRATOR_BACKUP_HOURS: "-1" }, { ORCHESTRATOR_BACKUP_KEEP: "0" }];
 
     // when
     const refused = cases.map((env) => {
@@ -80,8 +99,8 @@ describe("the backup settings", () => {
 
     // then
     expect(refused.map((e) => [e instanceof BackupSettingRefused, e?.message])).toEqual([
-      [true, "ORCHESTRATOR_BACKUP_HOURS is a whole number from 1 to 8760"],
-      [true, "ORCHESTRATOR_BACKUP_HOURS is a whole number from 1 to 8760"],
+      [true, "ORCHESTRATOR_BACKUP_HOURS is a whole number from 1 to 8760, or 0 for none"],
+      [true, "ORCHESTRATOR_BACKUP_HOURS is a whole number from 1 to 8760, or 0 for none"],
       [true, "ORCHESTRATOR_BACKUP_KEEP is a whole number from 1 to 1000"],
     ]);
   });
@@ -297,5 +316,34 @@ describe("the copy before an upgrade", () => {
       expect((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number }).v).toBe(SCHEMA_VERSION - 1);
       db.close();
     });
+  });
+});
+
+describe("the backup command", () => {
+  it("given no orchestrator running, one that takes a copy, one whose copy fails and a request with the wrong secret, when the command is run, then it says to start it, prints the copy's path, says the copy was not written, and the orchestrator refuses a caller without the secret", async () => {
+    // given
+    const dir = scratch();
+    const lines: string[] = [];
+    const say = (line: string) => void lines.push(line);
+    const serve = (copy: () => Promise<string | null>) => {
+      const app = localLinkRoutes(dir, async () => "http://127.0.0.1:18999/in", copy);
+      return ((url: string, init?: RequestInit) => app.request(new URL(url).pathname, init)) as unknown as typeof fetch;
+    };
+
+    // when
+    const stopped = await backupCommand(dir, say);
+    writeLocalAddress(dir, "http://127.0.0.1:18999/");
+    const done = await backupCommand(dir, say, serve(async () => join(dir, "backups", "backup-2026-11-12T10-00-00-000Z")));
+    const failed = await backupCommand(dir, say, serve(async () => null));
+    const stranger = await localLinkRoutes(dir, async () => "x", async () => "never").request("/api/local/backup", { method: "POST", headers: { "x-reentry-secret": "not the secret" } });
+
+    // then
+    expect([stopped, done, failed]).toEqual([1, 0, 1]);
+    expect(lines).toEqual([
+      `backup: no orchestrator is running on ${dir}; start it, then run this again`,
+      `backup: the copy is in ${join(dir, "backups", "backup-2026-11-12T10-00-00-000Z")}`,
+      "backup: no copy was written; the orchestrator's log says why",
+    ]);
+    expect(stranger.status).toBe(403);
   });
 });

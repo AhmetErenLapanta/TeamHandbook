@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { call } from "./api";
 import { Markdown } from "./Markdown";
+import { here } from "./router";
 
 // "sent" is a lesson a team's orchestrator handed one of the person's machines: it is decided there.
 export interface TaskLessonRow {
@@ -15,6 +16,8 @@ export interface TaskLessonRow {
 export interface TaskLessons {
   skills: { team: string[]; project: string[]; used?: string[] };
   candidates: TaskLessonRow[] | null;
+  /** The team's skills the agent used in a task its person corrected: each can be improved by a task on its repository. */
+  improvable?: string[];
 }
 
 interface LessonDetail extends TaskLessonRow {
@@ -39,19 +42,25 @@ export interface SkillOutcomes {
   with: OutcomeBucket;
 }
 
+/** Where a kept lesson lands; the team's is the Team handbook's own Add, after it is kept as the person's. */
+export type KeepTarget = "yours" | "folder";
+type Landing = KeepTarget | "team";
+
 const one = (task: string, slug: string, rest = "") => `/api/tasks/${encodeURIComponent(task)}/lessons/${encodeURIComponent(slug)}${rest}`;
 
 export const lessonsApi = {
   ofTask: (task: string) => call<TaskLessons>("GET", `/api/tasks/${encodeURIComponent(task)}/lessons`),
   read: (task: string, slug: string) => call<{ lesson: LessonDetail }>("GET", one(task, slug)).then((b) => b.lesson),
-  keep: (task: string, slug: string) => call<unknown>("POST", one(task, slug, "/keep")),
+  /** Keeps a lesson where the person picks: their own skills, or the folder the task worked in. */
+  keep: (task: string, slug: string, target: KeepTarget = "yours") => call<unknown>("POST", one(task, slug, "/keep"), { target }),
   reject: (task: string, slug: string, never: boolean) => call<unknown>("POST", one(task, slug, "/reject"), { never }),
   outcomes: (skill: string) => call<SkillOutcomes>("GET", `/api/skills/${encodeURIComponent(skill)}/outcomes?days=30`),
 };
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-export function learnedSentence({ skills, candidates }: TaskLessons): string | null {
+/** `usedShown`: the page names what the agent used elsewhere, so this sentence does not count it again. */
+export function learnedSentence({ skills, candidates }: TaskLessons, usedShown = false): string | null {
   const started = [skills.team.length ? count(skills.team.length, "team skill") : "", skills.project.length ? count(skills.project.length, "project skill") : ""].filter(Boolean);
   const lessons = candidates ?? [];
   const waiting = lessons.filter((l) => l.status === "pending").length;
@@ -59,7 +68,7 @@ export function learnedSentence({ skills, candidates }: TaskLessons): string | n
   const sent = lessons.filter((l) => l.status === "sent");
   const machines = [...new Set(sent.map((l) => l.machine).filter((m): m is string => !!m))];
   const parts = [
-    started.length ? `Started with ${started.join(" and ")}${skills.used?.length ? `, the agent called ${skills.used.length}` : ""}` : skills.used?.length ? `The agent called ${count(skills.used.length, "skill")}` : "",
+    usedShown ? "" : started.length ? `Started with ${started.join(" and ")}${skills.used?.length ? `, the agent called ${skills.used.length}` : ""}` : skills.used?.length ? `The agent called ${count(skills.used.length, "skill")}` : "",
     waiting ? `${count(waiting, "lesson")} ${waiting === 1 ? "waits" : "wait"} for your review` : "",
     kept ? `${count(kept, "lesson")} kept as your skill${kept === 1 ? "" : "s"}` : "",
     sent.length ? `${count(sent.length, "lesson")} ${sent.length === 1 ? "waits" : "wait"} in your review queue${machines.length === 1 ? ` on ${machines[0]}` : ""}` : "",
@@ -93,9 +102,11 @@ export function outcomeWords(o: SkillOutcomes): { phrase: string; facts: { term:
   };
 }
 
-export function TaskLearned({ task, finishedAt }: { task: string; finishedAt: string | null }) {
+export function TaskLearned({ task, finishedAt, folder = null, usedShown = false }: { task: string; finishedAt: string | null; folder?: string | null; usedShown?: boolean }) {
   const [read, setRead] = useState<TaskLessons | null>(null);
   const [reads, setReads] = useState(0);
+  // Lessons kept to go on to the team: kept as the person's own, then offered on Team, where the team's Add is.
+  const [forTeam, setForTeam] = useState<string[]>([]);
   useEffect(() => {
     let current = true;
     lessonsApi.ofTask(task).then((r) => current && setRead(r), () => current && setRead(null));
@@ -110,7 +121,7 @@ export function TaskLearned({ task, finishedAt }: { task: string; finishedAt: st
     const timer = setTimeout(() => setReads((n) => n + 1), LOOK_AGAIN_MS);
     return () => clearTimeout(timer);
   }, [waitingForOne, reads]);
-  const sentence = read ? learnedSentence(read) : null;
+  const sentence = read ? learnedSentence(read, usedShown) : null;
   if (!read || !sentence) return null;
   const shown = (read.candidates ?? []).filter((l) => l.status === "pending" || l.status === "sent" || l.status === "approved");
   return (
@@ -120,7 +131,10 @@ export function TaskLearned({ task, finishedAt }: { task: string; finishedAt: st
       {shown.length ? (
         <ul className="plain">
           {shown.map((l) => (
-            <li key={l.slug}>{l.status === "approved" ? <KeptLesson slug={l.slug} /> : <LessonFold task={task} lesson={l} onDecided={() => setReads((n) => n + 1)} />}</li>
+            <li key={l.slug}>{l.status === "approved" ? <KeptLesson slug={l.slug} toTeam={forTeam.includes(l.slug)} /> : <LessonFold task={task} lesson={l} folder={folder} onDecided={(team) => {
+              if (team) setForTeam((now) => [...now, l.slug]);
+              setReads((n) => n + 1);
+            }} />}</li>
           ))}
         </ul>
       ) : null}
@@ -128,7 +142,7 @@ export function TaskLearned({ task, finishedAt }: { task: string; finishedAt: st
   );
 }
 
-function KeptLesson({ slug }: { slug: string }) {
+function KeptLesson({ slug, toTeam }: { slug: string; toTeam: boolean }) {
   const [words, setWords] = useState<ReturnType<typeof outcomeWords>>(null);
   useEffect(() => {
     let current = true;
@@ -137,7 +151,7 @@ function KeptLesson({ slug }: { slug: string }) {
       current = false;
     };
   }, [slug]);
-  const line = <><span className="mono">{slug}</span> kept as your skill{words ? `; ${words.phrase}` : ""}</>;
+  const line = <><span className="mono">{slug}</span> kept as your skill{words ? `; ${words.phrase}` : ""}{toTeam ? <>; <a href={here("team")}>share it with the team on Team</a></> : null}</>;
   if (!words?.facts.length) return line;
   return (
     <details>
@@ -147,7 +161,8 @@ function KeptLesson({ slug }: { slug: string }) {
   );
 }
 
-function LessonFold({ task, lesson, onDecided }: { task: string; lesson: TaskLessonRow; onDecided: () => void }) {
+function LessonFold({ task, lesson, folder, onDecided }: { task: string; lesson: TaskLessonRow; folder: string | null; onDecided: (team: boolean) => void }) {
+  const [landing, setLanding] = useState<Landing>("yours");
   const [detail, setDetail] = useState<LessonDetail | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [never, setNever] = useState(false);
@@ -157,10 +172,10 @@ function LessonFold({ task, lesson, onDecided }: { task: string; lesson: TaskLes
     setFailed(null);
     lessonsApi.read(task, lesson.slug).then(setDetail, (e: Error) => setFailed(e.message));
   };
-  const decide = (action: Promise<unknown>) => {
+  const decide = (action: Promise<unknown>, team = false) => {
     setBusy(true);
     setFailed(null);
-    action.then(onDecided, (e: Error) => setFailed(e.message)).finally(() => setBusy(false));
+    action.then(() => onDecided(team), (e: Error) => setFailed(e.message)).finally(() => setBusy(false));
   };
   return (
     <details onToggle={(e) => (e.currentTarget.open ? open() : undefined)}>
@@ -169,8 +184,13 @@ function LessonFold({ task, lesson, onDecided }: { task: string; lesson: TaskLes
         <>
           {detail.quote ? <p dir="auto">You said: “{detail.quote}”</p> : null}
           <Markdown text={skillText(detail.skillMd)} />
+          <div className="segmented" role="group" aria-label="Where it lands">
+            <button type="button" className="secondary small" aria-pressed={landing === "yours"} onClick={() => setLanding("yours")}>Yours</button>
+            {folder ? <button type="button" className="secondary small" aria-pressed={landing === "folder"} onClick={() => setLanding("folder")}>This folder ({folder})</button> : null}
+            <button type="button" className="secondary small" aria-pressed={landing === "team"} onClick={() => setLanding("team")}>The team</button>
+          </div>
           <div className="actions">
-            <button type="button" className="small" disabled={busy} onClick={() => decide(lessonsApi.keep(task, lesson.slug))}>Keep</button>
+            <button type="button" className="small" disabled={busy} onClick={() => decide(lessonsApi.keep(task, lesson.slug, landing === "folder" ? "folder" : "yours"), landing === "team")}>Keep</button>
             <button type="button" className="secondary small" disabled={busy} onClick={() => decide(lessonsApi.reject(task, lesson.slug, never))}>Reject</button>
             <label className="check"><input type="checkbox" checked={never} onChange={(e) => setNever(e.target.checked)} />Never suggest it again</label>
           </div>

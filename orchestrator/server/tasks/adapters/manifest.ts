@@ -14,6 +14,12 @@ export interface DriverManifest {
   /** The version whose behaviour holding the agent to named MCP tools rests on. */
   mcpVersion?: string;
   options: readonly AgentOption[];
+  /**
+   * What a person runs to install the CLI, bring it up to date and sign it in, shown beside a
+   * reason it is not ready and never run by the orchestrator. Each is the CLI's own: read from
+   * its code, never by running it.
+   */
+  commands: { install: string; update: string; signIn: string };
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -27,11 +33,19 @@ export const MANIFEST = {
       { id: "model", label: "Model", choices: [{ value: "fable", label: "Fable" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }] },
       { id: "effort", label: "Effort", choices: EFFORTS.map((value) => ({ value, label: value === "xhigh" ? "Extra high" : value[0]!.toUpperCase() + value.slice(1) })) },
     ],
+    // 2.1.322: `claude update` updates a native or npm install and names the package manager's own
+    // command for one that manages it (`brew upgrade claude-code`); the native installer is the one
+    // its own messages send people to; `claude auth login` signs in to the person's account.
+    commands: { install: "curl -fsSL https://claude.ai/install.sh | bash", update: "claude update", signIn: "claude auth login" },
   },
   opencode: {
     checkedVersion: "1.18.31",
     mcpVersion: "1.18.31",
     // A model is any `provider/model` the person's OpenCode knows, so there is no list to offer.
     options: [],
+    // 1.19.4: `opencode upgrade` finds how it was installed (its install script, npm, bun, pnpm,
+    // brew…) and upgrades that way; the script at opencode.ai/install is the one it upgrades with;
+    // `opencode auth login` is the command its own errors name for a provider's credentials.
+    commands: { install: "curl -fsSL https://opencode.ai/install | bash", update: "opencode upgrade", signIn: "opencode auth login" },
   },
 } as const satisfies Record<string, DriverManifest>;

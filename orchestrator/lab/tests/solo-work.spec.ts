@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
@@ -53,6 +53,13 @@ function githubProject(machine: CleanMachine): string {
   return folder;
 }
 
+/** A board's start names no folder, so it goes to the one the person ran Claude Code in; this machine's history says they did here. */
+function ranSessionsIn(machine: CleanMachine, folder: string): void {
+  const seen = join(machine.home, ".claude", "projects", realpathSync(folder).replace(/[^a-zA-Z0-9]/g, "-"));
+  mkdirSync(seen, { recursive: true });
+  writeFileSync(join(seen, "session.jsonl"), "{}\n");
+}
+
 /** The person enters their Jira's address, account and token on the issue tracker card, opened by its link. */
 async function enterJiraToken(page: Page, org: string, port: number, token: string): Promise<void> {
   await page.goto(`${org}/integrations?open=tracker`);
@@ -61,7 +68,7 @@ async function enterJiraToken(page: Page, org: string, port: number, token: stri
   await card.getByLabel("Account email").fill(EMAIL);
   await card.getByLabel("API token").fill(token);
   await card.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("region", { name: "Issue tracker" })).toContainText("Issues are read with a token set by");
+  await expect(page.getByRole("region", { name: "Issue tracker" })).toContainText("Read with your API token");
 }
 
 /** A folder of the person's with no Git, laid out as a service with an endpoint per call. */
@@ -88,15 +95,16 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
     try {
       const repo = personsRepository(solo.machine);
       await solo.call("POST", "/api/projects", { path: repo });
+      ranSessionsIn(solo.machine, repo);
       await page.goto(solo.base);
-      await page.waitForURL(/\/activity$/);
+      await page.waitForURL(/\/(activity|tasks)$/);
       const org = new URL(page.url()).pathname.split("/")[1]!;
 
       // when they enter their token on the issue tracker card
       await enterJiraToken(page, `${solo.base}/${org}`, port, token);
 
       // then the card reads issues and never shows the token
-      await expect(page.getByRole("region", { name: "Issue tracker" })).toContainText("Issues are read with a token set by");
+      await expect(page.getByRole("region", { name: "Issue tracker" })).toContainText("Read with your API token");
       expect(await page.content()).not.toContain(token);
       expect((await solo.call<{ tracker: boolean }>("GET", "/api/activity/summary")).tracker).toBe(true);
 
@@ -119,14 +127,14 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
       await expect(page.getByRole("status").filter({ hasText: /started\./ })).toHaveText(/^1 agent started\./);
       await page.getByRole("region", { name: /^Start agents/ }).getByRole("button", { name: /^Done( picking)?$/ }).click();
       const issue = board.getByRole("listitem", { name: /^HOO-413 / });
-      await expect(issue.getByRole("link", { name: /Agent (queued|working)|Request in review/ })).toBeVisible({ timeout: 60_000 });
-      await expect(issue.getByRole("link", { name: "Request in review" })).toBeVisible({ timeout: 180_000 });
+      await expect(issue.getByRole("link", { name: /waiting its turn|working|needs you|in review/ })).toBeVisible({ timeout: 60_000 });
+      await expect(issue.getByRole("link", { name: /needs you|in review/ })).toBeVisible({ timeout: 180_000 });
 
       // and the token reached neither the page nor the orchestrator's output, and nothing of the person's own ran but agent readiness asking a version
       expect(await page.content()).not.toContain(token);
       expect(solo.run.said()).not.toContain(token);
       expect(existsSync(join(root, "jira.log")) ? readFileSync(join(root, "jira.log"), "utf8") : "").not.toMatch(/ WRITE/);
-      expect(solo.machine.trapped().filter((call) => call.args !== "--version")).toEqual([]);
+      expect(solo.machine.trapped().filter((call) => !["--version", "auth list"].includes(call.args))).toEqual([]);
     } finally {
       await solo.stop();
     }
@@ -148,9 +156,11 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
     const solo = await soloSession(page, root, gh.more);
     try {
       await solo.call("POST", "/api/projects", { path: githubProject(solo.machine) });
-      const { project } = await solo.call<{ project: { id: string } }>("POST", "/api/projects", { path: personsRepository(solo.machine) });
+      const persons = personsRepository(solo.machine);
+      const { project } = await solo.call<{ project: { id: string } }>("POST", "/api/projects", { path: persons });
+      ranSessionsIn(solo.machine, persons);
       await page.goto(solo.base);
-      await page.waitForURL(/\/activity$/);
+      await page.waitForURL(/\/(activity|tasks)$/);
       const org = new URL(page.url()).pathname.split("/")[1]!;
 
       // when they open Work
@@ -165,25 +175,23 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
       await page.getByRole("checkbox", { name: `Pick ${GITHUB_REPO}#101` }).check();
       await page.getByRole("region", { name: "Picked issues" }).getByRole("button", { name: "Start agents" }).click();
       const form = page.getByRole("form", { name: "Start agents" });
-      await form.getByRole("radio", { name: "Work in one repository" }).check();
-      await form.getByRole("combobox", { name: "Repository" }).click();
-      await page.getByRole("option", { name: "delivery-service" }).click();
+      await expect(form.getByRole("combobox", { name: `Folder for ${GITHUB_REPO}#101` })).toHaveText(/delivery-service/);
       await form.getByRole("button", { name: "Start 1 agent" }).click();
 
       // then the card follows the agent until its request waits in review, in the project picked
       await expect(page.getByRole("status").filter({ hasText: /started\./ })).toHaveText(/^1 agent started\./);
       await page.getByRole("region", { name: /^Start agents/ }).getByRole("button", { name: /^Done( picking)?$/ }).click();
       const issue = board.getByRole("listitem", { name: new RegExp(`^${GITHUB_REPO}#101 `) });
-      await expect(issue.getByRole("link", { name: /Agent (queued|working)|Request in review/ })).toBeVisible({ timeout: 60_000 });
+      await expect(issue.getByRole("link", { name: /waiting its turn|working|needs you|in review/ })).toBeVisible({ timeout: 60_000 });
       const { tasks } = await solo.call<{ tasks: { repoId: string; issueKey: string | null }[] }>("GET", "/api/tasks");
       expect(tasks.map((t) => [t.repoId, t.issueKey])).toEqual([[project.id, `${GITHUB_REPO}#101`]]);
-      await expect(issue.getByRole("link", { name: "Request in review" })).toBeVisible({ timeout: 180_000 });
+      await expect(issue.getByRole("link", { name: /needs you|in review/ })).toBeVisible({ timeout: 180_000 });
 
       // and gh was asked only whether it is signed in and to read, the lab's token reached nothing it shows, and nothing else of the person's ran
       expect(gh.asked().filter(([verb, what]) => !(verb === "auth" && what === "status") && verb !== "api")).toEqual([]);
       expect(await page.content()).not.toContain(token);
       expect(solo.run.said()).not.toContain(token);
-      expect(solo.machine.trapped().filter((call) => call.args !== "--version")).toEqual([]);
+      expect(solo.machine.trapped().filter((call) => !["--version", "auth list"].includes(call.args))).toEqual([]);
     } finally {
       await solo.stop();
       server.close();
@@ -202,8 +210,9 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
     try {
       const folder = plainFolder(solo.machine);
       await solo.call("POST", "/api/projects", { path: folder });
+      ranSessionsIn(solo.machine, folder);
       await page.goto(solo.base);
-      await page.waitForURL(/\/activity$/);
+      await page.waitForURL(/\/(activity|tasks)$/);
       const org = `${solo.base}/${new URL(page.url()).pathname.split("/")[1]!}`;
       await enterJiraToken(page, org, port, token);
 
@@ -218,9 +227,8 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
 
       // then the card says its changes wait for review, with no request
       const issue = board.getByRole("listitem", { name: /^HOO-414 / });
-      await expect(issue.getByRole("link", { name: "Changes to review" })).toBeVisible({ timeout: 180_000 });
-      await expect(issue.getByRole("link", { name: "Request in review" })).toHaveCount(0);
-      const taskId = (await issue.getByRole("link", { name: "Changes to review" }).getAttribute("href"))!.split("/").pop()!;
+      await expect(issue.getByRole("link", { name: "needs you" })).toBeVisible({ timeout: 180_000 });
+      const taskId = (await issue.getByRole("link", { name: "needs you" }).getAttribute("href"))!.split("/").pop()!;
       expect(existsSync(join(folder, "src", "endpoints", "return-label.ts"))).toBe(true);
 
       // when they keep the changes
@@ -228,9 +236,9 @@ test.describe("the orchestrator alone works a sprint from the person's Jira or G
       await page.reload();
 
       // then the card says they are kept, and the folder still has no Git
-      await expect(board.getByRole("listitem", { name: /^HOO-414 / }).getByRole("link", { name: "Changes kept" })).toBeVisible({ timeout: 60_000 });
+      await expect(board.getByRole("listitem", { name: /^HOO-414 / }).getByRole("link", { name: "kept on this machine" })).toBeVisible({ timeout: 60_000 });
       expect(existsSync(join(folder, ".git"))).toBe(false);
-      expect(solo.machine.trapped().filter((call) => call.args !== "--version")).toEqual([]);
+      expect(solo.machine.trapped().filter((call) => !["--version", "auth list"].includes(call.args))).toEqual([]);
     } finally {
       await solo.stop();
     }

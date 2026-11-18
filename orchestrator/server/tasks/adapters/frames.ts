@@ -128,6 +128,16 @@ export function signInEvents(waiting: readonly string[]): AgentEvent[] {
 /** The tokens a sum of known counts makes, or null when the first is unknown: a part nobody reported is never guessed. */
 export const tokensOf = (first: unknown, ...more: unknown[]): number | null => (num(first) === null ? null : more.reduce<number>((sum, n) => sum + (num(n) ?? 0), num(first)!));
 
+/** The context the agent's latest request filled, said each time its size or the model's window moves. */
+export function contextMeter(): (tokens: number | null, window: number | null) => AgentEvent[] {
+  let last: { tokens: number; window: number | null } | null = null;
+  return (tokens, window) => {
+    if (tokens === null || tokens <= 0 || (last?.tokens === tokens && last.window === window)) return [];
+    last = { tokens, window };
+    return [{ type: "context_used", tokens, window }];
+  };
+}
+
 /** The session's context once: the first request's input as the agent reports it, cache read and written included. */
 export function firstContext(): (tokens: number | null) => AgentEvent[] {
   let told = false;

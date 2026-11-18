@@ -23,11 +23,26 @@ export function offerOf(agent: AgentAdapter, personal: boolean): AgentOffer {
   return { id: agent.id, label: agent.label, modes, options: agent.capabilities.options, questions: agent.twoWay?.capabilities.questions === true, plan: agent.twoWay?.capabilities.plan === true };
 }
 
-export function machineOffers(reported: readonly MachineAgentStatus[]): (AgentOffer & { signIn: MachineAgentStatus["signIn"] })[] {
+export interface MachineReadiness {
+  ready: boolean;
+  state: "ready" | "warnings" | "not-ready";
+  first: string | null;
+  code: string | null;
+  fix: string | null;
+}
+
+export function machineOffers(reported: readonly MachineAgentStatus[]): (AgentOffer & { signIn: MachineAgentStatus["signIn"]; readiness: MachineReadiness })[] {
   return machineAdapters().flatMap((agent) => {
     const seen = reported.filter((r) => r.id === agent.id && r.installed);
     if (!seen.length) return [];
     const signIn = seen.some((r) => r.signIn === "signed-in") ? "signed-in" : seen.some((r) => r.signIn === "unknown") ? "unknown" : "signed-out";
-    return [{ ...offerOf(agent, true), signIn }];
+    const current = seen.some((r) => r.supported === "ok");
+    const readiness: MachineReadiness =
+      signIn === "signed-out"
+        ? { ready: false, state: "not-ready", first: "not signed in on your machine", code: "signin-missing", fix: agent.probe?.signInCommand ?? null }
+        : current
+          ? { ready: true, state: "ready", first: null, code: null, fix: null }
+          : { ready: true, state: "warnings", first: "version older than checked on your machine", code: "version-older", fix: agent.probe?.updateCommand ?? null };
+    return [{ ...offerOf(agent, true), signIn, readiness }];
   });
 }

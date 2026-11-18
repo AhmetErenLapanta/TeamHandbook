@@ -7,7 +7,7 @@ import type { Principal } from "../auth.js";
 import { seededContext, storePrincipals } from "../test-fixtures.js";
 import { fakeAgentAdapter } from "./agents.js";
 import { saveWrites } from "../work/writes.js";
-import { FORGE_REASON, PERSONAL_READ_REASON, refusedTool, releasePersonalGuard, TRACKER_REASON, writePersonalGuard, writesTracker } from "./profile.js";
+import { FORGE_REASON, PERSONAL_READ_REASON, QUESTION_REASON, refusedTool, releasePersonalGuard, TRACKER_REASON, writePersonalGuard, writesTracker } from "./profile.js";
 import { createTaskRunner } from "./runner.js";
 
 const ADMIN: Principal = { id: "a", name: "Ada Example", email: "ada@example.invalid", role: "admin", ownedTeams: [] };
@@ -60,17 +60,17 @@ describe("a forge's tools that write", () => {
 
 describe("a task given a tracker's tools", { timeout: 120_000 }, () => {
   /** A task on the seeded Payments repository whose operator named a tracker's writing and reading tools for tasks. */
-  async function ran(allowed: boolean) {
+  async function ran(allowed: boolean, question = false) {
     const { ctx, root } = await seededContext("orchestrator-tracker-writes-", ["payments-skills"]);
     await storePrincipals(ctx, ADMIN);
     dirs.push(root);
     if (allowed) await saveWrites(ctx, true);
     const script = join(root, "agent.mjs");
     writeFileSync(script, 'import { writeFileSync } from "node:fs";\nwriteFileSync("note.md", "x\\n");\nconsole.log(JSON.stringify({ type: "result", summary: "Done." }));\n');
-    const tools = [{ server: "docs", tool: "createJiraIssue" }, { server: "docs", tool: "getJiraIssue" }, { server: "github", tool: "merge_pull_request" }];
+    const tools = [{ server: "docs", tool: "createJiraIssue" }, { server: "docs", tool: "getJiraIssue" }, { server: "github", tool: "merge_pull_request" }, { server: "deploy", tool: "start_rollout" }, { server: "deploy", tool: "list_rollouts" }];
     const tasks = createTaskRunner(ctx, { agents: [fakeAgentAdapter(script)], isolation: { mode: "process", network: "open" }, testCommand: () => null, hostEnv: { PATH: process.env.PATH }, mcpTools: () => tools });
     const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
-    const started = await tasks.start({ repo, title: "Note the incident", description: "", agent: "fake", user: ADMIN });
+    const started = await tasks.start({ repo, title: "Note the incident", description: "", agent: "fake", user: ADMIN, ...(question ? { readOnly: true } : {}) });
     await tasks.idle();
     return (await ctx.store.taskLog(ctx.tenant, started.id, 0)).map((l) => l.text);
   }
@@ -85,17 +85,26 @@ describe("a task given a tracker's tools", { timeout: 120_000 }, () => {
     // then
     expect(log).toContainEqual(expect.stringContaining("Left out, as this organization keeps tasks from writing to its tracker, MCP tools: docs/createJiraIssue."));
     expect(log).toContainEqual(expect.stringContaining("Left out, as a task's change reaches people only as a request a person reviews, MCP tools: github/merge_pull_request."));
+    expect(log).not.toContainEqual(expect.stringContaining("this task is a question"));
+  });
+
+  it("given an operator who named a server's tool that writes and one that reads for tasks, when a question starts, then the one that writes is left out of what its agent is given, the one that reads stays, and the log says so", async () => {
+    // when
+    const log = await ran(false, true);
+
+    // then
+    expect(log).toContainEqual(expect.stringContaining("Left out, as this task is a question and reads only, MCP tools: deploy/start_rollout."));
   });
 });
 
 describe("the guard's hook and a tracker's tools", { timeout: 120_000 }, () => {
   /** The guard's hook for a run as you, and its answer to one call. */
-  async function guarded() {
+  async function guarded(readOnly = false) {
     const root = mkdtempSync(join(tmpdir(), "orchestrator-tracker-guard-"));
     dirs.push(root);
     const paths = { root, work: join(root, "work") };
     mkdirSync(paths.work);
-    const settings = JSON.parse(readFileSync(await writePersonalGuard(paths), "utf8"));
+    const settings = JSON.parse(readFileSync(await writePersonalGuard(paths, [], [], readOnly ? { readOnly: true } : {}), "utf8"));
     const command = settings.hooks.PreToolUse[0].hooks[0].command as string;
     return (tool_name: string) => spawnSync("/bin/sh", ["-c", command], { input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input: {}, cwd: paths.work }), encoding: "utf8" }).stdout;
   }
@@ -115,5 +124,19 @@ describe("the guard's hook and a tracker's tools", { timeout: 120_000 }, () => {
     // A tool that writes and is no tracker's or forge's is left to the person's own rules and the task's mode.
     expect(decide("mcp__claude_ai_Slack__slack_send_message")).toBe("");
     expect(decide("mcp__notes__send_list")).toBe("");
+  });
+
+  it("given a question run as you, when its agent calls MCP tools of the person's own servers, then each that reads runs and each that writes is refused as a question's, a chat's send and a deploy's start among them", async () => {
+    // given
+    const decide = await guarded(true);
+
+    // then
+    for (const tool of ["mcp__claude_ai_Slack__slack_send_message", "mcp__notes__send_list", "mcp__deploy__start_rollout", "mcp__docs__create_page"]) {
+      expect(JSON.parse(decide(tool)).hookSpecificOutput).toEqual({ hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: QUESTION_REASON });
+    }
+    for (const tool of ["mcp__claude_ai_Slack__slack_search_messages", "mcp__docs__search", "mcp__postgres__query"]) {
+      expect(JSON.parse(decide(tool)).hookSpecificOutput.permissionDecision).toBe("allow");
+    }
+    expect(JSON.parse(decide("mcp__atlassian__createJiraIssue")).hookSpecificOutput.permissionDecisionReason).toBe(TRACKER_REASON);
   });
 });

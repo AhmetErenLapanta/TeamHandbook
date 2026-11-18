@@ -1,13 +1,12 @@
 import type { AgentCodec, AgentDecoder, AgentEvent, AgentSession, AgentTransport, Decision } from "./contract.js";
 
 /**
- * A session over a process the runner started. Every stdout line goes to `frames`, the
- * diagnostics sink, before it is decoded; the sink is a persistence boundary, so the runner
- * masks what it writes there. With a codec the session is two-way: a message, an answer and
- * an interrupt go to the agent as stdin lines. With a decoder alone it runs one turn on the
+ * A session over a process the runner started. Each stdout line is decoded and goes no further:
+ * the agent's raw frames are never kept. With a codec the session is two-way: a message, an answer
+ * and an interrupt go to the agent as stdin lines. With a decoder alone it runs one turn on the
  * prompt it was started with, and interrupting it ends the process.
  */
-export function openSession(codec: AgentDecoder | AgentCodec, transport: AgentTransport, { frames = () => {}, steer = false }: { frames?: (line: string) => void; steer?: boolean } = {}): AgentSession {
+export function openSession(codec: AgentDecoder | AgentCodec, transport: AgentTransport, { steer = false }: { steer?: boolean } = {}): AgentSession {
   const twoWay = "answer" in codec ? codec : null;
   const queue: AgentEvent[] = [];
   const waiting = new Set<string>();
@@ -37,7 +36,6 @@ export function openSession(codec: AgentDecoder | AgentCodec, transport: AgentTr
   void (async () => {
     try {
       for await (const line of transport.lines) {
-        frames(line);
         for (const event of codec.decode(line)) {
           push(event);
           if (event.type === "turn_finished") busy = false;
@@ -90,6 +88,12 @@ export function openSession(codec: AgentDecoder | AgentCodec, transport: AgentTr
       if (!line) throw new Error("no question of this agent's is waiting for an answer");
       transport.write(line);
       waiting.delete(requestId);
+    },
+    compact() {
+      const line = busy ? null : twoWay?.compact?.();
+      if (!line) throw new Error(busy ? "the agent is in a turn and compacts when it is done" : "this agent cannot compact its conversation now");
+      transport.write(line);
+      busy = true;
     },
     approvePlan(requestId, plan) {
       if (!waiting.has(requestId)) throw new Error("no plan of this agent's is waiting for approval");

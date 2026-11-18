@@ -1,4 +1,5 @@
 import type { TaskOutcome } from "../runner/link.js";
+import type { ChangedFile } from "./forge/request-diff.js";
 import type { OrchestratorContext } from "./app.js";
 import { mirrorDir } from "./app.js";
 import { machineAsksOf } from "./machine-folders.js";
@@ -30,14 +31,14 @@ export async function inPlaceRules(ctx: OrchestratorContext, repo: RepoRecord): 
   return source ? taskPolicy(mirrorDir(ctx, source.id), source.head!) : [];
 }
 
-export type MachineUndo = { undone: string[]; kept: string[] } | { refused: string; code: string; status: 409 | 502 | 504 };
+export type MachineUndo = { undone: string[]; kept: string[]; left?: number; after?: string; files?: ChangedFile[] } | { refused: string; code: string; status: 409 | 502 | 504 };
 
 /** Takes a task's change back on the machine whose folder it is in, waiting for the machine's answer. */
-export async function undoOnMachine(ctx: OrchestratorContext, repo: RepoRecord, snapshots: { before: string; after: string }): Promise<MachineUndo> {
+export async function undoOnMachine(ctx: OrchestratorContext, repo: RepoRecord, snapshots: { before: string; after: string }, from?: { start: string; end: string }): Promise<MachineUndo> {
   const folder = machineFolderOf(repo.url);
   if (!folder) return { refused: `${repo.name} is not a folder on a person's machine`, code: "not-on-a-machine", status: 409 };
   const name = (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === folder.machineId)?.name ?? "its machine";
-  const answer = await machineAsksOf(ctx).ask(folder.machineId, "undos", { projectId: repo.id, path: folder.path, before: snapshots.before, after: snapshots.after });
+  const answer = await machineAsksOf(ctx).ask(folder.machineId, "undos", { projectId: repo.id, path: folder.path, before: snapshots.before, after: snapshots.after, ...(from ? { from } : {}) });
   if (answer === "offline") return { refused: `${name} is not connected now; start its runner and undo again`, code: "machine-offline", status: 409 };
   if (answer === "busy") return { refused: `${name} is still answering earlier asks; undo again in a moment`, code: "machine-busy", status: 409 };
   if (answer === null) return { refused: `${name} did not answer; its runner is stopped or older than this orchestrator, so update it and undo again`, code: "machine-did-not-answer", status: 504 };

@@ -76,7 +76,7 @@ async function undo(page: Page, method: string, path: string) {
 }
 
 test.describe("the Integrations page for an admin", () => {
-  test("given the orchestrator's own GitHub application and no organization connection, when an admin signs in from the card, then it offers the one-time code and its page, and says connected as them once GitHub answers", async ({ page }) => {
+  test("given the orchestrator's own GitHub application and no organization connection, when an admin signs in from the card, then it offers the one-time code and its page, says connected as them once GitHub answers, and offers Sign in again once GitHub no longer renews it", async ({ page }) => {
     // given
     let state: Record<string, unknown> = { state: "idle" };
     await page.route("**/api/forge/github/sign-in", async (route) => {
@@ -89,7 +89,7 @@ test.describe("the Integrations page for an admin", () => {
     });
     await page.goto("/demo/integrations");
     const card = page.locator("#card-github");
-    await expect(card).toContainText("Sign in to GitHub with a one-time code, nothing to install; it lets the orchestrator write to the repositories you can, which it uses only for the requests of the tasks you start.");
+    await expect(card).toContainText("Open the requests of the tasks you start on GitHub as you. You sign in with a one-time code, nothing to install; the sign-in can write to the repositories you can, and is used only for those requests.");
 
     await expect(card.getByRole("button", { name: "Sign in with GitHub" })).toHaveClass(/secondary/);
 
@@ -106,6 +106,14 @@ test.describe("the Integrations page for an admin", () => {
     state = { state: "done", account: "ada", host: "github.com" };
     await expect(card).toContainText("Connected as ada on github.com; the orchestrator opens the requests of the tasks you start as you, and nothing else.", { timeout: 15_000 });
     await expect(card.getByRole("button", { name: "Sign out" })).toBeVisible();
+
+    // when GitHub no longer renews the sign-in
+    state = { state: "failed", error: "your GitHub sign-in lapsed and gave no way to renew it; press Sign in again" };
+    await page.reload();
+
+    // then the card says so and offers the sign-in again
+    await expect(card).toContainText("Your GitHub sign-in lapsed and gave no way to renew it; press Sign in again.");
+    await expect(card.getByRole("button", { name: "Sign in again" })).toHaveClass(/secondary/);
   });
 
   test("given no GitLab application registered, when an admin opens Integrations, then the GitLab card says the next step once, and the settings' names wait behind its (i)", async ({ page }) => {
@@ -173,7 +181,7 @@ test.describe("the Integrations page for an admin", () => {
 
     // then
     await expect(page.getByRole("region", { name: "Issue tracker" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Slack" })).toHaveCount(0);
+    await expect(page.locator("#body-slack")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Close" })).toHaveCount(1);
   });
 
@@ -297,7 +305,8 @@ test.describe("the Integrations page for an admin", () => {
       await card.getByRole("button", { name: "Disconnect Slack" }).click();
       await card.getByRole("group", { name: "Disconnect Slack" }).getByRole("button", { name: "Disconnect Slack" }).click();
       await expect(card.getByRole("status")).toHaveText("Slack is disconnected and its webhook address removed.");
-      await expect(card.getByText("Not set up")).toBeVisible();
+      await expect(card.getByText("Connected", { exact: true })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "Close" })).toBeVisible();
     } finally {
       await undo(page, "DELETE", "/api/integrations/slack");
       slack.server.close();

@@ -21,6 +21,10 @@ export interface ReadinessCheck {
   detail: string;
   /** For a warning or a failure: what it is in a few fixed words, with nothing the check found, so the task form can say it to anyone who starts tasks. */
   short?: string;
+  /** For a warning, a failure or an unknown: what it is as a fixed code, the same on the form, the report and doctor. */
+  code?: string;
+  /** The command that repairs it, shown and never run. */
+  fix?: string;
 }
 
 export interface AgentReadiness {
@@ -131,7 +135,7 @@ async function programChecks(ctx: OrchestratorContext, options: RunnerOptions, a
       { program: "docker", args: ["image", "inspect", "--format", "{{.Id}}", image], env: { PATH: options.hostEnv.PATH ?? "/usr/bin:/bin", ...dockerEnv(options.hostEnv) }, cwd: ctx.dataDir },
       { timeoutMs: options.readinessTimeoutMs ?? PROBE_TIMEOUT_MS, signal: new AbortController().signal, onLine: () => {} },
     );
-    if (inspected.code !== 0) return { checks: [{ name: "Image", status: "fail", short: "image not on the Docker daemon", detail: `${image} is not on the Docker daemon; build or pull it (the check never pulls)` }], found: null };
+    if (inspected.code !== 0) return { checks: [{ name: "Image", status: "fail", code: "image-missing", fix: `docker pull ${image}`, short: "image not on the Docker daemon", detail: `${image} is not on the Docker daemon; build or pull it (the check never pulls)` }], found: null };
     return { checks: [{ name: "Image", status: "ok", detail: `${image} is on the Docker daemon` }], found: `${probe.program} in ${image}` };
   }
   const found = await onPath(probe.program, options.hostEnv.PATH);
@@ -141,6 +145,8 @@ async function programChecks(ctx: OrchestratorContext, options: RunnerOptions, a
         checks: [{
           name: "Program",
           status: "fail",
+          code: "program-missing",
+          ...(probe.installCommand ? { fix: probe.installCommand } : {}),
           short: "program not found",
           detail: probe.program.includes("/")
             ? `${probe.program}, named by ${probe.setting}, is not an executable file`
@@ -156,8 +162,8 @@ function versionCheck(probe: AgentProbe, outcome: RunOutcome & { said: string[] 
   if (!seen) {
     // In a container the program is found only by starting it.
     const missing = outcome.code === 127 || /executable file not found|no such file/i.test(outcome.said.join("\n"));
-    if (missing) return { check: { name: "Version", status: "fail", short: "program did not start", detail: `${where}: the program did not start (${words})` }, seen };
-    return { check: { name: "Version", status: "unknown", detail: `${probe.program} --version printed no version${words ? ` (${words})` : ""}` }, seen };
+    if (missing) return { check: { name: "Version", status: "fail", code: "program-not-started", ...(probe.installCommand ? { fix: probe.installCommand } : {}), short: "program did not start", detail: `${where}: the program did not start (${words})` }, seen };
+    return { check: { name: "Version", status: "unknown", code: "version-unread", detail: `${probe.program} --version printed no version${words ? ` (${words})` : ""}` }, seen };
   }
   const text = seen.join(".");
   const difference = compare(seen, checked);
@@ -169,15 +175,16 @@ function versionCheck(probe: AgentProbe, outcome: RunOutcome & { said: string[] 
   const detail = difference < 0
     ? `${text} is older than ${probe.checkedVersion}, the version the orchestrator was checked with. Update the CLI to ${probe.checkedVersion}.`
     : `${text} is newer than ${probe.checkedVersion}, the version the orchestrator was checked with. If a task fails on a changed flag or output, install ${probe.checkedVersion}.`;
-  return { check: { name: "Version", status: "warn", short: difference < 0 ? "version older than checked" : "version newer than checked", detail }, seen };
+  const fix = difference < 0 ? probe.updateCommand : undefined;
+  return { check: { name: "Version", status: "warn", code: difference < 0 ? "version-older" : "version-newer", ...(fix ? { fix } : {}), short: difference < 0 ? "version older than checked" : "version newer than checked", detail }, seen };
 }
 
 function credentialCheck(options: RunnerOptions, agent: AgentAdapter): ReadinessCheck {
   const set = agent.credentialEnv.filter((name) => options.hostEnv[name]);
   if (set.length) return { name: "Credential", status: "ok", detail: `set on the orchestrator: ${set.join(", ")}` };
   const passed = (options.passEnv ?? []).filter((name) => options.hostEnv[name]);
-  if (passed.length) return { name: "Credential", status: "warn", short: "model key only passed through", detail: `none of ${agent.credentialEnv.join(", ")} is set; a task gets ${passed.join(", ")} through ORCHESTRATOR_TASK_ENV_PASS, which serves only if the agent reads its model key from one of them` };
-  return { name: "Credential", status: "fail", short: "no model credential", detail: `none of ${agent.credentialEnv.join(", ")} is set on the orchestrator, and a task gets no other credential` };
+  if (passed.length) return { name: "Credential", status: "warn", code: "credential-passed-only", fix: `export ${agent.credentialEnv[0]}=<key>`, short: "model key only passed through", detail: `none of ${agent.credentialEnv.join(", ")} is set; a task gets ${passed.join(", ")} through ORCHESTRATOR_TASK_ENV_PASS, which serves only if the agent reads its model key from one of them` };
+  return { name: "Credential", status: "fail", code: "credential-missing", fix: `export ${agent.credentialEnv[0]}=<key>`, short: "no model credential", detail: `none of ${agent.credentialEnv.join(", ")} is set on the orchestrator, and a task gets no other credential` };
 }
 
 /**
@@ -191,6 +198,8 @@ async function subscriptionCheck(ctx: OrchestratorContext, options: RunnerOption
   return {
     name: "Credential kind",
     status: "warn",
+    code: "subscription-token-shared",
+    fix: "export ANTHROPIC_API_KEY=<key>",
     short: "personal subscription token on a shared orchestrator",
     detail: "A personal subscription token is meant for one person's own use; a shared orchestrator should use an API key or a Team or Enterprise plan. See Anthropic's terms.",
   };
@@ -203,14 +212,14 @@ async function mcpChecks(ctx: OrchestratorContext, options: RunnerOptions, agent
     if (!allowed.length || !repo.head) continue;
     const named = allowed.map((t) => `${t.server}/${t.tool}`).join(", ");
     if (!agent.placesMcp) {
-      checks.push({ name: `MCP tools, ${repo.id}`, status: "warn", short: "allowed MCP tools not placed", detail: `the repository allows ${named}, and ${agent.label} gets no MCP server${probe.mcpSetting ? ` without ${probe.mcpSetting}` : ""}` });
+      checks.push({ name: `MCP tools, ${repo.id}`, status: "warn", code: "mcp-not-placed", short: "allowed MCP tools not placed", detail: `the repository allows ${named}, and ${agent.label} gets no MCP server${probe.mcpSetting ? ` without ${probe.mcpSetting}` : ""}` });
       continue;
     }
     let team;
     try {
       team = await readTeamSetupAsync(mirrorDir(ctx, repo.id), repo.head);
     } catch (err) {
-      checks.push({ name: `MCP tools, ${repo.id}`, status: "unknown", detail: `the team's .mcp.json was not read: ${(err as Error).message.split("\n")[0]}` });
+      checks.push({ name: `MCP tools, ${repo.id}`, status: "unknown", code: "mcp-unread", detail: `the team's .mcp.json was not read: ${(err as Error).message.split("\n")[0]}` });
       continue;
     }
     const problems: string[] = [];
@@ -228,7 +237,7 @@ async function mcpChecks(ctx: OrchestratorContext, options: RunnerOptions, agent
       problems.push(`holding ${agent.label} to named MCP tools rests on how ${probe.mcpVersion} behaves, and this is ${seen.join(".")}`);
     }
     checks.push(problems.length
-      ? { name: `MCP tools, ${repo.id}`, status: "warn", short: "allowed MCP tools not placed", detail: problems.join("; ") }
+      ? { name: `MCP tools, ${repo.id}`, status: "warn", code: "mcp-not-placed", short: "allowed MCP tools not placed", detail: problems.join("; ") }
       : { name: `MCP tools, ${repo.id}`, status: "ok", detail: `${named} from the team's .mcp.json` });
   }
   return checks;
@@ -247,16 +256,16 @@ async function checkAgent(ctx: OrchestratorContext, options: RunnerOptions, agen
   }
   if (options.profile === "personal") {
     const refused = agent.runsAsYou ? await personalProfileRefusal(ctx, options.hostEnv, options.orgs) : `Run as me starts ${agent.label} with no profile of yours to use`;
-    checks.push(refused ? { name: "Profile", status: "fail", short: "Run as me refused here", detail: refused.endsWith(ISOLATED_ACTION) ? refused : `${refused}; tasks do not run until ORCHESTRATOR_TASK_PROFILE is isolated` } : { name: "Profile", status: "ok", detail: PERSONAL_NOTE });
+    checks.push(refused ? { name: "Profile", status: "fail", code: "profile-refused", fix: "export ORCHESTRATOR_TASK_PROFILE=isolated", short: "Run as me refused here", detail: refused.endsWith(ISOLATED_ACTION) ? refused : `${refused}; tasks do not run until ORCHESTRATOR_TASK_PROFILE is isolated` } : { name: "Profile", status: "ok", detail: PERSONAL_NOTE });
   }
   checks.push(options.profile === "personal" && agent.runsAsYou ? { name: "Credential", status: "ok", detail: "your own Claude Code profile's sign-in" } : credentialCheck(options, agent));
   const kind = options.profile === "personal" ? null : await subscriptionCheck(ctx, options, agent);
   if (kind) checks.push(kind);
   const started = found !== null && checks.every((c) => c.status !== "fail" || c.name === "Credential");
   if (!probe.signIn) {
-    checks.push({ name: "Sign-in", status: "unknown", detail: `${agent.label} has no read-only status command; the first task shows whether the model takes the credential` });
+    checks.push({ name: "Sign-in", status: "unknown", code: "signin-unasked", detail: `${agent.label} has no read-only status command; the first task shows whether the model takes the credential` });
   } else if (!started) {
-    checks.push({ name: "Sign-in", status: "unknown", detail: "not asked: the program did not start" });
+    checks.push({ name: "Sign-in", status: "unknown", code: "signin-unasked", detail: "not asked: the program did not start" });
   } else {
     const command = `${probe.program} ${probe.signIn.args.join(" ")}`;
     const asked = await ask(ctx, options, agent, probe, probe.signIn.args);
@@ -264,11 +273,11 @@ async function checkAgent(ctx: OrchestratorContext, options: RunnerOptions, agen
     if (!answer) {
       // Never quoted: an answer the orchestrator cannot read is exactly one whose account details it cannot pick out.
       const why = asked.timedOut ? `gave no answer within ${Math.round((options.readinessTimeoutMs ?? PROBE_TIMEOUT_MS) / 1000)} s` : `gave an answer the orchestrator does not read (exit code ${asked.code ?? "none"})`;
-      checks.push({ name: "Sign-in", status: "unknown", detail: `${command} ${why}` });
+      checks.push({ name: "Sign-in", status: "unknown", code: "signin-unread", detail: `${command} ${why}` });
     } else if (answer.present) {
       checks.push({ name: "Sign-in", status: "ok", detail: `${command}, with what a task gets: ${answer.how}. A credential is there; whether the model takes it shows at the first task` });
     } else {
-      checks.push({ name: "Sign-in", status: "fail", short: "not signed in", detail: `${command}, with what a task gets: ${answer.how}` });
+      checks.push({ name: "Sign-in", status: "fail", code: "signin-missing", ...(probe.signInCommand ? { fix: probe.signInCommand } : {}), short: "not signed in", detail: `${command}, with what a task gets: ${answer.how}` });
     }
   }
   checks.push(...(await mcpChecks(ctx, options, agent, probe, seen)));
@@ -289,7 +298,7 @@ export async function checkReadiness(ctx: OrchestratorContext, options: RunnerOp
         id: agent.id,
         label: agent.label,
         ready: false,
-        checks: [{ name: "Check", status: "unknown" as const, detail: `the check itself failed: ${err.message.split("\n")[0]}` }],
+        checks: [{ name: "Check", status: "unknown" as const, code: "check-failed", detail: `the check itself failed: ${err.message.split("\n")[0]}` }],
       })),
     ),
   );

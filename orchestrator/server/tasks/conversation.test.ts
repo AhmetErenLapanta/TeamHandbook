@@ -132,7 +132,7 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
     expect(asked).toMatchObject({ kind: "command", sourceKey: "r1", payload: { tool: "Bash", summary: "npm test" }, status: "pending", targetPosition: null });
     const log = (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text);
     expect(log).toContain(`The agent asks to use Bash on npm test; it waits for ${ADA.name}'s answer on this task's page.`);
-    expect(log).toContain(`${ADA.email} answered the agent's Bash call: allow-once.`);
+    expect(log).toContain(`${ADA.name} answered the agent's Bash call: allow-once.`);
     expect(await ctx.store.getTask(ctx.tenant, task.id)).toMatchObject({ status: "needs-review", mode: "approval-required" });
   });
 
@@ -153,11 +153,11 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
     expect(heard()).toBe('reply r1 {"db":{"chosen":["pg"],"other":null}}\n');
     const log = (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text);
     expect(log).toContain(`The agent asks ${ADA.name} a question; it waits for the answer on this task's page.`);
-    expect(log).toContain(`${ADA.email} answered the agent's question.`);
+    expect(log).toContain(`${ADA.name} answered the agent's question.`);
     expect(await ctx.store.getTask(ctx.tenant, task.id)).toMatchObject({ status: "needs-review" });
   });
 
-  it("given an agent that asks, when its starter declines, then the agent hears no and the task opens nothing", async () => {
+  it("given an agent that asks, when its starter declines, then the agent hears no, the log names who answered, and the task finished with nothing changed and opens nothing", async () => {
     // given
     const { ctx, task } = await asking();
     const asked = await askedOf(ctx, task);
@@ -168,9 +168,9 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
 
     // then
     const done = (await ctx.store.getTask(ctx.tenant, task.id))!;
-    expect(done.status).toBe("failed");
+    expect(done.status).toBe("nothing-changed");
     expect(done.requestNumber).toBeNull();
-    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.email} answered the agent's Bash call: deny.`);
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.name} answered the agent's Bash call: deny.`);
   });
 
   it.each([["mcp__atlassian__createJiraIssue"], ["atlassian_createJiraIssue"]])("given an agent that asks to use a tracker's writing tool %s, in an organization that keeps tasks from its tracker, when it asks, then it hears no before any card is kept and the log says why", async (tool) => {
@@ -195,7 +195,7 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
 
     // then
     expect(asked).toMatchObject({ kind: "permission", payload: { tool: "WebFetch" } });
-    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.email} answered the agent's WebFetch call: allow-for-task.`);
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.name} answered the agent's WebFetch call: allow-for-task.`);
   });
 
   it("given a one-person orchestrator running tasks as its person, when the agent asks, then it is started as a conversation in the person's own profile and the question still reaches the starter", async () => {
@@ -243,7 +243,7 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
     expect(String(asked.payload.plan)).not.toContain(QUESTION_TOKEN);
     expect(heard()).toBe(`approve r1 ${JSON.stringify("1. Only read the notes")}\n`);
     const log = (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text);
-    expect(log).toEqual(expect.arrayContaining([`${ADA.email} approved the plan as they changed it:`, "## Plan", "1. Only read the notes"]));
+    expect(log).toEqual(expect.arrayContaining([`${ADA.name} approved the plan as they changed it:`, "## Plan", "1. Only read the notes"]));
     expect((await ctx.store.getTask(ctx.tenant, task.id))!).toMatchObject({ status: "needs-review", planFirst: true });
     const request = (await ctx.store.listRequests(ctx.tenant))[0]!;
     const description = git(["notes", "--ref", localDescriptionRef(request.branch), "show", request.branch], localRepoPath((await ctx.store.getRepo(ctx.tenant, "payments-skills"))!.url)!);
@@ -289,7 +289,7 @@ describe("a task whose agent asks before it acts", { timeout: 120_000 }, () => {
 
     // then
     expect(heard()).toBe("deny r1 Run only the unit tests.\n");
-    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.email} answered the agent's Bash call: deny, with a note.`);
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADA.name} answered the agent's Bash call: deny, with a note.`);
   });
 
   it("given a task leased to a runner, when its agent asks and the starter declines with a note, then the request and its answer reach the runner's events masked and the agent hears the note", async () => {

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { writesOff } from "./writes.js";
 import { restrictedKey } from "../accounts.js";
 import type { Principal } from "../auth.js";
 import { ORCHESTRATOR_ACTOR, recordEvent } from "../events.js";
@@ -161,5 +162,22 @@ describe("an issue left as it is while changing issues is off", () => {
     expect(sources.body.sources[0]).toMatchObject({ can: { write: false }, writeProblem: off });
     expect([moved, writes]).toEqual([[], []]);
     expect(asked.some((p) => p.startsWith("/rest/agile/1.0/board"))).toBe(true);
+  });
+});
+
+describe("the line a board says while changing issues is off", () => {
+  afterEach(() => {
+    delete process.env.ORCHESTRATOR_MODE;
+  });
+
+  it("given one person's own orchestrator and a team's, when the line is said, then the person is told to turn it on and a team is told who does", () => {
+    // when
+    process.env.ORCHESTRATOR_MODE = "local";
+    const own = writesOff("jira");
+    process.env.ORCHESTRATOR_MODE = "self-hosted";
+    const team = writesOff("jira");
+
+    // then
+    expect([own.endsWith("Turn it on under Integrations."), team.endsWith("An owner or an admin turns it on under Integrations.")]).toEqual([true, true]);
   });
 });

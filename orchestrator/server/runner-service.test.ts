@@ -3,7 +3,7 @@ import { localLink } from "../runner/local-link.js";
 import type { TaskOutcome } from "../runner/link.js";
 import { startRunnerLoop } from "../runner/loop.js";
 import type { TaskExecutor } from "../runner/task.js";
-import { LEASE_MS, NotHeld, checkedWork, createRunnerService } from "./runner-service.js";
+import { QUESTION_CHANGED_AWAY, IDLE_SESSION_MS, LEASE_MS, NotHeld, checkedWork, createRunnerService } from "./runner-service.js";
 import { memoryStore, task } from "./runner-service.fixture.js";
 
 const ADA = "ada@example.invalid";
@@ -85,6 +85,51 @@ describe("the runner service a local orchestrator's runner calls", () => {
     expect(order).toEqual(["followed tsk-review", "tsk-review stage null", "followed tsk-failed"]);
   });
 
+  it("given runs that changed nothing, one answering plainly, one whose answer looks like it holds a secret, an older runner's plain failure and a run that went on from a review and changed nothing more, when each finishes, then the first two end with nothing changed, only the plain answer is kept, the older one stays failed and the last is back in review with its answer", async () => {
+    // given
+    const mem = memoryStore();
+    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const finish = async (id: string, outcome: Partial<TaskOutcome>) => {
+      mem.queued.push(task(id, ADA));
+      const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+      await service.finish(id, lease!.leaseId, { status: "failed", error: "The agent changed nothing, so there is nothing to push.", nativeSessionId: null, branch: null, position: null, request: null, ...outcome });
+    };
+
+    // when
+    await finish("tsk-plain", { nothingChanged: true, lastSaid: "No change is needed." });
+    await finish("tsk-secret", { nothingChanged: true, lastSaid: "Use ghp_0123456789abcdefghijklmnopqrstuvwxyzAB to read it." });
+    await finish("tsk-older", {});
+    await finish("tsk-again", { status: "needs-review", error: null, lastSaid: "Nothing more to add." });
+
+    // then
+    expect(mem.ended["tsk-plain"]).toMatchObject({ status: "nothing-changed", error: null, lastSaid: "No change is needed." });
+    expect(mem.ended["tsk-secret"]).toMatchObject({ status: "nothing-changed", error: null });
+    expect(mem.ended["tsk-secret"]!.lastSaid).toBeUndefined();
+    expect(mem.ended["tsk-older"]).toMatchObject({ status: "failed", error: "The agent changed nothing, so there is nothing to push." });
+    expect(mem.ended["tsk-again"]).toMatchObject({ status: "needs-review", lastSaid: "Nothing more to add." });
+  });
+
+  it("given a question taken by a machine whose agent changed files and pushed a branch all the same, when it finishes for review, then it ends failed with nothing kept and no request to open, what follows hears the same, and another task's review stands", async () => {
+    // given
+    const mem = memoryStore();
+    const followed: TaskOutcome[] = [];
+    const service = createRunnerService({ tenant: "acme", store: mem.store, isQuestion: async (id) => id === "tsk-question", onFinished: async (_id, outcome) => void followed.push(outcome) });
+    const finish = async (id: string) => {
+      mem.queued.push(task(id, ADA));
+      const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+      await service.finish(id, lease!.leaseId, { status: "needs-review", error: null, nativeSessionId: null, branch: "task/add-a-note", position: null, request: { title: "Add a note", body: "Adds it." } });
+    };
+
+    // when
+    await finish("tsk-question");
+    await finish("tsk-change");
+
+    // then
+    expect(mem.ended["tsk-question"]).toMatchObject({ status: "failed", error: QUESTION_CHANGED_AWAY, branch: null });
+    expect(followed[0]).toMatchObject({ status: "failed", branch: null, request: null });
+    expect(mem.ended["tsk-change"]).toMatchObject({ status: "needs-review", branch: "task/add-a-note" });
+  });
+
   it("given a runner already running a task, when it polls, then it leases nothing more", async () => {
     const mem = memoryStore();
     mem.queued.push(task("tsk-1", ADA));
@@ -125,6 +170,17 @@ describe("the runner service a local orchestrator's runner calls", () => {
     // then
     expect(mem.requests[0]!.payload).toEqual({ tool: "question", summary: "Which logger?", questions });
     expect(polled.commands).toEqual([{ type: "answer", taskId: "tsk-1", requestId: "question_1", decision: "allow-once", answers: { q1: { chosen: ["pino"], other: null } } }]);
+  });
+
+  it("given a follow-up its sender wrote, when the machine reports the agent took it, then the task's log names the sender, never their address", async () => {
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store, nameOf: async (who) => (who === ADA ? "Ada Example" : "A teammate") });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+
+    await service.events("tsk-1", lease!.leaseId, [{ n: 1, event: { type: "steer", text: "Also name the pager rotation.", by: ADA } }]);
+
+    expect(mem.events.get("tsk-1")).toEqual([expect.objectContaining({ kind: "steer", text: "Ada Example: Also name the pager rotation.", data: { type: "steer", text: "Also name the pager rotation.", by: "Ada Example" } })]);
   });
 
   it("given the agent's plan, when its starter approves it as they changed it, then the runner gets the changed plan with the answer", async () => {
@@ -256,6 +312,28 @@ describe("the runner service a local orchestrator's runner calls", () => {
     expect(mem.used.get("tsk-1")).toEqual(["add-ledger-migration", "release-notes", "db-query"]);
   });
 
+  it("given a machine reporting a skill and an MCP call with the source it read and one call without, when the events arrive, then each use is recorded with that source and the one without as unknown", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+
+    // when
+    await service.events("tsk-1", lease!.leaseId, [
+      { n: 1, event: { type: "tool_call", id: "t1", tool: "Skill", target: "payments-skills:add-endpoint", status: "started", source: "plugin:payments-skills@acme-market", sourceLabel: "payments-skills 1.4.0" } },
+      { n: 2, event: { type: "tool_call", id: "t2", tool: "mcp__docs__search", target: null, status: "started", mcp: { server: "docs", tool: "search" }, source: "folder:~/notes", sourceLabel: "notes" } },
+      { n: 3, event: { type: "tool_call", id: "t3", tool: "Skill", target: "rota-check", status: "started" } },
+    ]);
+
+    // then
+    expect(mem.uses.map(({ kind, name, source, sourceLabel }) => [kind, name, source, sourceLabel])).toEqual([
+      ["skills", "add-endpoint", "plugin:payments-skills@acme-market", "payments-skills 1.4.0"],
+      ["mcpServers", "docs", "folder:~/notes", "notes"],
+      ["skills", "rota-check", "unknown", "unknown"],
+    ]);
+  });
+
   it("given a machine reporting its agent's starting context, when the event arrives, then the task records it and its log gets no line", async () => {
     const mem = memoryStore();
     mem.queued.push(task("tsk-1", ADA));
@@ -266,6 +344,27 @@ describe("the runner service a local orchestrator's runner calls", () => {
 
     expect(mem.contexts.get("tsk-1")).toBe(18_400);
     expect(mem.events.get("tsk-1") ?? []).toEqual([]);
+  });
+
+  it("given a machine reporting how much context its agent takes twice and a usage window's reading, when they arrive, then the task keeps the last reading with no log line and the window's reading reaches its keeper", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const limits: unknown[] = [];
+    const counts: unknown[] = [];
+    const service = createRunnerService({ tenant: "acme", store: mem.store, onLimit: async (taskId, event) => void limits.push([taskId, event]), onContextParts: async (taskId, event) => void counts.push([taskId, event]) });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+    const limit = { type: "limit" as const, window: "seven_day", status: "allowed" as const, used: 0.66 };
+    const parts = { type: "context_parts" as const, mcpServers: [{ name: "docs", tokens: 1200 }], skills: [{ name: "review-checklist", tokens: 90 }] };
+
+    // when
+    await service.events("tsk-1", lease!.leaseId, [{ n: 1, event: { type: "context_used", tokens: 48_000, window: null } }, { n: 2, event: { type: "context_used", tokens: 142_000, window: 200_000 } }, { n: 3, event: limit }, { n: 4, event: parts }, { n: 5, event: { type: "loaded", plugins: null, skills: null, mcpServers: null } }]);
+
+    // then
+    expect(mem.contextsUsed.get("tsk-1")).toEqual({ tokens: 142_000, window: 200_000 });
+    expect((mem.events.get("tsk-1") ?? []).map((e) => e.kind)).toEqual(["limit"]);
+    expect(limits).toEqual([["tsk-1", limit]]);
+    expect(counts).toEqual([["tsk-1", parts]]);
   });
 
   it("given a machine reporting its turn's estimated cost and then a step's real cost, when each arrives, then the cost cap hears both, the real one once it is kept, and the log gets no line", async () => {
@@ -358,6 +457,43 @@ describe("the runner service a local orchestrator's runner calls", () => {
     expect(first.lease?.task.work).toEqual({ ...work, setup: { ...work.setup, ownSetup: false, folderSettings: false } });
     expect(second.lease).toBeNull();
     expect(mem.ended["tsk-2"]).toMatchObject({ status: "failed", error: "The task could not be handed to this machine: its repository is no longer connected" });
+  });
+
+  it("given a task with something turned off for it, when a runner from before leaving things out and then a current one lease it, then the older one is not handed it and the task ends failed saying why, and the current one gets the list", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const off = { sources: ["folder:~/notes"], skills: [], mcpServers: [{ source: "yours", name: "tracker" }] };
+    const work = { prompt: "Task: Task", mode: "auto" as const, choices: null, repo: { url: "https://git.example.invalid/payments-skills.git", baseBranch: "main", baseSha: "abc1234" }, branch: "task/t", rules: [], setup: { plugin: null, mcpTools: [], deniedTools: [], off }, limits: { timeoutMs: 1_800_000, testCommand: null } };
+    const service = createRunnerService({ tenant: "acme", store: mem.store, describeWork: async () => work });
+
+    // when
+    const older = await service.poll(ADA, "machine-1", 0, true, open(), { work: true, features: ["workspace-continues"] });
+    mem.queued.push(task("tsk-2", ADA));
+    const current = await service.poll(ADA, "machine-2", 0, true, open(), { work: true, features: ["task-off"] });
+
+    // then
+    expect(older.lease).toBeNull();
+    expect(mem.ended["tsk-1"]).toMatchObject({ status: "failed", error: expect.stringContaining("its runner is older than leaving things out of a task") });
+    expect(current.lease?.task.work?.setup.off).toEqual(off);
+  });
+
+  it("given a question, when a runner from before questions held to reading and then a current one lease it, then the older one is not handed it and the task ends failed saying why, and the current one gets it as a question", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const work = { prompt: "Task: Task", mode: "auto" as const, choices: null, readOnly: true as const, repo: { url: "https://git.example.invalid/payments-skills.git", baseBranch: "main", baseSha: "abc1234" }, branch: "task/t", rules: [], setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 1_800_000, testCommand: null } };
+    const service = createRunnerService({ tenant: "acme", store: mem.store, describeWork: async () => work });
+
+    // when
+    const older = await service.poll(ADA, "machine-1", 0, true, open(), { work: true, features: ["task-off"] });
+    mem.queued.push(task("tsk-2", ADA));
+    const current = await service.poll(ADA, "machine-2", 0, true, open(), { work: true, features: ["read-only"] });
+
+    // then
+    expect(older.lease).toBeNull();
+    expect(mem.ended["tsk-1"]).toMatchObject({ status: "failed", error: expect.stringContaining("its runner is older than holding a question to reading") });
+    expect(current.lease?.task.work?.readOnly).toBe(true);
   });
 
   it("given a description whose clone address carries a token or is not https or ssh, or whose tools carry more than their names, when it would leave for a machine, then the address is refused and only names travel", () => {
@@ -462,6 +598,72 @@ describe("the runner service a local orchestrator's runner calls", () => {
     expect(again.commands).toEqual([]);
     expect(mem.followUps.map((f) => [f.id, f.status])).toEqual([["fup-1", "delivered"], ["fup-2", "pending"]]);
     await expect(stale).rejects.toBeInstanceOf(NotHeld);
+  });
+
+  it("given a follow-up the lease's first message carried and one sent after it, when its runner polls, then only the later one is handed, and one carried by an earlier lease is handed too", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+    const followUp = (id: string, handedLease?: string) => ({ tenant: "acme", id, taskId: "tsk-1", source: "person" as const, key: id, text: id, quotes: null, status: "pending" as const, createdAt: new Date().toISOString(), deliveredAt: null, createdBy: ADA, ...(handedLease ? { handedLease } : {}) });
+    mem.followUps.push(followUp("fup-carried", lease!.leaseId), followUp("fup-later"), followUp("fup-earlier", "lease-before"));
+
+    // when
+    const { commands } = await service.poll(ADA, "machine-1", 0, false, open());
+
+    // then
+    expect(commands.map((c) => (c.type === "follow_up" ? c.followUp.id : c.type))).toEqual(["fup-later", "fup-earlier"]);
+  });
+
+  it("given a run whose card waits, when its runner polls before and after half an hour has passed, then only the later poll tells it once to close its session as idle", async () => {
+    // given
+    let clock = Date.parse("2026-11-12T10:00:00.000Z");
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store, now: () => clock });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+    await mem.store.recordTaskRequest({ tenant: "acme", id: "req-1", taskId: "tsk-1", targetPosition: null, sourceKey: "ask-1", kind: "command", payload: { tool: "Bash", summary: "npm test" }, createdAt: new Date(clock).toISOString(), expiresAt: null });
+    const wait = async (ms: number) => {
+      for (let passed = 0; passed < ms; passed += 60_000) {
+        clock += 60_000;
+        await service.renew("tsk-1", lease!.leaseId);
+      }
+    };
+
+    // when
+    await wait(IDLE_SESSION_MS - 60_000);
+    const early = await service.poll(ADA, "machine-1", 0, false, open());
+    await wait(60_000);
+    const late = await service.poll(ADA, "machine-1", 0, false, open());
+    const again = await service.poll(ADA, "machine-1", 0, false, open());
+
+    // then
+    expect(early.commands).toEqual([]);
+    expect(late.commands).toEqual([{ type: "stop", taskId: "tsk-1", idle: true }]);
+    expect(again.commands).toEqual([]);
+  });
+
+  it("given a run on a person's machine whose card has waited half an hour, when a runner from before idle closing polls and then one that lists it, then only the later one is told to close the session as idle", async () => {
+    // given
+    let clock = Date.parse("2026-11-12T10:00:00.000Z");
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store, now: () => clock });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+    await mem.store.recordTaskRequest({ tenant: "acme", id: "req-1", taskId: "tsk-1", targetPosition: null, sourceKey: "ask-1", kind: "command", payload: { tool: "Bash", summary: "npm test" }, createdAt: new Date(clock).toISOString(), expiresAt: null });
+    for (let passed = 0; passed < IDLE_SESSION_MS; passed += 60_000) {
+      clock += 60_000;
+      await service.renew("tsk-1", lease!.leaseId);
+    }
+
+    // when
+    const older = await service.poll(ADA, "machine-1", 0, false, open(), { work: true, features: ["workspace-continues"] });
+    const current = await service.poll(ADA, "machine-1", 0, false, open(), { work: true, features: ["workspace-continues", "idle-stop"] });
+
+    // then
+    expect(older.commands).toEqual([]);
+    expect(current.commands).toEqual([{ type: "stop", taskId: "tsk-1", idle: true }]);
   });
 
   it("given two of the orchestrator's processes over one store, when a Stop is asked on one, then the runner polling the other hears it, once", async () => {

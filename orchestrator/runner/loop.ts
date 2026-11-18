@@ -1,5 +1,5 @@
 import { MachineRefused, ProtocolMismatch } from "./http-link.js";
-import type { ChecksAnswer, ChecksAsk, FolderAnswer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, RunnerLink, UndoAnswer, UndoAsk } from "./link.js";
+import type { ChecksAnswer, ChecksAsk, FolderAnswer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, RunnerLink, SetupAnswer, SetupAsk, UndoAnswer, UndoAsk } from "./link.js";
 import { runLeasedTask } from "./task.js";
 import type { LeasedTask, TaskExecutor, TaskOptions } from "./task.js";
 
@@ -38,6 +38,7 @@ export interface LoopOptions extends TaskOptions {
   /** This machine's reading of a folder project's checks, for the screen that approves them. */
   readChecks?: (ask: ChecksAsk) => Promise<ChecksAnswer>;
   pushBranch?: (ask: PushAsk) => Promise<PushAnswer>;
+  setupHere?: (ask: SetupAsk) => Promise<SetupAnswer>;
   /** This machine's read or decision of a lesson in its person's queue, as they asked on a task's page. */
   lessonOp?: (ask: LessonOpAsk) => Promise<LessonOpAnswer>;
   /** How many tasks the runner takes at once, asked before each poll; one when left out. */
@@ -51,7 +52,7 @@ export interface LoopOptions extends TaskOptions {
 
 /** Leases tasks up to its slots, hands each running task its own commands, and keeps polling through outages. */
 export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, options: LoopOptions): RunnerLoop {
-  const { random = Math.random, onPollFailed = () => {}, now = Date.now, listFolders, undoInFolder, queueLesson, readChecks, lessonOp, pushBranch, slots = () => 1, onRefused = () => {} } = options;
+  const { random = Math.random, onPollFailed = () => {}, now = Date.now, listFolders, undoInFolder, queueLesson, readChecks, lessonOp, pushBranch, setupHere, slots = () => 1, onRefused = () => {} } = options;
   const running = new Map<string, LeasedTask>();
   const halt = new AbortController();
   let wakeSleep: (() => void) | null = null;
@@ -70,7 +71,7 @@ export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, option
     let stableSince: number | null = null;
     while (!halt.signal.aborted) {
       try {
-        const { lease, commands, folders = [], undos = [], lessons = [], checks = [], lessonOps = [], pushes = [] } = await link.poll(POLL_WAIT_MS, running.size < slots(), halt.signal);
+        const { lease, commands, folders = [], undos = [], lessons = [], checks = [], lessonOps = [], pushes = [], setups = [] } = await link.poll(POLL_WAIT_MS, running.size < slots(), halt.signal);
         if (stableSince === null) stableSince = now();
         if (now() - stableSince >= STABLE_MS) failures = 0;
         for (const command of commands) running.get(command.taskId)?.command(command);
@@ -81,6 +82,7 @@ export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, option
         if (readChecks && link.checks) for (const ask of checks) void readChecks(ask).then((answer) => link.checks!(ask.nonce, answer)).catch(() => {});
         if (lessonOp && link.lessonOp) for (const ask of lessonOps) void lessonOp(ask).then((answer) => link.lessonOp!(ask.nonce, answer)).catch(() => {});
         if (pushBranch && link.push) for (const ask of pushes) void pushBranch(ask).then((answer) => link.push!(ask.nonce, answer)).catch(() => {});
+        if (setupHere && link.setup) for (const ask of setups) void setupHere(ask).then((answer) => link.setup!(ask.nonce, answer)).catch(() => {});
         // A lease the poll was not asked for is still run: the orchestrator holds it for this runner now.
         if (lease && !running.has(lease.task.id) && !halt.signal.aborted) {
           const task = runLeasedTask(lease, link, executor, options);

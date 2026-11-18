@@ -149,4 +149,51 @@ describe("where a task with no project named works", { timeout: 120_000 }, () =>
     expect(await ctx.store.getTask(ctx.tenant, routedTask.body.task.id)).toMatchObject({ status: "cancelled", error: `Moved to ${paths.site}.` });
     expect((await logOf(moved.body.task.id))[0]).toBe(`Working in ${paths.site}, the folder its starter picked.`);
   });
+
+  it("given a one-person orchestrator and two folders of the person's, when a form asks where tasks would go before starting them, then it is told the folder the agent picked with its reason, or none when the agent names none or there is none, and a start sent with that folder is not routed again", async () => {
+    // given
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "orchestrator-routing-")));
+    dirs.push(root);
+    const home = join(root, "home");
+    const paths = { site: join(home, "site"), payments: join(home, "payments") };
+    for (const folder of Object.values(paths)) {
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "README.md"), "Notes.\n");
+    }
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("CLAUDE_CONFIG_DIR", join(home, ".claude"));
+    vi.stubEnv("ORCHESTRATOR_MODE", "local");
+    const ctx: OrchestratorContext = { store: openSqliteStore(":memory:"), dataDir: join(root, "data"), tenant: "default", addedRepos: new Map(), localReposRoot: home, mode: "local" };
+    const account = await createUser(ctx.store, ctx.tenant, new Set(["Mine"]), { email: "ada@example.invalid", name: "Ada Example", role: "owner" }, OWNER);
+    const ada: Principal = { id: account.id, name: account.name, email: account.email, role: "owner", ownedTeams: [], restrictedTeams: [] };
+    ctx.workFolders = async () => candidates(paths);
+    ctx.tasks = createTaskRunner(ctx, { agents: [fakeAgentAdapter(FAKE_AGENT)], isolation: { mode: "process", network: "open" }, testCommand: () => null, hostEnv: { PATH: process.env.PATH, HOME: home }, profile: "personal" });
+    await ctx.tasks.ready();
+    const answers = ["2: refunds live in payments", "no folder fits"];
+    const asked: string[] = [];
+    ctx.tasks.ask = async (_agent, _title, prompt) => {
+      asked.push(prompt);
+      return { summary: answers.shift() ?? null, cost: { usd: null, inputTokens: null, outputTokens: null } };
+    };
+    const app = createApp(ctx, as(ada));
+    const post = async (path: string, body: unknown) => {
+      const res = await app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      return { status: res.status, body: await res.json() };
+    };
+
+    // when
+    const named = await post("/api/tasks/where", { description: "Add a refund lookup", agent: "fake" });
+    const unsure = await post("/api/tasks/where", { description: "Fix the footer", agent: "fake" });
+    ctx.workFolders = async () => [];
+    const none = await post("/api/tasks/where", { description: "Tidy the logs", agent: "fake" });
+    const started = await post("/api/tasks", { description: "Add a refund lookup", path: named.body.folder.path, agent: "fake", mode: "auto" });
+    await ctx.tasks.idle();
+
+    // then
+    expect(named).toEqual({ status: 200, body: { folder: { path: paths.payments, reason: "refunds live in payments", fallback: false }, title: "Add a refund lookup" } });
+    expect(unsure).toEqual({ status: 200, body: { folder: null, title: "Fix the footer" } });
+    expect(none).toEqual({ status: 200, body: { folder: null, title: "Tidy the logs" } });
+    expect(started.status).toBe(201);
+    expect(asked).toHaveLength(2);
+  });
 });

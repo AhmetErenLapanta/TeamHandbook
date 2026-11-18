@@ -412,3 +412,95 @@ describe("merging only the head that was checked", () => {
   });
 });
 
+
+describe("a local request into the branch its task started from, not the one checked out", () => {
+  const IDENTITY = ["-c", "user.name=Stand In", "-c", "user.email=stand-in@example.invalid"];
+  /** The person's working copy with main checked out and a change of theirs not committed, develop one commit past main, and the task's branch one commit past develop. */
+  async function onDevelop() {
+    const { root, repo } = await fixture();
+    const copy = join(root, "copy");
+    mkdirSync(copy);
+    git(["init", "-q", "-b", "main"], copy);
+    writeFileSync(join(copy, "README.md"), "skills\n");
+    git(["add", "."], copy);
+    git([...IDENTITY, "commit", "-q", "-m", "first"], copy);
+    git(["switch", "-q", "-c", "develop"], copy);
+    writeFileSync(join(copy, "NOTES.md"), "develop\n");
+    git(["add", "."], copy);
+    git([...IDENTITY, "commit", "-q", "-m", "on develop"], copy);
+    const base = git(["rev-parse", "HEAD"], copy).trim();
+    git(["switch", "-q", "-c", "handbook/pushed"], copy);
+    mkdirSync(join(copy, "skills", "retry"), { recursive: true });
+    writeFileSync(join(copy, "skills", "retry", "SKILL.md"), "# Retry\n");
+    git(["add", "."], copy);
+    git([...IDENTITY, "commit", "-q", "-m", "the runner's commit"], copy);
+    const head = git(["rev-parse", "HEAD"], copy).trim();
+    git(["switch", "-q", "main"], copy);
+    writeFileSync(join(copy, "README.md"), "skills, being edited\n");
+    const recorded = new Map<number, { branch: string; headSha: string; targetBranch?: string }>();
+    let n = 0;
+    const forge = createLocalForge(join(root, "work"), { nextNumber: async () => ++n, request: async (_t, _id, number) => recorded.get(number) ?? null });
+    return { root, copy, base, head, forge, recorded, repo: { ...repo, url: `file://${copy}` }, main: git(["rev-parse", "main"], copy).trim() };
+  }
+
+  it("given a task that started from develop, when its request is opened into develop, into a branch the repository lacks, or into main its base is not in, then only develop opens", async () => {
+    // given
+    const { forge, repo, base, head } = await onDevelop();
+    const into = (target: string) => forge.openForBranch!(repo, { title: "Add retry", body: "b", branch: "handbook/pushed", baseSha: base, target });
+
+    // when
+    const opened = await into("develop");
+    const missing = await into("release").catch((err: Error) => err.message);
+    const elsewhere = await into("main").catch((err: Error) => err.message);
+
+    // then
+    expect(opened).toMatchObject({ number: 1, headSha: head });
+    expect(missing).toBe(`branch release is not in ${repo.name}, so no request goes into it`);
+    expect(elsewhere).toBe(`the task started from ${base.slice(0, 7)}, which is not in main`);
+  });
+
+  it("given a change prepared on develop, when the orchestrator opens it into develop and into a branch the repository lacks, then only develop opens and the branch starts from develop's head", async () => {
+    // given
+    const { root, repo, copy, base } = await onDevelop();
+    const forge = createLocalForge(join(root, "work"), { nextNumber: async () => 7 });
+    const prepared = (branch: string, target: string) => change(copy, { branch, baseSha: base, target });
+
+    // when
+    const opened = await forge.open(repo, prepared("handbook/on-develop", "develop"));
+    const missing = await forge.open(repo, prepared("handbook/nowhere", "release")).catch((err: Error) => err.message);
+
+    // then
+    expect(git(["rev-parse", `${opened.headSha}^`], copy).trim()).toBe(base);
+    expect(missing).toBe(`branch release is not in ${repo.name}, so no request goes into it`);
+    expect(gitMaybe(["rev-parse", "--verify", "--quiet", "refs/heads/handbook/nowhere"], copy)).toBeNull();
+  });
+
+  it("given a request into develop, when the person merges it there themselves, then it reads as merged although main never had it", async () => {
+    // given
+    const { forge, repo, copy, base, head, recorded } = await onDevelop();
+    recorded.set(1, { branch: "handbook/pushed", headSha: head, targetBranch: "develop" });
+    const before = await forge.status!(repo, 1);
+
+    // when
+    const merge = git([...IDENTITY, "commit-tree", `${head}^{tree}`, "-p", base, "-p", head, "-m", "Merge handbook/pushed"], copy).trim();
+    git(["update-ref", "refs/heads/develop", merge], copy);
+
+    // then
+    expect(before.status).toBe("open");
+    expect(await forge.status!(repo, 1)).toEqual({ status: "merged", mergedAt: null, headSha: head });
+  });
+
+  it("given a request into develop and the person's own change not committed on main, when it is merged, then develop moves to the merge and main and their change stay as they were", async () => {
+    // given
+    const { root, repo, copy, base, head, main } = await onDevelop();
+
+    // when
+    const merged = await inLocalTurn(repo, () => mergeLocalBranch(join(root, "work"), repo, "handbook/pushed", { name: "Ada Example", email: "ada@example.invalid" }, head, "develop"));
+
+    // then
+    expect(git(["rev-parse", "develop"], copy).trim()).toBe(merged);
+    expect([git(["rev-parse", `${merged}^1`], copy).trim(), git(["rev-parse", `${merged}^2`], copy).trim()]).toEqual([base, head]);
+    expect(git(["rev-parse", "main"], copy).trim()).toBe(main);
+    expect(readFileSync(join(copy, "README.md"), "utf8")).toBe("skills, being edited\n");
+  });
+});

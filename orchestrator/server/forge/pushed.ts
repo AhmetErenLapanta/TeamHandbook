@@ -17,7 +17,14 @@ import { createOwnCliForge, hasOwnCli, ownCliReady, ownCredentialConfig, OwnCliR
 import type { CliForge, CliRun } from "./own-cli.js";
 import type { BranchUpdate, OpenedRequest, PushedBranch, RequestRecord } from "./types.js";
 import { ownCliHere } from "./own-cli-here.js";
-import { DEVICE_ENDPOINTS, personForgeToken } from "./device-sign-in.js";
+import { DEVICE_ENDPOINTS, personForgeToken, personLastingToken, personSignedIn } from "./device-sign-in.js";
+import { forgeHttp } from "./http.js";
+import { githubAuth } from "./github.js";
+import { gitlabAuth } from "./gitlab.js";
+import { ForgeReadError, readFailure, readWatchWith } from "./read-model.js";
+import type { RequestWatch } from "./read-model.js";
+import type { OnForgeRead } from "../../shared/forge-read.js";
+import { ownCliReader } from "./own-cli.js";
 import { DRIVERS } from "./registry.js";
 
 /** The CLI a person signs in to each forge with, as the request's page names it. */
@@ -55,7 +62,7 @@ export async function requestForPushedBranch(ctx: OrchestratorContext, repo: Rep
       reason = err.message;
     }
   }
-  const target = ((await gitAsyncMaybe(["symbolic-ref", "--short", "HEAD"], mirrorDir(ctx, repo.id))) ?? "").trim() || "main";
+  const target = pushed.target ?? (((await gitAsyncMaybe(["symbolic-ref", "--short", "HEAD"], mirrorDir(ctx, repo.id))) ?? "").trim() || "main");
   return { createUrl: FORGES[config.kind].newRequestUrl(new URL(repo.url).origin, config.project, pushed.branch, target), reason };
 }
 
@@ -98,7 +105,7 @@ export async function originRequest(ctx: OrchestratorContext, path: string, repo
   if (!origin) return null;
   const { kind, at } = origin;
   const label = FORGES[kind].label;
-  const target = ((await gitAsyncMaybe(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], path)) ?? "").trim().replace(/^origin\//, "") || "main";
+  const target = pushed.target ?? (((await gitAsyncMaybe(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], path)) ?? "").trim().replace(/^origin\//, "") || "main");
   const page = (reason: string): OriginRequest => ({ createUrl: FORGES[kind].newRequestUrl(at.web, at.project, pushed.branch, target), reason });
   if (!at.overHttp) return page(`the clone's origin on ${at.host} is reached over ssh, which the orchestrator does not push to; push it with \`git push origin ${pushed.branch}\`, then open it there`);
   const url = new URL(`${at.web}/${at.project}.git`);
@@ -133,7 +140,7 @@ async function originRequestAsPerson(ctx: OrchestratorContext, path: string, rep
   const kind = origin.kind;
   const { at } = origin;
   if (at.host !== DEVICE_ENDPOINTS[kind].host) return null;
-  const target = ((await gitAsyncMaybe(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], path)) ?? "").trim().replace(/^origin\//, "") || "main";
+  const target = pushed.target ?? (((await gitAsyncMaybe(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], path)) ?? "").trim().replace(/^origin\//, "") || "main");
   const page = (reason: string): OriginRequest => ({ createUrl: FORGES[kind].newRequestUrl(at.web, at.project, pushed.branch, target), reason });
   if (!at.overHttp) return page(`the clone's origin on ${at.host} is reached over ssh, which the orchestrator does not push to; push it with \`git push origin ${pushed.branch}\`, then open it there`);
   const url = new URL(`${at.web}/${at.project}.git`);
@@ -182,13 +189,74 @@ const keptOnForge = async (ctx: OrchestratorContext, repo: RepoRecord, number: n
   return kept ? (JSON.parse(kept) as OnForgeRequest) : null;
 };
 
+/** How a watch reads a request a press opened on the clone's origin, or why it is not read now. */
+export type OnForgeWatch = { kind: "github" | "gitlab"; number: number; url: string } & ({ read: () => Promise<RequestWatch> } | { paused: string });
+
+/**
+ * The request a path repository's local request was opened as on its clone's GitLab or GitHub,
+ * read for the watch with GETs alone: through the person's own CLI where it is used here, else with
+ * the sign-in the task's starter made with a code, while it lasts. Nothing is renewed in the
+ * background: a lapsed sign-in pauses the read until its person signs in again. Null for a request
+ * never opened there.
+ */
+export async function onForgeWatch(ctx: OrchestratorContext, repo: RepoRecord, number: number, starter: Pick<Principal, "id"> | null, send: typeof fetch = fetch): Promise<OnForgeWatch | null> {
+  const kept = await keptOnForge(ctx, repo, number);
+  const path = localRepoPath(repo.url);
+  const origin = kept && path ? await originForge(ctx, path) : null;
+  if (!kept || !origin) return null;
+  const { at } = origin;
+  const kind = origin.kind;
+  const label = FORGES[kind].label;
+  const config = { repoId: repo.id, kind, apiUrl: FORGES[kind].apiUrlFor(new URL(at.web)), project: at.project };
+  const reading = async (http: ReturnType<typeof forgeHttp>) => {
+    try {
+      return await readWatchWith(http, config, kept.number);
+    } catch (err) {
+      if (err instanceof OwnCliRefused) throw new ForgeReadError("unauthenticated", err.message);
+      if (err instanceof ForgeHttpError) throw readFailure(err, kind, repo, false);
+      throw err;
+    }
+  };
+  if (kind !== "github" && kind !== "gitlab") return null;
+  const where = { kind, number: kept.number, url: kept.url };
+  if (await ownCliHere(ctx)) return { ...where, read: () => reading(ownCliReader(kind, at.host)) };
+  if (at.host !== DEVICE_ENDPOINTS[kind].host || !starter) return { ...where, paused: `${label} is read here only with your own CLI or a sign-in with a code` };
+  const token = await personLastingToken(ctx, starter.id, kind);
+  if (!token) return { ...where, paused: `the sign-in to ${label} it was opened with lapsed, and it is renewed only when you press for a request; sign in again on the ${label} card to have it read` };
+  // A code sign-in's token is OAuth's: GitLab takes it as a bearer alone, never in PRIVATE-TOKEN.
+  return { ...where, read: () => reading(forgeHttp(label, config.apiUrl, token, kind === "github" ? githubAuth(token) : gitlabAuth(token, true), send)) };
+}
+
+/**
+ * What the task page shows of a request its person's press opened on the clone's forge, read once
+ * now with GETs alone, through the reader the watch uses: never renewed, and read with a code
+ * sign-in only for the person who opened it. Null for a request never opened there.
+ */
+export async function readOnForge(ctx: OrchestratorContext, repo: RepoRecord, request: RequestRecord, viewer: Pick<Principal, "id" | "email">): Promise<OnForgeRead | null> {
+  const opened = await onForgeWatch(ctx, repo, request.number, request.createdBy === viewer.email ? viewer : null);
+  return opened ? readOnce(opened) : null;
+}
+
+/** One read of a request a press opened on a forge, in the page's words; a forge that does not answer says why. */
+export async function readOnce(opened: OnForgeWatch): Promise<OnForgeRead> {
+  const where = { kind: opened.kind, number: opened.number, url: opened.url };
+  if ("paused" in opened) return { ...where, unread: opened.paused };
+  try {
+    const { detail, comments } = await opened.read();
+    return { ...where, read: { status: detail.status, checks: detail.checks.state, approvals: detail.review.approvedBy.length, comments: comments.filter((c) => c.kind === "person").length, mergedBy: detail.mergedBy ?? null, readAt: new Date().toISOString() } };
+  } catch (err) {
+    if (err instanceof ForgeReadError) return { ...where, unread: err.message };
+    throw err;
+  }
+}
+
 export async function requestOnForge(ctx: OrchestratorContext, repo: RepoRecord, number: number, user?: Pick<Principal, "id" | "email">): Promise<OnForge> {
   const path = localRepoPath(repo.url);
   const origin = path ? await originForge(ctx, path) : null;
   const request = user ? await ctx.store.getRequest(ctx.tenant, repo.id, number) : null;
   // Offered with the person's own CLI here, or with the sign-in of the person who started the task, to them alone.
   const own = origin ? await ownCliHere(ctx) : false;
-  const asPerson = !own && origin && user && request && request.createdBy === user.email && (origin.kind === "github" || origin.kind === "gitlab") && origin.at.host === DEVICE_ENDPOINTS[origin.kind].host && (await personForgeToken(ctx, user.id, origin.kind));
+  const asPerson = !own && origin && user && request && request.createdBy === user.email && (origin.kind === "github" || origin.kind === "gitlab") && origin.at.host === DEVICE_ENDPOINTS[origin.kind].host && (await personSignedIn(ctx, user.id, origin.kind));
   const forge = own || asPerson ? (origin?.kind ?? null) : null;
   const opened = await keptOnForge(ctx, repo, number);
   return { forge, url: opened?.url ?? null, number: opened?.number ?? null };
@@ -208,13 +276,14 @@ export async function openRequestOnForge(ctx: OrchestratorContext, repo: RepoRec
   const own = await ownCliHere(ctx);
   // Without the person's own CLI here, only the task's own starter pushes, and only with the sign-in that is theirs.
   const origin = own ? null : await originForge(ctx, path);
-  const token = !own && origin && (origin.kind === "github" || origin.kind === "gitlab") && request.createdBy === user.email ? await personForgeToken(ctx, user.id, origin.kind) : null;
+  const token = !own && origin && (origin.kind === "github" || origin.kind === "gitlab") && request.createdBy === user.email ? await personForgeToken(ctx, user, origin.kind, { send }) : null;
   if (!own && !token) throw new OnForgeRefused("not-one-person", request.createdBy === user.email ? "sign in to GitHub or GitLab on its card first; your own gh or glab is not used on an orchestrator more than one person reaches" : "only the person who started the task opens its request on the forge", 409);
   // Only what the orchestrator checked leaves the machine: a branch moved since is read again first.
   const head = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${request.branch}^{commit}`], path))?.trim();
   const base = head && head === (request.checkedHead ?? request.headSha) ? (await gitAsyncMaybe(["merge-base", "HEAD", head], path))?.trim() : null;
   if (!base) throw new OnForgeRefused("moved", `${request.branch} moved since the orchestrator checked it; read the request again`, 409);
-  const pushed = { title: request.title, body: (await readLocalDescription(repo, request.branch)) ?? "", branch: request.branch, baseSha: base, assignment: await teamAssignment(ctx, repo, user) };
+  // The request goes into the branch its task started from on the origin too, as it does here.
+  const pushed = { title: request.title, body: (await readLocalDescription(repo, request.branch)) ?? "", branch: request.branch, baseSha: base, ...(request.targetBranch ? { target: request.targetBranch } : {}), assignment: await teamAssignment(ctx, repo, user) };
   const answer = token ? await originRequestAsPerson(ctx, path, repo, pushed, token, send) : await originRequest(ctx, path, repo, pushed, run);
   if (!answer) throw new OnForgeRefused("no-origin", `${repo.name} has no origin on GitLab or GitHub to open its request on`, 400);
   if (!("opened" in answer)) throw new OnForgeRefused("not-opened", answer.reason, 409, answer.createUrl);

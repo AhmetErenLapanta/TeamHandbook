@@ -36,7 +36,7 @@ test("given the agent asks to run a command, when its starter allows it once, th
   await card.getByRole("button", { name: "Allow once" }).click();
 
   // then
-  await expect(card).toContainText("Ada allowed once.");
+  await expect(card).toContainText("You allowed once.");
   expect(sent).toMatchObject({ answer: { decision: "allow_once" } });
   expect((sent as unknown as { answer: Record<string, unknown> }).answer).not.toHaveProperty("note");
 });
@@ -107,6 +107,50 @@ test("given a log with two failing lines, when the person finds 'failed' and pre
   // then
   await expect(page.getByRole("status").filter({ hasText: "of 2" })).toHaveText("2 of 2");
   await expect(page.locator(".task-log li[aria-current='true']")).toContainText("retrying the failed tests");
+});
+
+test("given a finished task's page, when the palette opens, then its first row is Find in this task, which puts the cursor in the find row where Previous, Next and the close button work", async ({ page }) => {
+  // given
+  const line = (seq: number, text: string) => ({ seq, at: "2026-11-03T10:00:0" + seq + "Z", text });
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed" }), log: [line(1, "npm test: 3 FAILED"), line(2, "Cloning payments-api"), line(3, "retrying the failed tests")], outputCut: false } }));
+  await page.goto("/demo/tasks/t1");
+
+  await expect(page.getByRole("search", { name: "Find in the log" })).toBeVisible();
+
+  // when
+  await page.keyboard.press("ControlOrMeta+K");
+  const first = page.getByRole("option").first();
+
+  // then
+  await expect(first).toHaveText("Find in this task");
+
+  // when
+  await first.click();
+  const find = page.getByRole("search").getByLabel("Find in the log");
+  await expect(find).toBeFocused();
+  await page.keyboard.type("failed");
+
+  // then
+  await expect(page.getByRole("status").filter({ hasText: "of 2" })).toHaveText("1 of 2");
+
+  // when
+  await page.getByRole("button", { name: "Next" }).click();
+
+  // then
+  await expect(page.getByRole("status").filter({ hasText: "of 2" })).toHaveText("2 of 2");
+
+  // when
+  await page.getByRole("button", { name: "Previous" }).click();
+
+  // then
+  await expect(page.getByRole("status").filter({ hasText: "of 2" })).toHaveText("1 of 2");
+
+  // when
+  await page.getByRole("button", { name: "Close find" }).click();
+
+  // then
+  await expect(find).toHaveValue("");
+  await expect(page.locator(".task-log mark")).toHaveCount(0);
 });
 
 test("given a finished task with a log longer than the page holds, when it opens, then the newest lines show and the earlier ones come back on request", async ({ page }) => {
@@ -377,6 +421,21 @@ test("given a task the orchestrator's own restart stopped, when its page opens, 
   await expect(note.getByRole("button", { name: "Pick up where it stopped" })).toBeVisible();
 });
 
+test("given a task whose session closed after waiting half an hour on a card, when its page opens, then it says why in the orchestrator's words and offers to pick it up", async ({ page }) => {
+  // given
+  const why = "The agent waited half an hour for an answer, so its session was closed to free this machine; Continue brings it back where it left off.";
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "interrupted", phase: "working", error: why, startedAt: new Date().toISOString() }), log: [], outputCut: false } }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  const note = page.locator(".waiting");
+  await expect(note).toContainText(why);
+  await expect(note).not.toContainText("machine went away");
+  await expect(note.getByRole("button", { name: "Pick up where it stopped" })).toBeVisible();
+});
+
 test("given a task its machine left part way, when its starter picks it up and the machine is gone, then the reason shows; when the machine is back, the task goes back in line and only its starter is offered it", async ({ page, browser }) => {
   // given
   let status = "interrupted";
@@ -572,6 +631,33 @@ test("given a change a machine kept on its branch with a GitLab remote, when its
   await expect(changes.getByRole("button", { name: "Open a merge request" })).toHaveCount(0);
 });
 
+test("given a change its starter opened on GitLab, when its page opens, then the group reads the merge request in the forge's own facts, and Read again reads it once more", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const opened = { repoId: "payments-skills--alpha", name: "alpha", status: "request", reason: "changed by the agent in alpha", path: "alpha", branch: "task/alpha", forge: "gitlab", tests: null, error: null, request: { number: 3, url: "https://gitlab.example.invalid/team/alpha/-/merge_requests/3", status: "open" } };
+  const reads = [
+    { kind: "gitlab", number: 3, url: "https://gitlab.example/alpha/-/merge_requests/3", read: { status: "open", checks: "passing", approvals: 1, comments: 3, mergedBy: null, readAt: "2026-11-12T10:42:00" } },
+    { kind: "gitlab", number: 3, url: "https://gitlab.example/alpha/-/merge_requests/3", unread: "sign in to GitLab from Integrations." },
+  ];
+  let read = 0;
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, targets: [opened], ranOn: "ada-laptop" }), log: [], outputCut: false } }));
+  await page.route((url) => url.pathname.startsWith("/api/repos/payments-skills--alpha/requests/3/changes"), (route) => route.fulfill({ json: { changes: { base: "a", head: "b", omitted: 0, files: [] } } }));
+  await page.route("**/api/tasks/t1/targets/0/on-forge", (route) => route.fulfill({ json: { onForge: reads[Math.min(read++, 1)] } }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const group = page.getByRole("region", { name: "Changes", exact: true }).getByRole("region", { name: "alpha" });
+
+  // then
+  await expect(group).toContainText("Merge request !3 on GitLab: checks passing, 1 approval, 3 comments, read at 10:42");
+
+  // when
+  await group.getByRole("button", { name: "Read again" }).click();
+
+  // then
+  await expect(group).toContainText("Not read from GitLab for now: sign in to GitLab from Integrations.");
+});
+
 test("given a task held at its plan's usage limit, when its page and the task list open, then both say it is at the usage limit in the waiting tone rather than queued", async ({ page }) => {
   // given
   const resetAt = new Date(Date.now() + 3 * 3_600_000).toISOString();
@@ -712,7 +798,7 @@ test("given a task whose run found two MCP servers that need sign-in, when its p
   const note = page.getByRole("note").filter({ hasText: "sign-in" });
   await expect(note.locator("summary")).toHaveText("2 MCP servers need sign-in");
   await note.locator("summary").click();
-  await expect(note).toContainText("GitLab, Notion.");
+  await expect(note).toContainText("GitLab, Notion");
   await expect(note).toHaveText(/run claude\s+Copy, then \/mcp/);
 
   // when
@@ -721,6 +807,22 @@ test("given a task whose run found two MCP servers that need sign-in, when its p
 
   // then
   await expect(page.getByRole("note").filter({ hasText: "need sign-in" })).toHaveCount(0);
+});
+test("given a task whose run found a plugin's server and one service reached twice, when its page opens, then each service is named once as a person reads it and the plugin is named only where it brought the server", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const needs = ["plugin:acme-skills:atlassian", "claude.ai Notion", "notion"];
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at, mcpNeedsSignIn: needs }), log: [], outputCut: false } }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const note = page.getByRole("note").filter({ hasText: "sign-in" });
+  await note.locator("summary").click();
+
+  // then
+  await expect(note.locator("summary")).toHaveText("2 MCP servers need sign-in");
+  await expect(note).toContainText("Atlassian (from acme-skills), Notion");
+  await expect(note).not.toContainText("plugin:");
 });
 
 test("given a task whose run stopped to ask a question, when its starter picks an option and sends it, then the answer goes as the option's words and the question is gone, and a teammate sees only who it waits on", async ({ page }) => {
@@ -963,7 +1065,7 @@ test("given messages of the starter's that wait for the agent's next step, when 
   ]);
 });
 
-test("given a task in review that goes on from a change with no request, when its page opens, then the follow-up says the new run joins this review, and with a request it says the request's branch", async ({ page }) => {
+test("given a task in review that goes on from a change with no request, when its page opens, then the follow-up says the new run joins this review, with a request it says the request's branch, and once the change is kept it says the new changes come back for review", async ({ page }) => {
   // given
   const at = new Date().toISOString();
   let over: Record<string, unknown> = { status: "needs-review", phase: "review", startedAt: at, finishedAt: at, followUp: "continue" };
@@ -982,6 +1084,13 @@ test("given a task in review that goes on from a change with no request, when it
 
   // then
   await expect(page.getByRole("form", { name: "Continue with a follow-up" })).toContainText("A new run starts on the request's branch");
+
+  // when the change was kept
+  over = { ...over, state: "kept", request: { status: "merged", provider: "local", branch: "handbook/task-t1", url: "local://requests/payments-skills/7" } };
+  await page.reload();
+
+  // then
+  await expect(page.getByRole("form", { name: "Continue with a follow-up" })).toContainText("A new run starts from the kept change, with your words, and its new changes come to you for review.");
 });
 
 test("given the follow-up box of a task in review, when its text is measured, then it is the task form's text: regular weight, medium size, a box of at least 96 px", async ({ page }) => {
@@ -999,6 +1108,195 @@ test("given the follow-up box of a task in review, when its text is measured, th
 
   // then
   expect(style).toEqual({ size: "16px", weight: "400", min: "96px" });
+});
+
+test("given a folder task that changed files in place, when its change is waiting, kept or undone, then the follow-up goes on from the files as left, says where the next run starts once kept, and is not drawn once undone", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const files = [{ path: "a.md", status: "modified", additions: 1, deletions: 0, patch: "@@ -1 +1 @@\n-a\n+b" }];
+  const by = { at, by: "ada@example.invalid" };
+  let over: Record<string, unknown> = { status: "needs-review", phase: "review", result: "changes", startedAt: at, finishedAt: at, followUp: "continue", changes: { files, undone: null, kept: null } };
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task(over), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.goto("/demo/tasks/t1");
+  const form = page.getByRole("form", { name: "Continue with a follow-up" });
+
+  // then
+  await expect(form).toContainText("A new run starts where this one left off, with your words, and its changes join this review.");
+
+  // when kept
+  over = { ...over, changes: { files, undone: null, kept: by } };
+  await page.reload();
+
+  // then
+  await expect(form).toContainText("A new run starts from the kept change, with your words, and its new changes come to you for review.");
+
+  // when undone
+  over = { ...over, changes: { files, undone: { ...by, kept: [] }, kept: null } };
+  await page.reload();
+
+  // then
+  await expect(page.getByRole("heading", { name: "Continue with a follow-up" })).toHaveCount(0);
+});
+
+test("given a queued task that waits behind another task's card, when its page and the board open, then both say what it waits for with a link to that task", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const behind = { id: "t0", title: "Add the delivery window" };
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "queued", phase: "waiting", queuePosition: 1, waitingBehind: behind }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  const note = page.getByRole("note").filter({ hasText: "Starts once you answer" });
+  await expect(note).toContainText("Starts once you answer Add the delivery window, which works in the same folder.");
+  await expect(note.getByRole("link", { name: "Add the delivery window" })).toHaveAttribute("href", "/demo/tasks/t0");
+  void at;
+});
+
+test("given a run that finished without changing a file, when its page opens, then the head says so, the agent's last words are its answer, and Run again is secondary", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed", state: "finished-nothing-changed", description: "Is the retry already there?", startedAt: at, finishedAt: at, lastSaid: "No change is needed: the retry is already there." }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  await expect(page.locator("header.page-head [data-status]").first()).toHaveText("finished, nothing changed");
+  await expect(page.locator("header.page-head .page-summary")).toHaveText(/^The agent finished in .* without changing a file\.$/);
+  await expect(page.getByRole("region", { name: "The agent's answer" })).toContainText("No change is needed");
+  await expect(page.getByRole("region", { name: "The agent's answer" })).toContainText("You asked: Is the retry already there?");
+  await expect(page.getByRole("button", { name: "Run again" })).toHaveClass(/secondary/);
+});
+
+test("given an answered request to change a file, when the starter reads it, then it is one line naming the file and who allowed it", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const answered = { id: "r9", kind: "file-change", payload: { tool: "Write", summary: "src/endpoints/delivery-window.ts" }, status: "answered", responseCapability: "live", answer: { decision: "allow_once" }, answeredBy: "ada@example.invalid", createdAt: at };
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ requests: [answered] }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  await expect(page.getByRole("listitem", { name: "The agent asks to change a file" })).toHaveText("You allowed writing src/endpoints/delivery-window.ts once.");
+});
+
+test("given a follow-up with two files chosen and one refused, when it is sent, then each file goes to the task first and the message carries their ids", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const uploads: string[] = [];
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, followUp: "continue" }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/tasks/t1/attachments", (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { attachments: [] } });
+    uploads.push(`${route.request().headers()["x-attachment-name"]} ${route.request().headers()["content-type"]}`);
+    return route.fulfill({ status: 201, json: { attachment: { id: `att_${uploads.length}`, taskId: "t1", name: "x", mime: "text/plain", size: 3 } } });
+  });
+  await page.route("**/api/tasks/t1/messages", (route) => {
+    sent = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fulfill({ status: 202, json: { followUp: null } });
+  });
+  await page.goto("/demo/tasks/t1");
+  const form = page.getByRole("form", { name: "Continue with a follow-up" });
+
+  // when
+  await form.getByLabel("Choose files").setInputFiles([
+    { name: "error.png", mimeType: "image/png", buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) },
+    { name: "notes.md", mimeType: "", buffer: Buffer.from("hi\n") },
+    { name: "tool.zip", mimeType: "application/zip", buffer: Buffer.from("PK") },
+  ]);
+
+  // then the zip is refused in one line and two chips remain
+  await expect(form.getByRole("alert").filter({ hasText: "tool.zip" })).toHaveText("tool.zip is not a file the agent reads: PNG, JPEG, GIF, WebP, PDF, text or JSON.");
+  await expect(form.getByRole("list", { name: "Files" }).getByRole("listitem")).toHaveCount(2);
+
+  // when
+  await form.getByRole("textbox", { name: "What the agent should do" }).fill("Look at the screenshot.");
+  await form.getByRole("button", { name: "Start the next run" }).click();
+
+  // then
+  await expect.poll(() => sent).toMatchObject({ text: "Look at the screenshot.", attachments: ["att_1", "att_2"] });
+  expect(uploads).toEqual(["error.png image%2Fpng".replace("%2F", "/"), "notes.md text/plain"]);
+});
+
+test("given a task that was given a file, when its page opens, then the rail lists it after what was asked and opens it by a signed address, and a task with none has no Files heading", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  let given = [{ id: "att_1", taskId: "t1", name: "error.png", mime: "image/png", size: 245760 }];
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, description: "Fix what the screenshot shows." }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/tasks/t1/attachments", (route) => route.fulfill({ json: { attachments: given } }));
+  await page.route("**/api/tasks/t1/attachments/att_1/url", (route) => route.fulfill({ json: { url: "/api/attachments/att_1?u=x", expiresAt: at } }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  const rail = page.getByRole("complementary", { name: "About this task" });
+  await expect(rail.getByRole("heading", { level: 2 })).toHaveText(["The ask", "Files", "Where", "Run"]);
+  await expect(rail.getByRole("region", { name: "Files" })).toContainText("error.png 240 KB");
+  await expect(rail).toContainText("The agent reads them; they are not part of its change.");
+
+  // when none
+  given = [];
+  await page.reload();
+
+  // then
+  await expect(rail.getByRole("heading", { name: "Files" })).toHaveCount(0);
+});
+
+test("given a secret the agent asks for, when its starter gives it or declines, then the value goes to the secrets route alone, the field empties, and the answered card is one line with no value", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const ask = (over: Record<string, unknown> = {}) => ({ id: "s1", kind: "secret", payload: { name: "STRIPE_TEST_KEY", why: "To call the sandbox." }, status: "pending", responseCapability: "live", answer: null, answeredBy: null, createdAt: at, ...over });
+  let requests = [ask()];
+  const sent: string[] = [];
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at, requests }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/tasks/t1/secrets/s1", (route) => {
+    sent.push(`secret ${(route.request().postDataJSON() as { value: string }).value}`);
+    requests = [ask({ status: "answered", answer: { provided: true }, answeredBy: "ada@example.invalid" })];
+    return route.fulfill({ json: { request: { id: "s1", status: "answered" } } });
+  });
+  await page.goto("/demo/tasks/t1");
+  const card = page.getByRole("listitem", { name: "The agent asks for STRIPE_TEST_KEY" });
+
+  // then
+  await expect(card).toContainText("To call the sandbox.");
+  await expect(card).toContainText("It is sealed for this task alone; the agent gets it by name, and the value is never in the chat or the log.");
+  await expect(card.getByRole("button", { name: "Give it to the agent" })).toBeDisabled();
+
+  // when
+  const field = card.getByLabel("STRIPE_TEST_KEY", { exact: true });
+  await expect(field).toHaveAttribute("type", "password");
+  await field.fill("sk_test_not_a_real_one");
+  await card.getByRole("button", { name: "Give it to the agent" }).click();
+
+  // then
+  await expect(card).toHaveText("You gave STRIPE_TEST_KEY.");
+  expect(sent).toEqual(["secret sk_test_not_a_real_one"]);
+  await expect(page.locator("body")).not.toContainText("sk_test_not_a_real_one");
+});
+
+test("given a secret asked for and someone other than the starter reading the task, when the page opens, then one line says who it waits for and no field is drawn", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at, createdBy: "pat@example.invalid", startedBy: { name: "Pat Payments" }, requests: [{ id: "s1", kind: "secret", payload: { name: "STRIPE_TEST_KEY", why: "x" }, status: "pending", responseCapability: "live", answer: null, answeredBy: null, createdAt: at }] }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  await expect(page.getByRole("listitem", { name: "The agent asks for STRIPE_TEST_KEY" })).toHaveText("Waiting for Pat Payments to give STRIPE_TEST_KEY.");
+  await expect(page.getByLabel("STRIPE_TEST_KEY", { exact: true })).toHaveCount(0);
 });
 
 test("given a task whose agent made a plan first, when its starter reads it, changes it and starts with it, then the changed plan is what is sent, the card shrinks to one line, and a decline is sent as a decline", async ({ page }) => {
@@ -1625,4 +1923,447 @@ test("given a task in a folder without Git on its person's machine, when its rev
   await expect(page.getByText("These files changed on the computer the task ran on; open the folder there to read them.")).toBeVisible();
   // a short list opens its files by itself, each saying where its patch is
   await expect(page.getByText("Its patch stays on the computer the task ran on; open the folder there to read it.")).toBeVisible();
+});
+
+test.describe("on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("given a task in review on a phone, when its page opens, then its main action sits at the foot of the main surface and sticks, Share stays in the head, and a card waiting for an answer takes the foot", async ({ page }) => {
+    // given
+    const at = new Date().toISOString();
+    let requests: Record<string, unknown>[] = [];
+    await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, requestNumber: 7, createdBy: "ada@example.invalid", request: { status: "open", provider: "local", branch: "handbook/task-t1", url: "local://requests/payments-skills/7" }, requests }), log: [], outputCut: false } }));
+    await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+    await page.goto("/demo/tasks/t1");
+    const foot = page.locator(".foot-actions");
+
+    // then
+    await expect(foot.getByRole("link", { name: "Open the request" })).toBeVisible();
+    await expect(foot).toHaveCSS("position", "sticky");
+    await expect(page.locator("header.page-head").getByRole("link", { name: "Open the request" })).toHaveCount(0);
+
+    // when a card waits
+    requests = [{ id: "r1", kind: "command", payload: { tool: "Bash", summary: "npm test" }, status: "pending", responseCapability: "live", answer: null, answeredBy: null, createdAt: at }];
+    await page.reload();
+
+    // then
+    await expect(page.locator(".foot-actions")).toHaveCSS("position", "static");
+  });
+});
+
+test("given a running task, when its starter stops the agent's step, then the task reads needs you with the sentence and the button is gone, and a refusal shows beside it", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  let stopped = false;
+  let refuse = true;
+  await page.addInitScript(() => delete (window as unknown as { EventSource?: unknown }).EventSource);
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at, followUp: "steer", ...(stopped ? { state: "needs-you", stage: "stopped" } : {}) }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/stop-step", (route) => {
+    if (refuse) return route.fulfill({ status: 409, json: { error: "The agent's session has not opened yet", code: "no-session" } });
+    stopped = true;
+    return route.fulfill({ json: { task: task({ status: "running", startedAt: at, followUp: "steer", state: "needs-you", stage: "stopped" }) } });
+  });
+  await page.goto("/demo/tasks/t1");
+
+  // when
+  await page.getByRole("button", { name: "Stop this step" }).click();
+
+  // then
+  await expect(page.getByRole("alert").filter({ hasText: "has not opened yet" })).toBeVisible();
+
+  // when
+  refuse = false;
+  await page.getByRole("button", { name: "Stop this step" }).click();
+
+  // then
+  await expect(page.getByText("You stopped the agent's step; tell it what to do next.")).toBeVisible();
+  await expect(page.locator("header.page-head [data-status]").first()).toHaveText("needs you");
+  await expect(page.getByRole("button", { name: "Stop this step" })).toHaveCount(0);
+});
+
+test("given the first task in a folder that found checks nobody approved, when its review opens, then one line names them and Review them opens the folder's settings", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", requestNumber: 7, request: { status: "open", provider: "local", branch: "handbook/t1", url: "" }, startedAt: at, finishedAt: at, checksFound: [{ command: "npm test", source: "package.json" }, { command: "npm run lint", source: "package.json" }] }), log: [], outputCut: false } }));
+  await standInChanges(page, "payments-skills", 7, [{ path: "src/a.ts", status: "modified", additions: 1, deletions: 0, patch: "+x" }]);
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  await expect(page.getByText("npm test and npm run lint were found for this folder; approve them to run after each task.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Review them" })).toHaveAttribute("href", /\/settings\/code$/);
+});
+
+test("given a task started from a turn of another, when its page opens, then the stream's first line says where it started from and opens that task", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const started = { seq: 1, at, text: "Started from “Also return the window” in Retry a failed capture", kind: "started-from", data: { type: "started-from", taskId: "t0", n: 2 } };
+  const said = { seq: 2, at, text: "masked", kind: "message", data: { type: "message", text: "Reading the files as that turn left them." } };
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at }), log: new URL(route.request().url()).searchParams.get("after") === "0" ? [started, said] : [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  const first = page.locator("li.run-line").first();
+  await expect(first).toContainText("Started from “Also return the window” in Retry a failed capture");
+  await expect(first.getByRole("link", { name: "Open it" })).toHaveAttribute("href", /\/tasks\/t0$/);
+});
+
+test("given a task held at the usage limit and a second sign-in named in the settings, when its starter presses Continue with your second sign-in, then the task goes on at once, and without the second sign-in no such button is offered", async ({ page }) => {
+  // given
+  const resetAt = new Date(Date.now() + 3 * 3_600_000).toISOString();
+  let named: string | null = "/home/ada/.claude-second";
+  let sent: Record<string, unknown> | null = null;
+  const held = task({ status: "queued", phase: "working", waitingFor: "limit", resetAt, startedAt: new Date(Date.now() - 3 * 3_600_000).toISOString() });
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: held, log: [], outputCut: false } }));
+  await page.route("**/api/settings/task-limits", (route) => route.fulfill({ json: { maxUsd: null, maxMinutes: null, secondSignIn: named } }));
+  await page.route("**/api/tasks/t1/continue", (route) => {
+    sent = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fulfill({ json: { task: { ...held, status: "running", waitingFor: null, secondSignIn: true } } });
+  });
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  await page.getByRole("button", { name: "Continue with your second sign-in" }).click();
+
+  // then
+  await expect.poll(() => sent).toMatchObject({ secondSignIn: true });
+
+  // when no second sign-in is named
+  named = null;
+  await page.reload();
+
+  // then
+  await expect(page.locator(".waiting")).toContainText("Your plan's usage limit is reached");
+  await expect(page.getByRole("button", { name: "Continue with your second sign-in" })).toHaveCount(0);
+
+  // when someone who does not manage the limits is told only that one is named
+  await page.unroute("**/api/settings/task-limits");
+  await page.route("**/api/settings/task-limits", (route) => route.fulfill({ json: { maxUsd: null, maxMinutes: null, secondSignInSet: true } }));
+  await page.reload();
+
+  // then
+  await expect(page.getByRole("button", { name: "Continue with your second sign-in" })).toBeVisible();
+});
+
+test("given the task limits page on one person's own orchestrator, when a second sign-in folder is named and saved, then the save carries it with the limits, an empty field clears it, and a save that leaves it alone does not send it", async ({ page }) => {
+  // given
+  const saved: Record<string, unknown>[] = [];
+  await page.route(/\/api\/(orgs\/demo\/)?me$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+  });
+  await page.route("**/api/settings/task-limits", (route) => {
+    if (route.request().method() === "PUT") {
+      saved.push(route.request().postDataJSON() as Record<string, unknown>);
+      return route.fulfill({ json: saved.at(-1) });
+    }
+    return route.fulfill({ json: { maxUsd: 5, maxMinutes: 60, secondSignIn: null } });
+  });
+  await page.goto("/demo/settings/task-limits");
+
+  // when
+  await page.getByLabel("Another Claude Code sign-in").fill("/home/ada/.claude-second");
+  await page.getByRole("button", { name: "Save" }).click();
+
+  // then
+  await expect.poll(() => saved.length).toBe(1);
+  expect(saved[0]).toMatchObject({ maxUsd: 5, maxMinutes: 60, secondSignIn: "/home/ada/.claude-second" });
+  await expect(page.getByRole("status").filter({ hasText: "A task now stops at" })).toBeVisible();
+
+  // when
+  await page.getByLabel("Another Claude Code sign-in").fill("");
+  await page.getByRole("button", { name: "Save" }).click();
+
+  // then
+  await expect.poll(() => saved.length).toBe(2);
+  expect(saved[1]).toMatchObject({ secondSignIn: null });
+  await expect(page.getByRole("status").filter({ hasText: "A task now stops at" })).toBeVisible();
+
+  // when
+  await page.getByRole("button", { name: "Save" }).click();
+
+  // then
+  await expect.poll(() => saved.length).toBe(3);
+  expect(saved[2]).toEqual({ maxUsd: 5, maxMinutes: 60 });
+});
+
+test("given a running task whose agent waits on a card, when its starter opens it, then Stop this step is not offered, since the agent is not in a step", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  await page.addInitScript(() => delete (window as unknown as { EventSource?: unknown }).EventSource);
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at, followUp: "steer", requests: [asked()] }), log: [], outputCut: false } }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  await expect(page.getByRole("button", { name: "Stop…", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop this step" })).toHaveCount(0);
+});
+
+test("given a finished task that kept its setup, turned a skill off and still called it, when its page opens, then one Started with block counts what loaded once, names what was used with a link to where, leads with the item loaded though off, and folds Loaded and Off for this task", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const setup = [
+    { id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "release-notes" }, { name: "changelog" }, { name: "review-checklist" }, { name: "standup" }], commands: [], mcpServers: [{ name: "jira" }], hooks: [], claudeMd: true },
+    { id: "plugin:payments-skills@payments-market", kind: "plugin", name: "payments-skills", version: "1.4.0", enabled: true, skills: [{ name: "add-endpoint" }], commands: [], mcpServers: [], hooks: [] },
+  ];
+  const off = { sources: [], skills: [{ source: "yours", name: "changelog" }, { source: "yours", name: "standup" }, { source: "yours", name: "review-checklist" }], commands: [], mcpServers: [] };
+  await page.route("**/api/handbook/defaults", (route) => route.fulfill({ json: { off: { skills: [{ source: "yours", name: "standup" }] } } }));
+  const used = { skills: [{ name: "release-notes", source: "yours", sourceLabel: "Yours", seq: 2 }, { name: "changelog", source: "yours", sourceLabel: "Yours" }, { name: "add-endpoint", source: "plugin:payments-skills@payments-market", sourceLabel: "payments-skills 1.4.0" }], mcpServers: [] };
+  const log = [{ seq: 1, at, text: "Claude Code started." }, { seq: 2, at, text: "Skill release-notes" }];
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed", startedAt: at, finishedAt: at, setup, off, offChanges: 2, used, loaded: { commands: 3, plugins: 1, mcpServers: 1, claudeMd: true }, startedWith: { plugins: ["payments-skills@payments-market"], skills: null, mcpServers: [{ name: "jira", state: "failed" }] } }), log, outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const block = page.getByRole("region", { name: "Started with" });
+  const line = (name: string) => block.locator(".started-line").filter({ hasText: name });
+
+  // then
+  await expect(block.locator("p").first()).toHaveText("jira was on and did not load.");
+  await expect(block.locator("p").nth(1)).toHaveText("2 skills, 1 plugin, 1 MCP server, CLAUDE.md");
+  await expect(line("changelog")).toContainText("changelog from yours Loaded, though off");
+  await expect(line("add-endpoint")).toHaveText("add-endpoint from payments-skills 1.4.0");
+  await expect(page.getByRole("complementary", { name: "About this task" })).not.toContainText("skills or commands");
+
+  // when
+  await line("release-notes").getByRole("button", { name: "release-notes" }).click();
+
+  // then
+  await expect(page.locator("#log-line-2")).toBeInViewport();
+
+  // when
+  await block.getByText("Loaded (2)").click();
+  await block.getByText("Off (1)", { exact: true }).click();
+  await block.getByText("Off for this task (1)").click();
+
+  // then
+  await expect(line("jira")).toContainText("jira from yours Loaded");
+  await expect(line("standup")).toContainText("standup from yours Off");
+  await expect(line("standup")).not.toContainText("for this task");
+  await expect(line("review-checklist")).toContainText("review-checklist from yours Off for this task");
+});
+
+test("given a lesson waiting in a finished task's review on one person's own orchestrator, when it is kept in this folder, then the keep says so, and The team keeps it as theirs and points to Team", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const kept: unknown[] = [];
+  await page.route(/\/api\/(orgs\/demo\/)?me$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+  });
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed", startedAt: at, finishedAt: at, routing: { path: "/home/ada/work/payments-api" } }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  const lesson = (slug: string) => ({ slug, description: `Lesson ${slug}`, status: "pending", createdAt: at, taskId: "t1" });
+  await page.route("**/api/tasks/t1/lessons", (route) => route.fulfill({ json: { skills: { team: [], project: [] }, candidates: [lesson("retry-once"), { ...lesson("name-the-queue"), ...(kept.length > 1 ? { status: "approved" } : {}) }] } }));
+  await page.route("**/api/skills/*/outcomes*", (route) => route.fulfill({ json: { pivot: null, minimum: 5, before: {}, with: {} } }));
+  await page.route(/\/api\/tasks\/t1\/lessons\/[^/]+$/, (route) => route.fulfill({ json: { lesson: { ...lesson(route.request().url().split("/").pop()!), skillMd: "Retry once.", quote: null } } }));
+  await page.route(/\/api\/tasks\/t1\/lessons\/[^/]+\/keep$/, (route) => {
+    kept.push({ slug: route.request().url().split("/").at(-2), ...(route.request().postDataJSON() as object) });
+    return route.fulfill({ json: { lesson: { status: "approved" } } });
+  });
+  await page.goto("/demo/tasks/t1");
+  const learned = page.getByRole("region", { name: "Learned" });
+
+  // when
+  await learned.getByText("Lesson retry-once").click();
+  await learned.getByRole("button", { name: "This folder (payments-api)" }).click();
+  await learned.getByRole("button", { name: "Keep", exact: true }).first().click();
+
+  // then
+  await expect.poll(() => kept).toEqual([{ slug: "retry-once", target: "folder" }]);
+
+  // when
+  await learned.getByText("Lesson name-the-queue").click();
+  const second = learned.locator("details").filter({ hasText: "Lesson name-the-queue" });
+  await second.getByRole("button", { name: "The team" }).click();
+  await second.getByRole("button", { name: "Keep", exact: true }).click();
+
+  // then
+  await expect.poll(() => kept.length).toBe(2);
+  expect(kept[1]).toEqual({ slug: "name-the-queue", target: "yours" });
+  await expect(learned.getByRole("link", { name: "share it with the team on Team" })).toBeVisible();
+});
+
+test("given a task whose agent used a team skill and a plugin's skill and had a request denied, when its page opens, then each skill is said once with its one way to improve: the team's starts an Improve a skill task asked first, and Copy to Yours writes the plugin's text as the person's own", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const written: unknown[] = [];
+  let started: Record<string, unknown> | null = null;
+  const used = { skills: [{ name: "add-endpoint", source: "team:payments-skills", sourceLabel: "the team's payments-skills" }, { name: "write-docs", source: "plugin:docs-kit@payments-market", sourceLabel: "docs-kit 2.0.0" }], mcpServers: [] };
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed", startedAt: at, finishedAt: at, used, requests: [asked({ status: "answered", answer: { decision: "deny" }, answeredBy: "ada@example.invalid" })] }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/tasks/t1/lessons", (route) => route.fulfill({ json: { skills: { team: [], project: [] }, candidates: [], improvable: ["add-endpoint"] } }));
+  await page.route("**/api/handbook/skill?*", (route) => route.fulfill({ json: { content: "---\nname: write-docs\n---\nWrite the docs." } }));
+  await page.route("**/api/handbook/file", (route) => {
+    written.push(route.request().postDataJSON());
+    return route.fulfill({ json: { digest: "d1" } });
+  });
+  await page.route(/\/api\/tasks$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    started = route.request().postDataJSON();
+    return route.fulfill({ json: { task: task({ id: "t9", status: "queued" }) } });
+  });
+
+  // when
+  await page.goto("/demo/tasks/t1");
+
+  // then
+  const lines = page.locator(".used-corrected li");
+  await expect(lines.nth(0)).toContainText("add-endpoint was used, and a request it made was denied.");
+
+  // when
+  await lines.nth(1).getByRole("button", { name: "Copy to Yours" }).click();
+
+  // then
+  await expect(lines.nth(1)).toContainText("Copied to yours.");
+  expect(written).toEqual([{ source: "yours", kind: "skill", name: "write-docs", content: "---\nname: write-docs\n---\nWrite the docs.", expectedDigest: null }]);
+
+  // when
+  await lines.nth(0).getByRole("button", { name: "Improve this skill…" }).click();
+  await page.getByRole("button", { name: "Start the task" }).click();
+
+  // then
+  await expect.poll(() => started).toMatchObject({ repoId: "payments-skills", template: { kind: "skill.improve", skill: "add-endpoint" } });
+  await expect(page).toHaveURL(/\/tasks\/t9$/);
+});
+
+test("given an ended task whose log runs to a second page, when its page opens with the log folded, then only the first page is read, and opening the log reads the rest", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const reads: string[] = [];
+  const line = (seq: number) => ({ seq, at, text: `line ${seq}` });
+  await page.route("**/api/tasks/t1?*", (route) => {
+    const after = new URL(route.request().url()).searchParams.get("after") ?? "0";
+    reads.push(after);
+    const first = after === "0";
+    return route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", requestNumber: null, startedAt: at, finishedAt: at, changes: { files: [{ path: "a.md", status: "modified", previousPath: null, additions: 1, deletions: 0, binary: false, test: false }], undone: null } }), log: first ? [line(1), line(2)] : [line(3), line(4)], outputCut: false, ...(first ? { next: 2 } : {}) } });
+  });
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+
+  // then
+  await expect.poll(() => reads).toEqual(["0"]);
+
+  // when
+  await page.locator("details.log-fold > summary").filter({ hasText: /^Log/ }).click();
+
+  // then
+  await expect.poll(() => reads).toEqual(["0", "2"]);
+  await expect(page.getByRole("log", { name: "Task log" })).toContainText("line 4");
+});
+
+test("given words sent to a running agent, when the stream shows them, then on one person's own orchestrator they read You even when the person has no name, and on a team's a teammate's keep their name", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  let local = true;
+  const steer = (seq: number, by: string, text: string) => ({ seq, at, text: `${by}: ${text}`, kind: "steer", data: { type: "steer", text, by } });
+  await page.route(/\/api\/(orgs\/demo\/)?me$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, ...(local ? { mode: "local" } : {}) } } });
+  });
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "running", startedAt: at, followUp: "steer" }), log: new URL(route.request().url()).searchParams.get("after") === "0" ? [steer(1, "A teammate", "Expose the return-label endpoint to customers too."), steer(2, "Pat Payments", "Keep the old route.")] : [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const said = page.locator('li.run-line[data-kind="you"]');
+
+  // then
+  await expect(said.nth(0)).toHaveText("You Expose the return-label endpoint to customers too.");
+  await expect(said.nth(1)).toHaveText("You Keep the old route.");
+
+  // when
+  local = false;
+  await page.reload();
+
+  // then
+  await expect(said.nth(1)).toHaveText("Pat Payments Keep the old route.");
+});
+
+test("given one person's own task whose agent works again on its open change, when its page opens, then neither Keep nor Discard is offered until the run ends", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  let status = "running";
+  await page.route(/\/api\/(orgs\/demo\/)?me$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+  });
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status, phase: status === "running" ? "working" : "review", startedAt: at, ...(status === "running" ? {} : { finishedAt: at }), followUp: status === "running" ? "steer" : "continue", requestNumber: 7, request: { status: "open", provider: "local", branch: "handbook/t1", url: "" } }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/repos/payments-skills/requests/7/on-forge", (route) => route.fulfill({ json: { forge: null, url: null, number: null } }));
+  await standInChanges(page, "payments-skills", 7, [{ path: "src/a.ts", status: "modified", additions: 1, deletions: 0, patch: "+x" }]);
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const head = page.locator("header.page-head");
+
+  // then
+  await expect(head.locator("[data-status]").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Keep these changes" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Discard these changes…" })).toHaveCount(0);
+
+  // when the run ends
+  status = "needs-review";
+  await page.reload();
+
+  // then
+  await expect(head.getByRole("button", { name: "Keep these changes" })).toBeVisible();
+});
+
+test("given an agent's answer that holds a Markdown table, when the task page opens, then the table is drawn as a table and no bars show as text", async ({ page }) => {
+  // given
+  const at = new Date().toISOString();
+  const lastSaid = "Changed files:\n\n| File | Change |\n|---|---|\n| src/a.ts | retry added |\n| src/b.ts | name fixed |";
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed", state: "finished-nothing-changed", startedAt: at, finishedAt: at, lastSaid }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+
+  // when
+  await page.goto("/demo/tasks/t1");
+  const answer = page.getByRole("region", { name: "The agent's answer" });
+
+  // then
+  await expect(answer.getByRole("columnheader")).toHaveText(["File", "Change"]);
+  await expect(answer.getByRole("cell").first()).toHaveText("src/a.ts");
+  await expect(answer).not.toContainText("|---|");
+});
+
+test("given a task page at 1440, when the rail's edge is stepped by arrow, then the right rail changes width and a double press brings back its default of 420 pixels", async ({ page }) => {
+  // given
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const at = new Date().toISOString();
+  await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "failed", phase: "failed", startedAt: at, finishedAt: at, description: "Add a retry to the webhook." }), log: [], outputCut: false } }));
+  await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+  await page.goto("/demo/tasks/t1");
+  const rail = page.getByRole("complementary", { name: "About this task" });
+  const handle = page.getByRole("separator", { name: "Width of the side panel" });
+  const width = async () => Math.round((await rail.boundingBox())!.width);
+
+  // then
+  await expect.poll(width).toBe(420);
+
+  // when
+  await handle.focus();
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowLeft");
+
+  // then
+  await expect.poll(width).toBe(500);
+
+  // when
+  await handle.dblclick();
+
+  // then
+  await expect.poll(width).toBe(420);
 });

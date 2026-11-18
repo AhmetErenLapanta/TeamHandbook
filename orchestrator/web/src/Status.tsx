@@ -14,6 +14,11 @@ export function Loading({ what, panel = false }: { what: string; panel?: boolean
   );
 }
 
+/** Said quietly while a screen that drew its last answer reads again behind it. */
+export function Refreshing({ what }: { what: string }) {
+  return <p className="muted small">Refreshing {what}…</p>;
+}
+
 /** A load that failed always offers the next step: trying again, or the page that puts it right. */
 type NextStepOf = { onRetry: () => void; next?: never } | { next: ReactNode; onRetry?: never };
 

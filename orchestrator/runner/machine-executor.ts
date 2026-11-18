@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { AgentEvent, AgentFailure, AgentSession } from "../server/tasks/adapters/contract.js";
+import { loadedDespiteOff } from "../server/tasks/adapters/contract.js";
+import type { AgentEvent, AgentFailure, AgentOff, AgentSession } from "../server/tasks/adapters/contract.js";
 import { openSession } from "../server/tasks/adapters/session.js";
 import { writeApprovedProjectMcp, writeTeamSkills } from "../server/tasks/agents.js";
 import type { AgentAdapter, AgentSetup } from "../server/tasks/agents.js";
@@ -22,15 +23,22 @@ import { Redactor } from "../server/tasks/redact.js";
 import { isGitFolder } from "../server/projects.js";
 import { shadowChanges, shadowSnapshot } from "../server/shadow-git.js";
 import { refusedInPlace } from "../server/tasks/task-policy.js";
+import { turnRecorder } from "../server/tasks/turns.js";
+import type { TurnRecorder } from "../server/tasks/turns.js";
+import type { ShadowPlace } from "../server/shadow-git.js";
+import type { TaskTurn } from "../server/tasks/types.js";
 import { attachmentsSection, followUpText, OUTPUT_HEAD_LINES, OUTPUT_TAIL_LINES, printable, talksIn } from "../server/tasks/runner.js";
 import { processTransport } from "../server/tasks/transport.js";
-import type { CheckoutWork, FolderWork, PushAnswer, PushAsk, RemoteWork, RunnerTask, TaskOutcome, WorkspaceWork } from "./link.js";
+import type { CheckoutWork, FolderWork, PushAnswer, PushAsk, RelayedFollowUp, RemoteWork, RunnerTask, TaskOutcome, WorkspaceWork } from "./link.js";
 import { WORKING_COPIES_MAX, workingCopies } from "./workspace.js";
 import { keepOpencodeModel, personalOpencodeModel } from "./opencode-model.js";
 import { personalRules } from "./opencode-rules.js";
 import { runOpencodeAsYou } from "./opencode-session.js";
 import { folderPlace } from "./folders.js";
-import { installedTeamPlugin, installedTeamSkills } from "./team-plugin.js";
+import { installedPlugins, installedTeamPlugin, installedTeamSkills } from "./team-plugin.js";
+import { mcpSource, offNames, skillSource, UNKNOWN_SOURCE } from "../server/tasks/handbook-use.js";
+import type { HandbookPlace, TaskOff } from "../server/tasks/handbook-use.js";
+import { calledSkill } from "../server/skill-rules.js";
 import { machineMcpServers } from "./machine-mcp.js";
 import { environmentSecrets, keepOwnToolsHere, maskEvent, ownMcpTool, ownRequest } from "./mask.js";
 import { orgDir } from "./profile.js";
@@ -71,7 +79,7 @@ export interface MachineExecutorOptions {
 }
 
 class Ended extends Error {
-  constructor(readonly status: "failed" | "interrupted", message: string, readonly kept: Pick<TaskOutcome, "nativeSessionId" | "limitResetAt"> = { nativeSessionId: null }) {
+  constructor(readonly status: "failed" | "interrupted", message: string, readonly kept: Pick<TaskOutcome, "nativeSessionId" | "limitResetAt" | "nothingChanged" | "lastSaid"> = { nativeSessionId: null }) {
     super(message);
   }
 }
@@ -170,7 +178,11 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     const start = work.continues?.head ?? work.repo.baseSha;
     const changes = await collectChanges(paths, start, (text) => new Redactor().carriesCredential(text));
     if ("refused" in changes) throw new Ended("failed", changes.refused);
-    if (!changes.files.length) throw new Ended(result.stopped ? "interrupted" : "failed", result.stopped ?? "The agent changed nothing, so there is nothing to push.");
+    if (!changes.files.length) {
+      if (result.stopped) throw new Ended("interrupted", result.stopped);
+      if (work.continues) return { status: "needs-review", error: null, nativeSessionId: result.nativeSessionId, branch: null, position: null, request: null, ...said(result.summary) };
+      throw nothingChanged("The agent changed nothing, so there is nothing to push.", result.summary);
+    }
     const tree = (await git(paths, ["write-tree"])).trim();
     const who = { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email };
     const commit = (await git(paths, ["commit-tree", tree, "-p", start, "-m", task.title], { extraEnv: who })).trim();
@@ -199,13 +211,15 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     const place = await folderPlace(work.folder.path, work.folder.projectId, { home: hostEnv.HOME || homedir(), dataDir, shadows: join(orgDir(dataDir, org), "shadow") });
     if ("refused" in place) return ended("failed", `The task did not run: ${place.refused}.`);
     if (await isGitFolder(place.folder)) return ended("failed", "The task did not run: the folder is a git repository now; open it again so its tasks run on a branch.");
-    if (working.has(place.folder)) return ended("failed", "The task did not run: another task is working in this folder now; start it again when that one ends.");
+    if (working.has(place.folder)) return ended("failed", `The task did not run: another task is working in ${basename(place.folder)} now; start this one again when that one ends.`);
     working.add(place.folder);
     const paths: TaskPaths = { root, work: place.folder, home: join(root, "home"), tmp: join(root, "tmp"), git: join(root, "git") };
     let before: string | null = null;
     let kept: NonNullable<TaskOutcome["changes"]> | null = null;
+    const turns = machineTurns(place, task.id, hooks);
     const keep = async () => {
       if (!before || kept) return kept;
+      await turns.finish();
       const after = await shadowSnapshot(place, `after ${task.id}`);
       if ("refused" in after) {
         hooks.log(`The folder could not be recorded after the agent ran: ${after.refused}.`);
@@ -230,10 +244,10 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
       if ("refused" in first) throw new Ended("failed", `The task did not run: ${first.refused}.`);
       before = first.sha;
       hooks.log(`Working in ${basename(place.folder)} in place: the agent edits the folder's files, and what it changes is kept for you to review and undo.`);
-      const result = await agentRun(task, work, adapter, paths, false, hooks);
+      const result = await agentRun(task, work, adapter, paths, false, hooks, turns);
       const changes = await keep();
       if (!changes) throw new Ended("failed", "The folder could not be read back after the agent ran; what it changed stays in the folder.");
-      if (!changes.files.length) throw new Ended(result.stopped ? "interrupted" : "failed", result.stopped ?? "The agent changed nothing in the folder.");
+      if (!changes.files.length) throw result.stopped ? new Ended("interrupted", result.stopped) : nothingChanged("The agent changed nothing in the folder.", result.summary);
       if (result.stopped) hooks.log(keptAfterStop(result.stopped));
       const refused = await refusedInPlace(work.rules, changes.files.map((f) => f.path), place, changes.before, changes.after);
       outcome = refused
@@ -318,7 +332,11 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
       if ("refused" in changes) throw new Ended("failed", `${repo.path || basename(folder)}: ${changes.refused}`);
       if (changes.files.length) changed.push(repo);
     }
-    if (!changed.length) throw new Ended(result.stopped ? "interrupted" : "failed", result.stopped ?? "The agent changed nothing, so there is nothing to push.");
+    if (!changed.length) {
+      if (result.stopped) throw new Ended("interrupted", result.stopped);
+      if (work.continues) return { status: "needs-review", error: null, nativeSessionId: result.nativeSessionId, branch: null, position: null, request: null, repos: [], ...said(result.summary) };
+      throw nothingChanged("The agent changed nothing, so there is nothing to push.", result.summary);
+    }
     const body = result.summary.split("\n").map((line) => new Redactor().line(line)).join("\n");
     hooks.record({ stage: "request" });
     const delivered: NonNullable<TaskOutcome["repos"]> = [];
@@ -359,8 +377,16 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
    * broke still fails. Throws Ended for any end but a finished one; checks that fail do not end it,
    * as the orchestrator keeps what they showed and the request says so.
    */
-  async function agentRun(task: RunnerTask, work: RemoteWork, adapter: AgentAdapter, paths: TaskPaths, resume: boolean, hooks: ExecutorHooks): Promise<{ summary: string; nativeSessionId: string | null; stopped?: string }> {
-    const ready = await prepare(work, paths, hooks);
+  async function agentRun(task: RunnerTask, work: RemoteWork, adapter: AgentAdapter, paths: TaskPaths, resume: boolean, hooks: ExecutorHooks, turns?: TurnRecorder): Promise<{ summary: string; nativeSessionId: string | null; stopped?: string }> {
+    const ready: Prepared = { ...(await prepare(work, paths, hooks)), ...(turns ? { turns } : {}) };
+    const off = ready.setup.off;
+    if (off) {
+      const kept = leftOn(adapter, off);
+      if (kept.length) throw new Ended("failed", `The task did not run: ${adapter.label} cannot be started without ${kept.join(", ")}.`);
+      const named = [...off.plugins.map((p) => `the ${p} plugin`), ...off.skills, ...off.mcpServers.map((m) => `MCP server ${m}`)];
+      if (named.length) hooks.log(`Turned off for this task alone: ${named.join(", ")}.`);
+    }
+    await turns?.begin(saidOf(task.title, ready.masked));
     const checks = work.limits.verification;
     const box = checks || (checks === undefined && work.limits.testCommand) ? await checkBox() : null;
     const sandbox = box && !("refused" in box) ? box : null;
@@ -419,18 +445,26 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     const folderSettings = "folder" in work && work.setup.folderSettings === true;
     const hooksOff = (await personalHooksRefusal(managedSettingsPlaces(hostEnv))) ?? (folderSettings ? await folderHooksRefusal(paths.work) : null);
     if (hooksOff) throw new Ended("failed", `The task did not run: ${hooksOff}.`);
-    await writePersonalGuard(paths, project, work.rules);
+    const home = await realpath(hostEnv.HOME || homedir()).catch(() => hostEnv.HOME || homedir());
+    const place: HandbookPlace = { home, folder: "folder" in work ? paths.work : null, plugins: installedPlugins(hostEnv), team: null };
+    const off = work.setup.off ? await offNames(place, fromHome(work.setup.off, home)) : null;
+    await writePersonalGuard(paths, project, work.rules, { ...(off ? { off } : {}), ...(work.readOnly ? { readOnly: true } : {}) });
 
     // The project's servers, their values from the person's own environment: none of the organization's reaches the machine.
     const shared = machineMcpServers(work.setup.mcpServers ?? {}, hostEnv);
     for (const note of shared.notes) hooks.log(note);
     const setup: AgentSetup = { skills: await teamSkillsHere(work, hooks), mcpServers: {}, mcpTools: work.setup.mcpTools, deniedTools: work.setup.deniedTools, personal: { ownSetup: work.setup.ownSetup === true, folderSettings }, approvedProjectMcp: shared.servers };
+    if (off) {
+      const team = new Set(setup.skills.map((s) => s.slug));
+      setup.off = { ...off, skills: off.skills.filter((name) => !team.has(name)) };
+      setup.skills = setup.skills.filter((s) => !off.skills.includes(s.slug));
+    }
     await writeTeamSkills(paths, setup);
     const attached = await fetchAttachments(work, paths, hooks);
     if (attached.length) setup.readDirs = [join(paths.root, "attachments")];
     await writeApprovedProjectMcp(paths, setup);
     const prompt = attached.length ? [work.prompt, ...attachmentsSection(join(paths.root, "attachments"), attached)].join("\n") : work.prompt;
-    return { setup, masked: [...shared.values, ...environmentSecrets(hostEnv)], prompt };
+    return { setup, masked: [...shared.values, ...environmentSecrets(hostEnv)], prompt, sourced: sourcedAt(place) };
   }
 
   async function teamSkillsHere(work: RemoteWork, hooks: ExecutorHooks): Promise<AgentSetup["skills"]> {
@@ -461,15 +495,36 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     return fetched;
   }
 
+  async function turnText(followUp: RelayedFollowUp, ready: Prepared, hooks: ExecutorHooks): Promise<string> {
+    await ready.turns?.begin(saidOf(followUp.text, ready.masked));
+    if (!followUp.attachments?.length) return followUpText(followUp);
+    const dir = ready.setup.readDirs?.[0];
+    if (!dir || !hooks.attachment) return [followUpText({ ...followUp, attachments: undefined }), "", "Files were sent with it; they reach you with the task's next run."].join("\n");
+    const taken = new Set(await readdir(dir).catch(() => []));
+    const fetched: NonNullable<RelayedFollowUp["attachments"]> = [];
+    for (const file of followUp.attachments) {
+      const bytes = await hooks.attachment(file.id).catch(() => null);
+      if (!bytes) {
+        hooks.log(`${file.name} was not fetched from the orchestrator, so the agent does not see it.`);
+        continue;
+      }
+      const name = taken.has(file.name) ? `${file.id}-${file.name}` : file.name;
+      await writeFile(join(dir, name), bytes);
+      taken.add(name);
+      fetched.push({ ...file, name });
+    }
+    return followUpText({ ...followUp, attachments: fetched.length ? fetched : undefined });
+  }
+
   async function turn(task: RunnerTask, work: RemoteWork, adapter: AgentAdapter, paths: TaskPaths, ready: Prepared, hooks: ExecutorHooks, prompt: string, kind: "first" | "resume" | "repair"): Promise<{ summary: string; nativeSessionId: string | null }> {
-    if (adapter.servedAsYou) return servedTurn(work, adapter, paths, ready, hooks, prompt);
+    if (adapter.servedAsYou) return servedTurn(task, work, adapter, paths, ready, hooks, prompt, kind);
     const plans = work.planFirst === true && kind === "first" && adapter.twoWay?.capabilities.plan === true;
     const twoWay = talksIn(adapter, work.mode, true) || plans ? adapter.twoWay! : null;
     // A session is kept for Continue only by an agent that resumes one; its id is on record before it starts, so a crash keeps it too.
     const keeps = twoWay?.capabilities.resume === true && kind !== "repair";
     const sessionId = kind === "resume" ? task.nativeSession! : keeps ? randomUUID() : null;
     if (kind === "first" && sessionId) hooks.record({ nativeSession: sessionId });
-    const launched = twoWay ? twoWay.launch(paths, ready.setup, { mode: work.mode, personal: true, questions: true, ...(plans ? { plan: true } : {}), ...(work.choices ? { choices: work.choices } : {}), ...(kind === "resume" ? { resume: sessionId! } : sessionId ? { sessionId } : {}) }) : null;
+    const launched = twoWay ? twoWay.launch(paths, ready.setup, { mode: work.mode, personal: true, questions: true, contextParts: true, ...(plans ? { plan: true } : {}), ...(work.choices ? { choices: work.choices } : {}), ...(kind === "resume" ? { resume: sessionId! } : sessionId ? { sessionId } : {}) }) : null;
     for (const note of launched?.notes ?? []) hooks.log(note);
     const call = launched ? launched.call : adapter.invocation(paths, { title: task.title, prompt, ...(work.choices ? { choices: work.choices } : {}) }, ready.setup, true);
     const stdin = launched ? undefined : (call as { stdin?: string }).stdin;
@@ -484,14 +539,15 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     // A one-shot agent reads its whole prompt from stdin, to its end, before it starts.
     if (launched) session.sendTurn(prompt);
     else session.close();
-    const result = await converse(session, hooks, work.limits.timeoutMs, stop, ownMcpTool(work.setup.mcpTools), ready.masked, launched !== null);
+    const result = await converse(session, hooks, work.limits.timeoutMs, stop, ownMcpTool(work.setup.mcpTools), ready.masked, launched !== null, { turnText: (followUp) => turnText(followUp, ready, hooks), sourced: ready.sourced, off: ready.setup.off ?? null });
     stopped(hooks);
+    if (result.despite.length) throw new Ended("failed", stoppedDespite(result.despite));
     if (result.timedOut) throw new Ended("failed", `The agent ran past the task's ${Math.round(work.limits.timeoutMs / 60_000)} minutes and was stopped.`);
     if (result.terminal?.status !== "completed") throw untilReset(work, result.terminal?.failure, result.terminal?.nativeSessionId ?? sessionId) ?? new Ended("failed", result.terminal?.failure?.message ?? "The agent stopped before it finished.");
     return { summary: result.terminal.summary, nativeSessionId: result.terminal.nativeSessionId ?? sessionId };
   }
 
-  async function servedTurn(work: RemoteWork, adapter: AgentAdapter, paths: TaskPaths, ready: Prepared, hooks: ExecutorHooks, prompt: string): Promise<{ summary: string; nativeSessionId: string | null }> {
+  async function servedTurn(task: RunnerTask, work: RemoteWork, adapter: AgentAdapter, paths: TaskPaths, ready: Prepared, hooks: ExecutorHooks, prompt: string, kind: "first" | "resume" | "repair"): Promise<{ summary: string; nativeSessionId: string | null }> {
     await adapter.configure(paths, ready.setup);
     if (ready.setup.personal?.ownSetup !== true) {
       const model = await personalOpencodeModel(hostEnv);
@@ -501,20 +557,30 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     const served = adapter.servedAsYou!;
     const stop = new AbortController();
     hooks.signal.addEventListener("abort", () => stop.abort(hooks.signal.reason), { once: true });
-    hooks.log(`Starting ${adapter.label} as you, on a server of its own for this task.`);
+    const keeps = adapter.servedAsYou!.capabilities.resume === true && kind !== "repair";
+    const resume = kind === "resume" && keeps ? task.nativeSession! : undefined;
+    let sessionId: string | null = null;
+    hooks.log(resume ? `Going on in ${adapter.label}'s session for this task, as you, on a server of its own.` : `Starting ${adapter.label} as you, on a server of its own for this task.`);
     let result: Awaited<ReturnType<typeof converse>> | null = null;
     const ran = await runOpencodeAsYou({
       program: served.program,
       cwd: paths.work,
       env: { ...personalEnv(hostEnv, paths), ...served.env(paths, ready.setup) },
-      rules: personalRules(work.mode, ready.setup.deniedTools ?? [], work.rules, ready.setup.readDirs ?? []),
+      rules: personalRules(work.mode, ready.setup.deniedTools ?? [], work.rules, ready.setup.readDirs ?? [], ready.setup.off?.skills ?? []),
+      ...(ready.setup.off?.mcpServers.length ? { off: ready.setup.off.mcpServers } : {}),
+      ...(work.readOnly ? { readOnly: true } : {}),
       timeoutMs: CONVERSATION_PROCESS_MS,
       signal: stop.signal,
       onProcess: (pgid) => hooks.onProcess(pgid, paths.root),
+      onSession: (id) => {
+        sessionId = id;
+        if (keeps && kind === "first") hooks.record({ nativeSession: id });
+      },
+      ...(resume ? { resume } : {}),
       talk: async (transport, codec) => {
         const session = openSession(codec, transport, { steer: false });
         session.sendTurn(prompt);
-        result = await converse(session, hooks, work.limits.timeoutMs, stop, ownMcpTool(work.setup.mcpTools), ready.masked, true);
+        result = await converse(session, hooks, work.limits.timeoutMs, stop, ownMcpTool(work.setup.mcpTools), ready.masked, true, { turnText: (followUp) => turnText(followUp, ready, hooks), sourced: ready.sourced, off: ready.setup.off ?? null });
         return [];
       },
     }).catch((error: Error) => {
@@ -522,9 +588,10 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     });
     stopped(hooks);
     const finished = result as Awaited<ReturnType<typeof converse>> | null;
+    if (finished?.despite.length) throw new Ended("failed", stoppedDespite(finished.despite));
     if (ran.timedOut || finished?.timedOut) throw new Ended("failed", `The agent ran past the task's ${Math.round(work.limits.timeoutMs / 60_000)} minutes and was stopped.`);
-    if (finished?.terminal?.status !== "completed") throw new Ended("failed", finished?.terminal?.failure?.message ?? "The agent stopped before it finished.");
-    return { summary: finished.terminal.summary, nativeSessionId: null };
+    if (finished?.terminal?.status !== "completed") throw untilReset(work, finished?.terminal?.failure, keeps ? sessionId : null) ?? new Ended("failed", finished?.terminal?.failure?.message ?? "The agent stopped before it finished.");
+    return { summary: finished.terminal.summary, nativeSessionId: keeps ? sessionId : null };
   }
 
   async function legacyTests(work: RemoteWork, paths: TaskPaths, hooks: ExecutorHooks, masked: readonly string[], sandbox: SandboxTool | null): Promise<void> {
@@ -604,7 +671,62 @@ interface Prepared {
   setup: AgentSetup;
   masked: string[];
   prompt: string;
+  turns?: TurnRecorder;
+  sourced: (event: AgentEvent) => Promise<AgentEvent>;
 }
+
+const stoppedDespite = (names: readonly string[]) => `Stopped before its first step: ${names.join(", ")} ${names.length === 1 ? "is" : "are"} off and ${names.length === 1 ? "was" : "were"} loaded anyway.`;
+
+const leftOn = (adapter: AgentAdapter, off: AgentOff): string[] => {
+  const leaves = new Set(adapter.leavesOut ?? []);
+  return [...(leaves.has("plugins") ? [] : off.plugins.map((p) => `the ${p} plugin`)), ...(leaves.has("skills") ? [] : off.skills), ...(leaves.has("mcpServers") ? [] : off.mcpServers.map((m) => `MCP server ${m}`))];
+};
+
+const fromHome = (off: TaskOff, home: string): TaskOff => {
+  const real = (source: string) => (source.startsWith("folder:~/") ? `folder:${home}/${source.slice("folder:~/".length)}` : source);
+  return { sources: off.sources.map(real), skills: off.skills.map((s) => ({ ...s, source: real(s.source) })), mcpServers: off.mcpServers.map((s) => ({ ...s, source: real(s.source) })) };
+};
+
+export const sourcedAt = (place: HandbookPlace) => async (event: AgentEvent): Promise<AgentEvent> => {
+  if (event.type !== "tool_call" || event.status !== "started") return event;
+  const skill = event.tool.toLowerCase() === "skill" ? calledSkill(event.target) : null;
+  const named = skill && event.target && /^[^:\s]{1,200}:[a-z0-9][a-z0-9-]{0,62}$/.test(event.target) ? event.target : skill;
+  const found = named ? await skillSource(place, named).catch(() => UNKNOWN_SOURCE) : event.mcp?.server ? await mcpSource(place, event.mcp.server).catch(() => UNKNOWN_SOURCE) : null;
+  if (!found || found.source === UNKNOWN_SOURCE.source) return event;
+  const folder = `folder:${place.home}/`;
+  if (found.source.startsWith("folder:") && !found.source.startsWith(folder)) return event;
+  return { ...event, source: found.source.startsWith(folder) ? `folder:~/${found.source.slice(folder.length)}` : found.source, sourceLabel: found.sourceLabel };
+};
+
+const saidOf = (text: string, masked: readonly string[]) => new Redactor(masked).line(printable(text.split("\n")[0]!.trim()));
+
+function machineTurns(place: ShadowPlace, taskId: string, hooks: ExecutorHooks): TurnRecorder {
+  const held: TaskTurn[] = [];
+  return turnRecorder(
+    {
+      taskTurns: async () => held,
+      openTaskTurn: async (turn) => {
+        held.push({ ...turn, end: null, files: null, undoneAt: null });
+      },
+      endTaskTurn: async (_tenant, _taskId, n, end, files) => {
+        const turn = held.find((t) => t.n === n)!;
+        Object.assign(turn, { end, files });
+        hooks.onEvent({ type: "turn", n, said: turn.said, start: turn.start, end, files });
+      },
+    },
+    "",
+    taskId,
+    place,
+    "project",
+  );
+}
+
+const said = (summary: string): Pick<TaskOutcome, "lastSaid"> => {
+  const text = summary.split("\n").map((line) => new Redactor().line(line)).join("\n").trim();
+  return text ? { lastSaid: text } : {};
+};
+
+const nothingChanged = (message: string, summary: string) => new Ended("failed", message, { nativeSessionId: null, nothingChanged: true, ...said(summary) });
 
 function untilReset(work: RemoteWork, failure: AgentFailure | undefined, nativeSessionId: string | null): Ended | null {
   if (failure?.class !== "usage_limit" || !failure.resetAt || !nativeSessionId || "folder" in work) return null;
@@ -662,7 +784,7 @@ function testOutput(hooks: ExecutorHooks, values: readonly string[], kept: Outpu
  * the background still goes. The task's time counts only while the agent works: a question
  * waiting for its person stops the clock (design #14), and the agent is stopped when it runs out.
  */
-async function converse(session: AgentSession, hooks: ExecutorHooks, timeoutMs: number, stop: AbortController, own: (tool: string) => boolean, values: readonly string[], talks: boolean): Promise<{ terminal: Extract<AgentEvent, { type: "terminal" }> | null; timedOut: boolean }> {
+async function converse(session: AgentSession, hooks: ExecutorHooks, timeoutMs: number, stop: AbortController, own: (tool: string) => boolean, values: readonly string[], talks: boolean, { turnText = async (followUp) => followUpText(followUp), sourced = async (event) => event, off = null }: { turnText?: (followUp: RelayedFollowUp) => Promise<string>; sourced?: (event: AgentEvent) => Promise<AgentEvent>; off?: AgentOff | null } = {}): Promise<{ terminal: Extract<AgentEvent, { type: "terminal" }> | null; timedOut: boolean; despite: string[] }> {
   // The values the person's environment gave the project's servers are masked too, wherever the agent repeats them.
   const redactor = new Redactor(values);
   const mask = (text: string) => redactor.line(text);
@@ -695,12 +817,20 @@ async function converse(session: AgentSession, hooks: ExecutorHooks, timeoutMs: 
   run();
   stop.signal.addEventListener("abort", () => session.stop(), { once: true });
   let terminal: Extract<AgentEvent, { type: "terminal" }> | null = null;
+  let despite: string[] = [];
   const answers: Promise<void>[] = [];
   try {
     for await (const event of session.events) {
       const kept = keepOwnToolsHere(event, own);
       const masked = kept && maskEvent(kept, mask);
-      if (masked) hooks.onEvent(masked as AgentEvent);
+      if (event.type === "loaded" && off) {
+        despite = loadedDespiteOff(off, event);
+        if (despite.length) {
+          session.stop();
+          break;
+        }
+      }
+      if (masked) hooks.onEvent(await sourced(masked as AgentEvent));
       if (event.type === "request") {
         pause();
         answers.push(
@@ -725,7 +855,7 @@ async function converse(session: AgentSession, hooks: ExecutorHooks, timeoutMs: 
         // A follow-up the person sent while the agent worked is its next turn; a one-shot run takes none.
         const [next] = talks ? (hooks.followUps?.() ?? []) : [];
         if (next) {
-          session.sendTurn(followUpText(next));
+          session.sendTurn(await turnText(next));
           hooks.delivered?.([next.id]);
           hooks.log("Sent a follow-up to the agent.");
           hooks.onEvent({ type: "steer", text: next.text, by: next.createdBy });
@@ -740,5 +870,5 @@ async function converse(session: AgentSession, hooks: ExecutorHooks, timeoutMs: 
     if (timer) clearTimeout(timer);
     await Promise.allSettled(answers);
   }
-  return { terminal, timedOut };
+  return { terminal, timedOut, despite };
 }

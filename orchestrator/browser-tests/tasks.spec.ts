@@ -143,6 +143,68 @@ test.describe("another team's owner", () => {
   });
 });
 
+test("given a file attached to the new task form, when the task starts, then the file is kept for the person first and the start names it", async ({ page }) => {
+  // given
+  const uploads: string[] = [];
+  let started: Record<string, unknown> | null = null;
+  await page.route("**/api/attachments", (route) => {
+    uploads.push(route.request().headers()["x-attachment-name"] ?? "");
+    return route.fulfill({ status: 201, json: { attachment: { id: "att_free1", taskId: "", name: "error.png", mime: "image/png", size: 8 } } });
+  });
+  await page.route("**/api/tasks", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    started = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fallback();
+  });
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+
+  // when
+  await form.getByLabel("Choose files").setInputFiles({ name: "error.png", mimeType: "image/png", buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) });
+  await expect(form.getByRole("list", { name: "Files" })).toContainText("error.png");
+  await work(form, "Fix the error in the screenshot");
+  await chooseAgent(form);
+  await form.getByRole("button", { name: "Start task" }).click();
+
+  // then
+  await expect.poll(() => started).toMatchObject({ attachments: ["att_free1"] });
+  expect(uploads).toEqual(["error.png"]);
+});
+
+test("given a repository whose branches are read, when another branch is picked, then the start names it and the default one is not sent", async ({ page }) => {
+  // given
+  let started: Record<string, unknown> | null = null;
+  await page.route("**/api/repos/*/branches", (route) => route.fulfill({ json: { default: "main", branches: ["main", "release/2"] } }));
+  await page.route("**/api/tasks", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    started = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fallback();
+  });
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+  await work(form, "Fix it on the release branch");
+  await chooseAgent(form);
+
+  // when
+  await form.getByText("More options").click();
+  await choose(form, "Start from branch", "release/2");
+  await form.getByRole("button", { name: "Start task" }).click();
+
+  // then
+  await expect.poll(() => started).toMatchObject({ baseBranch: "release/2" });
+});
+
+test("given a phone, when the new task form is drawn, then the Attach files button is at least 24 pixels high", async ({ page }) => {
+  // given
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+
+  // then
+  const box = await form.getByRole("button", { name: "Attach files" }).boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(24);
+});
+
 test("given the dark theme, when a task's links are shown, then a row's title takes the theme's text colour and a keyboard focus draws a ring", async ({ page }) => {
   // given
   await page.emulateMedia({ colorScheme: "dark" });
@@ -306,6 +368,25 @@ test("given a task by the stand-in agent, when the task list and its page open, 
   await expect(rail.getByRole("region", { name: "Run" })).toContainText(`Agent${label}Started`);
 });
 
+test("given an agent whose readiness has a command that repairs it, when the form shows the agent, then the command is offered to copy beside the first problem", async ({ page }) => {
+  // given
+  await page.route("**/api/tasks/options", async (route) => {
+    const real = await route.fetch().then((r) => r.json());
+    const readiness = { ready: false, state: "not-ready", first: "signed out", fix: "claude auth login" };
+    await route.fulfill({ json: { ...real, agents: real.agents.map((a: { id: string }) => (a.id === "fake" ? { ...a, readiness } : a)) } });
+  });
+
+  // when
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+  await chooseAgent(form);
+
+  // then
+  await expect(form.getByRole("alert", { name: /readiness/ })).toContainText("Signed out");
+  await expect(form.getByText("claude auth login")).toBeVisible();
+  await expect(form.getByRole("button", { name: "Copy the command" })).toBeVisible();
+});
+
 test("given an agent that offers a model and an effort, when one is picked, then the form shows only that agent's choices and the start carries only what was picked", async ({ page }) => {
   // given
   let started: Record<string, unknown> | null = null;
@@ -410,4 +491,279 @@ test("given the agents' names answering late, when the Tasks list and a task's p
   await expect(page.locator("header.page-head h1")).toHaveCount(0);
   release();
   await expect(page.getByRole("complementary", { name: "About this task" }).getByRole("region", { name: "Run" })).not.toContainText("AgentThe agent");
+});
+
+test("given a task set to repeat, when it starts, then the start carries when it repeats and the rail says what that means", async ({ page }) => {
+  // given
+  let started: Record<string, unknown> | null = null;
+  let stopped = "";
+  await page.route("**/api/tasks/repeats", (route) => route.fulfill({ json: { repeats: stopped ? [] : [{ id: "rep_1", title: "Check the nightly build", every: "weekday", at: "09:00", next: "2026-11-16T09:00:00", skipped: { at: "2026-11-10T09:00:00", reason: "this machine was off" } }] } }));
+  await page.route("**/api/tasks/repeats/rep_1/stop", (route) => {
+    stopped = "rep_1";
+    return route.fulfill({ json: {} });
+  });
+  await page.route(/\/api\/tasks$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    started = route.request().postDataJSON();
+    return route.fulfill({ status: 201, json: { repeat: { id: "rep_1", title: "Check the nightly build", every: "weekday", at: "09:00", next: "2026-11-16T09:00:00" } } });
+  });
+  await page.route("**/api/me", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+  });
+  await page.goto("/demo/tasks/new");
+  const form = await newTaskForm(page);
+  await work(form, "Check the nightly build");
+  await moreOptions(form);
+
+  // when
+  await choose(form, "Repeat", "Every weekday");
+  await form.getByLabel("Time of day").fill("09:00");
+
+  // then
+  await expect(page.getByText("Runs every weekday at 9:00 on this machine, under the same limits; a run this machine is off for is skipped and said.").first()).toBeVisible();
+
+  // when
+  await form.getByRole("button", { name: "Start task" }).click();
+
+  // then
+  await expect.poll(() => started).toMatchObject({ repeat: { every: "weekday", at: "09:00" } });
+  await expect(form).toContainText("It repeats every weekday at 9:00; the first run is Mon 9:00.");
+});
+
+test("given a task that repeats, when the task list opens, then a Repeats section holds it with its next run and the run it skipped, and stopping it asks first", async ({ page }) => {
+  // given
+  let stopped = false;
+  await page.route("**/api/tasks/repeats", (route) => route.fulfill({ json: { repeats: stopped ? [] : [{ id: "rep_1", title: "Check the nightly build", every: "weekday", at: "09:00", next: "2026-11-16T09:00:00", skipped: { at: "2026-11-10T09:00:00", reason: "this machine was off" } }] } }));
+  await page.route("**/api/tasks/repeats/rep_1/stop", (route) => {
+    stopped = true;
+    return route.fulfill({ json: {} });
+  });
+
+  // when
+  await page.goto("/demo/tasks");
+  const section = page.getByRole("region", { name: /^Repeats/ });
+
+  // then
+  await expect(section).toContainText("Check the nightly build");
+  await expect(section).toContainText("every weekday at 9:00, next ");
+  await expect(section).toContainText("Skipped Tue 9:00: this machine was off.");
+
+  // when
+  await section.getByRole("button", { name: "Stop repeating Check the nightly build" }).click();
+  await section.getByRole("button", { name: "Stop repeating", exact: true }).click();
+
+  // then
+  await expect(page.getByRole("region", { name: /^Repeats/ })).toHaveCount(0);
+});
+
+test("given a task list with an agent at work, when its tab is hidden and shown again, then the board is not read while hidden and is read once when it comes back", async ({ page }) => {
+  // given
+  let reads = 0;
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => (window as unknown as { __hidden?: boolean }).__hidden === true });
+  });
+  await page.clock.install();
+  await page.route("**/api/tasks/board*", async (route) => {
+    reads++;
+    const real = await route.fetch().then((r) => r.json());
+    await route.fulfill({ json: { ...real, counts: { ...real.counts, agents: 1 } } });
+  });
+  await page.goto("/demo/tasks");
+  await expect.poll(() => reads).toBeGreaterThan(0);
+
+  // when hidden
+  await page.evaluate(() => { (window as unknown as { __hidden?: boolean }).__hidden = true; });
+  await page.clock.runFor(1_000);
+  const before = reads;
+  await page.clock.runFor(10_000);
+
+  // then
+  expect(reads).toBe(before);
+
+  // when shown
+  await page.evaluate(() => {
+    (window as unknown as { __hidden?: boolean }).__hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+
+  // then
+  await expect.poll(() => reads).toBeGreaterThan(before);
+});
+
+test("given the orchestrator reads handbooks, when a handbook is turned off for this task, then the folded line counts one change from the default, Reset returns to the default and the start carries only this task's off", async ({ page }) => {
+  // given
+  let started: Record<string, unknown> | null = null;
+  const plugin = "plugin:payments-skills@payments-market";
+  const sources = [
+    { id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "release-notes", description: "Write release notes" }], commands: [], mcpServers: [{ name: "jira" }], hooks: [], claudeMd: true },
+    { id: plugin, kind: "plugin", name: "payments-skills", version: "1.4.0", enabled: true, skills: [{ name: "add-endpoint", context: { tokens: 900, percent: 1 } }, { name: "review-checklist", context: { tokens: 600, percent: 1 } }], commands: [], mcpServers: [], hooks: [{ name: "PreToolUse" }] },
+  ];
+  await page.route("**/api/handbook/sources*", (route) => route.fulfill({ json: { sources, readAt: new Date().toISOString() } }));
+  await page.route(/\/api\/tasks$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    started = route.request().postDataJSON();
+    return route.fulfill({ status: 400, json: { error: "stopped by the test before a task starts" } });
+  });
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+  await work(form, "Use less of my setup");
+  await chooseAgent(form);
+  const setup = page.locator(".task-setup");
+
+  // then
+  await expect(setup.getByRole("heading", { name: "This task will use" })).toBeVisible();
+  await expect(setup).toContainText("Your default setup: 6 of 6 on");
+  await expect(setup).toContainText("Turn anything off for this task only; your default stays the same.");
+  // each thing is said once: no second summary and no second sentence under the heading
+  await expect(setup.getByText("Only for this task")).toHaveCount(0);
+  await expect(setup.getByText(/on, .* off|servers not measured/)).toHaveCount(0);
+
+  // when the list stands open on a wide screen
+  await setup.getByRole("switch", { name: "Use payments-skills 1.4.0" }).uncheck();
+
+  // then
+  await expect(setup).toContainText("1 change from your default");
+  await expect(setup.getByRole("link", { name: "Change your default on Team" })).toBeVisible();
+  const offRow = setup.locator("li.handbook-off");
+  await expect(offRow).toContainText("Off");
+  await expect(offRow).toContainText("1 handbook");
+  await expect(offRow.locator(":scope > .handbook-line").getByRole("switch")).toHaveCount(0);
+  const rowLine = async (row: import("@playwright/test").Locator) => row.locator(":scope > .handbook-line").boundingBox();
+  const sourceLine = await rowLine(setup.locator("li.handbook").first());
+  expect((await rowLine(offRow))!.height).toBeCloseTo(sourceLine!.height, 0);
+  expect(await offRow.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
+
+  // when
+  await setup.getByRole("button", { name: "Reset" }).click();
+
+  // then
+  await expect(setup).toContainText("Your default setup: 6 of 6 on");
+
+  // when
+  await setup.getByRole("switch", { name: "Use payments-skills 1.4.0" }).uncheck();
+  await form.getByRole("button", { name: "Start task" }).click();
+
+  // then
+  await expect.poll(() => started).toMatchObject({ off: { sources: [plugin] } });
+});
+
+test("given a plugin that runs hooks and a server, when the task form opens, then one notice says so with Look, Start stays, and × puts it away and tells the orchestrator", async ({ page }) => {
+  // given
+  const noticed: unknown[] = [];
+  const docs = { id: "plugin:docs-kit@payments-market", kind: "plugin", name: "docs-kit", version: "2.0.0", enabled: true, skills: [{ name: "write-docs" }], commands: [], mcpServers: [{ name: "docs-search" }], hooks: [{ name: "PreToolUse" }, { name: "Stop" }], notice: { hooks: 2, mcpServers: 1 } };
+  await page.route("**/api/handbook/sources*", (route) => route.fulfill({ json: { sources: [docs], readAt: new Date().toISOString() } }));
+  await page.route("**/api/handbook/noticed", (route) => {
+    noticed.push(route.request().postDataJSON());
+    return route.fulfill({ json: { noticed: "docs-kit@payments-market@2.0.0" } });
+  });
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+
+  // then
+  await expect(page.locator(".handbook-news")).toContainText("docs-kit 2.0.0 runs 2 hooks and 1 MCP server. Look Got it");
+  await expect(form.getByRole("button", { name: "Start task" })).toBeVisible();
+  await expect(page.locator(".task-setup")).toContainText("Your default setup: 4 of 4 on");
+
+  // when
+  await page.getByRole("button", { name: "Got it" }).click();
+
+  // then
+  await expect(page.locator(".handbook-news")).toHaveCount(0);
+  await expect(page.getByText("Put away; nothing changed.")).toBeVisible();
+  await expect.poll(() => noticed).toEqual([{ plugin: "plugin:docs-kit@payments-market" }]);
+});
+
+test("given the orchestrator reads handbooks, when the new task form is wide, then This task will use stands to the form's right, and narrow it sits under the form", async ({ page }) => {
+  // given
+  const sources = [{ id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "release-notes" }], commands: [], mcpServers: [], hooks: [] }];
+  await page.route("**/api/handbook/sources*", (route) => route.fulfill({ json: { sources, readAt: new Date().toISOString() } }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+  const setup = page.locator(".task-setup");
+  await expect(setup).toBeVisible();
+
+  // then wide
+  const formBox = (await form.boundingBox())!;
+  const wide = (await setup.boundingBox())!;
+  expect(wide.x).toBeGreaterThanOrEqual(formBox.x + formBox.width - 1);
+  expect(Math.abs(wide.y - formBox.y)).toBeLessThan(40);
+
+  // when narrow
+  await page.setViewportSize({ width: 800, height: 900 });
+
+  // then
+  const narrow = (await setup.boundingBox())!;
+  expect(narrow.y).toBeGreaterThanOrEqual(formBox.y + formBox.height - 2);
+});
+
+test("given a handbook with a long skill name and unused items, when the task panel lists them at 1440, then every row is one line, names are cut with the whole name in the title, switches share one right edge, and no use note stands in a row", async ({ page }) => {
+  // given
+  const long = "release-notes-for-the-payments-webhook-retry-queue-and-its-dead-letter-handling-in-every-region";
+  const sources = [{ id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: long, used: { tasks: 0, lastAt: null } }, { name: "standup", used: { tasks: 0, lastAt: null } }, { name: "changelog" }], commands: [], mcpServers: [], hooks: [] }];
+  await page.route("**/api/handbook/sources*", (route) => route.fulfill({ json: { sources, readAt: new Date().toISOString() } }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/demo/tasks");
+  await newTaskForm(page);
+  await page.locator(".task-setup .handbook-name").first().click();
+
+  // when
+  const rows = await page.locator(".task-setup .handbook-row").evaluateAll((els) => els.map((el) => { const line = el.querySelector(".handbook-line")!.getBoundingClientRect(); const sw = el.querySelector("[role=switch]")!.getBoundingClientRect(); return { height: Math.round(line.height), right: Math.round(sw.right), cut: (el.querySelector(".handbook-name") as HTMLElement).scrollWidth > (el.querySelector(".handbook-name") as HTMLElement).clientWidth }; }));
+
+  // then
+  expect(rows).toHaveLength(3);
+  expect(new Set(rows.map((r) => r.height)).size).toBe(1);
+  expect(new Set(rows.map((r) => r.right)).size).toBe(1);
+  await expect(page.locator(".task-setup")).not.toContainText("Not used in 30 days");
+  await expect(page.locator(".task-setup .handbook-name", { hasText: "release-notes-for" })).toHaveAttribute("title", long);
+});
+
+test("given the new task form at 1440, when the panel's edge is dragged, stepped by arrow and double pressed, then the panel changes width within its limits, keeps it after a reload, and goes back to its default", async ({ page }) => {
+  // given
+  const sources = [{ id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "standup" }], commands: [], mcpServers: [], hooks: [] }];
+  await page.route("**/api/handbook/sources*", (route) => route.fulfill({ json: { sources, readAt: new Date().toISOString() } }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/demo/tasks");
+  await newTaskForm(page);
+  const panel = page.locator(".task-setup");
+  const handle = page.getByRole("separator", { name: "Width of the side panel" });
+  const width = async () => Math.round((await panel.boundingBox())!.width);
+
+  // then the default
+  await expect.poll(width).toBe(420);
+
+  // when dragged left by 100 px
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 100, box.y + 40, { steps: 5 });
+  await page.mouse.up();
+
+  // then wider, and kept
+  await expect.poll(width).toBeGreaterThan(500);
+  const dragged = await width();
+  await page.reload();
+  await newTaskForm(page);
+  await expect.poll(width).toBe(dragged);
+
+  // when stepped by arrow past the half of the window
+  await handle.focus();
+  for (let i = 0; i < 60; i++) await page.keyboard.press("ArrowLeft");
+
+  // then it stops at half the window
+  await expect.poll(width).toBeLessThanOrEqual(720);
+
+  // when the arrows take it in past the least
+  for (let i = 0; i < 80; i++) await page.keyboard.press("ArrowRight");
+
+  // then it stops at its least
+  await expect.poll(width).toBe(320);
+
+  // when double pressed
+  await handle.dblclick();
+
+  // then it is the default again
+  await expect.poll(width).toBe(420);
 });

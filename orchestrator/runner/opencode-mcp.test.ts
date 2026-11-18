@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentCodec, AgentEvent } from "../server/tasks/adapters/contract.js";
 import { FORGE_REASON, TRACKER_REASON } from "../server/tasks/profile.js";
 import { signInEvents } from "../server/tasks/adapters/frames.js";
-import { mcpDecidingCodec, mcpDecision, waitingForSignIn } from "./opencode-mcp.js";
+import { mcpDecidingCodec, mcpDecision, OFF_REASON, waitingForSignIn } from "./opencode-mcp.js";
+import { QUESTION_REASON } from "../server/tasks/profile.js";
 
 describe("an MCP call of an OpenCode session run as its person", () => {
   const servers = ["atlassian", "slack", "jira_get", "notes.local"];
@@ -61,6 +62,31 @@ describe("an MCP call of an OpenCode session run as its person", () => {
     // then
     expect(events).toEqual([{ type: "tool_call", tool: "atlassian_editJiraIssue", target: null, status: "refused", refusal: { kind: "tracker-write", reason: TRACKER_REASON } }, { type: "request", request: { id: "r3", kind: "mcp", tool: "slack_slack_send_message", summary: "" } }]);
     expect(written).toEqual(["r1:allow-once", "r2:deny"]);
+  });
+
+  it("given a server turned off for the task and another whose name begins with it, when the agent calls a tool of each, then only the turned-off server's call is refused, as not allowed in this task, and the one whose server cannot be named asks as before", () => {
+    // given
+    const known = ["notes.local", "notes_local_archive", "slack"];
+    const codec = { decode: (line: string): AgentEvent[] => [{ type: "request", request: { id: line, kind: "mcp", tool: line, summary: "" } }], answer: (id: string, decision: string) => `${id}:${decision}`, pending: () => [] } as unknown as AgentCodec;
+    const deciding = mcpDecidingCodec(codec, known, [], ["notes.local"]);
+
+    // when
+    const events = ["notes_local_list_pages", "notes_local_archive_list_pages"].flatMap((line) => deciding.decode(line));
+
+    // then
+    expect(events).toEqual([
+      { type: "tool_call", tool: "notes_local_list_pages", target: null, status: "refused", refusal: { kind: "not-allowed", reason: OFF_REASON } },
+      { type: "request", request: { id: "notes_local_archive_list_pages", kind: "mcp", tool: "notes_local_archive_list_pages", summary: "" } },
+    ]);
+    expect(deciding.pending()).toEqual(["notes_local_list_pages:deny"]);
+  });
+
+  it("given a question, when the agent calls a server's tool that reads, one that writes, one whose server cannot be named and a tracker's that writes, then only the reading call goes ahead and every other is refused as closed to a question", () => {
+    // when
+    const decided = ["slack_slack_search_public_and_private", "slack_slack_send_message", "unknown_send", "atlassian_editJiraIssue"].map((id) => mcpDecision(id, servers, [], true));
+
+    // then
+    expect(decided).toEqual([{ decision: "allow-once" }, { decision: "deny", note: QUESTION_REASON }, { decision: "deny", note: QUESTION_REASON }, { decision: "deny", note: TRACKER_REASON }]);
   });
 
   it("given OpenCode's servers in each state, when the session starts, then only the ones waiting for a sign-in are named, once, before the agent's first words", () => {

@@ -4,7 +4,7 @@ import { ChangeRefused } from "../changes.js";
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /** An address on this machine or a private network, by its literal host: what a member's URL must not make the orchestrator call. */
-function internal(host: string): boolean {
+export function internal(host: string): boolean {
   const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (LOOPBACK.has(host) || bare === "::1" || bare.endsWith(".localhost") || bare === "0.0.0.0") return true;
   if (isIP(bare) === 4) {

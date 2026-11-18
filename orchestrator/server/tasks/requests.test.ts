@@ -65,7 +65,7 @@ describe("what a task's agent asks, answered in the browser", { timeout: 120_000
     // then
     expect(first.status).toBe(200);
     expect(woken).toBe(1);
-    expect((await first.json()).request).toMatchObject({ id: "req-1", status: "answered", answer: { decision: "allow_once" }, answeredBy: ADA.email, answeredVia: "web" });
+    expect((await first.json()).request).toMatchObject({ id: "req-1", status: "answered", answer: { decision: "allow_once" }, answeredBy: ADA.name, answeredVia: "web" });
     expect([again.status, (await again.json()).error]).toEqual([409, "this request is no longer waiting for an answer"]);
     expect(listed.requests).toEqual([expect.objectContaining({ id: "req-1", status: "answered" })]);
     expect(listed.requests[0]).not.toHaveProperty("tenant");
@@ -88,7 +88,7 @@ describe("what a task's agent asks, answered in the browser", { timeout: 120_000
 
     // then
     expect([byAdmin.status, (await byAdmin.json()).error]).toEqual([404, "unknown request"]);
-    expect([withValue.status, (await withValue.json()).error]).toEqual([400, "a secret is answered only with whether it was provided; its value never reaches the orchestrator's store"]);
+    expect([withValue.status, (await withValue.json()).error]).toEqual([400, "a secret is answered only with whether it was given; its value goes to the vault from its card, never in an answer"]);
     expect(unknown.status).toBe(404);
     expect(pending).toEqual([expect.objectContaining({ status: "pending", answer: null })]);
   });

@@ -106,7 +106,7 @@ const gitlabState = (status: unknown): CheckState =>
 
 async function readGitLab(http: ForgeHttp, config: ForgeConfig, number: number): Promise<RequestDetail> {
   const project = `/projects/${encodeURIComponent(config.project)}`;
-  const mr = await http.request<{ state?: unknown; sha?: unknown; target_branch?: unknown; detailed_merge_status?: unknown; has_conflicts?: unknown; head_pipeline?: unknown }>("GET", `${project}/merge_requests/${number}`);
+  const mr = await http.request<{ state?: unknown; sha?: unknown; target_branch?: unknown; detailed_merge_status?: unknown; has_conflicts?: unknown; head_pipeline?: unknown; merged_by?: { username?: unknown } | null }>("GET", `${project}/merge_requests/${number}`);
   const approvals = await http.request<{ approved?: unknown; approvals_left?: unknown; approved_by?: { user?: { username?: unknown } }[] }>("GET", `${project}/merge_requests/${number}/approvals`);
   const headSha = String(mr.sha ?? "");
   const statuses = /^[0-9a-f]{40}$/.test(headSha)
@@ -133,7 +133,7 @@ async function readGitLab(http: ForgeHttp, config: ForgeConfig, number: number):
     sequence: Number(s.id) || 0,
     url: shownUrl(s.target_url),
   }));
-  return { number, status, headSha, ...targetOf(mr.target_branch), mergeability, review, checks: normalizeChecks(raw, CAPABILITIES.gitlab) };
+  return { number, status, headSha, ...targetOf(mr.target_branch), mergeability, review, checks: normalizeChecks(raw, CAPABILITIES.gitlab), ...mergedByOf(status, mr.merged_by?.username) };
 }
 
 const githubRunState = (status: unknown, conclusion: unknown): CheckState => {
@@ -145,7 +145,7 @@ const githubRunState = (status: unknown, conclusion: unknown): CheckState => {
 
 async function readGitHub(http: ForgeHttp, config: ForgeConfig, number: number): Promise<RequestDetail> {
   const repo = `/repos/${config.project.split("/").map(encodeURIComponent).join("/")}`;
-  const pr = await http.request<{ state?: unknown; merged?: unknown; mergeable?: unknown; mergeable_state?: unknown; head?: { sha?: unknown }; base?: { ref?: unknown }; requested_reviewers?: unknown[] }>("GET", `${repo}/pulls/${number}`);
+  const pr = await http.request<{ state?: unknown; merged?: unknown; mergeable?: unknown; mergeable_state?: unknown; head?: { sha?: unknown }; base?: { ref?: unknown }; requested_reviewers?: unknown[]; merged_by?: { login?: unknown } | null }>("GET", `${repo}/pulls/${number}`);
   const reviews = await http.request<{ id?: unknown; user?: { login?: unknown }; state?: unknown; submitted_at?: unknown }[]>("GET", `${repo}/pulls/${number}/reviews?per_page=100`);
   const headSha = String(pr.head?.sha ?? "");
   const sha = /^[0-9a-f]{40}$/.test(headSha) ? headSha : null;
@@ -186,8 +186,11 @@ async function readGitHub(http: ForgeHttp, config: ForgeConfig, number: number):
       url: shownUrl(s.target_url),
     })),
   ];
-  return { number, status, headSha, ...targetOf(pr.base?.ref), mergeability, review, checks: normalizeChecks(raw, CAPABILITIES.github) };
+  return { number, status, headSha, ...targetOf(pr.base?.ref), mergeability, review, checks: normalizeChecks(raw, CAPABILITIES.github), ...mergedByOf(status, pr.merged_by?.login) };
 }
+
+/** Who merged a request, as text, only once the forge says it is merged. */
+const mergedByOf = (status: RequestStatus, who: unknown): { mergedBy?: string } => (status === "merged" && typeof who === "string" && shownText(who) ? { mergedBy: shownText(who) } : {});
 
 /** The branch a request merges into, when the forge names one as text. */
 export const targetOf = (branch: unknown): { target?: string } => (typeof branch === "string" && branch ? { target: shownText(branch) } : {});
@@ -255,10 +258,13 @@ export function watchFingerprint(detail: RequestDetail, comments: RequestComment
 
 /** A request as a watch reads it: its detail, what people said on it, and the fingerprint of both. */
 export function readRequestWatch(ctx: OrchestratorContext, repo: RepoRecord, number: number): Promise<RequestWatch> {
-  return withForge(ctx, repo, async (http, config) => {
-    const [detail, comments] = await Promise.all([READERS[config.kind](http, config, number), COMMENT_READERS[config.kind](http, config, number)]);
-    return { detail, comments, fingerprint: watchFingerprint(detail, comments) };
-  });
+  return withForge(ctx, repo, (http, config) => readWatchWith(http, config, number));
+}
+
+/** The same read through a forge access the caller holds, GETs alone. */
+export async function readWatchWith(http: ForgeHttp, config: ForgeConfig, number: number): Promise<RequestWatch> {
+  const [detail, comments] = await Promise.all([READERS[config.kind](http, config, number), COMMENT_READERS[config.kind](http, config, number)]);
+  return { detail, comments, fingerprint: watchFingerprint(detail, comments) };
 }
 
 // In local mode a repository connected with no token is read through the person's own gh or glab, GETs alone.

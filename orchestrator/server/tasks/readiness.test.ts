@@ -119,7 +119,7 @@ describe("whether an agent is ready before its first task", () => {
 
   it.each([
     ["one account", ["ada@example.invalid"], { status: "ok", detail: "Runs as you: your own Claude Code, with your skills, plugins, MCP servers and memory, plus the team's skills." }],
-    ["two accounts", ["ada@example.invalid", "max@example.invalid"], { status: "fail", short: "Run as me refused here", detail: "Run as me is for one person's orchestrator, and this one has 2 accounts; tasks do not run until ORCHESTRATOR_TASK_PROFILE is isolated" }],
+    ["two accounts", ["ada@example.invalid", "max@example.invalid"], { status: "fail", code: "profile-refused", fix: "export ORCHESTRATOR_TASK_PROFILE=isolated", short: "Run as me refused here", detail: "Run as me is for one person's orchestrator, and this one has 2 accounts; tasks do not run until ORCHESTRATOR_TASK_PROFILE is isolated" }],
   ])("given Run as me on an orchestrator with %s, when an admin asks, then the profile line says so and the credential is the user's own sign-in", async (_case, emails, profile) => {
     // given
     const { ctx, bin } = await seeded();
@@ -301,7 +301,7 @@ esac
 
     // then
     const checks = checksOf(body, "claude-code");
-    expect(checks.Image).toMatchObject({ status: "fail", detail: "agents:1 is not on the Docker daemon; build or pull it (the check never pulls)" });
+    expect(checks.Image).toMatchObject({ status: "fail", code: "image-missing", fix: "docker pull agents:1", detail: "agents:1 is not on the Docker daemon; build or pull it (the check never pulls)" });
     expect(checks["Sign-in"]!.status).toBe("unknown");
     // The start lists leftover probe containers first; the check itself only inspects.
     expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["ps -a --filter name=teamhandbook-probe- --format {{.Names}}", "image inspect --format {{.Id}} agents:1"]);
@@ -397,7 +397,24 @@ describe("who sees an agent's readiness", () => {
 
     // then
     expect(options.readinessReport).toBe(true);
-    expect(options.agents).toEqual([{ id: "claude-code", label: "Claude Code", modes: expect.any(Array), options: expect.any(Array), questions: expect.any(Boolean), plan: expect.any(Boolean), readiness: { ready: true, state: "warnings", first: "version newer than checked" }, personal: null }]);
+    expect(options.agents).toEqual([{ id: "claude-code", label: "Claude Code", modes: expect.any(Array), options: expect.any(Array), questions: expect.any(Boolean), plan: expect.any(Boolean), readiness: { ready: true, state: "warnings", first: "version newer than checked", code: "version-newer", fix: null }, personal: null }]);
+  });
+
+  it("given a Claude Code CLI older than the one checked against, when an admin asks, then the version line has its code and the CLI's own update command, and the form carries both", async () => {
+    // given
+    const { ctx, bin } = await seeded();
+    fakeCli(bin, "claude", "2.0.3 (Claude Code)", say({ loggedIn: true, authMethod: "claude.ai" }));
+    const adapter = claudeCodeAdapter("claude");
+    runnerWith(ctx, [adapter], hostEnv(bin));
+    await ctx.tasks!.readiness();
+
+    // when
+    const checks = checksOf((await readinessOf(ctx)).body, "claude-code");
+    const options = await (await createApp(ctx, as(ADMIN)).request("/api/tasks/options")).json();
+
+    // then
+    expect(checks.Version).toMatchObject({ status: "warn", code: "version-older", fix: "claude update" });
+    expect(options.agents[0].readiness).toEqual({ ready: true, state: "warnings", first: "version older than checked", code: "version-older", fix: "claude update" });
   });
 
   it("given a team's owner, when they ask for readiness and for the task form, then the full report is refused and the form says only where each agent stands once a check has finished", async () => {

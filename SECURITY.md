@@ -50,6 +50,11 @@ This document states exactly what it reads, what it writes, and where data goes.
   are read in order to screen them: a command carrying a recognized credential or a trace
   of this machine (its home path, account name or an email address) is refused rather than
   shared.
+- **Your installed plugins, read-only, and only when you run `/handbook:share` or `/handbook:status`:** the
+  names, versions and skill folder names under `~/.claude/plugins`, so the list can say where
+  each skill comes from. A plugin's skill is never offered for sharing, its files are not
+  opened beyond the folder names and its manifest, and nothing is fetched: the marketplace
+  copy compared with is whatever Claude Code last left on this machine.
 - **`~/.claude.json`, read-only, and only when you run `/handbook:share`:** the MCP
   servers Claude Code has configured for your user and for
   the current project, so they can be offered to your team. TeamHandbook never writes to
@@ -946,7 +951,7 @@ token and ingest id, and keeps its request, task and usage records. For sign-in 
   The key is shown once when it is made; removing a member or a service account deletes its keys;
 - each service account's name and the teams it owns;
 - task secrets, for a team or a repository, sealed in the vault under their own name, with when
-  and by whom each was set. An owner or an admin writes a value on the screen, or names the
+  and by whom each was set, and values a task's starter gave one run of a task, kept until that run ends. An owner or an admin writes a value on the screen, or names the
   1Password item it is read from; no answer, event or page shows a value afterwards, and a
   named item is shown by its reference. A task's agent gets its team's and repository's values as
   environment variables when it starts; a value that does not open, for want of the key or
@@ -1069,11 +1074,15 @@ organization's connection. Where the person's own CLI is not used and the orches
 application of its own on GitHub or GitLab.com (`ORCHESTRATOR_FORGE_<FORGE>_DEVICE_CLIENT_ID`, or
 the release's), the card instead signs that person in with a one-time code they enter on the
 forge's own https page, on the forge's own host: the orchestrator sends the forge only the
-application's id, which carries no secret, and seals the token the forge returns in the vault under
-that person alone; it is never shown again. The token can write to every repository the person can
-(GitHub `repo read:org`, GitLab `api write_repository`), and the orchestrator uses it only to open
-the requests of tasks that person started, never for anyone else's. Their Sign out, the directory
-turning the account off, or the account's deletion removes it. A self-managed GitLab is not signed
+application's id, which carries no secret, and seals the token the forge returns, with the refresh
+token that renews it (GitLab.com's token lapses after two hours, GitHub's after eight when the
+application expires tokens), in the vault under that person alone; neither is shown again. A
+renewal runs only on that person's press, sends only the application's id and the refresh token to
+the forge's own token address, and seals the new pair in place of the old. The token can write to
+every repository the person can (GitHub `repo read:org`, GitLab `api write_repository`), and the
+orchestrator uses it only to open the requests of tasks that person started, and to read those
+requests while their tasks wait for review, never for anyone else's. Their Sign out, the directory turning the account off, the account's deletion, or a renewal
+the forge refuses removes both. A self-managed GitLab is not signed
 in this way. In local mode Work also reads, with that same `gh api` and GET alone, the issues
 of each github.com repository a project's folder names as its origin, and a task started from
 one of them gets the issue's text redacted line by line, as a tracker's issue text is; an issue
@@ -1084,7 +1093,12 @@ Open a pull request on that request, and is then pushed and its request opened t
 or, where the person's own CLI is not used, with the sign-in they made with a one-time code, and
 only when they are the one who started the task,
 over https alone, as the orchestrator checked it: a branch moved since is refused; an origin reached over ssh is never pushed to, and the forge's page that opens the request is
-shown instead. Beyond that, nothing until an operator
+shown instead. While the task waits for review, the request opened that way is read every
+two minutes for its status, checks and comments, with GETs alone, through the person's own CLI or
+with the starter's code sign-in only while its token lasts: nothing is renewed in the background,
+and a lapsed sign-in leaves it unread until the person signs in again. What it reads reaches the
+agent only as a follow-up queued for its next run, a reviewer's comment and a check's name fenced
+as data and redacted line by line, at most three times a task. Beyond that, nothing until an operator
 configures one of these:
 
 - **A GitLab, GitHub or Gitea repository.** When an admin has set a repository's project and token,
@@ -1451,7 +1465,10 @@ orchestrator's own under its data directory that is deleted afterwards. The head
 the machine reported and the base to the forge's default history before any rule is read. The same
 rules then check it, and the request opens with that token, never anyone else's, as a link only:
 nothing merges it from here, and what is pushed to it after it opens is not checked here, and a
-request whose head on the forge is not the one checked is closed again. Otherwise a request opens only from a branch on a repository this organization connected,
+request whose head on the forge is not the one checked is closed again. While the task waits for
+review, that request is read every two minutes with GETs alone and the same token while it lasts,
+renewed only on a press, and what it says reaches the agent fenced as data as a path repository's
+request's does. Otherwise a request opens only from a branch on a repository this organization connected,
 read from the orchestrator's own copy with its own sign-in, never with a token sent to a host the
 machine names: its base comes from that copy's default branch, a head other than the one reported
 is refused, and the branch is held to the checks above.
@@ -1483,7 +1500,62 @@ add the plugin to their Claude Code. Pressing **Install** runs `claude plugin ma
 this product's own repository and `claude plugin install handbook@teamhandbook`, each with two
 minutes to answer, in the person's own Claude Code folder; nothing runs before that press, and a
 team's orchestrator refuses the request and installs nothing. What Claude Code says when a step
-fails is masked and cut before it is shown.
+fails is masked and cut before it is shown. **Check for updates** on the same page runs the one fixed command `claude plugin marketplace update` only on that press, with no plugin named, and the page then reads the local marketplace copies again.
+
+**Repeating tasks.** On a person's own orchestrator a task can be set to start again at a time of
+day, on a day, weekdays or every day, at most once a day and at most twenty to a person. Each run
+starts as that person through the same start every task takes, under the same limits and approvals;
+a run whose time passed more than two minutes before the orchestrator could start it, as when it was not running,
+is not started late but said in one line. Only that person lists and stops their repeats, and an
+API key cannot set one.
+
+**Reading the person's handbooks.** On an orchestrator only its person reaches, whose tasks run as
+them, the orchestrator lists where their Claude Code draws skills, commands, MCP servers and hooks
+from (their own folder, the opened folder, each installed plugin, the team's repository), by name
+and count, only for a person signed in and never an API key, and a team's orchestrator reads nothing of the kind.
+No credential file is opened; an MCP server is listed by name, with whether it asks for a value and
+never its command, address, header or value; a hook's command is shown cut to 200 characters and
+masked, or withheld when it looks like a secret; a skill's one-line description is dropped when it
+does. A skill's text is read only when the person presses on it, by its source and name and not by a
+path, as a plain file inside its source after symbolic links are resolved, up to 64 KB with
+control characters removed, and is refused whole when it looks like it holds a secret. Whether a plugin's
+marketplace holds a newer version is read from the copy on disk, with no connection; the plugin's
+`/handbook:status` does the same and prints the handbooks it found. Writes there are the person's own, each after a press that says first what it will do: Claude
+Code's own commands for a plugin (install, update, turn on or off, remove, from fixed argument lists
+with a name checked against what was read), and the person's own skill or command file, which is shown
+as a change with the path it writes before Save, is refused when it looks like it holds a secret, and
+is never written over a stale one. The one place typed text reaches a command is adding an MCP
+server on the person's own orchestrator: its name, address or command and its arguments, and the
+names and values of its variables or headers are checked one by one and handed to `claude mcp add`
+as an argument list with no shell, the command after `--`; the values are in Claude Code's process
+arguments while it runs, as when typed in a terminal, are kept by Claude Code in its own settings and
+never by the orchestrator, and appear in no log, event or answer. A team's orchestrator adds no
+server that needs a value. Removing one runs `claude mcp remove` for the scope it names,
+and cannot be undone from here. The orchestrator keeps three records for each person, by names
+and counts only, and deletes them with the account: the skills, commands and servers they left out of
+agents started here (`handbook-off:`), the information lines they closed (`handbook-noticed:`) and
+the context their last task measured (`handbook-context:`). A task records sources, skills and servers to leave out of that task alone, validated by
+source id and name, and nothing in the person's own Claude Code is changed by it.
+On a task that runs on a person's machine, the list travels in the task's description and the
+machine turns it into names by reading that person's own folders there, so no orchestrator reads
+their home; the machine leaves them out through the task's own settings layer and start flags, never
+the person's `~/.claude`, a run whose agent cannot leave out one of those names does not start, and
+one whose agent reports loading such a name anyway stops before its first step. Each skill or MCP
+server the agent calls is reported with the source the machine read it from, a folder named from
+the home and never by its path on the machine.
+On a team's orchestrator the same reading, the same plugin commands and the same changes to the
+person's own skill and command files happen on their own machine, through its runner, at their press:
+the orchestrator sends a fixed kind of ask and a name, never a command or a path, the runner checks
+the name again, builds the arguments itself with no shell, reads only through its own folder rule,
+and names a folder in its answer from the home; the team's orchestrator reads and writes no home.
+
+**Undoing from a turn.** The snapshots are those of "A task's turns" below. Only the person who
+started the task undoes from a turn, once the task has stopped, and the turns after it go too while
+the conversation stays. In a folder it is done in place, under the folder's lock, leaving a file
+changed since; on a request it is one commit on the request's branch, never forced, which is
+checked again like any push to it. A turn on a machine is undone only by a runner that says it can.
+Each undo is in the task's log and the event log, with the person's one line of why when they gave
+one.
 
 **A folder of several repositories.** On your own machine a task in a folder that holds several
 repositories works on a copy of each one's last commit, not the live folder: each copy is a bare
@@ -1539,7 +1611,26 @@ admins, whoever started it, and a member it was shared with; anyone else gets th
 and "unknown task" for its id, the answer an id that does not exist gets. Only whoever started a
 task or edits its team shares it, and only with an active member of the same organization, for
 reading: a share never lets its reader stop, keep, undo or answer anything, nor pass the task on,
-and each share and its end are in the organization's log. A teammate who reviews a task's request
+and each share and its end are in the organization's log. A message to a running task that the
+agent has not read yet is the starter's alone to change or take back, never a teammate's or a
+reader's; a changed message and its quotes are masked again as when they were first sent, and each
+change and removal is in the event log, by length and not by text. One the agent has read is
+neither changed nor removed. An orchestrator only its person uses copies its database to its data folder once a day and keeps
+the last seven, on that disk, holding the database alone: not the person's own folders, which stay
+where they are, and not `secret.key`; `handbook-orchestrator backup` asks the running orchestrator
+for one more, over loopback with the secret in the data folder, so no signal is sent and no other
+user or page can ask. The copies are not sent anywhere, and `ORCHESTRATOR_BACKUP_DIR` can put them on another
+disk of the same machine. On a local orchestrator a person may subscribe their own browsers (at
+most five) to notices sent with the page closed: the push key is made on first use and sealed in
+the vault, each message is encrypted for that browser and carries only the task's id and its state
+(needs review, asking, failed or interrupted), a subscription reaches only the person who made it,
+and a message is sent once for each change of state to the browser vendor's push service, never
+retried; a team's orchestrator sends none. A follow-up after a Keep, or on a folder, starts from what the last
+run left; when that run changed no file, what the agent answered then goes into the next prompt
+quoted as data and masked as the rest of the log is. The search finds a task by its title or its issue key, among the tasks a person may
+read only: for words of three characters or more it also reads what the agent said or ran in
+the last 30 days, from the log as it was stored, already masked, and shows those tasks as "in its
+log". A teammate who reviews a task's request
 can suggest a follow-up; it reaches the agent only after the person who started the task continues
 the task with it, fenced as data like the starter's own words, the starter can dismiss it, it lapses
 once the request is merged or closed, and the log names both people. The browser suite keeps a team to its owners and checks that a
@@ -1629,7 +1720,49 @@ offered only the repositories they can start on.
   and gives that folder to the agent for reading only: Claude Code gets it with `--add-dir` and every
   edit or write into it denied, and under Run as me the orchestrator's guard refuses a write outside
   the tree as well. The prompt names each file, quoted as data. The folder goes with the task's
-  folder when the task ends. A connected machine is not handed attachments yet.
+  folder when the task ends. A connected machine is handed the files' ids and names in its lease, never
+  their bytes, and fetches each over its signed link into its own folder for the task; a file it
+  cannot fetch is logged and the agent does not see it. A file is a PNG, JPEG, GIF, WebP, PDF, text
+  or JSON, up to 10 MB, 20 to a task and 1 GiB to an organization, checked by its first bytes; text
+  and JSON are scanned for a secret and refused when one is found, images and PDFs are not read.
+  Its download address is signed with `ORCHESTRATOR_SECRET_KEY` and lasts 15 minutes. A file uploaded
+  for a task its person is about to start is kept under that person alone, no task's and no one
+  else's; a start takes only its starter's own uploads from the last hour, before any runner can
+  take the task, and one older than that is removed at the person's next upload or by the
+  orchestrator's cleanup. Files sent with a follow-up are the task's own attachments only; a run
+  that started with attachments gets them copied into the same read-only folder before the words
+  reach the agent, and a run that started without one gets them with its next run, since no
+  folder is opened to an agent after it starts.
+- *A question about an issue.* A task started as a question runs with no shell and no tool that
+  edits or writes a file, and is told to change nothing; a change it makes anyway is refused in a
+  checkout and taken back in a folder without git, and the task fails. An MCP tool is closed to
+  a question too unless its name says it reads (get, list, search, read and their like): the
+  team's servers hand it their reading tools alone, and as you the guard refuses every other MCP
+  tool whatever your own rules allow. That is read off the tool's name, so a tool named as one
+  that reads and writing all the same is not caught, and what it does is not undone. On a person's
+  machine its runner writes the same guard, and a runner older than it is not handed a question.
+  A question whose agent changed files there all the same ends failed on the orchestrator, with
+  none of it kept and no request opened; what it changed stays on that machine, which the task
+  says.
+- *A task that repeats.* On a person's own orchestrator a task can start again at a time of day
+  they pick, at most once a day and at most 20 at once. The start it repeats, its title, its
+  description and any issue link among it, is kept in the orchestrator's database until the
+  person stops it, and it starts as that person through the same checks, limits and approvals as
+  a task they start by hand. A time passed while the orchestrator was not running is not run late.
+- *A second sign-in.* On a person's own orchestrator they can name, under Settings, a second
+  Claude Code profile folder of their own; none is named until they do. A task stopped at its usage
+  limit goes on with it only when they click to, and only on this machine. The orchestrator never
+  reads, copies or keeps anything in that folder: it starts Claude Code with the folder as its
+  profile (`CLAUDE_CONFIG_DIR`), the agent's file tools are refused inside it, and the run is a new
+  session whose stream says "Continued with your second sign-in." Clearing the setting stops a
+  task marked for it from starting with it.
+- *A task's turns.* Each of the person's asks starts a snapshot of where the agent works, kept in
+  the orchestrator's data directory and nowhere else: nothing is written into the person's
+  repository or sent to a forge, a file that looks like a secret is kept as its digest alone, and a
+  task keeps at most 50. Only the task's starter undoes from a turn or starts a task from one. The
+  snapshots are removed when the task's log would be, when its starter's account is gone, and when
+  no task is theirs any more, at the orchestrator's start and every hour. A folder on a person's
+  machine keeps its turns on that machine.
 - *A task with no agent.* The scaffold refresh and the switch to versioning by commit are
   the plugin's own `upgradeCandidates`, run by the orchestrator in the task's checkout: nothing is
   started there, and no credential is handed to anything. It writes only the files the
@@ -1704,6 +1837,7 @@ offered only the repositories they can start on.
   carrying one is refused. A value shorter than 8 characters, too short to mask without masking
   ordinary text, refuses the task instead. Only the names are recorded, in the task log and the audit log. A
   name the orchestrator also passes refuses the task rather than letting either value win silently.
+- **A secret the agent asks for is given only by the task's starter and is never written into the conversation by the orchestrator.** When the agent asks for a value by name, the task page shows a card with that name and the agent's reason. Only the person who started the task answers it, from their own signed-in browser: no API key, no MCP tool and no teammate can. A name the orchestrator or the system sets, or one the task already has, is refused, and so is a value shorter than 8 characters or longer than 8 KB. The value goes from the browser to the vault, sealed for that task alone; the request's answer, the task log, the audit log and the conversation record only the name and who gave it. It lives for the run the agent asked in: that run gets it as a file named after the secret, readable only by the task's user, in the task's own folder outside the working tree, never committed or pushed, and from then on it is masked in the run's log and every process's output, and the run's change and its commit messages are checked for it before the value is deleted, and one that carries it is refused; its request text is masked; the tool that asked returns the name and how to use it in a command, never the value. A later run does not see it, and the agent asks again. A task running on a person's machine cannot ask for a secret yet. Declining gives the agent nothing. The value is deleted from the vault, and the file, when that run ends, fails, is cancelled or is interrupted, on the orchestrator's start-up sweep and its sweep of expired leases, and when the account is deleted.
 - **A task secret kept in 1Password is read by the orchestrator alone.** A task secret that names
   an item (`op://vault/item/field`) keeps the reference, sealed in the vault in the value's place.
   The orchestrator's own `op` CLI reads the value when a task starts and whenever a branch a
@@ -1731,7 +1865,8 @@ offered only the repositories they can start on.
   plugins, hooks and MCP servers, as their own sessions do, the TeamHandbook plugin's hooks
   included, and writes its transcript into their profile as theirs do. Only their user settings
   load, until the person says that they trust a folder they opened themselves, once per project
-  and off until they do, on the task's page (**Use them** or **Keep them off**): a folder's settings can run programs and send the model
+  and off until they do, on the task's page (**Use them** or **Keep them off**; a folder with no
+  `.claude/settings.json` or `.claude/settings.local.json` is not asked, since trusting it would load nothing): a folder's settings can run programs and send the model
   and the sign-in elsewhere (`apiKeyHelper`, `env`), and print mode asks nobody whether to trust
   them. Only the person who opened the folder answers (the owner of a one-person orchestrator, or
   the machine's person), the audit log records each answer, and a clone the orchestrator or the
@@ -1749,7 +1884,13 @@ offered only the repositories they can start on.
   decides nothing, and Full access runs as Auto. The shell is the person's, as in their own sessions:
   Bash runs in Auto and is asked about on the card in a mode that asks, unless the team's rules deny
   it, and the web is left to the person's own permission rules. The guard's deny rules on reading
-  hold for Claude Code's file tools; a shell command reads what the person's account reads. The orchestrator's guard is a settings layer of
+  hold for Claude Code's file tools; a shell command reads what the person's account reads. A
+  second Claude Code sign-in the person names in Settings (the folder of a profile of their own,
+  off until named) lets a task that reached its usage limit go on: the orchestrator starts Claude
+  Code with that folder as its config folder and reads, copies and writes nothing in it, the file
+  tools are denied reading or writing there, the task's stream says it went on with the second
+  sign-in, and the session goes on fresh, since a session one sign-in kept is in that sign-in's
+  folder. The orchestrator's guard is a settings layer of
   its own, from the task's directory and never the profile: deny rules keep the agent's file tools
   out of the guard, the person's Claude Code settings and `.git` folders, its reads out of the
   person's `~/.ssh`, `~/.aws`, `gh` and `glab` sign-ins, `~/.netrc` and Claude Code's own `~/.claude` and `~/.claude.json` (not other places a cloud or tool keeps a sign-in, which a shell reads as the account does) and out of the orchestrator's data folder beside the
@@ -1787,6 +1928,20 @@ offered only the repositories they can start on.
   read as files, never through `claude mcp list`, which connects to each one. No command, argument,
   address, header, value, path or account is kept, logged or answered, and claude.ai's connectors
   are not listed.
+- **A task starts without what its person keeps off, and with everything else of theirs.** A
+  start that names nothing to leave out takes the person's own list of the skills, commands and
+  MCP servers the agents started here go without; one that names it, an empty list included,
+  holds as sent. The orchestrator turns off nothing the person installed: a plugin that brings
+  hooks or an MCP server is said on the page, never held back from a task. What a task leaves
+  out goes into the task's own settings layer and its denied tools, never into the person's
+  Claude Code settings, and a run whose agent says it loaded one of them all the same stops
+  before its first step. What the agent says it loaded as its session opens (the names of its
+  plugins, skills and MCP servers and each server's state) is kept on the task, so its page says
+  where that differs from what the task was to start with; and in a run as the person, Claude
+  Code is asked once, with no model turn, how much of the context each MCP server and skill
+  takes, and those names and counts are kept as the person's last measure until their next task
+  and deleted with their account. The agent's names are held as data: printable, cut and
+  counted, and none is read as an instruction.
 - **A task's agent writes nothing to the organization's tracker.** An MCP tool named for an issue
   tracker or its wiki (Jira, Confluence and the rest of Atlassian's, issues and worklogs), on any
   server and whatever the server is called, that does not start with a reading verb is refused

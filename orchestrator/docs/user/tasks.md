@@ -126,7 +126,8 @@ failed at the next start. When the store refuses a task's outcome, as it does on
 agent filled, the outcome is written again once the task's directories are deleted.
 
 Tasks start in the order they were asked for, `ORCHESTRATOR_TASK_CONCURRENCY` at a time; a waiting
-task shows its place in line. Cancelling a waiting task takes it out of the line before it
+task shows its place in line, and on your own orchestrator, when it waits on the one task running
+that is itself waiting for your answer, it says "Starts once you answer" and names that task. Cancelling a waiting task takes it out of the line before it
 starts; cancelling a running one ends its agent's whole process group and deletes its
 directories, and no branch is left: the branch only reaches the team repository with its
 request, after the agent and the tests. A cancel that arrives while that request is being
@@ -150,27 +151,72 @@ own data, never in the folder ([SECURITY.md](../../../SECURITY.md), "A folder wi
 a folder past its limits does not start. The folder's own MCP servers stay off, and the team's
 policy holds as in a checkout: an edit it refuses is taken back.
 
-The task ends in `needs-review` with **Changes** on its page: each file the agent
+A run that changes no file ends as **finished, nothing changed**: its page says "The agent finished in <time> without changing a file", shows the agent's last words under **The agent's answer**, and offers **Run again**; it sits under **Done this week**. A run that changed something ends in `needs-review` with **Changes** on its page: each file the agent
 changed and its diff. The person who started it answers once: **Keep these changes** leaves the
 files as the agent left them, and **Undo these changes…** asks first, then puts each one back as
 it was before the task; a file you edited since stays as you left it and is named, and a file
 kept only by its digest (one named like a key or a password file) cannot be put back. The answer
 goes to the task's log and the audit log, and the task then reads **changes kept** or **changes
-undone** (see [The screens](screens.md#the-screens)). **Make this a Git repository**, on the project's **Settings** tab, starts
+undone** (see [The screens](screens.md#the-screens)). **Discard these changes…** drops a run's change before you decide: "This drops the agent's change; your checkout stays as it is.", or after an earlier Keep, "This drops this run's change; what you kept before stays, and your checkout stays as it is." **Make this a Git repository**, on the project's **Settings** tab, starts
 Git in the folder without adding or committing a file; the task's review then offers **Commit
 these changes**, and later tasks run as in any Git repository. What tasks changed in your folders, and every request, waits
 under **Your turn** on Tasks.
+
+### A task that repeats
+
+On your own orchestrator, **More options** on the new task form can repeat the task: every day, every
+weekday or one day of the week, at a time on your clock, at most once a day, and twenty repeats at most.
+Under **Repeats** on Tasks each repeat is listed with **Stop repeating…**; every run is an ordinary task in
+the list, started as you through the same start, under the same limits and approvals. A run whose time
+passed while the orchestrator was not running is not started late; the repeat says so in one line.
+
+### What a task starts with
+
+On the new task form, "This task will use your default setup, 12 items" folds the list Your handbooks
+shows; opened, it says "Only for this task. Your default stays the same." You can switch a plugin, or a
+skill, command or server of yours or the folder's, for this task alone; a change is tagged **Changed**,
+the line reads "2 changes from your default", and **Reset** returns to the default. Change the default
+on Team. A plugin that runs hooks or servers you have not looked at shows its notice and never blocks
+the start.
+
+After it runs, the task page's **Started with** block says what the agent started with ("12 skills,
+3 plugins, 4 MCP servers, CLAUDE.md"), which items it used and from where ("add-endpoint from
+payments-skills"), and folds **Loaded** and **Off for this task**. An item that was off and loaded anyway
+reads **Loaded, though off**, and a plugin that was on and did not load, "<name> was on and did not load."
+When you corrected a task (undid its change or denied a request), a team skill it used offers **Improve this
+skill…**, which asks first and starts an Improve a skill task on the team's repository; a plugin's
+skill offers **Copy to Yours**.
+
+### Files for a task
+
+On the new task form, **Attach files**, a drop or a paste puts a chip under the field with the name and
+size, **Sending…**, or **Not sent** with **Try again**; × removes it. A file is a PNG, JPEG, GIF,
+WebP, PDF, text (`.txt`, `.md`, `.log`) or JSON, up to 10 MB, and a task takes up to 20. The task's
+page lists them under **Files** in its rail, "The agent reads them; they are not part of its
+change." The agent is given the folder to read, never to write, and the files are not in the diff
+or the request. Text that looks like it holds a secret is refused ("take it out and attach it
+again"). A file you attached but did not start a task with is yours alone and removed at your next
+upload after an hour. The follow-up boxes take files the same way. Attachments need
+`ORCHESTRATOR_SECRET_KEY`.
 
 ### A follow-up
 
 The person who started a task writes to its agent from the task's page, from their own signed-in
 browser. While the agent works, **Tell the agent while it works** (**Send**) reaches it at once and
 **Message for the agent** (**Queue message**) waits for its current step to end. When the task is
-in review and its request is still open, **Continue with a follow-up** (**Start the next run**)
-sends it back to work: a new run on the request's branch, from where the branch is now, held to the
-same rights and policies as a start, and its new push goes onto the same request, checked again
-before it merges. A merged or closed request takes no more. Lines selected in the request's
-changes go with the follow-up as quotes.
+in review, or after you kept its change, **Continue with a follow-up** (**Start the next run**)
+sends it back to work, held to the same rights and policies as a start. With the request still
+open the new run goes on the request's branch and its new push goes onto the same request, checked
+again before it merges. After a Keep, or a merge, the new run starts from the kept change on a
+branch of its own, and its new changes come back for review. In a folder without Git, and on your
+own orchestrator, the note reads "A new run starts where this one left off, with your words, and
+its changes join this review." The same goes for a folder of several repositories, each
+repository going on from what the last run left. A task that finished with nothing changed takes a
+follow-up too, and its next run hears the agent's answer, fenced as data, with your words. A
+closed request, undone changes, a task from a template, a delegated child and, on a person's
+machine, a folder of several repositories whose runner is older than the follow-up take none.
+Lines selected in the request's changes, or in the agent's words or the log, go with the
+follow-up as quotes, and files can go with it.
 
 A teammate who reviews a task's request writes **Suggest a follow-up to <starter>** instead
 (**Suggest**). It waits under **Suggested follow-ups** on the task's page and puts the task in its
@@ -191,7 +237,7 @@ and the lessons its review left. On your own orchestrator, once a task ends, wha
 (a follow-up while it ran, with the lines it quoted, a tool call you denied with a note, and the one
 line you give when you undo a change in a folder without Git) goes to
 the task's agent as one question with no tool, and the answer is no lesson or a draft skill. Each is fenced as data, and words
-that match a secret drop the lesson. A draft waits in your own review queue and reaches nobody.
+that match a secret drop the lesson. A draft waits in your own review queue and reaches nobody; a draft with no "Use when…" trigger in its description, or a body under 40 characters, is dropped as weak before it gets there.
 Each pending lesson opens in its own fold with what it would teach, what you said and the skill's
 text: **Keep** copies it into your own skills folder, **Reject** turns it down and **Never suggest
 it again** mutes it; sharing a kept skill with the team stays in `/handbook:review`. On a team's
@@ -412,10 +458,11 @@ unless `ORCHESTRATOR_TASK_PROFILE=isolated` says otherwise; elsewhere `ORCHESTRA
 turns it on. Run as me runs your own Claude Code: your settings, memory, CLAUDE.md, skills,
 plugins, hooks and MCP servers load as in your own sessions, plus the team's skills for the task.
 A folder's own project and local settings load only in a folder without Git you opened yourself,
-and only once you trust it, asked once per project and off until then, since a folder's settings
+that has `.claude/settings.json` or `.claude/settings.local.json`, and only once you trust it, asked once per project and off until then, since a folder's settings
 can run programs and send the model and your sign-in elsewhere (`apiKeyHelper`, `env`). The task's
 page asks in its rail, under **This folder's settings**, only the person who opened the folder and
-only until they answer: **Use them** loads them for the next tasks there, **Keep them off** keeps
+only until they answer (a folder with no settings of its own is not asked, since trusting it would
+load nothing): **Use them** loads them for the next tasks there, **Keep them off** keeps
 them off; the task that asks runs without them. A copy the orchestrator cloned loads your user
 settings alone either way. In a Git repository the task gets its own
 checkout and ends in a request nobody merges for you; in a folder without Git it works in the
@@ -440,7 +487,7 @@ It is refused, and tasks do not run, unless the orchestrator listens on this mac
 (`ORCHESTRATOR_HOST` loopback) and has one account, across every organization it serves, and no
 service account; the readiness check
 says which condition failed. It needs `ORCHESTRATOR_TASK_ISOLATION=process`, since no container has
-your sign-in. OpenCode runs this way too, as a session of its own `opencode serve` on 127.0.0.1
+your sign-in. OpenCode runs this way too (and **Continue** goes on in the same OpenCode session, with the task's rules given again), as a session of its own `opencode serve` on 127.0.0.1
 behind a password made for the task, with your OpenCode sign-in; its rules go with the session,
 so no setting of yours outranks them, and they deny the shell and the web, anything outside the
 task's folder and every tool named for a tracker or a forge, and ask you before any other tool. The task form and the readiness check say

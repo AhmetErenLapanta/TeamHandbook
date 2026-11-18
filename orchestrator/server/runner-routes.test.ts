@@ -19,7 +19,8 @@ import { dirname, join } from "node:path";
 import { ATTACHMENT_LIMITS, attachmentPath } from "./attachments.js";
 import { ON_A_MACHINE, syncRepo } from "./app.js";
 import { eventOf, organizationRunners } from "./runner-routes.js";
-import { checksOnMachine, pushOnMachine } from "./machine-folders.js";
+import { checksOnMachine, pushOnMachine, setupOnMachine } from "./machine-folders.js";
+import { handbookNoticed } from "./handbook-defaults.js";
 import { TODOS_MAX } from "../shared/runner-wire.js";
 import { refreshRequest } from "./propose.js";
 import { newId } from "./ids.js";
@@ -194,6 +195,56 @@ describe("a machine's calls to a team's orchestrator", () => {
     expect(sent.status).toBe(204);
     expect((await store.getTask(TENANT, "tsk_max"))?.mcpNeedsSignIn).toEqual(["gitlab", "notion"]);
     expect(await store.taskLog(TENANT, "tsk_max", 0)).toEqual([]);
+  });
+
+  it("given a machine's turns of a change in its folder, one well formed with a token in its words and ones with a bad snapshot or count, when each arrives, then the first is kept masked and the others are left out", () => {
+    // given
+    const sha = (c: string) => c.repeat(40);
+    const mask = (text: string) => text.replace("ghp_secret", "[redacted]");
+
+    // when
+    const read = [
+      { type: "turn", n: 2, said: "Use ghp_secret to deploy", start: sha("a"), end: sha("b"), files: 3 },
+      { type: "turn", n: 2, said: "x", start: "not-a-sha", end: sha("b"), files: 3 },
+      { type: "turn", n: 0, said: "x", start: sha("a"), end: sha("b"), files: 3 },
+      { type: "turn", n: 2, said: "x", start: sha("a"), end: sha("b"), files: -1 },
+    ].map((e) => eventOf(e, mask));
+
+    // then
+    expect(read).toEqual([{ type: "turn", n: 2, said: "Use [redacted] to deploy", start: sha("a"), end: sha("b"), files: 3 }, null, null, null]);
+  });
+
+  it("given a machine's skill calls carrying sources, when they arrive, then a source in a known form and named from the home is kept with its label, and one naming a path on the machine, an unknown form or a label with a control character is left out of the call", () => {
+    // given
+    const call = (source: string, sourceLabel: string) => ({ type: "tool_call", tool: "Skill", target: "rota-check", status: "started", source, sourceLabel });
+
+    // when
+    const read = [call("folder:~/notes", "notes"), call("plugin:payments-skills@acme-market", "payments-skills 1.4.0"), call("folder:/home/stand-in/notes", "notes"), call("somewhere", "x"), call("yours", "Yours\u001b[2J")].map((e) => eventOf(e, (text) => text));
+
+    // then
+    expect(read.map((e) => (e?.type === "tool_call" ? e.source ?? null : "dropped"))).toEqual(["folder:~/notes", "plugin:payments-skills@acme-market", null, null, null]);
+    expect(read[1]).toMatchObject({ sourceLabel: "payments-skills 1.4.0" });
+  });
+
+  it("given a machine's report of what its agent loaded and what each part of its context costs, when they arrive, then the names are masked and kept with their states and counts, a kind the agent did not report stays unreported, and one with a state or count that does not read is left out", () => {
+    // given
+    const mask = (text: string) => text.replace("stand-in-secret", "[redacted]");
+
+    // when
+    const read = [
+      { type: "loaded", plugins: ["payments-skills@acme-market"], skills: null, mcpServers: [{ name: "stand-in-secret-docs", state: "needs-sign-in" }] },
+      { type: "loaded", plugins: [], skills: [], mcpServers: [{ name: "docs", state: "sleeping" }] },
+      { type: "context_parts", mcpServers: [{ name: "docs", tokens: 4_200 }], skills: [{ name: "rota-check", tokens: 310 }] },
+      { type: "context_parts", mcpServers: [{ name: "docs", tokens: -1 }], skills: [] },
+    ].map((e) => eventOf(e, mask));
+
+    // then
+    expect(read).toEqual([
+      { type: "loaded", plugins: ["payments-skills@acme-market"], skills: null, mcpServers: [{ name: "[redacted]-docs", state: "needs-sign-in" }] },
+      null,
+      { type: "context_parts", mcpServers: [{ name: "docs", tokens: 4_200 }], skills: [{ name: "rota-check", tokens: 310 }] },
+      null,
+    ]);
   });
 
   it("given a machine's running estimate of a turn's cost, when it arrives, then a finite amount of zero or more is taken and any other is left out", () => {
@@ -463,7 +514,7 @@ describe("a question a machine's agent asks its person", () => {
 });
 
 describe("the live task's events from a machine", () => {
-  it("given a team secret and a machine reporting a command, its output, an edit, a to-do list longer than the screen shows and the team's tests on a team's orchestrator, and then an edit outside the folder beside a message and an edit of a credential file, two follow-ups that reached the agent and three tool calls, an MCP tool's with its server, a refused one with its reason and one with a reason of no kind it knows, when they arrive, then each is kept in its own fields and masked, the agent's own output keeps no line, the tests' does, the list keeps its first items, the edit outside the folder is left out while the message beside it is kept, a credential file's edit keeps no patch, and a follow-up that reached the agent is kept masked with its sender while one with no sender's address is left out", async () => {
+  it("given a team secret and a machine reporting a command, its output, an edit, a to-do list longer than the screen shows and the team's tests on a team's orchestrator, and then an edit outside the folder beside a message and an edit of a credential file, two follow-ups that reached the agent and three tool calls, an MCP tool's with its server, a refused one with its reason and one with a reason of no kind it knows, the agent's context use and a plan window's share used each with one that does not read, when they arrive, then each is kept in its own fields and masked, the agent's own output keeps no line, the tests' does, the list keeps its first items, the edit outside the folder is left out while the message beside it is kept, a credential file's edit keeps no patch, and a follow-up that reached the agent is kept masked with its sender while one with no sender's address is left out", async () => {
     // given
     vi.stubEnv("ORCHESTRATOR_MODE", "self-hosted");
     const { store, ctx, owner, maxs } = await organization();
@@ -483,7 +534,7 @@ describe("the live task's events from a machine", () => {
 
     // when
     const sent = await maxs(RUNNER_PATHS.events("tsk_max"), { leaseId: lease.leaseId, events: events.map((event, i) => ({ n: i + 1, event })) });
-    const outside = await maxs(RUNNER_PATHS.events("tsk_max"), { leaseId: lease.leaseId, events: [{ n: 6, event: { type: "edit", id: "c3", path: "../elsewhere/x.md", additions: 1, deletions: 0 } }, { n: 7, event: { type: "message", text: "edited the runbook" } }, { n: 8, event: { type: "edit", id: "c4", path: "config/.env", additions: 1, deletions: 0, patch: "+REGISTRY_URL=https://registry.example.invalid" } }, { n: 9, event: { type: "steer", text: `publish with ${value}`, by: "ada@example.invalid" } }, { n: 10, event: { type: "steer", text: "too long a name", by: "x".repeat(321) } }, { n: 11, event: { type: "tool_call", id: "c5", tool: "mcp__docs__search", target: null, status: "done", mcp: { server: `docs-${value}`, tool: "search" } } }, { n: 12, event: { type: "tool_call", id: "c6", tool: "mcp__tracker__comment", target: null, status: "refused", mcp: { server: "tracker" }, refusal: { kind: "tracker-write", reason: `the team's tracker is written by people, not ${value}` } } }, { n: 13, event: { type: "tool_call", id: "c7", tool: "Bash", target: null, status: "refused", refusal: { kind: "no-such-kind", reason: "x" } } }] });
+    const outside = await maxs(RUNNER_PATHS.events("tsk_max"), { leaseId: lease.leaseId, events: [{ n: 6, event: { type: "edit", id: "c3", path: "../elsewhere/x.md", additions: 1, deletions: 0 } }, { n: 7, event: { type: "message", text: "edited the runbook" } }, { n: 8, event: { type: "edit", id: "c4", path: "config/.env", additions: 1, deletions: 0, patch: "+REGISTRY_URL=https://registry.example.invalid" } }, { n: 9, event: { type: "steer", text: `publish with ${value}`, by: "ada@example.invalid" } }, { n: 10, event: { type: "steer", text: "too long a name", by: "x".repeat(321) } }, { n: 11, event: { type: "tool_call", id: "c5", tool: "mcp__docs__search", target: null, status: "done", mcp: { server: `docs-${value}`, tool: "search" } } }, { n: 12, event: { type: "tool_call", id: "c6", tool: "mcp__tracker__comment", target: null, status: "refused", mcp: { server: "tracker" }, refusal: { kind: "tracker-write", reason: `the team's tracker is written by people, not ${value}` } } }, { n: 13, event: { type: "tool_call", id: "c7", tool: "Bash", target: null, status: "refused", refusal: { kind: "no-such-kind", reason: "x" } } }, { n: 14, event: { type: "context_used", tokens: 48_000, window: 200_000 } }, { n: 15, event: { type: "context_used", tokens: -1, window: null } }, { n: 16, event: { type: "limit", window: "seven_day", status: "warning", resetAt: "2026-11-18T10:00:00Z", used: 0.83 } }, { n: 17, event: { type: "limit", window: "five_hour", status: "allowed", used: 5000 } }] });
 
     // then
     expect([sent.status, outside.status]).toEqual([204, 204]);
@@ -495,12 +546,14 @@ describe("the live task's events from a machine", () => {
     expect(kept[3]).toMatchObject({ type: "edit", id: "c2", path: "docs/runbook.md", additions: 3, deletions: 1 });
     const todos = (kept[4] as { type: string; items: { text: string; state: string }[] });
     expect([todos.type, todos.items.length, todos.items[0]!.state, todos.items[1]]).toEqual(["todos", TODOS_MAX, "doing", { text: "step 0", state: "todo" }]);
-    expect(kept.map((k) => (k as { type: string }).type)).toEqual(["tool_call", "tool_output", "tool_output", "edit", "todos", "message", "edit", "steer", "tool_call", "tool_call", "tool_call"]);
+    expect(kept.map((k) => (k as { type: string }).type)).toEqual(["tool_call", "tool_output", "tool_output", "edit", "todos", "message", "edit", "steer", "tool_call", "tool_call", "tool_call", "limit"]);
     expect(kept[6]).toEqual({ type: "edit", id: "c4", path: "config/.env", additions: 1, deletions: 0 });
     expect(kept[7]).toEqual({ type: "steer", text: expect.any(String), by: "ada@example.invalid" });
     expect(kept[8]).toEqual({ type: "tool_call", id: "c5", tool: "mcp__docs__search", target: null, status: "done", mcp: { server: expect.not.stringContaining(value), tool: "search" } });
     expect(kept[9]).toEqual({ type: "tool_call", id: "c6", tool: "mcp__tracker__comment", target: null, status: "refused", refusal: { kind: "tracker-write", reason: expect.not.stringContaining(value) } });
     expect(kept[10]).toEqual({ type: "tool_call", id: "c7", tool: "Bash", target: null, status: "refused" });
+    expect((await store.getTask(TENANT, "tsk_max"))?.contextUsed).toEqual({ tokens: 48_000, window: 200_000 });
+    expect(kept[11]).toEqual({ type: "limit", window: "seven_day", status: "warning", resetAt: "2026-11-18T10:00:00Z", used: 0.83 });
   });
 });
 
@@ -666,6 +719,73 @@ describe("a machine's folders, listed for its own person", { timeout: 120_000 },
     expect(await second).toEqual({ unread: expect.stringMatching(/answered with something other than a push/) });
   });
 
+  it("given Max's screen asking his machine for his Claude Code's sources, when it answers, then the sources come back as sent, and an answer naming a path on the machine or one that is not what was asked is not taken", async () => {
+    // given
+    const { ctx, store, ids, maxs } = await organization();
+    const [machine] = await store.listMachines(TENANT, ids.max);
+    const source = (id: string) => ({ id, kind: id === "yours" ? "yours" : "folder", name: "notes", enabled: true, skills: [{ name: "rota-check", description: "Check the rota." }], commands: [], mcpServers: [{ name: "docs" }], hooks: [] });
+    await maxs(RUNNER_PATHS.poll, { waitMs: 0, canTake: false });
+    const ask = async (answer: unknown) => {
+      const reading = setupOnMachine(ctx, machine!.id, { want: "sources", folder: { projectId: "notes", path: "~/notes", trusted: false } });
+      const { setups } = await (await maxs(RUNNER_PATHS.poll, { waitMs: 5_000, canTake: false })).json();
+      const sent = await maxs(RUNNER_PATHS.setups(setups[0].nonce), { answer });
+      return { setups, status: sent.status, read: await reading };
+    };
+
+    // when
+    const good = await ask({ sources: [source("yours"), source("folder:~/notes")] });
+    const pathOfMachine = await ask({ sources: [source("folder:/home/stand-in/notes")] });
+    const another = await ask({ deleted: true });
+
+    // then
+    expect(good.setups).toEqual([{ nonce: expect.any(String), want: "sources", folder: { projectId: "notes", path: "~/notes", trusted: false } }]);
+    expect(good.read).toEqual({ sources: [source("yours"), source("folder:~/notes")] });
+    expect([pathOfMachine.status, pathOfMachine.read]).toEqual([400, { unread: expect.stringMatching(/answered with something other than what was asked/) }]);
+    expect([another.status, another.read]).toEqual([204, { unread: expect.stringMatching(/answered with something other than what was asked/) }]);
+  });
+
+  it("given Max's Team page on a team's server, when it reads his handbooks from his machine and Lee asks for Max's machine, then Max gets his machine's sources and Lee is refused before anything is asked", async () => {
+    // given
+    const { store, ids, maxs, browse } = await organization();
+    const [machine] = await store.listMachines(TENANT, ids.max);
+    const source = { id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "rota-check", description: "Check the rota." }], commands: [], mcpServers: [], hooks: [] };
+    await maxs(RUNNER_PATHS.poll, { waitMs: 0, canTake: false });
+
+    // when
+    const reading = browse(ids.max, `/api/handbook/sources?machine=${machine!.id}`);
+    const { setups } = await (await maxs(RUNNER_PATHS.poll, { waitMs: 5_000, canTake: false })).json();
+    await maxs(RUNNER_PATHS.setups(setups[0].nonce), { answer: { sources: [source] } });
+    const read = await (await reading).json();
+    const fromLee = await browse(ids.lee, `/api/handbook/sources?machine=${machine!.id}`);
+
+    // then
+    expect(setups).toEqual([{ nonce: expect.any(String), want: "sources", folder: null }]);
+    expect(read).toMatchObject({ available: true, sources: [source], machine: machine!.name });
+    expect(fromLee.status).toBe(404);
+  });
+
+  it("given Max with a machine and the owner with none on a team's server, when each reads their own off list and Max puts away a plugin's notice through his machine, then Max's list and notice are kept for him and the owner's list is not offered", async () => {
+    // given
+    const { store, ids, maxs, browse, send } = await organization();
+    const [machine] = await store.listMachines(TENANT, ids.max);
+    const plugin = { id: "plugin:docs-kit@payments-market", kind: "plugin", name: "docs-kit", version: "2.0.0", marketplace: "payments-market", enabled: true, skills: [], commands: [], mcpServers: [{ name: "wiki" }], hooks: [{ name: "Stop", commands: ["echo done"] }] };
+    await maxs(RUNNER_PATHS.poll, { waitMs: 0, canTake: false });
+
+    // when
+    const maxList = await browse(ids.max, "/api/handbook/defaults");
+    const ownerList = await browse(ids.owner, "/api/handbook/defaults");
+    const noticing = send(ids.max, `/api/handbook/noticed?machine=${machine!.id}`, { plugin: plugin.id });
+    const { setups } = await (await maxs(RUNNER_PATHS.poll, { waitMs: 5_000, canTake: false })).json();
+    await maxs(RUNNER_PATHS.setups(setups[0].nonce), { answer: { sources: [plugin] } });
+    const noticed = await noticing;
+
+    // then
+    expect([maxList.status, await maxList.json()]).toEqual([200, { off: { skills: [], commands: [], mcpServers: [] } }]);
+    expect(ownerList.status).toBe(404);
+    expect([noticed.status, await noticed.json()]).toEqual([200, { noticed: "docs-kit@payments-market@2.0.0" }]);
+    expect(await handbookNoticed(store, TENANT, ids.max)).toEqual(new Set(["docs-kit@payments-market@2.0.0"]));
+  });
+
   async function inPlaceOnMachine(root: string, changed: string, outcome: Record<string, unknown> = {}) {
     vi.stubEnv("ORCHESTRATOR_MODE", "self-hosted");
     const org = await organization({ dataDir: join(root, "data"), wired: true });
@@ -709,6 +829,38 @@ describe("a machine's folders, listed for its own person", { timeout: 120_000 },
       expect(await store.getTask(TENANT, taskId)).toMatchObject({ status: "failed", error: `${editRefusal([{ action: "tool.use", resource: "tool:Edit:*.env", effect: "deny", reason: "env files are set by the platform team" }], ["deploy.env"], "/home/someone/notes")!.replace(/ No request was opened\.$/, "")} Its change is being undone on the machine.`, changes: { files: changes.files, undone: { by: "orchestrator", kept: [] } } });
       expect(undos).toEqual([{ nonce: expect.any(String), projectId: "notes", path: "~/notes", before: changes.before, after: changes.after }]);
       expect(answered.status).toBe(204);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("given a task in a folder of Max's machine with two turns, when Max undoes from the second on a runner that knows turns and on one that does not, then the old runner is refused, the new one is asked from that turn and the change left stays for review", async () => {
+    // given
+    const root = mkdtempSync(join(tmpdir(), "runner-in-place-"));
+    try {
+      const { store, ids, send, maxs, taskId, changes } = await inPlaceOnMachine(root, "notes.md");
+      const agents = [{ id: "claude-code", installed: true, version: "2.1.316", supported: "ok", signIn: "signed-in" }];
+      for (const [n, start, end] of [[1, "a", "c"], [2, "c", "b"]] as const) {
+        await store.openTaskTurn({ tenant: TENANT, taskId, n, at: new Date().toISOString(), said: n === 1 ? "Add a note" : "Add a second line", place: "machine", start: start.repeat(40) });
+        await store.endTaskTurn(TENANT, taskId, n, end.repeat(40), 1);
+      }
+
+      // when
+      await maxs(RUNNER_PATHS.status, { agents, features: ["workspace-continues"] });
+      const old = await send(ids.max, `/api/tasks/${taskId}/turns/2/undo`, { commandId: "cmd-turn-old-1" });
+      await maxs(RUNNER_PATHS.status, { agents, features: ["workspace-continues", "turn-undo"] });
+      const undoing = send(ids.max, `/api/tasks/${taskId}/turns/2/undo`, { commandId: "cmd-turn-new-1" });
+      const { undos } = await (await maxs(RUNNER_PATHS.poll, { waitMs: 5_000, canTake: false })).json();
+      const left = [{ path: "notes.md", status: "added", previousPath: null, additions: 1, deletions: 0, binary: false, test: false }];
+      await maxs(RUNNER_PATHS.undo(undos[0].nonce), { answer: { undone: ["notes.md"], kept: [], left: 1, after: "d".repeat(40), files: left } });
+      const undone = await undoing;
+
+      // then
+      expect([old.status, (await old.json()).code]).toEqual([409, "machine-too-old"]);
+      expect(undos).toEqual([{ nonce: expect.any(String), projectId: "notes", path: "~/notes", before: changes.before, after: changes.after, from: { start: "c".repeat(40), end: "b".repeat(40) } }]);
+      expect((await undone.json()).turns).toMatchObject([{ n: 1, undone: false }, { n: 2, undone: true }]);
+      expect((await store.getTask(TENANT, taskId))!.changes).toMatchObject({ files: left, undone: null });
+      expect(await store.taskChangeSnapshots(TENANT, taskId)).toEqual({ before: changes.before, after: "d".repeat(40) });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,10 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MiddlewareHandler } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { seed } from "../../demo/seed.js";
-import { createApp, syncRepo } from "../app.js";
+import { createApp } from "../app.js";
 import type { OrchestratorContext } from "../app.js";
 import { principalOf, setupFirstOwner } from "../accounts.js";
 import type { OrchestratorEnv, Principal } from "../auth.js";
@@ -29,22 +28,25 @@ const as = (user: Principal): MiddlewareHandler<OrchestratorEnv> => async (c, ne
   await next();
 };
 
-/** A finished task on the seeded Payments repository, and the app that serves it. */
+/**
+ * A task that finished for review on the Payments repository, with its log and its open request, written as a run leaves
+ * them, and the app that serves it. No agent runs: what the stream reads is the record, and a run under load took most of
+ * this file's time.
+ */
 async function finished() {
   const root = mkdtempSync(join(tmpdir(), "orchestrator-task-events-"));
   dirs.push(root);
-  const { configFile } = seed(join(root, "demo"));
-  const config = JSON.parse(readFileSync(configFile, "utf8"));
-  const ctx: OrchestratorContext = { store: openSqliteStore(":memory:"), dataDir: join(root, "data"), tenant: config.tenant };
+  const ctx: OrchestratorContext = { store: openSqliteStore(":memory:"), dataDir: join(root, "data"), tenant: "acme" };
   await storePrincipals(ctx, ADMIN);
-  const entry = config.repos.find((r: { id: string }) => r.id === "payments-skills");
-  await ctx.store.upsertRepo({ ...entry, tenant: config.tenant });
-  await syncRepo(ctx, "payments-skills");
   ctx.tasks = createTaskRunner(ctx, { agents: [fakeAgentAdapter(FAKE_AGENT)], isolation: { mode: "process", network: "open" }, testCommand: () => null, hostEnv: { PATH: process.env.PATH } });
-  const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
-  const task = await ctx.tasks.start({ repo, title: "Add a note", description: "", agent: "fake", user: ADMIN });
-  await ctx.tasks.idle();
-  return { ctx, app: createApp(ctx, as(ADMIN)), id: task.id };
+  // The runner's start puts right what an earlier one left, a stage among it; the task below is written after it.
+  await ctx.tasks.ready();
+  const at = new Date().toISOString();
+  const id = newId("tsk");
+  await ctx.store.createTask({ tenant: ctx.tenant, id, repoId: "payments-skills", team: "Payments", title: "Add a note", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "needs-review", createdBy: ADMIN.email, createdAt: at, startedAt: at, finishedAt: at, baseSha: "0".repeat(40), tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: 1, error: null });
+  await ctx.store.appendTaskLog(ctx.tenant, id, ["Checked out payments-skills at 0000000.", "Starting the demo agent.", "The agent changed 1 file(s): notes.md", "Opened request #1 on task/add-a-note. It waits for a person to review and merge it."]);
+  await ctx.store.saveRequest({ tenant: ctx.tenant, repoId: "payments-skills", number: 1, provider: "local", url: "local://requests/payments-skills/1", branch: "task/add-a-note", headSha: "a".repeat(40), title: "Add a note", status: "open", createdAt: at, createdBy: ADMIN.email });
+  return { ctx, app: createApp(ctx, as(ADMIN)), id };
 }
 
 /** The stream's events in order, read until the orchestrator closes it. */

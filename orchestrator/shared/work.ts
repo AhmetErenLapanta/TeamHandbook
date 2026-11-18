@@ -86,10 +86,12 @@ export interface WorkItem {
   blocked?: boolean;
   /** The orchestrator tasks started from this issue that this person sees, newest first. */
   tasks: WorkTaskLink[];
+  /** The latest question asked about this issue, a task that reads and changes nothing; absent when none was. */
+  asked?: { taskId: string; at: string };
 }
 
 /** Where an orchestrator task stands, as the server works it out from the task and its requests. */
-export type TaskPhase = "planned" | "working" | "tests" | "request" | "review" | "merged" | "failed";
+export type TaskPhase = "planned" | "working" | "tests" | "request" | "review" | "merged" | "failed" | "finished";
 
 export interface WorkTaskLink {
   taskId: string;

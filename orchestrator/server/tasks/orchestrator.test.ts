@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MiddlewareHandler } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
-import { createUser } from "../accounts.js";
+import { createUser, principalOf } from "../accounts.js";
+import { giveTaskSecret, secretsForTask } from "../task-secrets.js";
+import { createVault } from "../vault.js";
 import { createApp, syncRepo } from "../app.js";
 import type { OrchestratorContext } from "../app.js";
 import type { OrchestratorEnv, Principal } from "../auth.js";
@@ -55,13 +57,28 @@ async function denyGrepOnPayments(ctx: OrchestratorContext, root: string): Promi
   await syncRepo(ctx, "payments-skills");
 }
 
-async function delegating({ grepDenied = false } = {}): Promise<{ ctx: OrchestratorContext; parent: TaskRecord; root: string; token: () => Promise<string>; call: (token: string, method: string, params?: unknown) => Response | Promise<Response> }> {
+/**
+ * A stand-in agent that, once released, reads the secret its task was given from the file the test names,
+ * says it in its log and writes it into its change: what a careless agent does with a value.
+ */
+const leaking = (dir: string) => [
+  'import { existsSync, readFileSync, writeFileSync } from "node:fs";',
+  `const dir = ${JSON.stringify(dir)};`,
+  'writeFileSync(`${dir}/${process.env.TEAMHANDBOOK_TASK}.token`, process.env.TH_ORCHESTRATOR_TOKEN ?? "");',
+  'while (!existsSync(`${dir}/release`)) await new Promise((r) => setTimeout(r, 50));',
+  'const value = readFileSync(readFileSync(`${dir}/secret-file`, "utf8"), "utf8");',
+  'console.log(JSON.stringify({ type: "log", text: `deploying with ${value}` }));',
+  'writeFileSync("note.md", `token: ${value}\\n`);',
+  'console.log(JSON.stringify({ type: "result", summary: "Added a note." }));',
+].join("\n");
+
+async function delegating({ grepDenied = false, agentProgram = program } = {}): Promise<{ ctx: OrchestratorContext; parent: TaskRecord; root: string; token: () => Promise<string>; call: (token: string, method: string, params?: unknown) => Response | Promise<Response> }> {
   const { ctx, root } = await seededContext("orchestrator-orchestrator-", ["payments-skills", "platform-skills"]);
   dirs.push(root);
   const ada = await createUser(ctx.store, ctx.tenant, new Set(["Payments", "Platform"]), { email: "ada@example.invalid", name: "Ada Example", role: "admin" }, OWNER);
   if (grepDenied) await denyGrepOnPayments(ctx, root);
   const agent = join(root, "holding-agent.mjs");
-  writeFileSync(agent, program(root));
+  writeFileSync(agent, agentProgram(root));
   const stand = fakeAgentAdapter(agent);
   // What each task's agent was given to deny, by task, for a test to read.
   const recording: AgentAdapter = { ...stand, configure: async (paths, setup) => { writeFileSync(join(root, `${paths.root.split("/").pop()}.denied`), JSON.stringify(setup.deniedTools ?? [])); await stand.configure(paths, setup); } };
@@ -144,6 +161,42 @@ describe("a task's agent and the orchestrator's tools", { timeout: 120_000 }, ()
     // then
     expect(more.result).toMatchObject({ isError: true, content: [{ text: `a task delegates at most ${MAX_CHILD_TASKS} tasks` }] });
     expect(await ctx.store.taskChildren(ctx.tenant, parent.id)).toHaveLength(MAX_CHILD_TASKS);
+  });
+
+  it("given a running task whose agent asks for a secret, when its starter gives it and the agent prints it and writes it into its change, then the agent learns only where it is, the file is its own, the line is masked, the change is refused and the value is gone at the end", async () => {
+    // given
+    const { ctx, parent, root, token, call } = await delegating({ agentProgram: leaking });
+    ctx.vault = createVault(Buffer.alloc(32, 7));
+    const bearer = await token();
+    const value = "deploy-value-0123456789abcdef";
+    const user = await principalOf(ctx.store, (await ctx.store.listUsers(ctx.tenant)).find((u) => u.email === "ada@example.invalid")!);
+
+    // when
+    const asking = call(bearer, "tools/call", { name: "request_secret", arguments: { name: "DEPLOY_TOKEN", why: "The release step pushes with it." } });
+    let card;
+    while (!(card = (await ctx.store.taskRequests(ctx.tenant, parent.id)).find((r) => r.kind === "secret"))) await new Promise((r) => setTimeout(r, 50));
+    await giveTaskSecret(ctx, user, parent.id, card.id, value);
+    const told = await text(await asking);
+    const file = (told.use as string).match(/\$\(cat ([^)]+)\)/)![1]!;
+    const kept = { value: readFileSync(file, "utf8"), mode: statSync(file).mode & 0o777 };
+    writeFileSync(join(root, "secret-file"), file);
+    writeFileSync(join(root, "release"), "");
+    await ctx.tasks!.idle();
+
+    // then
+    expect(card.payload).toEqual({ name: "DEPLOY_TOKEN", why: "The release step pushes with it." });
+    expect(told).toMatchObject({ given: true, name: "DEPLOY_TOKEN" });
+    expect(JSON.stringify(told)).not.toContain(value);
+    expect(kept).toEqual({ value, mode: 0o600 });
+    expect(file.includes(`${join(parent.id, "work")}`)).toBe(false);
+    const log = (await ctx.store.taskLog(ctx.tenant, parent.id, 0)).map((l) => l.text).join("\n");
+    expect(log).toContain("deploying with");
+    expect(log).not.toContain(value);
+    const ended = (await ctx.store.getTask(ctx.tenant, parent.id))!;
+    expect(ended.status).toBe("failed");
+    expect(ended.requestNumber).toBeNull();
+    expect(await secretsForTask(ctx, ended.repoId, ended.team, undefined, ended.id)).toEqual([]);
+    expect(existsSync(file)).toBe(false);
   });
 
   it("given a task with a child still running, when the task is cancelled, then the child is cancelled with it and the task's token no longer opens the server", async () => {

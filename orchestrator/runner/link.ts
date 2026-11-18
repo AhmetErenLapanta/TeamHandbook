@@ -6,6 +6,10 @@ import type { ChangedFile } from "../server/forge/request-diff.js";
 import type { FollowUpRecord } from "../server/task-followups.js";
 import type { PolicyRule } from "../server/plugin.js";
 import type { MachineMcpServer } from "./machine-mcp.js";
+import type { TaskOff } from "../server/tasks/handbook-use.js";
+import type { HandbookSource, SkillRead } from "../server/tasks/handbook-sources.js";
+import type { FileKind } from "../server/tasks/handbook-files.js";
+import type { PluginOp, PluginOpResult } from "../server/tasks/plugin-install.js";
 import type { MachineAgentStatus, RunnerEvent } from "../server/runner-store.js";
 import type { TaskCost, TestOutcome } from "../server/tasks/types.js";
 import type { VerifyPlan } from "../server/tasks/verify.js";
@@ -33,6 +37,7 @@ interface WorkCommon {
   choices: AgentChoices | null;
   /** The agent plans first and changes nothing until its starter approves the plan. */
   planFirst?: boolean;
+  readOnly?: true;
   /** The task's attachments by id, which the machine fetches into the task's own folder for the agent to read; never their bytes. */
   attachments?: { id: string; name: string; kind: "image" | "pdf" | "text" }[];
   /**
@@ -51,6 +56,7 @@ interface WorkCommon {
     folderSettings?: boolean;
     /** The project's servers by template: each value names variables of the person's own environment, never one of the organization's. */
     mcpServers?: Record<string, MachineMcpServer>;
+    off?: TaskOff;
   };
   limits: {
     timeoutMs: number;
@@ -139,10 +145,11 @@ export interface UndoAsk {
   path: string;
   before: string;
   after: string;
+  from?: { start: string; end: string };
 }
 
 /** The files put back and the ones kept because the person changed them since, or why nothing was undone. */
-export type UndoAnswer = { undone: string[]; kept: string[] } | { refused: string };
+export type UndoAnswer = { undone: string[]; kept: string[]; left?: number; after?: string; files?: ChangedFile[] } | { refused: string };
 
 /** A folder project's checks, read off the folder on this machine for the screen that approves them. */
 export interface ChecksAsk {
@@ -165,6 +172,29 @@ export interface PushAsk {
 
 export type PushAnswer = { pushed: true } | { refused: string };
 
+export interface SetupFolder {
+  projectId: string;
+  path: string;
+  trusted: boolean;
+}
+
+export type SetupAsk = { nonce: string } & SetupWant;
+
+export type SetupWant =
+  | { want: "sources"; folder: SetupFolder | null }
+  | { want: "skill"; source: string; name: string; folder: SetupFolder | null }
+  | { want: "plugin"; op: PluginOp; plugin: string }
+  | { want: "file"; act: "read" | "write" | "delete"; source: string; kind: FileKind; name: string; content?: string; expectedDigest?: string | null; folder: SetupFolder | null };
+
+export type SetupAnswer =
+  | { sources: HandbookSource[] }
+  | SkillRead
+  | PluginOpResult
+  | { content: string | null; digest: string | null }
+  | { digest: string }
+  | { deleted: true }
+  | { refused: string; detail?: string };
+
 /** A lesson from a task of this machine's person, for their own review queue: its makings, which the machine reads, builds and screens itself. */
 export interface LessonAsk {
   nonce: string;
@@ -172,7 +202,7 @@ export interface LessonAsk {
 }
 
 /** The name the lesson was queued under, why the plugin's own rules left it out, or why nothing was written. */
-export type LessonAnswer = { slug: string } | { dropped: "secret" | "muted" | "duplicate" } | { refused: string };
+export type LessonAnswer = { slug: string } | { dropped: "secret" | "muted" | "duplicate" | "weak" } | { refused: string };
 
 /** Its person, on the task's page, reading or deciding a lesson this machine holds from that task. */
 export interface LessonOpAsk {
@@ -189,13 +219,13 @@ export type LessonOpAnswer =
   | { refused: string };
 
 /** A follow-up the person sent a running task, as the agent is given it. */
-export type RelayedFollowUp = Pick<FollowUpRecord, "id" | "source" | "text" | "quotes" | "createdBy">;
+export type RelayedFollowUp = Pick<FollowUpRecord, "id" | "source" | "text" | "quotes" | "createdBy" | "attachments">;
 
 /** What the orchestrator hands a runner between leases: a person's answer, a follow-up, or a Stop. */
 export type RunnerCommand =
   | { type: "answer"; taskId: string; requestId: string; decision: Decision; note?: string; answers?: AgentAnswers; plan?: string }
   | { type: "follow_up"; taskId: string; followUp: RelayedFollowUp }
-  | { type: "stop"; taskId: string };
+  | { type: "stop"; taskId: string; idle?: true };
 
 
 export type { RunnerEvent };
@@ -232,6 +262,12 @@ export interface TaskOutcome {
   /** For a run interrupted at its plan's usage limit: when the agent says the limit resets, so the task goes on then. */
   limitResetAt?: string;
   /**
+   * A run that ended with nothing changed, sent with status "failed" so an orchestrator from before reads it as it did; one
+   * that knows the flag ends the task as finished with nothing changed, `lastSaid` its answer.
+   */
+  nothingChanged?: true;
+  lastSaid?: string;
+  /**
    * A run in a folder holding several repositories (the person's one working folder): each
    * repository the agent changed, by its path under that folder, with the task's branch, the commit
    * it pushed and the base it started from, the remote it went to (null when the repository has none,
@@ -258,7 +294,7 @@ export interface RunnerLink {
    * there. A runner already running a task says so with `canTake` false and gets commands only.
    * An aborted poll gives up its wait and takes no lease.
    */
-  poll(waitMs: number, canTake: boolean, signal: AbortSignal): Promise<{ lease: Lease | null; commands: RunnerCommand[]; folders?: FolderAsk[]; undos?: UndoAsk[]; lessons?: LessonAsk[]; checks?: ChecksAsk[]; lessonOps?: LessonOpAsk[]; pushes?: PushAsk[] }>;
+  poll(waitMs: number, canTake: boolean, signal: AbortSignal): Promise<{ lease: Lease | null; commands: RunnerCommand[]; folders?: FolderAsk[]; undos?: UndoAsk[]; lessons?: LessonAsk[]; checks?: ChecksAsk[]; lessonOps?: LessonOpAsk[]; pushes?: PushAsk[]; setups?: SetupAsk[] }>;
   /** False once the lease is no longer this runner's. */
   renew(taskId: string, leaseId: string): Promise<boolean>;
   events(taskId: string, leaseId: string, events: NumberedEvent[]): Promise<void>;
@@ -284,6 +320,7 @@ export interface RunnerLink {
   /** The answer to one read or decision of a lesson a poll handed; absent on the runner inside a local orchestrator. */
   lessonOp?(nonce: string, answer: LessonOpAnswer): Promise<void>;
   push?(nonce: string, answer: PushAnswer): Promise<void>;
+  setup?(nonce: string, answer: SetupAnswer): Promise<void>;
   /** That these follow-ups reached the agent, so none is handed or shown as waiting again. */
   followUpsDelivered?(taskId: string, leaseId: string, ids: string[]): Promise<void>;
   /** One of the task's attachments, its bytes, for a machine away from the orchestrator. */

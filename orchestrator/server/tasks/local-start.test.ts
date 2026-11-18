@@ -1,7 +1,10 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MiddlewareHandler } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
+import { createVault } from "../vault.js";
+import { draftOf } from "../attachments.js";
 import { createUser } from "../accounts.js";
 import { createApp } from "../app.js";
 import { localMachine } from "../local.js";
@@ -416,6 +419,79 @@ describe("a task for the starter's own machine", { timeout: 120_000 }, () => {
 
     // then
     expect([await read(leased.id), await read(here.id)]).toEqual([20 * 60_000, 20 * 60_000]);
+  });
+
+  it("given a person's own orchestrator and a task this machine stopped at its usage limit, when they name a second sign-in and continue with it, then neither is taken where their own Claude Code is not this machine's, a path that is not a folder is refused, the continue is refused until one is named, and then the task goes back in line marked to use it", async () => {
+    // given
+    const { ctx, app, post, start } = await withRunners();
+    ctx.mode = "local";
+    const own = await localMachine(ctx.store, ctx.tenant, ADMIN);
+    const profile = mkdtempSync(join(tmpdir(), "th-second-profile-"));
+    dirs.push(profile);
+    const fresh = await start();
+    const task = await start();
+    const now = Date.now();
+    await ctx.store.claimLocalTask(ctx.tenant, ADMIN.email, own.id, "lease_limit", new Date(now + 90_000).toISOString(), new Date(now).toISOString());
+    await ctx.store.finishLeasedTask(ctx.tenant, fresh.id, "lease_limit", { status: "interrupted", error: "The demo agent reached its usage limit.", nativeSession: null, branch: null, limitResetAt: new Date(now + 3_600_000).toISOString() }, new Date(now).toISOString());
+    const limits = (secondSignIn: unknown) => app.request("/api/settings/task-limits", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ maxUsd: 10, maxMinutes: 60, secondSignIn }) });
+    const goOn = (id: string, commandId: string) => post(`/api/tasks/${id}/continue`, { commandId, secondSignIn: true });
+
+    // when
+    const fromNetwork = await limits(profile);
+    const continuedFromNetwork = await goOn(fresh.id, "second-sign-in-0");
+    ctx.ownForgeCli = true;
+    const relative = await limits("profiles/second");
+    const missing = await limits(join(profile, "not-there"));
+    const early = await goOn(fresh.id, "second-sign-in-1");
+    const named = await limits(profile);
+    const notAtLimit = await goOn(task.id, "second-sign-in-2");
+    const went = await goOn(fresh.id, "second-sign-in-3");
+
+    // then
+    expect([fromNetwork.status, continuedFromNetwork.status, (await continuedFromNetwork.json()).code]).toEqual([400, 409, "not-own-machine"]);
+    expect([relative.status, missing.status, early.status, named.status, notAtLimit.status, went.status]).toEqual([400, 400, 409, 200, 409, 200]);
+    expect([(await early.json()).code, (await notAtLimit.json()).code]).toEqual(["no-second-sign-in", "not-at-limit"]);
+    expect((await named.json()).secondSignIn).toBe(profile);
+    expect(await statusOf(ctx, fresh.id)).toMatchObject({ status: "queued", secondSignIn: true });
+  });
+
+  it("given a file its starter uploaded before starting, when the start names it, then the task holds it before any runner can take the task, and a start naming a file that is not theirs starts nothing", async () => {
+    // given
+    const { ctx, post } = await withRunners();
+    ctx.vault = createVault(Buffer.alloc(32, 5));
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("a screenshot")]);
+    const uploaded = await (await createApp(ctx, as(ADMIN)).request("/api/attachments", { method: "POST", body: new Uint8Array(png), headers: { "content-type": "image/png", "x-attachment-name": "screen.png" } })).json();
+    const before = (await ctx.store.listTasks(ctx.tenant)).length;
+
+    // when
+    const refused = await post("/api/tasks", { repoId: "payments-skills", title: "Add a note", agent: "fake", attachments: ["att_not_theirs"] });
+    const started = (await (await post("/api/tasks", { repoId: "payments-skills", title: "Add a note", agent: "fake", attachments: [uploaded.attachment.id] })).json()).task as { id: string };
+
+    // then
+    expect([refused.status, (await refused.json()).code]).toEqual([400, "attachment-unknown"]);
+    expect((await ctx.store.listTasks(ctx.tenant)).length).toBe(before + 1);
+    expect((await ctx.store.taskAttachments(ctx.tenant, started.id)).map((a) => [a.id, a.name])).toEqual([[uploaded.attachment.id, "screen.png"]]);
+    expect(await ctx.store.taskAttachments(ctx.tenant, draftOf(ADMIN))).toEqual([]);
+  });
+
+  it("given a person's own orchestrator running one task that waits on their answer to a card, when a second task in line is read, then it says which task it waits behind, and once the card is answered it says none", async () => {
+    // given
+    const { ctx, app, start } = await withRunners();
+    ctx.mode = "local";
+    const first = await start();
+    const second = await start();
+    await ctx.store.updateTask(ctx.tenant, first.id, { status: "running" });
+    await ctx.store.recordTaskRequest({ tenant: ctx.tenant, id: "req_behind", taskId: first.id, targetPosition: null, sourceKey: "behind-1", kind: "command", payload: { tool: "Bash", summary: "npm test" }, createdAt: new Date().toISOString(), expiresAt: null });
+    const read = async () => (await (await app.request(`/api/tasks/${second.id}`)).json()).task.waitingBehind;
+
+    // when
+    const waiting = await read();
+    await ctx.store.answerTaskRequest(ctx.tenant, "req_behind", { decision: "allow_once" }, ADMIN.email, "web", new Date().toISOString());
+    const answered = await read();
+
+    // then
+    expect(waiting).toEqual({ id: first.id, title: "Add a note" });
+    expect(answered).toBeUndefined();
   });
 
   it("given a task at work on its starter's machine, when they send it a message, then it waits for the agent's turn to end there, and an agent only a machine runs is offered the same", async () => {

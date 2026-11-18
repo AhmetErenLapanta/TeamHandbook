@@ -19,6 +19,8 @@ export interface BoardCard {
   state?: TaskState; forge?: TaskForge | null;
   agent: string; startedAt: string | null; issueKey: string | null;
   reason?: string | null;
+  ranMs?: number;
+  waitingBehind?: { id: string; title: string } | null;
 }
 /** `byRepo`: each repository's tasks waiting on the reader and at work, for the rail; a task over several counts in each. */
 export interface TaskBoard { sections: Record<Turn, BoardCard[]>; counts: Record<Turn, number>; byRepo?: Record<string, { yours: number; agents: number }> }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MiddlewareHandler } from "hono";
@@ -9,6 +9,7 @@ import { createApp, syncRepo } from "../app.js";
 import type { OrchestratorContext } from "../app.js";
 import type { OrchestratorEnv, Principal } from "../auth.js";
 import { git } from "../git.js";
+import { saveHandbookOff } from "../handbook-defaults.js";
 import { claudeArgvStandIn, copyOf, seededContext, storePrincipals } from "../test-fixtures.js";
 import { claudeCodeAdapter, fakeAgentAdapter } from "./agents.js";
 import type { CodeTarget } from "./config.js";
@@ -196,6 +197,99 @@ describe("tasks that run as the orchestrator's user", () => {
     // Auto as the person asks about a tool off its list, so Claude Code starts in its asking mode with questions on stdio.
     expect([argv[argv.indexOf("--permission-mode") + 1], argv[argv.indexOf("--permission-prompt-tool") + 1]]).toEqual(["default", "stdio"]);
     expect(argv[argv.indexOf("--settings") + 1]).toMatch(/\/guard\/personal-settings\.json$/);
+  });
+
+  /**
+   * A stand-in for the claude CLI that keeps, beside its arguments, the settings layer it was started
+   * with, and says in its init frame that it loaded the servers named, as a real session does.
+   */
+  const claudeSettingsStandIn = (dir: string, connected: string[]) => {
+    const bin = join(dir, "claude-settings-stand-in.mjs");
+    writeFileSync(
+      bin,
+      `#!${process.execPath}
+import { readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+if (process.argv[2] === "plugin") { console.log("[]"); process.exit(0); }
+const firstLine = async () => { for await (const line of createInterface({ input: process.stdin })) return line; return ""; };
+const heard = process.argv.includes("--input-format") ? await firstLine() : readFileSync(0, "utf8");
+if (heard.includes("teamhandbook-probe-initialize")) process.exit(0);
+const argv = process.argv.slice(2);
+writeFileSync(process.env.HOME + "/claude-argv.json", JSON.stringify(argv));
+writeFileSync(process.env.HOME + "/claude-settings.json", readFileSync(argv[argv.indexOf("--settings") + 1], "utf8"));
+console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "s", plugins: [], skills: [], mcp_servers: ${JSON.stringify(connected.map((name) => ({ name, status: "connected" })))} }));
+await new Promise((resolve) => setTimeout(resolve, 300));
+writeFileSync(process.env.HOME + "/claude-first-step.txt", "ran");
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 1, result: "Done.", total_cost_usd: 0 }));
+process.exit(0);
+`,
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  };
+  const OFF = { mcpServers: [{ source: "yours", name: "jira" }], skills: [{ source: "yours", name: "add-entity-field" }] };
+
+  it("given a task run as the orchestrator's user that turns a server and a skill of theirs off, when Claude Code starts, then the task's own settings layer leaves them out, its start refuses their calls, the task keeps what its agent said it loaded, and nothing is written into the person's Claude Code profile", async () => {
+    // given
+    const { ctx, root } = await withCode();
+    await storePrincipals(ctx, ADMIN);
+    const profile = join(root, "profile");
+    mkdirSync(profile);
+    runner(ctx, { profile: "personal", hostEnv: { PATH: process.env.PATH, HOME: profile }, agents: [claudeCodeAdapter(claudeSettingsStandIn(root, ["docs"]))] });
+
+    // when
+    const started = await (await start(ctx, { agent: "claude-code", off: OFF })).json();
+    await ctx.tasks!.idle();
+
+    // then
+    expect((await ctx.store.getTask(ctx.tenant, started.task.id))!.startedWith).toEqual({ plugins: [], skills: [], mcpServers: [{ name: "docs", state: "connected" }] });
+    const argv = JSON.parse(readFileSync(join(profile, "claude-argv.json"), "utf8")) as string[];
+    const layer = JSON.parse(readFileSync(join(profile, "claude-settings.json"), "utf8"));
+    expect(layer).toMatchObject({ deniedMcpServers: [{ serverName: "jira" }], skillOverrides: { "add-entity-field": "off" }, disableAllHooks: false });
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toContain("Skill(add-entity-field),mcp__jira__*");
+    expect(argv[argv.indexOf("--settings") + 1]).not.toContain(profile);
+    expect(existsSync(join(profile, ".claude"))).toBe(false);
+    expect(existsSync(join(profile, "claude-first-step.txt"))).toBe(true);
+  });
+
+  it("given a task that turns a server off and a Claude Code that says it loaded that server anyway, when the session opens, then the task stops before the agent's first step and says which one was loaded", async () => {
+    // given
+    const { ctx, root } = await withCode();
+    await storePrincipals(ctx, ADMIN);
+    const profile = join(root, "profile");
+    mkdirSync(profile);
+    runner(ctx, { profile: "personal", hostEnv: { PATH: process.env.PATH, HOME: profile }, agents: [claudeCodeAdapter(claudeSettingsStandIn(root, ["jira"]))] });
+
+    // when
+    const started = await (await start(ctx, { agent: "claude-code", off: OFF })).json();
+    await ctx.tasks!.idle();
+
+    // then
+    const task = (await ctx.store.getTask(ctx.tenant, started.task.id))!;
+    const log = (await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text).join("\n");
+    expect(`${task.error ?? ""}\n${log}`).toContain("Stopped before its first step: jira is off and was loaded anyway.");
+    expect(existsSync(join(profile, "claude-first-step.txt"))).toBe(false);
+  });
+
+  it("given a person who keeps a skill of theirs off for the agents started here, when one task starts saying nothing of it, one starts with a list of its own and one with an empty list, then the first takes their list, the second holds as sent with how far it moved from theirs, and the third leaves nothing out", async () => {
+    // given
+    const { ctx } = await withCode();
+    await storePrincipals(ctx, ADMIN);
+    runner(ctx);
+    await saveHandbookOff(ctx.store, ctx.tenant, ADMIN.id, { skills: [{ source: "yours", name: "add-entity-field" }], commands: [], mcpServers: [] });
+
+    // when
+    const silent = await (await start(ctx, {})).json();
+    const own = await (await start(ctx, { off: { skills: [{ source: "yours", name: "add-entity-field" }], mcpServers: [{ source: "yours", name: "jira" }] } })).json();
+    const none = await (await start(ctx, { off: {} })).json();
+    await ctx.tasks!.idle();
+
+    // then
+    expect(silent.task.off).toEqual({ sources: [], skills: [{ source: "yours", name: "add-entity-field" }], mcpServers: [] });
+    expect(silent.task.offChanges).toBeUndefined();
+    expect(own.task).toMatchObject({ off: { skills: [{ source: "yours", name: "add-entity-field" }], mcpServers: [{ source: "yours", name: "jira" }] }, offChanges: 1 });
+    expect([none.task.off, none.task.offChanges]).toEqual([undefined, 1]);
+    expect((await ctx.store.getTask(ctx.tenant, own.task.id))!.offChanges).toBe(1);
   });
 
   it("given an orchestrator with two accounts, when a task is started as its user, then it is refused before it waits in line", async () => {

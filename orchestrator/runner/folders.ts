@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { listFolders, projectFolder } from "../server/projects.js";
-import { shadowUndo } from "../server/shadow-git.js";
+import { shadowChanges, shadowSnapshot, shadowUndo } from "../server/shadow-git.js";
 import type { ShadowPlace } from "../server/shadow-git.js";
 import type { FolderEntry, FolderList, FolderRefusal } from "../shared/projects.js";
 import { folderReader } from "../server/tasks/verify.js";
@@ -58,12 +58,19 @@ export async function folderPlace(path: string, projectId: string, { home, dataD
 /** A task's change in a folder of this machine put back, as its person asked on the orchestrator's screen: only files still as the task left them. */
 export async function undoInFolder(ask: UndoAsk, where: MachineWhere, working: ReadonlySet<string> = new Set()): Promise<UndoAnswer> {
   // Snapshot ids reach git as words of its command line: anything but an object id could be read as an option.
-  if (![ask.before, ask.after].every((sha) => /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha))) return { refused: "the orchestrator named snapshots this machine does not take" };
+  if (![ask.before, ask.after, ...(ask.from ? [ask.from.start, ask.from.end] : [])].every((sha) => /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha))) return { refused: "the orchestrator named snapshots this machine does not take" };
   const place = await folderPlace(ask.path, ask.projectId, where);
   if ("refused" in place) return place;
   // The orchestrator's own undo waits for the folder's lock; here the task's agent may be writing the same files.
   if (working.has(place.folder)) return { refused: "a task is working in this folder now; undo once it ends" };
-  return shadowUndo(place, ask.before, ask.after);
+  if (!ask.from) return shadowUndo(place, ask.before, ask.after);
+  const undone = await shadowUndo(place, ask.from.start, ask.from.end);
+  if ("refused" in undone) return undone;
+  const now = await shadowSnapshot(place, `after undoing from ${ask.from.start}`);
+  if ("refused" in now) return now;
+  const left = await shadowChanges(place, ask.before, now.sha);
+  if (typeof left === "string") return { refused: left };
+  return { ...undone, left: left.files.length + left.untracked.length, after: now.sha, files: left.files };
 }
 
 /** A folder project's checks as its files name them, read under this machine's own folder rule; nothing is run to find them. */

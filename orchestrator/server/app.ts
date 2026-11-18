@@ -1,6 +1,7 @@
 import { rm, stat } from "node:fs/promises";
 import type { FolderCandidate } from "./tasks/routing.js";
 import { taskShareRoutes } from "./task-shares.js";
+import { handbookRunnerRoutes, handbookTeamRoutes } from "./handbook-team.js";
 import { taskSuggestionRoutes } from "./task-suggestion-routes.js";
 import { machineRoutes, runnerOpenRoutes } from "./machines.js";
 import { runnerRoutes } from "./runner-routes.js";
@@ -12,7 +13,11 @@ import { lessonRoutes } from "./lessons.js";
 import type { LessonPlace } from "./lessons.js";
 import { taskBoardRoutes } from "./task-board.js";
 import { skillOutcomeRoutes } from "./skill-outcomes.js";
+import { handbookUsageRoutes } from "./handbook-usage.js";
 import { teamRoutes } from "./team-routes.js";
+import { pushRoutes } from "./push.js";
+import { costRangeRoutes } from "./cost-range.js";
+import { dataSizeRoutes } from "./data-size.js";
 import { projectRoutes } from "./project-routes.js";
 import { verifyRoutes } from "./tasks/verify-routes.js";
 import { projectGitRoutes } from "./forge/project-git-routes.js";
@@ -396,6 +401,7 @@ export function createApp(ctx: OrchestratorContext, auth: MiddlewareHandler<Orch
   app.route("/", runnerOpenRoutes(ctx));
   // A machine's calls carry its token and signature, never a person's session.
   app.route("/", runnerRoutes(ctx));
+  app.route("/", handbookRunnerRoutes(ctx));
   app.use("/api/*", auth);
   app.route("/", machineRoutes(ctx));
   app.route("/", localFolderRoutes(ctx));
@@ -405,8 +411,12 @@ export function createApp(ctx: OrchestratorContext, auth: MiddlewareHandler<Orch
   app.route("/", lessonRoutes(ctx, ctx.lessons ?? null));
   // Before the task routes, whose /api/tasks/:id would read "board" as a task's id.
   app.route("/", taskBoardRoutes(ctx));
+  app.route("/", costRangeRoutes(ctx));
+  app.route("/", dataSizeRoutes(ctx));
   app.route("/", skillOutcomeRoutes(ctx));
   app.route("/", teamRoutes(ctx));
+  app.route("/", handbookUsageRoutes(ctx));
+  app.route("/", pushRoutes(ctx));
   app.route("/", projectRoutes(ctx));
   app.route("/", verifyRoutes(ctx));
   app.route("/", projectGitRoutes(ctx));
@@ -429,6 +439,7 @@ export function createApp(ctx: OrchestratorContext, auth: MiddlewareHandler<Orch
   app.route("/", taskSecretRoutes(ctx));
   app.route("/", attachmentRoutes(ctx));
   app.route("/", taskShareRoutes(ctx));
+  app.route("/", handbookTeamRoutes(ctx));
   app.route("/", connectRoutes(ctx));
   app.route("/", scimAdminRoutes(ctx));
   app.route("/", privacyRoutes(ctx));
@@ -589,7 +600,7 @@ export function createApp(ctx: OrchestratorContext, auth: MiddlewareHandler<Orch
   });
 
   if (ctx.tasks) app.route("/", taskRoutes(ctx, ctx.tasks));
-  if (ctx.tasks) app.route("/", handbookPluginRoutes(ctx, ctx.tasks));
+  app.route("/", handbookPluginRoutes(ctx, ctx.tasks));
   if (ctx.tasks) app.route("/", taskSuggestionRoutes(ctx, ctx.tasks));
   if (ctx.tasks) app.route("/", reviewRoutes(ctx));
 

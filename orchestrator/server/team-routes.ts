@@ -6,14 +6,14 @@ import type { OrchestratorEnv, Principal } from "./auth.js";
 import { readInventory } from "./inventory.js";
 import type { Inventory } from "./inventory.js";
 import { shownProjects } from "./projects.js";
+import { skillsOf } from "./skill-outcomes.js";
 import { route } from "./route-scopes.js";
 import type { RepoRecord } from "./store.js";
 import { everyTask, visibleTasks } from "./tasks/guards.js";
 
 /*
  * What the Team page reads of the team's repositories in one answer each: what stops teammates,
- * in the setup panel's own words, and what the team shares, by name, with how many tasks were
- * started with it.
+ * in the setup panel's own words, and what the team shares, by name, with how many tasks used it.
  */
 
 export interface TeamProblem {
@@ -71,18 +71,18 @@ export async function teamProblems(ctx: OrchestratorContext, user: Principal): P
   return problems;
 }
 
-/** The skills and MCP servers the team repositories this person reads share, and how many of their tasks in the window were started with each skill. */
+/** The skills and MCP servers the team repositories this person reads share, and how many of their tasks in the window used each skill, picked at the start or called by the agent. */
 export async function teamShared(ctx: OrchestratorContext, user: Principal, days: number, now = Date.now()): Promise<TeamShared> {
   const since = new Date(now - days * 86_400_000).toISOString();
   const tasks = await everyTask(ctx.store, ctx.tenant, { ...visibleTasks(user), since });
-  const started = new Map<string, number>();
-  for (const task of tasks) for (const name of new Set([...(task.skills ?? []), ...(task.tools?.skills ?? []).map((s) => s.name)])) started.set(name, (started.get(name) ?? 0) + 1);
+  const used = new Map<string, number>();
+  for (const task of tasks) for (const name of skillsOf(task)) used.set(name, (used.get(name) ?? 0) + 1);
   const shared: TeamShared = { skills: [], mcpServers: [] };
   for (const repo of (await teamRepos(ctx, user)).filter((r) => r.head)) {
     const read = await inventoryOf(ctx, repo);
     if (!read) continue;
     const at = { repoId: repo.id, repoName: repo.name };
-    for (const skill of read.skills) shared.skills.push({ name: skill.name, slug: skill.slug, ...at, tasks: started.get(skill.slug) ?? started.get(skill.name) ?? 0 });
+    for (const skill of read.skills) shared.skills.push({ name: skill.name, slug: skill.slug, ...at, tasks: used.get(skill.slug) ?? used.get(skill.name) ?? 0 });
     for (const server of read.mcpServers) shared.mcpServers.push({ name: server.name, ...at, tasks: null });
   }
   return shared;

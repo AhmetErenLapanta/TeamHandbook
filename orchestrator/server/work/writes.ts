@@ -1,5 +1,6 @@
 import type { OrchestratorContext } from "../app.js";
 import type { WorkKind } from "../../shared/work.js";
+import { localMode } from "../mode.js";
 
 const NAME: Record<WorkKind, string> = { jira: "Jira", gitlab: "GitLab", github: "GitHub", linear: "Linear" };
 
@@ -20,4 +21,4 @@ export async function saveWrites(ctx: Pick<OrchestratorContext, "store" | "tenan
 }
 
 /** The one line a board says while changing issues is off, naming where it is turned on. */
-export const writesOff = (kind: WorkKind) => `Changing issues in ${NAME[kind]} is off, so a card that moves here changes nothing there. An owner or an admin turns it on under Integrations.`;
+export const writesOff = (kind: WorkKind) => `Changing issues in ${NAME[kind]} is off, so a card that moves here changes nothing there. ${localMode() ? "Turn it on" : "An owner or an admin turns it on"} under Integrations.`;

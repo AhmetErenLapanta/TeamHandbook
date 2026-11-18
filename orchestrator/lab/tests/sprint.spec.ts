@@ -47,8 +47,8 @@ async function connectTracker(admin: OrchestratorClient, token: string): Promise
 const transitions = async () => ((await (await fetch(`${lab.jira!.url}/lab/transitions`)).json()) as { transitions: { key: string; from: string; to: string }[] }).transitions;
 
 const jiraWrites = () => readFileSync(join(lab.dir, "logs", "jira.log"), "utf8").split("\n").filter((l) => l.endsWith(" WRITE"));
-// An issue link is https and carries the key; the orchestrator reads the issue from the tracker it is connected to.
-const linkOf = (key: string) => `https://tracker.example.invalid/browse/${key}`;
+// An issue link carries the key and the address of the tracker the orchestrator is connected to: a link on another host is not read and moves nothing.
+const linkOf = (key: string) => `${lab.jira!.url}/browse/${key}`;
 
 test.describe("a sprint's issues worked by agents side by side", () => {
   test.skip(!org || !lab.jira, "this lab has no organization with code repositories or no stand-in tracker");
@@ -116,7 +116,7 @@ test.describe("a sprint's issues worked by agents side by side", () => {
     const ownerBoards = await owner.ok<{ boards: { id: string }[] }>("GET", "/api/work/boards?source=tracker");
 
     // then
-    expect(sources.find((x) => x.id === "tracker")).toMatchObject({ via: "token", can: { write: false }, writeProblem: "The organization's Jira token has no permission to move issues", problem: null });
+    expect(sources.find((x) => x.id === "tracker")).toMatchObject({ via: "token", can: { write: false }, writeProblem: "Changing issues in Jira is off, so a card that moves here changes nothing there. An owner or an admin turns it on under Integrations.", problem: null });
     expect(board.type).toBe("scrum");
     expect(columns.map((c) => c.name)).toEqual(["Ready for Dev", "In Dev", "Code Review", "Ready for Test", "In Test", "Test Passed", "Done"]);
     expect([active.name, sprints.map((x) => x.state).sort()]).toEqual(["Customers Sprint 14", ["active", "future"]]);
@@ -176,7 +176,8 @@ test.describe("a sprint's issues worked by agents side by side", () => {
     const owner = await as(org!, ownerKey("Customers"));
     const wanted = { started: "In Dev", requestOpened: "Code Review" };
 
-    // when the tracker reads only
+    // when an admin has turned changing issues on (it is off until they do) and the tracker reads only
+    await admin.ok("PUT", "/api/integrations/writes", { on: true });
     const offered = await admin.ok<{ enabled: boolean; guessed: boolean; write: { allowed: boolean; reason: string | null }; moves: Record<string, string> }>("GET", `/api/work/moves?board=${BOARD}`);
     const refusedOn = await admin.call<{ error?: string }>("PUT", `/api/work/moves?board=${BOARD}`, { enabled: true, moves: wanted });
 
@@ -211,6 +212,7 @@ test.describe("a sprint's issues worked by agents side by side", () => {
       }
     } finally {
       await admin.call("PUT", `/api/work/moves?board=${BOARD}`, { enabled: false, moves: wanted });
+      await admin.call("PUT", "/api/integrations/writes", { on: false });
       await connectTracker(admin, lab.jira!.token);
       await fetch(`${lab.jira!.url}/lab/move`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: SPRINT_ISSUE.key, status: "Ready for Dev" }) });
     }
@@ -240,8 +242,8 @@ test.describe("a sprint's issues worked by agents side by side", () => {
     // "Done picking" once the results' button is told apart from the board's Done column; "Done" before.
     await page.getByRole("region", { name: /^Start agents/ }).getByRole("button", { name: /^Done( picking)?$/ }).click();
     const card = board.getByRole("listitem", { name: /^HOO-413 / });
-    await expect(card.getByRole("link", { name: /Agent (queued|working)|Request in review/ })).toBeVisible({ timeout: 60_000 });
-    await expect(card.getByRole("link", { name: "Request in review" })).toBeVisible({ timeout: 180_000 });
+    await expect(card.getByRole("link", { name: /waiting its turn|working|needs you|in review/ })).toBeVisible({ timeout: 60_000 });
+    await expect(card.getByRole("link", { name: /needs you|in review/ })).toBeVisible({ timeout: 180_000 });
   });
 
   test("given the sprint board in the browser, when the team's owner picks the sprint's three issues and starts their agents together, then all three start, the board shows each card's agent, and the three run side by side to their requests", async ({ page }) => {
@@ -273,7 +275,7 @@ test.describe("a sprint's issues worked by agents side by side", () => {
     }
     try {
       // then
-      for (const key of ["HOO-412", "HOO-413", "HOO-414"]) await expect(board.getByRole("listitem", { name: new RegExp(`^${key} `) }).getByRole("link", { name: /Agent (queued|working)|Request in review/ })).toBeVisible();
+      for (const key of ["HOO-412", "HOO-413", "HOO-414"]) await expect(board.getByRole("listitem", { name: new RegExp(`^${key} `) }).getByRole("link", { name: /waiting its turn|working|needs you|in review/ })).toBeVisible();
       expect(cards.map((c) => [c.key, c.tasks[0]?.status])).toEqual([["HOO-412", "needs-review"], ["HOO-413", "needs-review"], ["HOO-414", "needs-review"]]);
       expect(most, "agents seen running at once").toBeGreaterThan(1);
     } finally {

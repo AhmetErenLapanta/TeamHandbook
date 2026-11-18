@@ -108,14 +108,14 @@ test.describe("a folder with no Git on a person's connected machine", () => {
     const connected = await connectedFolder(page);
     try {
       // then
-      expect(connected.machine.trapped()).toEqual([]);
+      expect(connected.machine.trapped().filter((call) => !["--version", "auth list"].includes(call.args))).toEqual([]);
       expect(connected.runner.said()).toContain(`This machine is connected to ${connected.tenant} as ${MACHINE}.`);
     } finally {
       await connected.stop();
     }
   });
 
-  test("given a person's connected machine and a folder of it with no Git opened as a project, when they start a task there, then the agent edits the folder in place on the machine, the task's page draws Review changes with the file and its diff, the folder holds no .git and its record is in the machine's data, and Undo on that page puts the folder back byte for byte", async ({ page }) => {
+  test("given a person's connected machine and a folder of it with no Git opened as a project, when they start a task there, then the agent edits the folder in place on the machine, the task's page draws Review changes naming the file whose patch stays on the machine, the folder holds no .git and its record is in the machine's data, and Undo on that page puts the folder back byte for byte", async ({ page }) => {
     test.setTimeout(600_000);
     // given
     const connected = await connectedFolder(page);
@@ -134,21 +134,21 @@ test.describe("a folder with no Git on a person's connected machine", () => {
       expect(existsSync(join(folder, ".git"))).toBe(false);
       const machineData = process.platform === "darwin" ? join(connected.machine.home, "Library", "Application Support", "TeamHandbook Orchestrator") : join(connected.machine.home, ".local", "share", "teamhandbook-orchestrator");
       expect(existsSync(join(machineData, "runner", "machines", connected.tenant, "shadow", connected.projectId, "HEAD"))).toBe(true);
-      expect(connected.machine.trapped()).toEqual([]);
+      expect(connected.machine.trapped().filter((call) => !["--version", "auth list"].includes(call.args))).toEqual([]);
 
       // and its page draws Review changes with the changed file and its diff
       await drawnTaskPage(page, `${connected.orchestrator.url}/${connected.tenant}/tasks/${task.id}`, TITLE);
-      const review = page.getByRole("region", { name: /Changes in this folder/ });
-      await expect(review.locator("ul.diff-files > li")).toHaveCount(1);
-      await review.locator("ul.diff-files > li summary", { hasText: "src/endpoints/delivery-window.ts" }).click();
-      await expect(review.locator("ul.diff-files > li")).toContainText('path: "/delivery-window"');
+      const review = page.getByRole("region", { name: /^Changes/ });
+      // Only the paths a task changed leave the machine: the page names the file, and its patch is read on the machine.
+      await expect(review).toContainText("src/endpoints/delivery-window.ts");
+      expect((await person.call("GET", `/api/tasks/${task.id}/changes`)).json).toMatchObject({ code: "changes-on-machine" });
 
       // when they press Undo on that page and confirm
-      await review.getByRole("button", { name: "Undo these changes…" }).click();
+      await page.getByRole("button", { name: "Undo these changes…" }).click();
       await page.getByRole("button", { name: "Undo changes" }).click();
 
       // then the page says it was undone, and the machine put the folder back byte for byte
-      await expect(review.getByText(/^Undone by /)).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByText(/^Undone by /)).toBeVisible({ timeout: 60_000 });
       expect(contents(folder)).toEqual(before);
     } finally {
       await connected.stop();

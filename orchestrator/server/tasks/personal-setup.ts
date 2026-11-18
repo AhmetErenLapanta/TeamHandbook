@@ -18,7 +18,7 @@ export interface PersonalSetup {
    * whether it asks for a value is unknown (null). Never a command, an argument, an address, a
    * header or a value.
    */
-  mcpServers: { name: string; kind: "stdio" | "http" | "unknown"; scope: "user" | "project" | "plugin"; asksForValue: boolean | null }[];
+  mcpServers: { name: string; kind: "stdio" | "http" | "unknown"; scope: "user" | "project" | "plugin"; asksForValue: boolean | null; /** The plugin that brings it, as `<name>@<marketplace>`. */ plugin?: string }[];
   /** Whether the person keeps a CLAUDE.md of their own, which every session of theirs loads; whether it is there, never what it says. */
   claudeMd: boolean;
   readAt: string;
@@ -69,7 +69,7 @@ async function commandsOf(program: string, env: Record<string, string>, cwd: str
 }
 
 /** The person's plugins as `claude plugin list --json` lists them, which reads their servers without connecting them; paths are left out. */
-async function pluginsOf(program: string, env: Record<string, string>, cwd: string, timeoutMs: number): Promise<{ plugins: PersonalSetup["plugins"]; servers: PersonalSetup["mcpServers"] } | null> {
+export async function listedPlugins(program: string, env: Record<string, string>, cwd: string, timeoutMs: number): Promise<Record<string, unknown>[] | null> {
   const listed = await runProcess({ program, args: ["plugin", "list", "--json"], env, cwd }, { timeoutMs, signal: new AbortController().signal, onLine: () => {} });
   if (listed.code !== 0) return null;
   let items: unknown;
@@ -78,7 +78,12 @@ async function pluginsOf(program: string, env: Record<string, string>, cwd: stri
   } catch {
     return null;
   }
-  const installed = Array.isArray(items) ? items : Array.isArray((items as { installed?: unknown })?.installed) ? (items as { installed: unknown[] }).installed : [];
+  return (Array.isArray(items) ? items : Array.isArray((items as { installed?: unknown })?.installed) ? (items as { installed: unknown[] }).installed : []) as Record<string, unknown>[];
+}
+
+async function pluginsOf(program: string, env: Record<string, string>, cwd: string, timeoutMs: number): Promise<{ plugins: PersonalSetup["plugins"]; servers: PersonalSetup["mcpServers"] } | null> {
+  const installed = await listedPlugins(program, env, cwd, timeoutMs);
+  if (!installed) return null;
   const plugins: PersonalSetup["plugins"] = [];
   const servers: PersonalSetup["mcpServers"] = [];
   for (const item of installed as Record<string, unknown>[]) {
@@ -90,7 +95,7 @@ async function pluginsOf(program: string, env: Record<string, string>, cwd: stri
     for (const [name, config] of entries) {
       if (typeof name !== "string") continue;
       const defined = config && typeof config === "object" && ("command" in config || "url" in config);
-      servers.push(defined ? serverOf(name, config, "plugin") : { name, kind: "unknown", scope: "plugin", asksForValue: null });
+      servers.push({ ...(defined ? serverOf(name, config, "plugin") : { name, kind: "unknown" as const, scope: "plugin" as const, asksForValue: null }), plugin: item.id });
     }
   }
   return { plugins, servers };

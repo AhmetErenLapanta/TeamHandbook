@@ -1,5 +1,5 @@
 import type { AgentRequest } from "../server/tasks/adapters/contract.js";
-import type { ChecksAnswer, ChecksAsk, FolderAnswer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, UndoAnswer, UndoAsk, Lease, NumberedEvent, RunnerCommand, TaskOutcome, TaskProgress } from "../runner/link.js";
+import type { ChecksAnswer, ChecksAsk, FolderAnswer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, SetupAnswer, SetupAsk, UndoAnswer, UndoAsk, Lease, NumberedEvent, RunnerCommand, TaskOutcome, TaskProgress } from "../runner/link.js";
 import type { MachineAgentStatus } from "../server/runner-store.js";
 
 export { RUNNER_PROTOCOL, SIGNATURE_HEADER } from "../server/runner-auth.js";
@@ -67,6 +67,7 @@ export const RUNNER_PATHS = {
   /** The machine's answer to one read or decision of a lesson its person asked for on a task's page. */
   lessonOps: (nonce: string) => `/api/runner/lesson-ops/${nonce}`,
   pushes: (nonce: string) => `/api/runner/pushes/${nonce}`,
+  setups: (nonce: string) => `/api/runner/setups/${nonce}`,
 } as const;
 
 export interface HelloAnswer {
@@ -122,6 +123,7 @@ export interface PollAnswer {
   /** Reads and decisions of its person's lessons they asked for on a task's page. */
   lessonOps?: LessonOpAsk[];
   pushes?: PushAsk[];
+  setups?: SetupAsk[];
 }
 
 export interface LeaseBody {
@@ -183,6 +185,10 @@ export interface LessonOpBody {
 
 export interface PushBody {
   answer: PushAnswer;
+}
+
+export interface SetupBody {
+  answer: SetupAnswer;
 }
 
 /** The most folders one answer lists, across folders, suggestions and matches, as the local list stops at. */

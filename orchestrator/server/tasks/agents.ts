@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { safeRepoPath } from "../forge/local.js";
 import type { TeamSetup } from "../inventory.js";
 import type { PermissionMode } from "../../shared/permission-mode.js";
 import { ASK_TOOL, ASKING_MODES, CLAUDE_CAPABILITIES, CLAUDE_MODE, CLAUDE_PLAN_ENV, CLAUDE_PLAN_MODE, CLAUDE_TWO_WAY_CAPABILITIES, claudeChoiceArgs, claudeCodeCodec, claudeCodeDecoder } from "./adapters/claude-code.js";
-import type { AgentCapabilities, AgentChoices, AgentCodec, AgentDecoder } from "./adapters/contract.js";
+import { claudeOffCall, claudeOffDenies, claudeOffSettings } from "./adapters/claude-off.js";
+import type { AgentCapabilities, AgentChoices, AgentCodec, AgentDecoder, AgentOff } from "./adapters/contract.js";
 import { choicesProblem } from "./adapters/contract.js";
 import { MANIFEST } from "./adapters/manifest.js";
 import { FAKE_CAPABILITIES, FAKE_TWO_WAY_CAPABILITIES, fakeCodec, fakeDecoder } from "./adapters/fake.js";
 import { foldStdout, logLineOf } from "./adapters/fold.js";
 import type { AgentReport } from "./adapters/fold.js";
 import { parseLine } from "./adapters/frames.js";
-import { opencodeCapabilities, opencodeDecoder } from "./adapters/opencode.js";
+import { opencodeCapabilities, opencodeDecoder, opencodeServeCapabilities } from "./adapters/opencode.js";
 import type { Invocation, TaskPaths } from "./isolation.js";
 import { serverForAgent } from "./mcp-tasks.js";
 import { CLAUDE_PLANS_DIR, personalMcpFile, personalSettingsFile } from "./profile.js";
@@ -44,6 +45,8 @@ export interface AgentSetup {
   mcpTools: McpTool[];
   /** File tools the team's policies take away whole. */
   deniedTools?: string[];
+  /** What its person turned off for this task alone, by name: whole plugins, single skills and MCP servers; their settings stay as they are. */
+  off?: AgentOff;
   orchestrator?: OrchestratorAccess;
   /**
    * Servers of the checkout's own .mcp.json the person approved for this task on its card, as the
@@ -243,6 +246,19 @@ export interface LaunchOptions {
    * a `plan` request; once it is approved it goes on in `mode`.
    */
   plan?: boolean;
+  /**
+   * With `personal`: the folder of the person's second Claude Code sign-in, a profile they named
+   * themselves, to go on with when the first one reaches its usage limit. Claude Code is started
+   * with it as its config folder and keeps its own sign-in there; the orchestrator reads nothing in
+   * it, and the agent's file tools are kept out of it. A session kept by one sign-in is in that
+   * sign-in's folder, so it cannot be resumed by the other.
+   */
+  signIn?: string;
+  /**
+   * Ask the agent, once as its session opens, how much context each MCP server and each skill
+   * takes (a `context_parts` event). An agent that cannot say sends none.
+   */
+  contextParts?: boolean;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -263,6 +279,9 @@ export interface AgentProbe {
   setting: string;
   /** The version whose flags and output the adapter was checked against, by reading that CLI rather than running a task with it. */
   checkedVersion: string;
+  installCommand?: string;
+  updateCommand?: string;
+  signInCommand?: string;
   /** The CLI's read-only status command and how to read its answer; absent when the CLI has none. */
   signIn?: { args: string[]; read(stdout: string): SignIn | null };
   /** The version whose behaviour holding the agent to named MCP tools rests on, when the orchestrator gives it MCP servers. */
@@ -285,6 +304,8 @@ export interface AgentInstance {
   readonly id: string;
   readonly label: string;
   readonly capabilities: AgentCapabilities;
+  /** The kinds of the person's own setup its launch leaves out when `setup.off` names them; it is never started with one of another kind turned off. */
+  readonly leavesOut?: readonly (keyof NonNullable<AgentSetup["off"]>)[];
   /** Host variables the agent needs to reach its model. They are the only ones that cross besides the basics. */
   readonly credentialEnv: readonly string[];
   /** Hosts the agent reaches its model at, let through a repository's allow list since the agent cannot run without them. */
@@ -302,9 +323,10 @@ export interface AgentInstance {
   readonly probe?: AgentProbe;
   /**
    * An agent whose run as the person is a session of its own server on this machine, the one
-   * place its rules outrank the person's own config: its program and the task's environment for it.
+   * place its rules outrank the person's own config: its program, the task's environment for it,
+   * and what such a session can do, which differs from a one-shot run's.
    */
-  readonly servedAsYou?: { program: string; env(paths: TaskPaths, setup: AgentSetup): Record<string, string> };
+  readonly servedAsYou?: { program: string; capabilities: AgentCapabilities; env(paths: TaskPaths, setup: AgentSetup): Record<string, string> };
 }
 
 /**
@@ -438,7 +460,7 @@ const claudeFiles = (setup: AgentSetup): string[] => CLAUDE_TOOLS.filter((t) => 
  * the team's denied tools and the guard's hook hold either way.
  */
 function claudeTools(paths: TaskPaths, setup: AgentSetup, personal = false): { files: string[]; disallowed: string[] } {
-  return { files: claudeFiles(setup), disallowed: ["--disallowedTools", [...(personal ? [] : CLAUDE_DENIED), ...(setup.deniedTools ?? []), ...guardRules(paths), ...dataFolderRules(paths)].join(",")] };
+  return { files: claudeFiles(setup), disallowed: ["--disallowedTools", [...(personal ? [] : CLAUDE_DENIED), ...(setup.deniedTools ?? []), ...(setup.off ? claudeOffDenies(setup.off) : []), ...guardRules(paths), ...dataFolderRules(paths)].join(",")] };
 }
 
 /** In Auto a run as the person has the shell, which Auto would otherwise refuse unasked; a mode that asks asks about it on the card. */
@@ -518,12 +540,16 @@ export function claudeCodeAdapter(program: string): AgentAdapter {
     id: "claude-code",
     label: "Claude Code",
     capabilities: CLAUDE_CAPABILITIES,
+    leavesOut: ["plugins", "skills", "mcpServers"],
     credentialEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     modelHosts: ["api.anthropic.com"],
     probe: {
       program,
       setting: "ORCHESTRATOR_CLAUDE_BIN",
       checkedVersion: MANIFEST["claude-code"].checkedVersion,
+      installCommand: MANIFEST["claude-code"].commands.install,
+      updateCommand: MANIFEST["claude-code"].commands.update,
+      signInCommand: MANIFEST["claude-code"].commands.signIn,
       twoWayVersion: MANIFEST["claude-code"].twoWayVersion,
       signIn: { args: ["auth", "status", "--json"], read: readClaudeAuthStatus },
     },
@@ -532,7 +558,7 @@ export function claudeCodeAdapter(program: string): AgentAdapter {
       await mkdir(config, { recursive: true });
       await writeSkills(join(config, "skills"), setup);
       // The task's home holds the agent's own settings and its MCP file: its file tools write in the checkout, never here.
-      await writeFile(join(config, "settings.json"), JSON.stringify({ plansDirectory: CLAUDE_PLANS_DIR, permissions: { deny: [...CLAUDE_DENIED, ...(setup.deniedTools ?? []), `Edit(/${paths.home}/**)`] } }, null, 2) + "\n");
+      await writeFile(join(config, "settings.json"), JSON.stringify({ ...(setup.off ? claudeOffSettings(setup.off) : {}), plansDirectory: CLAUDE_PLANS_DIR, permissions: { deny: [...CLAUDE_DENIED, ...(setup.deniedTools ?? []), `Edit(/${paths.home}/**)`] } }, null, 2) + "\n");
       const orchestrator = setup.orchestrator ? { [ORCHESTRATOR_SERVER]: { type: "http", url: setup.orchestrator.url, headers: { Authorization: `Bearer \${${ORCHESTRATOR_TOKEN_ENV}}` } } } : {};
       await writeFile(join(paths.home, "mcp.json"), JSON.stringify({ mcpServers: { ...setup.mcpServers, ...orchestrator } }, null, 2) + "\n");
     },
@@ -546,8 +572,9 @@ export function claudeCodeAdapter(program: string): AgentAdapter {
     },
     twoWay: {
       capabilities: CLAUDE_TWO_WAY_CAPABILITIES,
-      launch(paths, setup, { mode: asked, personal = false, choices, system, persist = false, resume, sessionId, questions = false, plan = false }) {
+      launch(paths, setup, { mode: asked, personal = false, choices, system, persist = false, resume, sessionId, questions = false, plan = false, signIn, contextParts = false }) {
         if (!CLAUDE_TWO_WAY_CAPABILITIES.permissionModes.includes(asked)) throw new Error(`a two-way Claude Code session does not run in ${asked}`);
+        if (signIn !== undefined && (!personal || !isAbsolute(signIn) || resume !== undefined)) throw new Error("a second sign-in is a folder of the person's own, named in full, for a run as them that resumes no session");
         const notes: string[] = [];
         let mode = asked;
         // Bypass lets every tool of a placed server run, and the orchestrator allows those tools one by one;
@@ -579,11 +606,13 @@ export function claudeCodeAdapter(program: string): AgentAdapter {
           // web among them, is asked about on the card; the deny rules and the guard's hook refuse what they hold first.
           const { files, disallowed } = claudeTools(paths, setup, true);
           const quiet = autoAsks ? [...files, ...personalShell(setup), ...orchestratorTools(setup)] : [...files, ...(asks ? [] : personalShell(setup)), ...orchestratorTools(setup)].filter((t) => !asks || CLAUDE_READ_ONLY.has(t));
-          const args = [...head, ...personalArgs(paths, setup), "--allowedTools", quiet.join(","), ...disallowed];
-          return { call: { program, args, env: { ...CLAUDE_PLAN_ENV } }, codec: claudeCodeCodec(mode, (tool, input) => tool !== ASK_TOOL && !aimsAtHome(paths, input), paths.work, questions && CLAUDE_TWO_WAY_CAPABILITIES.questions, opened, planned), mode, notes };
+          // The second sign-in's folder holds its credentials: no file tool reads or writes there.
+          const away = signIn ? ["--disallowedTools", ["Read", ...CLAUDE_WRITES].map((tool) => `${tool}(/${normalize(signIn)}/**)`).join(",")] : [];
+          const args = [...head, ...personalArgs(paths, setup), "--allowedTools", quiet.join(","), ...disallowed, ...away];
+          return { call: { program, args, env: { ...CLAUDE_PLAN_ENV, ...(signIn ? { CLAUDE_CONFIG_DIR: signIn } : {}) } }, codec: claudeCodeCodec(mode, (tool, input) => tool !== ASK_TOOL && !aimsAtHome(paths, input) && !claudeOffCall(setup.off, tool, input), paths.work, questions && CLAUDE_TWO_WAY_CAPABILITIES.questions, opened, planned, contextParts), mode, notes };
         }
         const allowed = new Set(claudeAllowed(setup));
-        return { call: { program, args: [...head, ...claudeTaskArgs(paths, setup, asks)], env: { CLAUDE_CONFIG_DIR: join(paths.home, ".claude"), ...CLAUDE_PLAN_ENV, ...orchestratorEnv(setup) } }, codec: claudeCodeCodec(mode, (tool, input) => allowed.has(tool) && !aimsAtHome(paths, input), paths.work, questions && CLAUDE_TWO_WAY_CAPABILITIES.questions, opened, planned), mode, notes };
+        return { call: { program, args: [...head, ...claudeTaskArgs(paths, setup, asks)], env: { CLAUDE_CONFIG_DIR: join(paths.home, ".claude"), ...CLAUDE_PLAN_ENV, ...orchestratorEnv(setup) } }, codec: claudeCodeCodec(mode, (tool, input) => allowed.has(tool) && !aimsAtHome(paths, input) && !claudeOffCall(setup.off, tool, input), paths.work, questions && CLAUDE_TWO_WAY_CAPABILITIES.questions, opened, planned, contextParts), mode, notes };
       },
     },
     decoder: (work) => claudeCodeDecoder(null, work),
@@ -644,12 +673,17 @@ export function opencodeAdapter(program: string, mcp = false): AgentAdapter {
     id: "opencode",
     label: "OpenCode",
     capabilities: opencodeCapabilities(mcp),
+    // A single plugin cannot be left out of OpenCode; a single skill stays listed and its session refuses the call.
+    leavesOut: ["skills", "mcpServers"],
     credentialEnv: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"],
     modelHosts: ["api.anthropic.com", "api.openai.com", "openrouter.ai", "generativelanguage.googleapis.com"],
     probe: {
       program,
       setting: "ORCHESTRATOR_OPENCODE_BIN",
       checkedVersion: MANIFEST.opencode.checkedVersion,
+      installCommand: MANIFEST.opencode.commands.install,
+      updateCommand: MANIFEST.opencode.commands.update,
+      signInCommand: MANIFEST.opencode.commands.signIn,
       signIn: { args: ["auth", "list"], read: readOpencodeAuthList },
       ...(mcp ? { mcpVersion: MANIFEST.opencode.mcpVersion } : { mcpSetting: "ORCHESTRATOR_OPENCODE_MCP=1" }),
     },
@@ -701,9 +735,12 @@ export function opencodeAdapter(program: string, mcp = false): AgentAdapter {
     // OpenCode's data directory, which stays theirs).
     servedAsYou: {
       program,
+      capabilities: opencodeServeCapabilities(mcp),
       env: (paths, setup) => {
         const config = join(paths.home, ".config");
-        return { OPENCODE_CONFIG_DIR: join(config, "opencode"), ...(setup.personal?.ownSetup === true ? {} : { XDG_CONFIG_HOME: config }) };
+        // A server the task leaves out is never connected: this layer comes after the person's own config and the folder's (1.19.4), for this task's server process alone.
+        const off: Record<string, string> = setup.off?.mcpServers.length ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: Object.fromEntries(setup.off.mcpServers.map((name) => [name, { enabled: false }])) }) } : {};
+        return { OPENCODE_CONFIG_DIR: join(config, "opencode"), ...(setup.personal?.ownSetup === true ? {} : { XDG_CONFIG_HOME: config }), ...off };
       },
     },
   });

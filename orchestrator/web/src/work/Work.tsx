@@ -6,13 +6,15 @@ import { Select } from "../Select";
 import { SubNav } from "../Shell";
 import { Loading, LoadFailed, RefreshFailed } from "../Status";
 import { PageHead } from "../design/PageHead";
-import { workApi } from "./api";
+import { lastWork, workApi } from "./api";
+import { chosen, rememberBoard, rememberedBoard, rememberedSource, rememberedSprint, rememberSource, rememberSprint } from "./remembered";
 import type { WorkBoard, WorkItem, WorkItems, WorkSource, WorkSprint } from "./api";
 import { isMine, morningSummary, nextIssue, placeItems, sprintSummary, taskBadge } from "./board";
 import { BoardTeam } from "./BoardTeam";
 import { MovesSwitch } from "./Moves";
 import { ArrangeColumns } from "./Columns";
 import { MOST_AT_ONCE, StartAgents } from "./StartAgents";
+import { AskAbout, AskedAnswer, AskedLine } from "./AskAbout";
 
 /** How often the board asks again: task links are joined fresh on every read, so a card's badge follows its agent. */
 const POLL_MS = 10_000;
@@ -26,7 +28,7 @@ export function WorkView({ me, sources, backlog }: { me: Principal; sources: Wor
   if (sources === null) return <Loading what="the issue trackers" panel />;
   if (!sources.length) return <NoTracker me={me} />;
   const params = new URLSearchParams(location.search);
-  const source = sources.find((s) => s.id === params.get("source")) ?? sources.find((s) => !s.problem) ?? sources[0]!;
+  const source = chosen(sources, params.get("source"), rememberedSource()) ?? sources.find((s) => !s.problem) ?? sources[0]!;
   return <SourceBoard key={source.id} me={me} sources={sources} source={source} params={params} backlog={backlog} />;
 }
 
@@ -57,11 +59,11 @@ function NoTracker({ me }: { me: Principal }) {
 }
 
 function SourceBoard({ me, sources, source, params, backlog }: { me: Principal; sources: WorkSource[]; source: WorkSource; params: URLSearchParams; backlog: boolean }) {
-  const [boards, setBoards] = useState<WorkBoard[] | null>(null);
+  const [boards, setBoards] = useState<WorkBoard[] | null>(lastWork.boards(source.id)?.boards ?? null);
   const [sprints, setSprints] = useState<WorkSprint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const board = boards?.find((b) => b.id === params.get("board")) ?? boards?.[0] ?? null;
-  const sprint = sprints?.find((s) => s.id === params.get("sprint")) ?? sprints?.find((s) => s.state === "active") ?? sprints?.find((s) => s.state === "future") ?? null;
+  const board = (boards && chosen(boards, params.get("board"), rememberedBoard(source.id))) ?? boards?.[0] ?? null;
+  const sprint = (sprints && board && chosen(sprints, params.get("sprint"), rememberedSprint(board.id))) ?? sprints?.find((s) => s.state === "active") ?? sprints?.find((s) => s.state === "future") ?? null;
   const readBoards = () => {
     setError(null);
     workApi.boards(source.id).then((r) => setBoards(r.boards), (e: Error) => setError(e.message));
@@ -70,7 +72,7 @@ function SourceBoard({ me, sources, source, params, backlog }: { me: Principal; 
     if (!source.problem) readBoards();
   }, [source.id]);
   useEffect(() => {
-    setSprints(null);
+    setSprints(board ? lastWork.sprints(board.id)?.sprints ?? null : null);
     if (!board) return;
     if (!source.can.sprints) return setSprints([]);
     workApi.sprints(board.id).then((r) => setSprints(r.sprints), (e: Error) => setError(e.message));
@@ -78,9 +80,9 @@ function SourceBoard({ me, sources, source, params, backlog }: { me: Principal; 
 
   const picker = (
     <div className="work-picker">
-      {sources.length > 1 ? <Select label="Source" value={source.id} onChange={(v) => pickParams({ source: v, board: null, sprint: null })} options={sources.map((s) => ({ value: s.id, label: s.name, hint: s.as === "you" ? "as you" : undefined }))} /> : null}
-      {boards && boards.length > 1 ? <Select label="Board" value={board?.id ?? ""} onChange={(v) => pickParams({ board: v, sprint: null })} options={boards.map((b) => ({ value: b.id, label: b.name, hint: [BOARD_KIND[b.type], b.project].filter(Boolean).join(", ") || undefined }))} /> : null}
-      {sprints && sprints.length ? <Select label="Sprint" value={sprint?.id ?? ""} onChange={(v) => pickParams({ sprint: v })} options={sprints.map((s) => ({ value: s.id, label: s.name, hint: s.state === "active" ? "active" : s.state === "future" ? "next" : "closed" }))} /> : null}
+      {sources.length > 1 ? <Select label="Source" value={source.id} onChange={(v) => { rememberSource(v); pickParams({ source: v, board: null, sprint: null }); }} options={sources.map((s) => ({ value: s.id, label: s.name, hint: s.as === "you" ? "as you" : undefined }))} /> : null}
+      {boards && boards.length > 1 ? <Select label="Board" value={board?.id ?? ""} onChange={(v) => { rememberBoard(source.id, v); pickParams({ board: v, sprint: null }); }} options={boards.map((b) => ({ value: b.id, label: b.name, hint: [BOARD_KIND[b.type], b.project].filter(Boolean).join(", ") || undefined }))} /> : null}
+      {sprints && sprints.length ? <Select label="Sprint" value={sprint?.id ?? ""} onChange={(v) => { rememberSprint(board!.id, v); pickParams({ sprint: v }); }} options={sprints.map((s) => ({ value: s.id, label: s.name, hint: s.state === "active" ? "active" : s.state === "future" ? "next" : "closed" }))} /> : null}
     </div>
   );
   const tracker = source.kind === "jira" ? "Jira" : source.kind === "linear" ? "Linear" : source.kind === "gitlab" ? "GitLab" : "GitHub";
@@ -147,7 +149,7 @@ function SourceBoard({ me, sources, source, params, backlog }: { me: Principal; 
 /** A sprint's board, or a list for the backlog; either way issues are picked here to start agents on. */
 /** `moves` is set for Jira, the one tracker whose issues the orchestrator moves; elsewhere the switch would only say it cannot. */
 function Issues({ me, board, sprint, backlog, mine, moves, whole = false }: { me: Principal; board: WorkBoard; sprint: WorkSprint | null; backlog: boolean; mine: boolean; moves: boolean; whole?: boolean }) {
-  const [read, setRead] = useState<WorkItems | null>(null);
+  const [read, setRead] = useState<WorkItems | null>(() => (whole ? lastWork.boardItems(board.id) : sprint && !backlog ? lastWork.sprintItems(sprint.id) : lastWork.backlog(board.id)) ?? null);
   const [picked, setPicked] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,15 +182,12 @@ function Issues({ me, board, sprint, backlog, mine, moves, whole = false }: { me
   const full = picked.length >= MOST_AT_ONCE;
   const card = (item: WorkItem) => <Card key={item.key} item={item} me={me} picked={picked.includes(item.key)} canPick={!full || picked.includes(item.key)} onPick={() => pick(item.key)} chosen={chosen === item.key} onChoose={() => setChosen(item.key)} />;
   const chosenItem = read.items.find((i) => i.key === chosen) ?? null;
-  const rail = (
+  // No rail until an issue is picked: the columns share the page's width, and the rail opens beside them.
+  const rail = chosenItem ? (
     <aside className="rail" aria-label="The picked issue">
-      {chosenItem ? (
-        <ChosenIssue item={chosenItem} me={me} onStart={() => { setPicked([chosenItem.key]); setStarting(true); }} />
-      ) : (
-        <section><h2>No issue picked</h2><p className="muted">Press an issue to read it here and start an agent on it.</p></section>
-      )}
+      <ChosenIssue item={chosenItem} me={me} local={me.mode === "local"} onStart={() => { setPicked([chosenItem.key]); setStarting(true); }} />
     </aside>
-  );
+  ) : null;
   const shownItems = mine ? read.items.filter((i) => isMine(i, me)) : read.items;
   const filter = (
     <div className="segmented wide" role="group" aria-label="Whose work">
@@ -196,7 +195,8 @@ function Issues({ me, board, sprint, backlog, mine, moves, whole = false }: { me
       <button type="button" className="secondary" aria-pressed={mine} onClick={() => pickParams({ mine: "1" })}>My work <span className="count">{read.items.filter((i) => isMine(i, me)).length}</span></button>
     </div>
   );
-  const picking = picked.length ? (
+  // While the Start agents form is open it is the one place that starts them: the bar would be a second Start over its last field.
+  const picking = picked.length && !starting ? (
     <div className="pick-bar" role="region" aria-label="Picked issues">
       <p>{picked.length} {picked.length === 1 ? "issue" : "issues"} picked{full ? `, as many as start at once` : ""}</p>
       <div className="actions">
@@ -216,7 +216,7 @@ function Issues({ me, board, sprint, backlog, mine, moves, whole = false }: { me
   const notice = (
     <>
       <p className="muted small read-at" role="status">
-        Read from the tracker at {read.fetchedAt.slice(11, 16)} UTC
+        Read from the tracker at {new Date(read.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}
         {read.stale ? <> <span className="badge neutral">refreshing</span> The tracker is being read again; the board catches up on its next look.</> : null}
       </p>
       {refreshError ? <RefreshFailed what="issues" reason={refreshError} onRetry={() => load(true)} /> : null}
@@ -269,7 +269,7 @@ function Issues({ me, board, sprint, backlog, mine, moves, whole = false }: { me
           <button key={c.name} type="button" className="secondary" aria-pressed={i === shown} onClick={() => setColumn(i)}>{c.name}<span className="visually-hidden"> column,</span> <span className="count">{c.items.length}</span></button>
         ))}
       </div>
-      <div className="with-rail">
+      <div className={rail ? "with-rail" : "board-alone"}>
         <div className="board" role="group" aria-label={`${sprint?.name ?? board.name} board`}>
           {columns.map((c, i) => (
             <section key={c.name} className={`board-col${i === shown ? " chosen" : ""}`} aria-labelledby={`col-${i}`}>
@@ -312,18 +312,17 @@ function Card({ item, me, picked, canPick, onPick, chosen, onChoose }: { item: W
       {latest && badge ? (
         <p className="work-card-agent small">
           <a className={`state ${badge.tone}`} href={here("tasks", latest.taskId)}>{badge.label}</a>
-          {latest.requests.map((r) => (
-            <a key={`${r.repoId}#${r.number}`} href={r.url ?? here("tasks", latest.taskId)} {...(r.url ? { target: "_blank", rel: "noopener noreferrer" } : {})}> {r.name}</a>
-          ))}
+          {latest.requests.flatMap((r) => (r.url ? [<a key={`${r.repoId}#${r.number}`} href={r.url} target="_blank" rel="noopener noreferrer"> {r.name}</a>] : []))}
           <span className="muted"> started by {latest.startedBy === me.email ? "you" : latest.startedBy}{item.tasks.length > 1 ? `, ${item.tasks.length - 1} earlier` : ""}</span>
         </p>
       ) : null}
+      {item.asked ? <p className="small"><AskedLine asked={item.asked} /></p> : null}
     </li>
   );
 }
 
 /** The picked issue in the right rail: what it is, what agents did on it, and its one action. */
-function ChosenIssue({ item, me, onStart }: { item: WorkItem; me: Principal; onStart: () => void }) {
+function ChosenIssue({ item, me, local, onStart }: { item: WorkItem; me: Principal; local: boolean; onStart: () => void }) {
   return (
     <>
       <section>
@@ -344,9 +343,13 @@ function ChosenIssue({ item, me, onStart }: { item: WorkItem; me: Principal; onS
       <section>
         <div className="actions">
           <button type="button" onClick={onStart}>Start an agent</button>
-          <a className="button ghost" href={item.url} target="_blank" rel="noopener noreferrer">Open the issue</a>
+          <a href={item.url} target="_blank" rel="noopener noreferrer">Open the issue</a>
         </div>
       </section>
+      <section>
+        <AskAbout key={item.key} item={item} local={local} />
+      </section>
+      {item.asked ? <AskedAnswer asked={item.asked} /> : null}
     </>
   );
 }

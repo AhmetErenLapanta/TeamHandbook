@@ -225,3 +225,21 @@ describe("writtenPlan", () => {
     expect(writtenPlan(unplanned.stream)).toBeNull();
   });
 });
+
+describe("a file change put to its person", () => {
+  it("given a write the agent asks to make, when the run is read before and after the answer, then its line says it asks until the answer and then says it wrote", () => {
+    // given
+    const asked = [
+      event({ type: "tool_call", id: "w", tool: "Write", target: "src/delivery.ts", status: "started" }),
+      event({ type: "request", request: { id: "r1", kind: "file-change", tool: "Write", summary: "src/delivery.ts" } }),
+    ];
+
+    // when
+    const waiting = liveRun(asked);
+    const answered = liveRun([...asked, event({ type: "request_resolved", requestId: "r1", decision: "allow_once" }), event({ type: "tool_call", id: "w", tool: "Write", target: "src/delivery.ts", status: "done" })]);
+
+    // then
+    expect(waiting.stream.filter((l) => l.kind === "tool").map(said)).toEqual(["Asks to write src/delivery.ts"]);
+    expect(answered.stream.filter((l) => l.kind === "tool").map(said)).toEqual(["Wrote src/delivery.ts"]);
+  });
+});

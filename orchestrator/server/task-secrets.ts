@@ -10,6 +10,10 @@ import type { SecretReference } from "../shared/secret-providers.js";
 import { opVaults, referenceKey, SECRET_PROVIDERS, secretResolver } from "./secret-providers.js";
 import type { SecretProvider } from "./secret-providers.js";
 import { secretSettingValue } from "./secret-writes.js";
+import { route } from "./route-scopes.js";
+import { startedTask } from "./task-suggestions.js";
+import type { TaskAnswer, TaskRequestRecord } from "./task-requests.js";
+import type { TaskStatus } from "./tasks/types.js";
 
 /**
  * Secrets a task's agent gets as environment variables, for one team's repositories or for one
@@ -33,6 +37,11 @@ export interface TaskSecretView {
 }
 
 const PREFIX = "task.secret.";
+/** A value a task's starter gave one task when its agent asked, sealed under that task alone. */
+const GIVEN = `${PREFIX}task.`;
+const givenKey = (taskId: string, name: string) => `${GIVEN}${taskId}.${name}`;
+/** The statuses a task still runs in; a value given to it goes once it leaves them. */
+const RUNNING: readonly TaskStatus[] = ["queued", "running"];
 const NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 /** Values longer than this are files, not secrets an environment variable carries. */
 export const MAX_SECRET_BYTES = 8192;
@@ -153,7 +162,7 @@ export async function deleteTaskSecret(ctx: OrchestratorContext, actor: Principa
  * now, and one not read, or read as a value no task secret could be, throws UnreadTaskSecret: a
  * check that masks the task's secrets would otherwise pass what it could not see.
  */
-export async function secretsForTask(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, repoId: string, team: string, providers: Readonly<Record<string, SecretProvider>> = TASK_SECRET_PROVIDERS): Promise<{ name: string; value: string }[]> {
+export async function secretsForTask(ctx: Pick<OrchestratorContext, "store" | "tenant" | "vault">, repoId: string, team: string, providers: Readonly<Record<string, SecretProvider>> = TASK_SECRET_PROVIDERS, taskId?: string): Promise<{ name: string; value: string }[]> {
   const all = await ctx.store.listSecrets(ctx.tenant, PREFIX);
   const byName = new Map<string, string | SecretReference>();
   for (const scope of ["team", "repo"] as const) {
@@ -166,6 +175,15 @@ export async function secretsForTask(ctx: Pick<OrchestratorContext, "store" | "t
       byName.set(parsed.name, referenceIn(value) ?? value);
     }
   }
+  // What the task's starter gave this task; a name the team or repository sets keeps that value, so nothing given replaces it.
+  if (taskId) {
+    for (const s of all) {
+      if (!s.name.startsWith(givenKey(taskId, ""))) continue;
+      const name = s.name.slice(givenKey(taskId, "").length);
+      const value = byName.has(name) ? null : await readSecret(ctx.store, ctx.vault ?? null, ctx.tenant, s.name);
+      if (value !== null) byName.set(name, value);
+    }
+  }
   const references = [...byName.values()].filter((v): v is SecretReference => typeof v !== "string");
   const read = references.length ? await secretResolver({ store: ctx.store, vault: ctx.vault ?? null, tenant: ctx.tenant }, providers).resolve(references) : new Map<string, string | undefined>();
   return [...byName].sort(([a], [b]) => a.localeCompare(b)).map(([name, held]) => {
@@ -174,6 +192,54 @@ export async function secretsForTask(ctx: Pick<OrchestratorContext, "store" | "t
     if (!value || value.includes("\0") || Buffer.byteLength(value) > MAX_SECRET_BYTES) throw new UnreadTaskSecret(`the task secret ${name} is read from ${held.reference}, and that read returned no value a task secret can be`);
     return { name, value };
   });
+}
+
+/**
+ * The value the task's starter types on the card its agent's request for a secret opened: sealed
+ * in the vault for that task alone before the request is answered as given, so no answer, log or
+ * event ever holds it. Only the starter, signed in, gives one; a name the orchestrator or the
+ * system sets, or one the task already has from its team or repository, is refused.
+ */
+export async function giveTaskSecret(ctx: OrchestratorContext, actor: Principal, taskId: string, requestId: string, value: unknown): Promise<{ name: string; request: TaskRequestRecord }> {
+  if (actor.key) throw new AccountError("an API key cannot give a task a secret; the person who started the task gives it on the task's page", 403);
+  const task = await ctx.store.getTask(ctx.tenant, taskId);
+  if (!task || !startedTask(actor, task)) throw new AccountError("unknown task", 404);
+  const asked = (await ctx.store.taskRequests(ctx.tenant, task.id)).find((r) => r.id === requestId);
+  if (!asked || asked.kind !== "secret") throw new AccountError("unknown request", 404);
+  if (asked.status !== "pending") throw new AccountError("this request is no longer waiting for an answer", 409);
+  if (!ctx.vault) throw new AccountError(NO_VAULT, 409);
+  const name = cleanSecretName(asked.payload.name);
+  for (const key of [secretKey("team", task.team, name), secretKey("repo", task.repoId, name), givenKey(task.id, name)]) {
+    if (await ctx.store.secretSetAt(ctx.tenant, key)) throw new AccountError(`this task already has ${name}; the agent reads that one`, 409);
+  }
+  const key = givenKey(task.id, name);
+  await storeSecret(ctx.store, ctx.vault, ctx.tenant, key, cleanValue(value), actor.email);
+  const answered = await ctx.store.answerTaskRequest(ctx.tenant, asked.id, { provided: true } as TaskAnswer, actor.email, "web", new Date().toISOString());
+  if (!answered) {
+    await ctx.store.deleteSecret(ctx.tenant, key);
+    throw new AccountError("this request is no longer waiting for an answer", 409);
+  }
+  ctx.runnerService?.wake();
+  return { name, request: answered };
+}
+
+/** Deletes every value given to this task: it ended, failed, was cancelled or was interrupted. */
+export async function dropTaskSecrets(ctx: Pick<OrchestratorContext, "store" | "tenant">, taskId: string): Promise<void> {
+  for (const s of await ctx.store.listSecrets(ctx.tenant, givenKey(taskId, ""))) await ctx.store.deleteSecret(ctx.tenant, s.name);
+}
+
+/**
+ * Deletes the values given to tasks that no longer run, or, with `startedBy`, to every task that
+ * person started: at start-up, so a value outlives no task the orchestrator stopped without ending
+ * it, and when that person's account is deleted.
+ */
+export async function sweepTaskSecrets(ctx: Pick<OrchestratorContext, "store" | "tenant">, startedBy?: { id: string; email: string }): Promise<void> {
+  for (const s of await ctx.store.listSecrets(ctx.tenant, GIVEN)) {
+    const taskId = s.name.slice(GIVEN.length).split(".")[0]!;
+    const task = await ctx.store.getTask(ctx.tenant, taskId);
+    const theirs = startedBy && task && (task.createdBy === startedBy.email || task.createdBy === startedBy.id);
+    if (!task || !RUNNING.includes(task.status) || theirs) await ctx.store.deleteSecret(ctx.tenant, s.name);
+  }
 }
 
 function failure(c: Context, err: unknown) {
@@ -195,6 +261,17 @@ export function taskSecretRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv
       const saved = await setTaskSecret(ctx, c.get("user"), await c.req.json().catch(() => ({})));
       await recordEvent(ctx, c.get("user"), "task-secret.set", { repoId: saved.scope === "repo" ? saved.target : null, subject: `secret:${saved.name}`, detail: `${saved.name} for ${saved.scope === "team" ? "team" : "repository"} ${saved.target}; ${saved.reference ? `read from ${saved.reference.reference}` : "the value is not recorded"}` });
       return c.json({ secret: saved });
+    } catch (err) {
+      return failure(c, err);
+    }
+  });
+
+  route(app, "POST /api/tasks/:id/secrets/:requestId", async (c) => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as { value?: unknown };
+      const given = await giveTaskSecret(ctx, c.get("user"), c.req.param("id") ?? "", c.req.param("requestId") ?? "", body.value);
+      await recordEvent(ctx, c.get("user"), "task.secret.given", { repoId: null, subject: `task:${c.req.param("id")}`, detail: `gave ${given.name} to the task's agent; the value is not recorded` });
+      return c.json({ request: { id: given.request.id, status: given.request.status } });
     } catch (err) {
       return failure(c, err);
     }

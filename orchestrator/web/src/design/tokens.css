@@ -35,6 +35,8 @@
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
+  /* How far what opens under a row goes in: the chevron and its gap, so it starts under the row's name. */
+  --fold-indent: var(--space-4);
 
   /* 4 for a badge or a key, 6 for a control, 8 for a layer or the diff's box. */
   --radius-sm: 4px;

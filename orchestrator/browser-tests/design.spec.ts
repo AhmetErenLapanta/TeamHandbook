@@ -108,6 +108,36 @@ const QUESTIONED = [
   ] }, status: "pending", responseCapability: "live", answer: null, answeredBy: null, createdAt: "2026-11-03T09:00:00.000Z" },
 ];
 
+/** A person's setup as the orchestrator reads it: their own, a folder's, and two plugins, one with a newer version. */
+const HANDBOOKS = (() => {
+  const used = (tasks: number, days: number | null) => ({ tasks, lastAt: days === null ? null : new Date(Date.now() - days * 86_400_000).toISOString() });
+  return { readAt: new Date().toISOString(), sources: [
+    { id: "yours", kind: "yours", name: "Yours", enabled: true, claudeMd: true, hooks: [{ name: "PostToolUse" }], commands: [{ name: "ship" }],
+      skills: [
+        { name: "release-notes", description: "Use when a release is cut: write the notes from the merged changes.", context: { tokens: 146, percent: 0.1 }, used: used(14, 3) },
+        { name: "on-call-handover", description: "Use at the end of an on-call week: what is open and what changed.", context: { tokens: 132, percent: 0.1 }, used: used(0, null) },
+      ],
+      mcpServers: [{ name: "tracker", context: { tokens: 6200, percent: 3.1 }, used: used(9, 1) }] },
+    { id: "folder", kind: "folder", name: "payments-api", enabled: true, claudeMd: true, hooks: [], commands: [], mcpServers: [],
+      skills: [{ name: "add-endpoint", description: "Use when a new endpoint is added to the payments service.", context: { tokens: 160, percent: 0.1 }, used: used(6, 2) }] },
+    { id: "plugin:payments-skills@payments-market", kind: "plugin", name: "payments-skills", version: "1.4.0", marketplace: "payments-market", enabled: true,
+      hooks: [{ name: "PreToolUse" }], commands: [{ name: "handover" }],
+      skills: [
+        { name: "add-ledger-migration", description: "Use when a change adds or alters a ledger table.", context: { tokens: 171, percent: 0.1 }, used: used(4, 6) },
+        { name: "review-checklist", description: "Use before asking for a review of a payments change.", context: { tokens: 139, percent: 0.1 }, used: used(11, 1) },
+      ],
+      mcpServers: [{ name: "ledger", context: { tokens: 4100, percent: 2 }, used: used(2, 12), whyNot: "It comes with its plugin; turn the plugin off." }],
+      latest: { version: "1.5.0", added: ["add-webhook"], changed: ["review-checklist"], removed: ["old-deploy"], hooks: [{ name: "PostToolUse", commands: ["scripts/check-commit.sh"] }], mcpServers: ["ledger"] },
+      notice: { hooks: 1, mcpServers: 1 } },
+    { id: "plugin:docs-kit@payments-market", kind: "plugin", name: "docs-kit", version: "2.0.0", marketplace: "payments-market", enabled: false, hooks: [], commands: [], mcpServers: [],
+      skills: [{ name: "write-runbook", description: "Use when an incident ends: write the runbook entry.", context: { tokens: 150, percent: 0.1 }, used: used(0, null) }] },
+  ] };
+})();
+const handbooks = async (page: Page): Promise<void> => {
+  await page.route(/\/api\/handbook\/sources(\?|$)/, (route) => route.fulfill({ json: HANDBOOKS }));
+  await page.route("**/api/handbook/defaults", (route) => (route.request().method() === "GET" ? route.fulfill({ json: { off: { skills: [{ source: "yours", name: "on-call-handover" }], commands: [], mcpServers: [] } } }) : route.fulfill({ json: { off: {} } })));
+};
+
 const MACHINES = { machines: [
   { id: "m1", name: "ada-laptop", platform: "macOS", runnerVersion: "1.4.0", lastSeenAt: "2026-11-03T09:00:00.000Z", online: true, paused: false, local: false, agents: [
     { id: "claude-code", label: "Claude Code", installed: true, version: "2.1.0", supported: "ok", signIn: "signed-in", signInCommand: null },
@@ -183,6 +213,24 @@ const SCREENS: Screen[] = [
   { name: "task-question", open: async (p) => {
     await taskAs(p, { status: "running", requests: QUESTIONED });
     await expect(p.getByText("How often should the webhook retry?")).toBeVisible();
+  } },
+  { name: "task-secret", open: async (p) => {
+    await taskAs(p, { status: "running", queuePosition: null, requests: [{ id: "s1", kind: "secret", payload: { name: "STRIPE_TEST_KEY", why: "The webhook tests call the payments provider's sandbox, which needs a test key." }, status: "pending", responseCapability: "live", answer: null, answeredBy: null, createdAt: "2026-11-03T09:00:00.000Z" }] });
+    await expect(p.getByRole("button", { name: "Give it to the agent" })).toBeVisible();
+    await p.evaluate(() => window.scrollTo(0, 0));
+  } },
+  { name: "task-files", open: async (p) => {
+    await p.route("**/api/attachments", (route) => {
+      const name = route.request().headers()["x-attachment-name"] ?? "";
+      return route.fulfill({ status: 201, json: { attachment: { id: `att_${name.length}`, taskId: "", name, mime: "image/png", size: 245760 } } });
+    });
+    await p.goto("/demo/tasks");
+    const box = p.getByLabel("What needs doing?");
+    await box.fill("The webhook retries in the screenshot stop after one try; make them back off five times.");
+    const file = (name: string, mimeType: string, size: number) => ({ name, mimeType, buffer: Buffer.alloc(size, 1) });
+    await p.getByLabel("Choose files").setInputFiles([file("retry-screenshot.png", "image/png", 245760), file("trace-from-provider.json", "application/json", 18_000), file("notes.heic", "image/heic", 9000)]);
+    await expect(p.getByRole("list", { name: "Files" })).toContainText("trace-from-provider.json");
+    await expect(p.getByText("notes.heic is not a file the agent reads: PNG, JPEG, GIF, WebP, PDF, text or JSON.")).toBeVisible();
   } },
   { name: "task-live", open: async (p) => {
     await taskAs(p, { status: "running", requests: [], queuePosition: null, followUp: "steer", startedAt: new Date(Date.now() - 86_000).toISOString(), messages: [{ id: "m1", text: "Name the provider's outage windows in the runbook too.", quotes: null, createdAt: new Date().toISOString() }, { id: "m2", text: "Keep it short.", quotes: [{ path: "runbooks/failed-webhooks.md", lines: "38-40", text: "Each event is tried five times" }], createdAt: new Date().toISOString() }] }, LIVE);
@@ -285,6 +333,28 @@ const SCREENS: Screen[] = [
     await p.goto("/demo/team");
     await p.locator(".plugin-card").getByRole("button", { name: "Install the plugin…" }).click();
     await expect(p.locator(".plugin-card").getByRole("button", { name: "Install", exact: true })).toBeVisible();
+  } },
+  { name: "team-handbooks", open: async (p) => {
+    await inMode(p, "local");
+    await handbooks(p);
+    await p.goto("/demo/team");
+    const section = p.getByRole("region", { name: /^Your handbooks/ });
+    await expect(section).toContainText("payments-skills");
+    await section.getByText("payments-skills", { exact: true }).first().click();
+  } },
+  { name: "task-setup", open: async (p) => {
+    await inMode(p, "local");
+    await workFolders(p);
+    await handbooks(p);
+    await p.goto("/demo/tasks");
+    await p.getByLabel("What needs doing?").fill("Add a retry to the payments webhook.");
+    await expect(p.getByRole("heading", { name: "This task will use" })).toBeVisible();
+  } },
+  { name: "task-started-with", open: async (p) => {
+    await taskAs(p, { status: "needs-review", setup: HANDBOOKS.sources, off: { sources: [], skills: [{ source: "yours", name: "on-call-handover" }], commands: [], mcpServers: [] }, offChanges: 1,
+      used: { skills: [{ name: "add-endpoint", source: "folder", sourceLabel: "this folder (payments-api)", seq: 3 }, { name: "review-checklist", source: "plugin:payments-skills@payments-market", sourceLabel: "payments-skills 1.4.0", version: "1.4.0", seq: 5 }], mcpServers: [{ name: "tracker", source: "yours", sourceLabel: "yours", seq: 2 }] } });
+    await expect(p.locator("section.task-started")).toBeVisible();
+    await p.locator("section.task-started").scrollIntoViewIfNeeded();
   } },
   { name: "team-personal-alone", open: async (p) => {
     await inMode(p, "local");
@@ -742,4 +812,20 @@ test.describe("the main screens drawn for a look over", () => {
       });
     }
   }
+});
+
+test("given a fold on the new task form, when it opens, then what is inside starts one indent in from the fold's own left edge, not against it", async ({ page }) => {
+  // given
+  await page.goto("/demo/tasks");
+  const fold = page.getByRole("form", { name: "New task" }).locator("details.more").first();
+  await fold.locator("summary").click();
+
+  // when
+  const edges = await fold.evaluate((el) => {
+    const left = (n: Element) => Math.round(n.getBoundingClientRect().left);
+    return { fold: left(el), inside: left(el.querySelector(":scope > :not(summary)")!), indent: parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fold-indent")) || 0 };
+  });
+
+  // then
+  expect(edges.inside - edges.fold).toBeGreaterThanOrEqual(15);
 });

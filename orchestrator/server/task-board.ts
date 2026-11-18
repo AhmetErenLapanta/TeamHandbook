@@ -10,10 +10,11 @@ import { route } from "./route-scopes.js";
 import { everyTask, visibleTasks } from "./tasks/guards.js";
 import { taskPhase } from "./tasks/phase.js";
 import type { TaskPhase } from "./tasks/phase.js";
-import { machineWaits } from "./tasks/runner.js";
+import { machineWaits, waitingBehind } from "./tasks/runner.js";
 import { taskForge, taskState } from "./tasks/state.js";
 import type { TaskForge, TaskState } from "./tasks/state.js";
 import type { TaskCost, TaskRecord, TaskStatus } from "./tasks/types.js";
+import { agentTimeMs } from "./task-requests.js";
 
 /*
  * The data the Tasks screen and the command palette read in one call each. Tasks groups a
@@ -50,6 +51,8 @@ export interface BoardCard {
   /** In waiting for a computer: none of the starter's is connected, or theirs is away; or for their usage limit to reset at `resetAt`. */
   waitingFor: "connect" | "machine" | "limit" | null;
   resetAt?: string;
+  /** In line behind a task that waits on its person's answer to a card: that task. */
+  waitingBehind?: { id: string; title: string };
   /** Why it failed or stopped, as its page says it; null while it has not. */
   error: string | null;
   /** The size of its change, files and lines; null before there is one or when it cannot be read. */
@@ -58,6 +61,8 @@ export interface BoardCard {
   cost: TaskCost;
   /** Why a stopped or failed task ended, in one sentence; null for any other and when the run said nothing. */
   reason: string | null;
+  /** How long its agent ran, as the task's page says it; absent while it runs and on one from before it was kept. */
+  ranMs?: number;
 }
 
 export interface TaskBoard {
@@ -111,7 +116,7 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
   const week = new Date(now - WEEK_MS).toISOString();
   const open = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["queued", "running", "interrupted"] });
   const reviewed = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["needs-review"], finishedSince: new Date(now - REVIEW_DAYS * 86_400_000).toISOString() });
-  const ended = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["failed", "cancelled"], finishedSince: week });
+  const ended = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["failed", "cancelled", "nothing-changed"], finishedSince: week });
   const tasks = [...open, ...reviewed, ...ended];
 
   const requests = new Map<string, RequestRecord>();
@@ -124,6 +129,7 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
   }
   const statusOf = (repoId: string, number: number) => requests.get(`${repoId}#${number}`)?.status ?? null;
   const waits = await machineWaits(ctx, tasks.filter((t) => t.runner === "local" && t.status === "queued").map((t) => t.createdBy), now);
+  const behind = await waitingBehind(ctx, tasks);
   // A teammate's suggested follow-up waits on the task's starter, on a request still open.
   const suggested = await ctx.store.waitingSuggestionTasks(ctx.tenant, tasks.map((t) => t.id));
 
@@ -133,12 +139,16 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
     const phase = taskPhase(task, statusOf);
     const waitingFor = task.status === "interrupted" && task.limitResetAt ? "limit" : task.runner === "local" && task.status === "queued" ? (waits.get(task.createdBy) ?? null) : null;
     // A run asks while it works, or a run that stopped asked its starter one question: both wait on their answer.
-    const asking = (task.status === "running" && (await ctx.store.taskRequests(ctx.tenant, task.id)).some((r) => r.status === "pending")) || (task.question !== undefined && task.question !== null && !task.question.answer);
+    // The cards are read where they change a number: a running task's answer and its time so far, an ended one's time when no run counted it.
+    const cards = task.startedAt && (task.status === "running" || (task.finishedAt && task.ranMs === undefined)) ? await ctx.store.taskRequests(ctx.tenant, task.id) : [];
+    const asking = (task.status === "running" && cards.some((r) => r.status === "pending")) || (task.question !== undefined && task.question !== null && !task.question.answer);
+    // How long the agent worked, as the task's page says it: its cards' waits left out, so far for a running task.
+    const ranMs = task.status === "running" && task.startedAt ? agentTimeMs(task.startedAt, now, cards) : task.ranMs ?? (task.startedAt && task.finishedAt ? agentTimeMs(task.startedAt, Date.parse(task.finishedAt), cards) : undefined);
     // An interrupted task without a request reads as in review to taskPhase; its next step is to continue.
     const next: YourTurn | null = asking ? "answer" : task.status === "interrupted" ? "continue" : task.status === "failed" ? "retry" : suggested.has(task.id) ? "follow-up" : phase === "review" ? "review" : null;
     // A teammate's task that waits on them is their turn, not the reader's: it stays off the board and in the full list.
     if (next && task.createdBy !== user.email && task.createdBy !== user.id) continue;
-    const turn: Turn | null = waitingFor ? "waiting" : next ? "yours" : task.status === "queued" || task.status === "running" ? "agents" : phase === "merged" || phase === "failed" ? (task.finishedAt && task.finishedAt >= week ? "done" : null) : null;
+    const turn: Turn | null = waitingFor ? "waiting" : next ? "yours" : task.status === "queued" || task.status === "running" ? "agents" : phase === "merged" || phase === "failed" || phase === "finished" ? (task.finishedAt && task.finishedAt >= week ? "done" : null) : null;
     if (!turn) continue;
     if (turn === "yours" || turn === "agents") {
       for (const repoId of new Set([task.repoId, ...(task.targets ?? []).map((t) => t.repoId)])) (byRepo[repoId] ??= { yours: 0, agents: 0 })[turn]++;
@@ -161,11 +171,13 @@ export async function taskBoard(ctx: OrchestratorContext, user: Principal, now =
       finishedAt: task.finishedAt,
       waitingFor,
       ...(waitingFor === "limit" ? { resetAt: task.limitResetAt } : {}),
+      ...(behind.has(task.id) ? { waitingBehind: behind.get(task.id) } : {}),
       error: task.error,
       changes: null,
       request: request ? { repoId: request.repoId, number: request.number, status: request.status, url: request.url } : null,
       cost: task.cost,
       reason: task.status === "failed" || task.status === "interrupted" ? endReason(task.error) : null,
+      ...(ranMs !== undefined ? { ranMs } : {}),
     });
   }
 

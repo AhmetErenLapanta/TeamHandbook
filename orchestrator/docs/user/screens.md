@@ -16,6 +16,34 @@ under the person's name; the search is beside it.
   days, **Team handbook** (the team's skills, MCP servers and commands) and **Policies**.
 - **Integrations**: each service and each repository's forge access.
 
+**Your handbooks** on Team lists, on your own computer, where your Claude Code draws its skills,
+commands, MCP servers and hooks from: yours, the opened folder's, the team's repository and each
+installed plugin, one row each, with a version, "12 of 14 on", and whether an update is waiting
+("1.4.2 → 1.5.0"). A line above says "How agents started here begin. Turning a plugin off turns it
+off in your terminal too." and sums it up, for instance "12 on, 2 off, about 3.4k tokens in every
+task, plus about 1.2k for servers, as measured in your last task, 1 update". A row opens to its items,
+each with what it costs ("In every task about 1.2k tokens, 3% of the context."), whether it was used
+("Used in 3 tasks, last Nov 4.") and, for a skill, its text. What is off folds under **Off (N)**, and a
+search box, "Find in this list", shows past 20 items.
+
+- **Switches.** A plugin's switch runs Claude Code's own command and the page says "Ran <command>."; it
+  holds in your terminal too. A skill, command or server of yours or the folder's is left out of the
+  agents started here ("Off for agents started here. Your terminal still has it."). A plugin's server
+  or command has no switch ("It comes with its plugin; turn the plugin off."), nor has a hook, since
+  Claude Code leaves out none of them.
+- **Install, update, remove.** **Add** offers **New skill**, **New command** and **Add a plugin**;
+  every plugin action says first what it runs ("This runs `claude plugin install <name>@<marketplace>`;
+  your terminal gets it too") and what the plugin brings, naming each hook and server. **Update to
+  <version>…** shows what the version adds, changes and removes, and the patch of a changed
+  skill, before it runs. **Remove…** says it cannot be put back from here and offers **Turn off** first.
+  A notice, "<name> <version> runs 2 hooks and 1 MCP server.", with **Look** and ×, appears once per
+  version and never holds anything back.
+- **Your own skills and commands.** **Edit…** shows the change and the file it writes, **Save…**
+  then **Save**; **Remove…** says "This deletes <folder> and nothing else." A skill of a plugin or the team
+  is not edited here: **Copy to Yours** copies it to `~/.claude/skills/`, never over one of yours.
+- **On a team's server** a person with a paired computer sees their own handbooks read from that
+  computer, with the plugin commands run there; with none paired, nothing is drawn.
+
 On one person's own orchestrator, **Team** and the empty first **Tasks** screen carry one card
 while the handbook plugin is missing from their Claude Code: "Add the handbook plugin to your
 Claude Code. It turns what your sessions teach into skills you keep or share." **Install the
@@ -43,10 +71,10 @@ gives its state, its title with where and by whom, how big its change is, and wh
 A task's page puts its change first: **Changes**, each file with its diff, and under it the log,
 folded. A rail beside it holds **The ask** (the description, when there is more than the title),
 **Where** (the project, the team on a team's orchestrator, and the issue it works on) and **Run**
-(the agent, who started it and when, the tests, how long it ran and what it cost).
+(the agent, who started it and when, the tests, how long it ran and what it cost) and, when files were attached, **Files**.
 
 On Tasks and a task's page a task reads queued, running, needs review, failed, cancelled or
-interrupted, and once a person decides, merged or closed for a request and changes kept or changes
+interrupted, **finished, nothing changed** when a run changed no file, and once a person decides, merged or closed for a request and changes kept or changes
 undone for a folder without Git. A card on the Work board is an issue, so it says what each state
 belongs to (**Agent working**, **Request closed**, **Changes to review**, **Changes kept**), where
 the task screens say the state alone.
