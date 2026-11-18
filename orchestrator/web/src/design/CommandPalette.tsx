@@ -57,6 +57,11 @@ export function CommandPalette({ open, onClose, jumps, more, folders, finds }: {
   const found = jumpsFor([...jumps, ...read, ...inFolders, ...found_.filter((j) => !read.some((r) => r.to === j.to))], query);
   const active = found[Math.min(at, found.length - 1)];
   const go = (jump: Jump) => {
+    if (jump.run) {
+      onClose();
+      jump.run();
+      return;
+    }
     // A folder becomes a project before it is opened; a folder it cannot be is said here, and the palette stays.
     if (jump.open) {
       jump.open().then((to) => {
@@ -115,7 +120,7 @@ export function CommandPalette({ open, onClose, jumps, more, folders, finds }: {
                 <div key={group} role="group" aria-labelledby={`${listId}-${group}`}>
                   <p id={`${listId}-${group}`} className="palette-group">{group}</p>
                   {items.map((jump) => (
-                    <div key={jump.to} id={optionId(found.indexOf(jump))} role="option" aria-selected={jump === active} className="palette-option" onMouseDown={(e) => e.preventDefault()} onClick={() => go(jump)}>
+                    <div key={jump.to || jump.label} id={optionId(found.indexOf(jump))} role="option" aria-selected={jump === active} className="palette-option" onMouseDown={(e) => e.preventDefault()} onClick={() => go(jump)}>
                       <span className={jump.group === "Folders" ? "palette-label mono" : "palette-label"}>{jump.label}</span>
                       {jump.detail ? <span className="palette-detail">{jump.detail}</span> : null}
                     </div>

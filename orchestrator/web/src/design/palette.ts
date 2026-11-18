@@ -2,7 +2,7 @@
  * Where the command palette can jump, and the group it is listed under. A folder opens as a project
  * first, so it carries `open`, which answers where to go; `inside` is what typing into it reads.
  */
-export interface Jump { label: string; detail: string; to: string; group: Group; open?: () => Promise<string>; inside?: string; asked?: boolean }
+export interface Jump { label: string; detail: string; to: string; group: Group; open?: () => Promise<string>; inside?: string; asked?: boolean; run?: () => void; pinned?: boolean }
 
 export type Group = "Actions" | "Pages" | "Repositories" | "Folders" | "Tasks";
 
@@ -13,11 +13,13 @@ export const MOST_A_GROUP = 5;
 
 /**
  * The jumps that match what was typed, group by group: a label that starts with it before one that
- * only holds it, then the detail. Nothing typed matches nothing, so the palette opens empty.
+ * only holds it, then the detail. Nothing typed matches nothing, so the palette opens empty, but for a pinned jump:
+ * the page's own action, which stays first.
  */
 export function jumpsFor(jumps: readonly Jump[], query: string): Jump[] {
   const needle = query.trim().toLowerCase();
-  if (!needle) return [];
+  const pinned = jumps.filter((j) => j.pinned && (!needle || j.label.toLowerCase().includes(needle)));
+  if (!needle) return pinned;
   const score = (j: Jump) => {
     // The folders and what the orchestrator found were read for what was typed, so each one already matches it.
     if (j.group === "Folders" || j.asked) return 0;
@@ -26,9 +28,9 @@ export function jumpsFor(jumps: readonly Jump[], query: string): Jump[] {
     if (label.includes(needle)) return 1;
     return j.detail.toLowerCase().includes(needle) ? 2 : null;
   };
-  return GROUPS.flatMap((group) =>
+  return [...pinned, ...GROUPS.flatMap((group) =>
     jumps
-      .filter((j) => j.group === group)
+      .filter((j) => j.group === group && !j.pinned)
       .flatMap((j) => {
         const s = score(j);
         return s === null ? [] : [{ j, s }];
@@ -36,7 +38,7 @@ export function jumpsFor(jumps: readonly Jump[], query: string): Jump[] {
       .sort((a, b) => a.s - b.s)
       .slice(0, MOST_A_GROUP)
       .map((m) => m.j),
-  );
+  )];
 }
 
 /**
