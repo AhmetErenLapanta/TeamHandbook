@@ -45,6 +45,7 @@ orchestrator through WSL.
 - Connect Jira in one click. Your boards and sprints show up as they are.
 - Pick a ticket and press Start. Your own Claude Code does it, with your team's skills and MCP servers.
 - Watch it work, then review the change. Nothing merges, and nothing is written to Jira, without you.
+- See and change what each task starts with: the skills, plugins and MCP servers your Claude Code loads, on Team, and what one task leaves out.
 
 A real ticket became a reviewed 8-file change in 3 min 37 s.
 
@@ -67,8 +68,8 @@ On one machine, no account and no server:
 
 - **Work** shows your Jira board, a GitLab project or a GitHub repository. Connect each in one click:
   **Sign in with Atlassian**, or **Sign in with GitHub** / **GitLab** through your own `gh` or `glab`
-  (or with a one-time code, nothing to install, where the orchestrator has its own application
-  registered with that forge).
+  (or, for GitHub, with a one-time code and nothing to install; GitLab.com does the same once an
+  application is registered for it).
   Pick an issue, press **Start**, watch the agent live, read **Changes**, press **Keep**.
 - Or name a folder and write what should change. The Claude Code signed in on this machine does it
   with your own settings, skills and MCP servers, behind a guard that keeps it inside the folder.
@@ -77,8 +78,10 @@ On one machine, no account and no server:
   in a request on its own branch, and nothing reaches the repository until you merge it.
 - Checks (your tests, or the ones the folder names) run before and after, inside your machine's
   sandbox; a failing change gets two repair rounds before it is marked broken.
-- If the handbook plugin is missing from your Claude Code, a card offers to install it; it installs
-  only when you press **Install**.
+- **Your handbooks** on Team shows every skill, command, MCP server and hook your Claude Code
+  loads, from where, what it costs and whether it is used; switch, install, update or edit them there,
+  or leave something out of one task from the new task form. If the handbook plugin is missing, a card
+  offers to install it, only when you press **Install**.
 - **Your turn** and **The agents' turn** list what needs you across tasks in flight.
 - What you said while a task ran (a follow-up, a denied call, an undo reason) can become a draft
   skill, yours to keep or reject.

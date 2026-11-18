@@ -15,8 +15,10 @@ points, in progress, to do), then the issues in review, those agents are at work
 ones and the next one, one a line. The orchestrator sends it nowhere; the person pastes it, and
 where the browser refuses the clipboard the page says to select the board's text instead. Below
 it, each card shows its title, parent, key, type, priority, points and assignee, and
-the agent's state last. Pressing a card's title shows it in the rail beside the board, whose one
-action is **Start an agent**. A board with no sprints (a Kanban board, or a whole project read
+the agent's state last. The columns take the page's width until a card is picked; pressing a card's title then opens it
+in a rail beside the board, whose one action is **Start an agent**. The board says when it was
+read, as "Read from the tracker at <time>" in your own clock, and a card whose task waits on you
+says "Waiting for you." A board with no sprints (a Kanban board, or a whole project read
 through a person's own server) is drawn as the board itself: every issue on it but its epics, which
 show as their cards' parent line, and the done ones from the last two weeks. A Scrum board between
 sprints keeps its backlog. The board picker names each board's kind: Scrum, Kanban or whole
@@ -97,7 +99,7 @@ was read is kept in the orchestrator's memory alone. With the organization's aut
 none enabled, the boards are not read for them; an automation whose owner or admin no longer is one
 reads nothing, and its deliveries say so once.
 
-Nothing in a tracker changes until an owner or an admin turns on "Move Jira issues when a card
+Nothing in a tracker changes until an owner or an admin turns on (on your own orchestrator, you turn it on) "Move Jira issues when a card
 moves on Work" on the tracker's card under Integrations; it is off by default, and while it
 is off a board reads its tracker and says on its moves switch why it moves nothing.
 
@@ -123,4 +125,7 @@ issue changes**, over several (`"targets": "orchestrator"`, see [A task over sev
 repositories](tasks.md#a-task-over-several-repositories)). Each item is started or refused on its own,
 in order, and the answer lists the refused ones by their place in the list with the reason; the
 started ones wait in the organization's one queue like any other task, and the budget each start
-reads counts the ones before it.
+reads counts the ones before it. On your own orchestrator each
+issue shows the folder its task will work in before it starts, with the reason when there is one
+("Finding its folder…", then **Folder for <KEY>** with **Pick a folder**); where none is known the
+start asks for one, and **Start N agents** waits until every issue has a folder.

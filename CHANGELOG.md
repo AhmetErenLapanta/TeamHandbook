@@ -4,6 +4,97 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+This release carries Orchestrator 0.3.0. The plugin's own commands and hooks are unchanged.
+
+### Orchestrator 0.3.0: Added
+
+- **Polish from a real walk-through.** Your handbooks now keeps what is switched off in one group at the
+  bottom, draws each row as one line with its switch at the right edge, puts Add under the list and has
+  **Check for updates**, which refreshes the marketplaces your Claude Code knows on your click. The new
+  task form shows what the task will use in a panel at its right, and the panel's left edge can be
+  dragged, stepped with the arrow keys and reset with a double press, remembering its width. Work
+  remembers the source, board and sprint you last looked at, the pages draw the last data they had at
+  once and refresh behind it, and the answer to Ask about it shows in the rail beside its question.
+- **Your handbooks.** On Team, one row for each place your Claude Code draws a skill, command, MCP
+  server or hook from (yours, the folder's, the team's repository, each plugin), with what each holds,
+  what it costs in every task and whether it is used. Turn a plugin on or off, install one from the
+  marketplaces your Claude Code knows, update it after reading what the new version adds, changes and
+  removes, or remove it; each runs Claude Code's own command, says first what it will run, and holds in
+  your terminal too. Edit, add or delete your own skills and commands as plain files, shown as a
+  change before Save, and copy a plugin's skill to yours. A plugin's hooks and servers are named
+  before you install or update it. Nothing typed becomes a command, an address or an environment value.
+  On a team's server you see your own handbooks through your paired computer.
+- **A task starts with a setup you can change for it alone.** The new task form folds "This task will
+  use your default setup" and lets you switch a plugin, skill, command or server for that one task
+  ("Only for this task. Your default stays the same."); the task page's **Started with** block
+  names what the agent started with, used and loaded, and says when something turned off still
+  loaded. A skill the agent used on a task you corrected offers **Improve this skill…** or **Copy to Yours**.
+- **Undo from a turn.** A task's change is read a turn at a time, and you undo from a turn you pick, on
+  a task's own checkout, in a folder with or without Git and on a connected machine; a request gets one
+  commit, never forced. **Start a new task from here…** starts another task from the files as a turn left them.
+- **Stop this step** cuts the agent's turn and leaves the task waiting for what you say next.
+- **A task repeats.** On your own orchestrator, **More options** sets a task to start again at a time of
+  day, at most once a day and twenty to a person; a run missed while the orchestrator was not running is
+  not started late and is said in one line; **Repeats** on Tasks lists them with **Stop repeating…**.
+- **A picked issue can be asked about**: an agent that only reads answers, as a task that changed
+  nothing, and a change it makes anyway is refused and taken back.
+- **The first task in a folder whose files name no check asks its own agent to name them**; what it
+  names is offered beside what the files name, runs only once you approve it, and is said once in the review.
+- **A task at its plan's usage limit goes on with a second Claude Code sign-in** you named in the task
+  limits, on your click, as a new session that says so.
+- **A follow-up after a pause past the agent's cache has the conversation compacted first.**
+- **A task goes on with a follow-up wherever it worked.** In review or after you kept its change, in a
+  Git repository, a folder without Git or a folder of several repositories, **Continue with a
+  follow-up** starts the next run from the kept change on a branch of its own, or joins the
+  review; a task that finished with nothing changed takes one too, and its next run hears the
+  agent's answer, fenced as data.
+- **A run that changes nothing ends as "finished, nothing changed"**, with the agent's last words
+  under **The agent's answer** and **Run again**.
+- **Files can go with a task**: **Attach files**, a drop or a paste on the new task form and on the
+  follow-up boxes (PNG, JPEG, GIF, WebP, PDF, text or JSON, up to 10 MB, 20 to a task); the agent
+  reads them and they are not part of the change.
+- **A secret the agent asks for** is a card with one password field, given by the task's starter alone
+  and kept for that run only.
+- **Notices with the page closed** on your own orchestrator: the notice switch reaches the browser
+  through a push worker; the message names the task and its state only.
+- **Work's Start agents shows each issue's folder before it starts**, with the reason, and asks for one
+  where none is known; the board says when it was read, in your own clock.
+- **A request you opened shows its forge's own facts** in one line under its link, read once and again on your press.
+- **Find in a task**: the palette's first row finds in the task you are on. Code in the agent's words
+  is coloured by comments, strings, numbers and keywords.
+- **A code sign-in keeps its refresh token**, renews a lapsed token only on your press and offers **Sign
+  in again** when the forge will not renew it. GitHub's application ships with the release; GitLab.com's
+  needs one registered once, and `off` as a client ID turns the sign-in off.
+- **An orchestrator only you use copies its database once a day** and keeps the last seven in the data
+  folder (`ORCHESTRATOR_BACKUP_HOURS=0` turns it off); the copy holds the database alone and no
+  `secret.key`, `handbook-orchestrator backup` takes one now and says where it is, and
+  `handbook-orchestrator doctor --fix` puts the newest whole one back. `doctor` also warns, before a
+  start, when sealed values would no longer open because the key is missing.
+- **Settings says what the data takes**, and a page that lost the orchestrator says so under the top bar and reads itself again when it is back.
+- **A change proposed to the handbook says whether it adds, updates or removes**, and a row nobody
+  here can change says who can.
+- **OpenCode goes on in its own session on Continue**, with the task's rules given again.
+
+### Orchestrator 0.3.0: Changed
+
+- **A failed task's reason says in your words what happened and what to do** for the failures tasks meet.
+- **A Personal orchestrator names its person "you"**, shows no team, role or placeholder identity,
+  and the Jira card says "Read with your API token".
+- **Cost counts what a stopped or cut-off task had spent**, and a cost line counts only what is measured;
+  the start form shows what tasks like the next one have cost once five have finished.
+- **A task's run time leaves out the time the agent waited on you.**
+- **A folder with no Claude Code settings of its own is not asked whether to trust them.**
+- **Logs, cards and follow-ups name people by name, never by the address the record keeps.**
+- **The command that repairs an agent is shown to whoever manages agent readiness**, and can be copied.
+- **A lesson draft with no "Use when…" trigger, or a body under 40 characters, is dropped as weak** before it reaches your queue.
+
+### Upgrading from Orchestrator 0.2.0
+
+Eighteen additive database steps (48 to 65) run on the first start, after a copy named
+`backups/before-schema-65-<time>.db`; they add columns and tables only. No setting was renamed or removed.
+
 ## [0.34.0] - 2026-11-12
 
 This release carries Orchestrator 0.2.0. The plugin's own commands and hooks are unchanged.

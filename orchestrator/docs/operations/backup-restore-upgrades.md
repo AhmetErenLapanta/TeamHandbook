@@ -19,6 +19,41 @@ every admin becomes an owner and every team owner a member who keeps their teams
 https the session cookie is renamed `__Host-...` in the same release, so everyone signs in
 once more after it.
 
+### On your own machine
+
+Without Docker, everything is in the data folder: `~/Library/Application Support/TeamHandbook
+Orchestrator` on macOS, `$XDG_DATA_HOME/teamhandbook-orchestrator` (or
+`~/.local/share/teamhandbook-orchestrator`) on Linux, or the folder `--data-dir` names. It holds
+`orchestrator.db`, `secret.key` and the copies under `backups/`; `ORCHESTRATOR_BACKUP_DIR` names another
+folder for the copies, such as one on another disk, and `doctor` suggests it when no copy is taken on
+a schedule.
+
+- **Taking a copy.** An orchestrator only you use takes one a day by itself and keeps the last
+  seven (`ORCHESTRATOR_BACKUP_KEEP`); `ORCHESTRATOR_BACKUP_HOURS` changes the hours or, as `0`, turns
+  it off, and a start whose newest copy is older than that takes a new one about 30 seconds
+  later. For one now, run `handbook-orchestrator backup` in another terminal: it asks the
+  orchestrator running on this data folder for a copy and says "backup: the copy is in <folder>"
+  (when none runs it says "no orchestrator is running on <folder>; start it, then run this again").
+  There is no process to find and no signal to send. The copy is the folder `backups/backup-<time>/`
+  holding `orchestrator.db` and `manifest.json`: the database alone, since your own folders stay
+  where they are. `ORCHESTRATOR_BACKUP_DIR` writes the copies somewhere else, such as another disk.
+- **The copy does not hold `secret.key`.** Sealed values (a forge token, a task's secrets, a Jira sign-in) are
+  encrypted in the copied database, and open only with the key they were sealed with. A copy put on
+  another machine, or into a folder that lost its `secret.key`, starts with a new key, and none
+  of them opens. `handbook-orchestrator doctor` says so on stopped data, before a start does it:
+  `sealed-no-key` when the database holds sealed values and no key is set or kept in the data
+  folder, `sealed-lost` when the key in use opens some of them no more. The way out is to put back
+  the key they were sealed with (the `secret.key` of the data folder they came from, or
+  `ORCHESTRATOR_SECRET_KEY`), or to enter the values again. Keep `secret.key` somewhere else.
+- **A damaged database.** Stop the orchestrator and run `handbook-orchestrator doctor`; when the
+  database fails SQLite's check it says so. `handbook-orchestrator doctor --fix` puts the newest
+  whole copy back, keeps the damaged file beside it as `orchestrator.db.damaged-<time>` (with its
+  write-ahead log), and says what it did; what happened after that copy is not in it. Then start as
+  usual. The folder in `backups/` sits inside the data folder, so a lost disk takes the copies with
+  it: copy `backups/` and `secret.key` somewhere else now and then.
+- **Your repositories** stay in their own folders, so they need nothing from a copy; the compose
+  steps below that run `git clone --mirror` are for a server.
+
 Stop the orchestrator for the copy, so the database and the repositories it names agree. With the
 compose file, whose project names the volume (`docker volume ls` shows it):
 

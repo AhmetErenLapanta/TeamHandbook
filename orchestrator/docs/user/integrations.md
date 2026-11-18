@@ -1,10 +1,12 @@
 ## Integrations
 
 **Integrations** lists the services the orchestrator works with as cards, with a search box. Each
-card shows its state (not set up, requested, connected) and who turned it on and when. Anyone
-signed in reads the page; an admin changes the organization's integrations.
+card shows its state (not set up, requested, connected) and, on a team's orchestrator, who turned it
+on and when. Anyone signed in reads the page; an admin changes the organization's integrations. On
+your own orchestrator the page speaks to you, not to an owner or an admin: the Jira card says "Read
+with your API token" and names nobody.
 
-Personal and team orchestrators show the same sections and texts. On one person's own computer, the
+Personal and team orchestrators show the same sections. On one person's own computer, the
 page says under its first sentence "Your tasks use the 3 MCP servers in your Claude Code." (the
 number is theirs; it says "the MCP server" for one and nothing for none), with no list, since tasks use
 them as they are.
@@ -50,8 +52,11 @@ beforehand, so it cannot be connected in one step, and Slack notifications stay 
   starts the person's own `gh` or `glab` browser sign-in and shows its one-time code ("Enter
   ABCD-1234 on GitHub") with **Open GitHub**, then waits. Where the orchestrator has its own GitHub or GitLab.com application (its registered client ID is
   in `ORCHESTRATOR_FORGE_<GITHUB|GITLAB>_DEVICE_CLIENT_ID` or in the release), the same button gives
-  a one-time code to enter on the forge's page instead: nothing to install, and the token is sealed
-  for that person alone. Without the CLI or that application the card says to install the CLI,
+  a one-time code to enter on the forge's page instead: nothing to install. GitHub's application ships with the release; GitLab.com's is registered once
+  by whoever runs the orchestrator, and `off` as the client ID turns the code sign-in off for that
+  forge. The token and its refresh token are sealed for that person alone, and a lapsed token is
+  renewed only when you press (opening a request, pushing); where the forge will not renew it, the
+  card offers **Sign in again**. Without the CLI or that application the card says to install the CLI,
   then **Check again**. Elsewhere the card connects the organization through the operator's OAuth
   application, with **Connect with GitHub** or **Connect with GitLab**
   ([registering them](../operations/forge-apps.md#registering-the-gitlab-and-github-apps)). Either

@@ -2,17 +2,18 @@
 
 Two kinds of registration live here: a two-minute one that lets one person's orchestrator sign in to GitHub or GitLab.com with a code and no command line tools, and the applications a shared team orchestrator connects the organization through.
 
-## Sign in without the command line tools (two minutes, once)
+## Sign in without the command line tools
 
-A single person's orchestrator can sign in to GitHub or GitLab in the browser with a short code, with no `gh` or `glab` installed. It needs one application registered for it on each forge, once. The orchestrator ships no secret and keeps none: the sign-in sends only the application's public client ID.
+A single person's orchestrator can sign in to GitHub or GitLab in the browser with a short code, with no `gh` or `glab` installed. The sign-in goes through an application registered on the forge: GitHub's is compiled into the release, and GitLab.com's is registered once, in two minutes, as below; register a GitHub one only to sign in through your own. The orchestrator ships no secret and keeps none: the sign-in sends only the application's public client ID.
 
 ### GitHub: an OAuth App
 
 1. On github.com open **Settings > Developer settings > OAuth Apps > New OAuth App**, under your account or your organization.
-2. Name it, for instance `TeamHandbook Orchestrator`. **Homepage URL** and **Authorization callback URL** can be any address you own (the code flow never uses them), for instance the project's page.
-3. Tick **Enable Device Flow**, then register the application.
-4. Copy the **Client ID**. Do not generate a client secret; none is used.
-5. Set `ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID=<Client ID>`, then restart the orchestrator. The sign-in asks GitHub for the `repo` and `read:org` scopes.
+2. Name it, for instance `TeamHandbook Orchestrator`. **Homepage URL** and **Authorization callback URL** (GitHub's redirect address; the form requires one) can be any address you own (the code flow never uses them), for instance the project's page.
+3. Tick **Enable Device Flow**.
+4. **Expire user access tokens** is ticked by default, and either way works. Ticked, a person's token lapses after eight hours and the orchestrator renews it on their next press with the refresh token GitHub gave, which lasts six months without use; unticked, the token does not lapse. Then register the application.
+5. Copy the **Client ID**. Do not generate a client secret; none is used, not even to renew a token.
+6. Set `ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID=<Client ID>`, then restart the orchestrator. The sign-in asks GitHub for the `repo` and `read:org` scopes.
 
 This is an OAuth App, not a GitHub App; the GitHub App below is for a shared orchestrator.
 
@@ -23,13 +24,15 @@ This is an OAuth App, not a GitHub App; the GitHub App below is for a shared orc
 3. **Confidential**: unticked. **Scopes**: `api` and `write_repository`.
 4. Save, copy the **Application ID**, and set `ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID=<Application ID>`. Restart the orchestrator.
 
+GitLab.com's token lapses after two hours. The orchestrator renews it on the person's next press with the refresh token GitLab gave, sending the application ID and the refresh token alone; GitLab spends a refresh token on use, so the orchestrator renews one person's token once at a time.
+
 A self-managed GitLab keeps today's way (its own sign-in with `glab`, or the organization's application under **Other ways to connect**).
 
 ### What a person sees
 
-With a client ID set, the GitHub and GitLab cards say "Sign in to GitHub with a one-time code; nothing to install." and offer **Sign in with GitHub** (or **GitLab**). The card shows "Enter <code> on GitHub" with **Open GitHub**, the person enters the code there and approves, and the card says "Connected as <account> on <host>." With no client ID, the card falls back to the `gh` or `glab` way, and says which command to install. A code that is not entered within the time the forge gives is dropped, and the person presses the button again.
+With a client ID set, the GitHub and GitLab cards say "Sign in to GitHub with a one-time code; nothing to install." and offer **Sign in with GitHub** (or **GitLab**). The card shows "Enter <code> on GitHub" with **Open GitHub**, the person enters the code there and approves, and the card says "Connected as <account> on <host>." With no client ID, or with `off` as its value, the card falls back to the `gh` or `glab` way, and says which command to install. A code that is not entered within the time the forge gives is dropped, and the person presses the button again. A token is renewed only when the person presses for a request, never while a screen is open. When the forge refuses a renewal (the person revoked the application, or did not use it for six months), the orchestrator forgets the tokens and the card says why, with **Sign in again**; when the forge does not answer, the tokens stay and the person presses again.
 
-Where the client ID goes for a release: a client ID can also be compiled into a release in `RELEASE_DEVICE_CLIENTS` (`server/forge/device-sign-in.ts`); the environment variable wins when both are set.
+Where the client ID goes for a release: a client ID can also be compiled into a release in `RELEASE_DEVICE_CLIENTS` (`server/forge/device-sign-in.ts`); the environment variable wins when both are set. The orchestrator's own GitHub application is compiled in, so GitHub needs no registration of your own; GitLab.com's is not yet. To turn a forge's code sign-in off, the release's application included, set `ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID=off` (or the GitLab one); its card then offers the other ways to connect, and a sign-in a person made before is no longer used to open anything. An empty value keeps the release's application.
 
 ---
 
