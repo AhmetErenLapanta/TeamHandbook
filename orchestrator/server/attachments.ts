@@ -2,11 +2,13 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { principalOf } from "./accounts.js";
 import { suspended } from "./scim.js";
 import type { OrchestratorContext } from "./app.js";
 import type { AttachmentRecord } from "./attachment-store.js";
+import type { FollowUpAttachment } from "./task-followups.js";
 import { canEditTeam } from "./auth.js";
 import type { OrchestratorEnv } from "./auth.js";
 import { newId } from "./ids.js";
@@ -19,6 +21,38 @@ export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const ATTACHMENT_LIMITS = { perTask: 20, tenantBytes: 1024 * 1024 * 1024 };
 /** A signed address lasts long enough for the browser that asked for it to fetch it, and no longer. */
 export const URL_LIFETIME_MS = 15 * 60_000;
+
+/** Where a file uploaded before its task exists is kept: under its uploader, until the task they start takes it. */
+export const draftOf = (user: { id: string }): string => `draft:${user.id}`;
+/** How long such a file waits for its task; an older one is removed at its uploader's next upload. */
+export const DRAFT_LIFETIME_MS = 60 * 60_000;
+
+/** How the agent is told of a file: as an image, a PDF or text. */
+export const attachmentKind = (mime: string): "image" | "pdf" | "text" => (mime.startsWith("image/") ? "image" : mime === "application/pdf" ? "pdf" : "text");
+
+/** The task's own files a follow-up names, as the agent is told of them; null when one is not the task's. */
+export async function followUpAttachments(ctx: Pick<OrchestratorContext, "store" | "tenant">, taskId: string, ids: unknown): Promise<FollowUpAttachment[] | null> {
+  if (ids === undefined) return [];
+  if (!Array.isArray(ids) || ids.length > ATTACHMENT_LIMITS.perTask || new Set(ids).size !== ids.length) return null;
+  const files: FollowUpAttachment[] = [];
+  for (const id of ids) {
+    const kept = typeof id === "string" ? await ctx.store.getAttachment(ctx.tenant, id) : null;
+    if (!kept || kept.taskId !== taskId) return null;
+    files.push({ id: kept.id, name: kept.name, kind: attachmentKind(kept.mime) });
+  }
+  return files;
+}
+
+/** The files a start names, if each is its starter's own upload still waiting for a task; null when one is not. */
+export async function startAttachments(ctx: Pick<OrchestratorContext, "store" | "tenant">, user: { id: string }, ids: unknown): Promise<string[] | null> {
+  if (ids === undefined) return [];
+  if (!Array.isArray(ids) || ids.length > ATTACHMENT_LIMITS.perTask || new Set(ids).size !== ids.length) return null;
+  for (const id of ids) {
+    const kept = typeof id === "string" ? await ctx.store.getAttachment(ctx.tenant, id) : null;
+    if (!kept || kept.taskId !== draftOf(user) || Date.now() - Date.parse(kept.createdAt) > DRAFT_LIFETIME_MS) return null;
+  }
+  return ids as string[];
+}
 const PURPOSE = "task-attachment-url";
 
 /** The types a task takes, each known by its first bytes as well as by what the upload says it is. */
@@ -114,18 +148,45 @@ export function attachmentRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv
   const edits = (user: OrchestratorEnv["Variables"]["user"], task: TaskRecord) => task.createdBy === user.email || task.createdBy === user.id || canEditTeam(user, task.team);
 
   // The body is cut at the limit as it streams in, so an upload without a length, or with a false one, is not read whole first.
-  route(app, "POST /api/tasks/:id/attachments", bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES, onError: (c) => c.json({ error: "an attachment is at most 10 MB" }, 413) }), async (c) => {
+  const limited = bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES, onError: (c) => c.json({ error: "an attachment is at most 10 MB" }, 413) });
+  route(app, "POST /api/tasks/:id/attachments", limited, async (c) => {
     const user = c.get("user");
     const task = await taskOf(c.req.param("id") ?? "");
     if (!task || !seesTask(user, task)) return c.json({ error: "unknown task" }, 404);
     if (!edits(user, task)) return c.json({ error: "only whoever started the task or edits its team attaches files to it" }, 403);
+    return keep(c, task.id);
+  });
+
+  // A file for a task its person is about to start: kept under them until the start names it.
+  route(app, "POST /api/attachments", limited, async (c) => {
+    const user = c.get("user");
+    const stale = Date.now() - DRAFT_LIFETIME_MS;
+    for (const old of await ctx.store.taskAttachments(ctx.tenant, draftOf(user))) {
+      if (Date.parse(old.createdAt) >= stale) continue;
+      await ctx.store.deleteAttachment(ctx.tenant, old.id);
+      rmSync(attachmentPath(ctx.dataDir, ctx.tenant, old.id), { force: true });
+    }
+    return keep(c, draftOf(user));
+  });
+
+  route(app, "DELETE /api/attachments/:att", async (c) => {
+    const user = c.get("user");
+    const attachment = await ctx.store.getAttachment(ctx.tenant, c.req.param("att") ?? "");
+    if (!attachment || attachment.taskId !== draftOf(user)) return c.json({ error: "unknown attachment" }, 404);
+    await ctx.store.deleteAttachment(ctx.tenant, attachment.id);
+    rmSync(attachmentPath(ctx.dataDir, ctx.tenant, attachment.id), { force: true });
+    return c.json({ removed: attachment.id });
+  });
+
+  async function keep(c: Context<OrchestratorEnv>, taskId: string) {
+    const user = c.get("user");
     if (!ctx.vault) return c.json({ error: "attachments need ORCHESTRATOR_SECRET_KEY, which signs their addresses" }, 409);
     if (Number(c.req.header("content-length") ?? 0) > MAX_ATTACHMENT_BYTES) return c.json({ error: "an attachment is at most 10 MB" }, 413);
     const bytes = Buffer.from(await c.req.arrayBuffer());
     const mime = (c.req.header("content-type") ?? "").split(";")[0]!.trim();
     const problem = attachmentProblem(mime, bytes);
     if (problem) return c.json({ error: problem }, bytes.length > MAX_ATTACHMENT_BYTES ? 413 : 400);
-    const attachment: AttachmentRecord = { tenant: ctx.tenant, id: newId("att"), taskId: task.id, name: cleanAttachmentName(decodeURIComponent(c.req.header("x-attachment-name") ?? "")), mime, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), createdBy: user.email, createdAt: new Date().toISOString() };
+    const attachment: AttachmentRecord = { tenant: ctx.tenant, id: newId("att"), taskId, name: cleanAttachmentName(decodeURIComponent(c.req.header("x-attachment-name") ?? "")), mime, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), createdBy: user.email, createdAt: new Date().toISOString() };
     const path = attachmentPath(ctx.dataDir, ctx.tenant, attachment.id);
     mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
     writeFileSync(path, bytes, { mode: 0o600 });
@@ -136,7 +197,7 @@ export function attachmentRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv
       return c.json({ error: kept === "task-full" ? `a task holds at most ${ATTACHMENT_LIMITS.perTask} attachments` : "the organization's attachments are at their limit; remove some first" }, 409);
     }
     return c.json({ attachment }, 201);
-  });
+  }
 
   route(app, "GET /api/tasks/:id/attachments", async (c) => {
     const task = await taskOf(c.req.param("id") ?? "");
@@ -205,7 +266,16 @@ export function attachmentDownloadRoutes(ctx: OrchestratorContext): Hono<Orchest
 
 /** Removes an organization's attachments made before `before`, rows and files; says how many. */
 export async function purgeAttachments(ctx: Pick<OrchestratorContext, "store" | "tenant" | "dataDir">, before: string): Promise<number> {
-  const old = await ctx.store.attachmentsBefore(ctx.tenant, before);
+  return removeAttachments(ctx, await ctx.store.attachmentsBefore(ctx.tenant, before));
+}
+
+/** Removes the files uploaded for a start that never named them, once they are past their hour; says how many. */
+export async function purgeDraftAttachments(ctx: Pick<OrchestratorContext, "store" | "tenant" | "dataDir">, now: Date): Promise<number> {
+  const old = await ctx.store.attachmentsBefore(ctx.tenant, new Date(now.getTime() - DRAFT_LIFETIME_MS).toISOString());
+  return removeAttachments(ctx, old.filter((a) => a.taskId.startsWith("draft:")));
+}
+
+async function removeAttachments(ctx: Pick<OrchestratorContext, "store" | "tenant" | "dataDir">, old: readonly AttachmentRecord[]): Promise<number> {
   for (const attachment of old) {
     await ctx.store.deleteAttachment(ctx.tenant, attachment.id);
     rmSync(attachmentPath(ctx.dataDir, ctx.tenant, attachment.id), { force: true });

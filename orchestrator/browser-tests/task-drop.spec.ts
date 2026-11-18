@@ -98,3 +98,74 @@ test("given one person's own task, when they discard one file's change, then the
   // then
   await expect.poll(() => sent.dropped).toEqual(["notes/scratch.md"]);
 });
+
+test("given a task whose change was kept a turn at a time, when its starter picks a turn and confirms, then the question names the turns that go and the undo is sent once with the line why", async ({ page }) => {
+  // given
+  const sent: { n: string; body: { commandId?: string; reason?: string } }[] = [];
+  const turns = [
+    { n: 1, said: "Retry a failed capture", at: "2026-11-12T10:40:00Z", files: 2, undone: false },
+    { n: 2, said: "Also return the window", at: "2026-11-12T10:44:00Z", files: 1, undone: false },
+    { n: 3, said: "Rename the helper", at: "2026-11-12T10:50:00Z", files: 1, undone: false },
+  ];
+  await openRequestTask(page);
+  await page.route("**/api/tasks/t1/turns", (route) => route.fulfill({ json: { turns } }));
+  await page.route("**/api/tasks/t1/turns/2/changes", (route) => route.fulfill({ json: { changes: { files: [{ path: "src/window.ts", status: "modified", previousPath: null, additions: 1, deletions: 0, binary: false, test: false }], omitted: 0 } } }));
+  await page.route("**/api/tasks/t1/turns/2/undo", (route) => {
+    sent.push({ n: "2", body: route.request().postDataJSON() as { commandId?: string; reason?: string } });
+    return route.fulfill({ json: { turns: turns.map((t) => ({ ...t, undone: t.n >= 2 })) } });
+  });
+  await page.goto("/demo/tasks/t1");
+
+  // when
+  await page.getByRole("combobox", { name: "Show" }).click();
+  await page.getByRole("option", { name: /Also return the window/ }).click();
+  await expect(page.getByText("src/window.ts")).toBeVisible();
+  await page.getByRole("button", { name: "Undo from this turn…" }).click();
+
+  // then
+  await expect(page.getByText("The files go back to how they were before “Also return the window”; the turn after it goes too, and the conversation stays.")).toBeVisible();
+
+  // when
+  await page.getByLabel("Why").fill("the helper was right as it was");
+  await page.getByRole("button", { name: "Undo these turns" }).click();
+
+  // then
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]?.body.reason).toBe("the helper was right as it was");
+  expect(sent[0]?.body.commandId).toBeTruthy();
+  await expect(page.getByRole("combobox", { name: "Show" })).toContainText("All changes");
+});
+
+test("given a task kept a turn at a time, when its starter starts a new task from a turn with a word on what to do differently, then the word is sent once and the page goes to the new task", async ({ page }) => {
+  // given
+  const sent: { text?: string; commandId?: string }[] = [];
+  const turns = [
+    { n: 1, said: "Retry a failed capture", at: "2026-11-12T10:40:00Z", files: 2, undone: false },
+    { n: 2, said: "Also return the window", at: "2026-11-12T10:44:00Z", files: 1, undone: false, newTaskId: "t9" },
+  ];
+  await openRequestTask(page);
+  await page.route("**/api/tasks/t1/turns", (route) => route.fulfill({ json: { turns } }));
+  await page.route("**/api/tasks/t1/turns/2/changes", (route) => route.fulfill({ json: { changes: { files: [{ path: "src/window.ts", status: "modified", previousPath: null, additions: 1, deletions: 0, binary: false, test: false }], omitted: 0 } } }));
+  await page.route("**/api/tasks/t1/turns/2/new-task", (route) => {
+    sent.push(route.request().postDataJSON() as { text?: string; commandId?: string });
+    return route.fulfill({ status: 201, json: { task: { id: "t9", title: "Retry a failed capture", status: "queued" } } });
+  });
+  await page.goto("/demo/tasks/t1");
+  await page.getByRole("combobox", { name: "Show" }).click();
+  await page.getByRole("option", { name: /Also return the window/ }).click();
+
+  // then
+  await expect(page.getByRole("link", { name: "open it" })).toHaveAttribute("href", /\/tasks\/t9$/);
+
+  // when
+  await page.getByRole("button", { name: "Start a new task from here…" }).click();
+  await expect(page.getByText("A new task starts from the files as this turn left them; this task and its branch stay as they are.")).toBeVisible();
+  await page.getByLabel("What should it do differently?").fill("keep the old helper name");
+  await page.getByRole("button", { name: "Start new task" }).click();
+
+  // then
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]?.text).toBe("keep the old helper name");
+  expect(sent[0]?.commandId).toBeTruthy();
+  await expect(page).toHaveURL(/\/tasks\/t9$/);
+});

@@ -23,6 +23,8 @@ export interface AttachmentStore {
   getAttachment(tenant: string, id: string): Promise<AttachmentRecord | null>;
   taskAttachments(tenant: string, taskId: string): Promise<AttachmentRecord[]>;
   deleteAttachment(tenant: string, id: string): Promise<boolean>;
+  /** Moves these attachments, kept under `from`, to the task `taskId`; says how many moved. */
+  bindAttachments(tenant: string, ids: readonly string[], from: string, taskId: string): Promise<number>;
   /** The organization's attachments made before `before`, for the retention to delete with their files. */
   attachmentsBefore(tenant: string, before: string): Promise<AttachmentRecord[]>;
 }
