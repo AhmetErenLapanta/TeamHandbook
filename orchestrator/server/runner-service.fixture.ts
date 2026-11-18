@@ -19,6 +19,8 @@ export function memoryStore() {
   };
   const natives = new Map<string, string>();
   const contexts = new Map<string, number>();
+  const contextsUsed = new Map<string, { tokens: number; window: number | null }>();
+  const uses: { taskId: string; kind: string; name: string; source: string; sourceLabel: string }[] = [];
   const used = new Map<string, string[]>();
   const patched: { taskId: string; patch: unknown }[] = [];
   const stops = new Set<string>();
@@ -88,8 +90,14 @@ export function memoryStore() {
     async noteUsedSkill(_tenant, taskId, name) {
       used.set(taskId, [...new Set([...(used.get(taskId) ?? []), name])]);
     },
+    async noteTaskUse(_tenant, taskId, kind, name, ref) {
+      uses.push({ taskId, kind, name, ...ref });
+    },
     async noteTaskContext(_tenant, taskId, tokens) {
       if (!contexts.has(taskId)) contexts.set(taskId, tokens);
+    },
+    async noteTaskContextUsed(_tenant, taskId, used) {
+      contextsUsed.set(taskId, used);
     },
     async withdrawTaskRequest(_tenant, taskId, sourceKey) {
       const asked = requests.find((q) => q.taskId === taskId && q.sourceKey === sourceKey && q.status === "pending");
@@ -113,6 +121,6 @@ export function memoryStore() {
       return n;
     },
   };
-  return { store, queued, events, requests, ended, leases, natives, contexts, used, logs, followUps, patched };
+  return { store, queued, events, requests, ended, leases, natives, contexts, contextsUsed, used, uses, logs, followUps, patched };
 }
 

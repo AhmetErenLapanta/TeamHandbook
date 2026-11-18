@@ -1,10 +1,12 @@
 import type { AgentChoices } from "./adapters/contract.js";
+import type { TaskStartedWith, SourceRef, TaskOff, TaskSetupSource, TaskUsed } from "./handbook-use.js";
 import type { ChangedFile } from "../forge/request-diff.js";
 
 /** `interrupted`: a task on a person's machine whose lease ran out; it waits for Continue on that machine and is not finished. */
-export type TaskStatus = "queued" | "running" | "interrupted" | "needs-review" | "failed" | "cancelled";
+/** `nothing-changed`: the agent finished without changing anything, which is an outcome, not a failure; its last words are the answer. */
+export type TaskStatus = "queued" | "running" | "interrupted" | "needs-review" | "failed" | "cancelled" | "nothing-changed";
 
-export const FINISHED: readonly TaskStatus[] = ["needs-review", "failed", "cancelled"];
+export const FINISHED: readonly TaskStatus[] = ["needs-review", "failed", "cancelled", "nothing-changed"];
 
 export type TestOutcome = "passed" | "failed" | "skipped";
 
@@ -81,16 +83,42 @@ export interface TaskRecord {
   tools?: TaskToolChoice | null;
   /** What the person's own Claude Code loaded into a run as them on this orchestrator's host, by count alone; absent when none of it did. */
   loaded?: TaskLoaded | null;
+  /** What its agent said it started with as its session opened; absent until an agent says, and for one that does not. */
+  startedWith?: TaskStartedWith;
   /** The skills the agent called during the run, by name, each once and at most USED_SKILLS_MAX; absent when none. */
   usedSkills?: string[] | null;
   /** How many tokens the agent's first request carried, the context its cost starts from; a run that goes on keeps the first. */
   context?: { tokens: number };
+  /** How much of its context window the agent's last request took, with the window when the agent says it. */
+  contextUsed?: { tokens: number; window: number | null };
   /** When the task's current run on a runner started: a continued task's limit of time counts from here, not from its first start. */
   runStartedAt?: string;
   /** Started to plan first: the agent changes nothing until its starter approves the plan it puts to them. */
   planFirst?: boolean;
+  /** The checks its folder's files name, said on this task's review once, the first time a task works there with none approved. */
+  checksFound?: { command: string; source: string }[];
+  /** What its person turned off for it alone: sources, skills and MCP servers, by source; their Claude Code stays as it is. */
+  off?: TaskOff;
+  /** By how many items what its start turned off differed from its person's own list as it stood then; absent when it did not. */
+  offChanges?: number;
+  /** The handbook sources as they stood when it started, names alone, for its page to say what was loaded, used and off. */
+  setup?: TaskSetupSource[];
+  /** What its agent used, each skill and MCP server with the source the orchestrator's own reading gave it. */
+  used?: TaskUsed;
+  /** Its person continued it at a usage limit with their second Claude Code sign-in; its runs from then use it. */
+  secondSignIn?: true;
+  /** The task and turn it was started from: its first run starts from the files as that turn left them. */
+  seedFrom?: { taskId: string; n: number };
+  /** A question about its issue and folder: its agent reads and answers, and no tool of its writes. */
+  readOnly?: true;
+  /** The branch it starts from and its request goes into, when its person picked one other than the repository's default. */
+  baseBranch?: string;
+  /** It went on after its person kept an earlier run's change: discarding its latest change drops that run's alone. */
+  keptBefore?: boolean;
   /** For a task on its starter's machine cut off at their plan's usage limit: when the limit resets and the task goes on. */
   limitResetAt?: string;
+  /** What the agent said last in a run that changed nothing, masked and cut to LAST_SAID_MAX: the task's answer. */
+  lastSaid?: string;
   /** How long its agent worked over its runs on a machine, its cards' waits left out. */
   ranMs?: number;
   /** Where the orchestrator sent a task started with no project named, and why. */
@@ -140,9 +168,13 @@ export interface TaskChanges {
 
 export const USED_SKILLS_MAX = 20;
 
+/** The most of an agent's last words a task keeps as its answer. */
+export const LAST_SAID_MAX = 4000;
+
 export type TaskMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
 
-export type TaskStage = "working" | "tests" | "request";
+/** `stopped`: its person stopped the agent's step; the session waits for what they say next. */
+export type TaskStage = "working" | "tests" | "request" | "stopped";
 
 /** `local`: a repository on its person's machine whose change stays on the task's branch there, with no request; `reason` says why. */
 export type TaskTargetStatus = "planned" | "working" | "tests" | "request" | "failed" | "skipped" | "local";
@@ -175,8 +207,40 @@ export interface TaskTarget {
   cost: TaskCost;
 }
 
+/**
+ * A task on a folder without git whose change waits for review or was kept: it goes on in the folder from the files as the
+ * last run left them. One its person undid takes no more.
+ */
+/**
+ * A task none of whose runs left a change: one that goes on starts where the first did, told what the agent answered last
+ * and what its person asked for after reading it.
+ */
+export const leftNothing = (task: Pick<TaskRecord, "requestNumber" | "result" | "targets">): boolean => task.requestNumber === null && !task.result && !inWorkspace(task);
+
+export const inPlaceReview = (task: Pick<TaskRecord, "status" | "requestNumber" | "result" | "changes">): boolean =>
+  task.status === "needs-review" && task.requestNumber === null && task.result === "changes" && Boolean(task.changes) && !task.changes!.undone;
+
 /** A task on a folder of repositories that left a change in some of them: its targets name where each is in the folder. */
 export const inWorkspace = (task: Pick<TaskRecord, "requestNumber" | "targets">): boolean => task.requestNumber === null && Boolean(task.targets?.some((t) => t.path !== undefined));
+
+/**
+ * One turn of a task's change: its first ask, or a message the person sent after. Its start and end are snapshots of
+ * where the agent worked, kept in the task's own record of its checkout or in the shadow of the folder it worked in place.
+ */
+export interface TaskTurn {
+  tenant: string;
+  taskId: string;
+  n: number;
+  at: string;
+  /** The person's own first words, masked. */
+  said: string;
+  /** `machine`: kept in the shadow of a folder on its person's machine, read and undone there. */
+  place: "task" | "project" | "machine";
+  start: string;
+  end: string | null;
+  files: number | null;
+  undoneAt: string | null;
+}
 
 export type TaskTargetPatch = Partial<Pick<TaskTarget, "repoId" | "status" | "reason" | "baseSha" | "branch" | "tests" | "requestNumber" | "error" | "cost" | "forgeRequest">>;
 
@@ -196,7 +260,7 @@ export interface TaskLogLine {
   data?: Record<string, unknown>;
 }
 
-export type TaskPatch = Partial<Pick<TaskRecord, "status" | "startedAt" | "finishedAt" | "baseSha" | "tests" | "cost" | "requestNumber" | "error" | "stage" | "result" | "loaded" | "routing" | "question" | "mcpNeedsSignIn" | "planFirst">>;
+export type TaskPatch = Partial<Pick<TaskRecord, "startedWith" | "off" | "offChanges" | "status" | "startedAt" | "finishedAt" | "baseSha" | "tests" | "cost" | "requestNumber" | "error" | "stage" | "result" | "loaded" | "routing" | "question" | "mcpNeedsSignIn" | "planFirst" | "keptBefore" | "ranMs" | "checksFound" | "secondSignIn" | "setup">> & { lastSaid?: string | null };
 
 /** The person's own skills or commands, enabled plugins and MCP servers a run loaded, and whether their CLAUDE.md was among them. */
 export interface TaskLoaded {
@@ -299,6 +363,8 @@ export interface TaskStore {
   /** Lines for the task's log, already masked: a line as it reads, or an agent's event with the line it reads as. */
   appendTaskLog(tenant: string, id: string, lines: readonly (string | TaskLogEvent)[]): Promise<void>;
   taskLog(tenant: string, id: string, afterSeq: number): Promise<TaskLogLine[]>;
+  /** The lines of a task's log whose text holds these words, whatever their case, oldest first; the text is what the log keeps, masked. */
+  findInTaskLog(tenant: string, id: string, words: string, limit: number): Promise<{ seq: number; text: string }[]>;
   /** Marks every task of the tenant a previous process left queued or running as failed, and says how many. */
   interruptTasks(tenant: string, reason: string): Promise<number>;
   /** The process group a running task's current process leads, so a later start can end what a crash left. */
@@ -309,14 +375,28 @@ export interface TaskStore {
   setTaskChanges(tenant: string, id: string, changes: TaskChanges & { before: string; after: string }): Promise<void>;
   /** The snapshots a task's changes are read between, for the runner and the undo alone; null when it has none. */
   taskChangeSnapshots(tenant: string, id: string): Promise<{ before: string; after: string } | null>;
+  /** Starts a task's turn n where its agent's place stood. */
+  openTaskTurn(turn: Omit<TaskTurn, "end" | "files" | "undoneAt">): Promise<void>;
+  /** Ends a task's turn n where its agent's place stood then, with how many files it changed. */
+  endTaskTurn(tenant: string, taskId: string, n: number, end: string, files: number): Promise<void>;
+  /** A task's turns, first first. */
+  taskTurns(tenant: string, taskId: string): Promise<TaskTurn[]>;
+  /** Forgets a task's turns, once the snapshots they point at are gone; says how many were. */
+  deleteTaskTurns(tenant: string, taskId: string): Promise<number>;
+  /** Marks a task's turns from n on undone; says how many were. */
+  undoTaskTurns(tenant: string, taskId: string, from: number, at: string): Promise<number>;
   /** Records an undo once: false when the changes were undone or kept already, or there are none. */
   markTaskChangesUndone(tenant: string, id: string, undone: NonNullable<TaskChanges["undone"]>): Promise<boolean>;
   /** Marks these files of the task's change undone, and the change itself once none is left; false once it was kept or undone. */
   markTaskFilesUndone(tenant: string, id: string, paths: readonly string[], undone: NonNullable<TaskChanges["undone"]>): Promise<boolean>;
   /** Keeps how many tokens the task's first agent request carried, once: a later run's leaves the first as it is. */
   noteTaskContext(tenant: string, id: string, tokens: number): Promise<void>;
+  /** Keeps how much of its context window the agent's last request took, in place of the reading before. */
+  noteTaskContextUsed(tenant: string, id: string, used: { tokens: number; window: number | null }): Promise<void>;
   /** Adds a skill the agent called to the task's record, once; nothing past USED_SKILLS_MAX. */
   noteUsedSkill(tenant: string, id: string, name: string): Promise<void>;
+  /** Adds one skill or MCP server the agent used, with its source, once per name and source. */
+  noteTaskUse(tenant: string, id: string, kind: keyof TaskUsed, name: string, ref: SourceRef): Promise<void>;
   /** Records that its person keeps the change, once: false when it was kept or undone already, or there is none. */
   markTaskChangesKept(tenant: string, id: string, kept: NonNullable<TaskChanges["kept"]>): Promise<boolean>;
   /** Shares a task with a member to read; false when it is shared with them already. */

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 /** What each kind of record's id starts with, so an id says what it names wherever it is pasted. */
-export type IdPrefix = "usr" | "inv" | "key" | "svc" | "tsk" | "evt" | "pol" | "idn" | "eff" | "aut" | "drf" | "ses" | "att" | "ide" | "mch" | "req" | "fup" | "ssr" | "mcp";
+export type IdPrefix = "usr" | "inv" | "key" | "svc" | "tsk" | "evt" | "pol" | "idn" | "eff" | "aut" | "drf" | "ses" | "att" | "ide" | "mch" | "req" | "fup" | "ssr" | "mcp" | "psh" | "rpt";
 
 // Crockford's base32 in lower case: no i, l, o or u to misread, and safe in a path, a branch
 // name and a container name, which a task's id becomes.

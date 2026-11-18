@@ -29,7 +29,7 @@ export interface MachineRecord {
 }
 
 /** A part of the work a runner understands only from some version on; the orchestrator offers what needs it only to a machine that lists it. */
-export const MACHINE_FEATURES = ["workspace-continues"] as const;
+export const MACHINE_FEATURES = ["workspace-continues", "turn-undo", "idle-stop", "task-off", "handbook-setup", "read-only"] as const;
 export type MachineFeature = (typeof MACHINE_FEATURES)[number];
 
 export interface PairingRecord {
@@ -62,7 +62,7 @@ export interface RunnerEventRow {
 }
 
 /** What a runner reports of a task: the agent's own events, the orchestrator's own lines as `log`, and each follow-up as it reached the agent as `steer`. */
-export type RunnerEvent = AgentEvent | { type: "log"; text: string } | { type: "steer"; text: string; by: string };
+export type RunnerEvent = AgentEvent | { type: "log"; text: string } | { type: "steer"; text: string; by: string } | { type: "turn"; n: number; said: string; start: string; end: string; files: number };
 
 /** What the orchestrator's progress on a leased task changes; `addCost` is added to what the task already spent. */
 export interface LeasedTaskPatch {
@@ -78,7 +78,7 @@ export interface LeasedTaskPatch {
 }
 
 export interface LeasedTaskEnd {
-  status: "needs-review" | "failed" | "interrupted";
+  status: "needs-review" | "failed" | "interrupted" | "nothing-changed";
   error: string | null;
   nativeSession: string | null;
   branch: string | null;
@@ -86,6 +86,8 @@ export interface LeasedTaskEnd {
   limitResetAt?: string | null;
   /** How long the agent worked in this run, its cards' waits left out; added to what earlier runs worked. */
   ranMs?: number;
+  /** For a run that changed nothing: what the agent said last, already masked. */
+  lastSaid?: string | null;
 }
 
 export interface RunnerStore {
