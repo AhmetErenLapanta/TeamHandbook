@@ -365,6 +365,31 @@ test("given a team repository with skills, MCP servers and commands, when Team o
   await expect(rail.getByLabel("SKILL.md")).toBeVisible();
 });
 
+test("given a picked skill, when its removal is reviewed and opened, then the row says a removal is proposed, and for a skill nobody can change the rail says who can", async ({ page }) => {
+  // given
+  const sent: Record<string, unknown>[] = [];
+  await page.route((url) => /\/api\/repos\/[^/]+\/changes\/proposal$/.test(url.pathname), (route) => route.fulfill({ json: { proposal: "Remove a skill", branch: "handbook/remove-skill" } }));
+  await page.route((url) => /\/api\/repos\/[^/]+\/changes$/.test(url.pathname) && url.pathname.startsWith("/api/repos/"), (route) => {
+    sent.push(route.request().postDataJSON());
+    return route.fulfill({ json: { request: { repoId: "payments-skills", number: 7, url: "https://forge.example.invalid/team/payments-skills/-/merge_requests/7", branch: "handbook/remove-skill", title: "Remove a skill", status: "open", provider: "gitlab", createdAt: new Date().toISOString(), createdBy: "ada" } } });
+  });
+  await page.goto("/demo/team");
+  const handbook = page.getByRole("region", { name: /^Team handbook/ });
+  const first = handbook.getByRole("listitem").first();
+  const name = (await first.getByRole("button").first().innerText()).trim();
+
+  // when
+  await first.getByRole("button").first().click();
+  const rail = page.getByRole("complementary", { name: "The picked row" });
+  await rail.getByRole("button", { name: "Remove…" }).click();
+  await rail.getByRole("button", { name: /^Review removing/ }).click();
+  await rail.getByRole("button", { name: "Open request" }).click();
+
+  // then
+  await expect(handbook.getByRole("link", { name: "Removal proposed in !7" })).toBeVisible();
+  expect(sent[0]).toMatchObject({ change: { kind: "skill.delete", slug: name } });
+});
+
 test.describe("adding to the team handbook from one's own Claude Code", () => {
   const own = {
     available: true,
@@ -770,6 +795,185 @@ test.describe("the welcome on one person's machine", () => {
     await expect(card).toHaveCount(0);
   });
 
+  test("given one person's Claude Code with a plugin and a skill of their own, when Team opens, then Your handbooks lists them, a plugin switch runs Claude Code's own command and says so, and a skill switch keeps it off for agents started here", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    const sources = [
+      { id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "triage-notes", description: "Sort incoming notes" }], commands: [], mcpServers: [], hooks: [] },
+      { id: "plugin:payments-skills@payments-market", kind: "plugin", name: "payments-skills", version: "1.4.0", marketplace: "payments-market", scope: "user", enabled: true, skills: [{ name: "add-endpoint" }], commands: [], mcpServers: [], hooks: [] },
+    ];
+    const ran: string[] = [];
+    const saved: unknown[] = [];
+    await page.route((url) => url.pathname === "/api/handbook/sources", (route) => route.fulfill({ json: { available: true, sources, readAt: new Date().toISOString() } }));
+    await page.route((url) => url.pathname === "/api/handbook/defaults", (route) => {
+      if (route.request().method() === "PUT") {
+        saved.push(route.request().postDataJSON());
+        return route.fulfill({ json: route.request().postDataJSON() });
+      }
+      return route.fulfill({ json: { off: { skills: [], commands: [], mcpServers: [] } } });
+    });
+    await page.route((url) => url.pathname.startsWith("/api/handbook/plugins/"), (route) => {
+      ran.push(`${url(route.request().url())} ${JSON.stringify(route.request().postDataJSON())}`);
+      return route.fulfill({ json: { ok: true, command: "claude plugin disable payments-skills@payments-market" } });
+    });
+    const url = (u: string) => new URL(u).pathname;
+
+    // when
+    await page.goto("/demo/team");
+    const section = page.getByRole("region", { name: /^Your handbooks/ });
+
+    // then
+    await expect(section).toContainText("payments-skills");
+    await expect(section).toContainText("How agents started here begin.");
+
+    // when
+    await section.getByRole("switch", { name: /^Use payments-skills/ }).click();
+
+    // then
+    await expect(section.getByRole("status")).toHaveText("Ran claude plugin disable payments-skills@payments-market.");
+    expect(ran).toEqual(['/api/handbook/plugins/disable {"plugin":"plugin:payments-skills@payments-market"}']);
+  });
+
+  test("given a plugin whose marketplace holds a newer version and that runs a hook, when Your handbooks opens, then one line says so, Look opens its row, Got it records only that it was read, Update shows what changes before it runs, and Remove offers Turn off first", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    const source = { id: "plugin:payments-skills@payments-market", kind: "plugin", name: "payments-skills", version: "1.4.0", marketplace: "payments-market", scope: "user", enabled: true, skills: [{ name: "add-endpoint" }], commands: [], mcpServers: [], hooks: [{ name: "SessionStart", commands: ["echo hi"] }], latest: { version: "1.5.0", added: ["add-migration"], changed: ["add-endpoint"], removed: [], hooks: [{ name: "PostToolUse", commands: ["npm run lint"] }], mcpServers: ["webhook-sandbox"] }, notice: { hooks: 1, mcpServers: 0 } };
+    const posted: string[] = [];
+    await page.route((url) => url.pathname === "/api/handbook/sources", (route) => route.fulfill({ json: { available: true, sources: [source], readAt: new Date().toISOString() } }));
+    await page.route((url) => url.pathname === "/api/handbook/defaults", (route) => route.fulfill({ json: { off: { skills: [], commands: [], mcpServers: [] } } }));
+    await page.route((url) => url.pathname === "/api/handbook/noticed", (route) => (posted.push("noticed"), route.fulfill({ json: { noticed: "payments-skills@payments-market@1.4.0" } })));
+    await page.route((url) => url.pathname === "/api/handbook/plugins/payments-market/payments-skills/changes", (route) => route.fulfill({ json: { freshness: { installed: "1.4.0", available: "1.5.0", behind: true, added: ["add-migration"], changed: ["add-endpoint"], removed: [] }, commands: { added: [], changed: [], removed: [] }, mcpServers: { added: [], changed: [], removed: [] } } }));
+    await page.route((url) => url.pathname === "/api/handbook/plugins/payments-market/payments-skills/changes/skills/add-endpoint", (route) => route.fulfill({ json: { patch: "-Steps for 1.4.0\n+Steps for 1.5.0\n", truncated: false } }));
+    await page.route((url) => /^\/api\/handbook\/plugins\/(update|uninstall|disable)$/.test(url.pathname), (route) => {
+      const op = new URL(route.request().url()).pathname.split("/").pop()!;
+      posted.push(op);
+      return route.fulfill({ json: { ok: true, command: `claude plugin ${op} payments-skills@payments-market` } });
+    });
+
+    // when
+    await page.goto("/demo/team");
+    const section = page.getByRole("region", { name: /^Your handbooks/ });
+
+    // then
+    await expect(section).toContainText("payments-skills 1.4.0 runs 1 hook. Look");
+    await expect(section.getByRole("button", { name: "Update to 1.5.0…" })).toHaveCount(0);
+
+    // when
+    await section.getByRole("button", { name: "Look" }).click();
+
+    // then
+    await expect(section.getByRole("button", { name: "Update to 1.5.0…" })).toBeVisible();
+    await expect(section).toContainText("1.5.0 brings 1 hook (after each tool call) and 1 MCP server, adds add-migration and changes add-endpoint.");
+    await expect(section).toContainText("after each tool call: npm run lint");
+    expect(posted).toEqual([]);
+
+    // when
+    await section.getByRole("button", { name: "Got it" }).click();
+    await expect(section.getByText("Put away; nothing changed.")).toBeVisible();
+
+    // then
+    await expect(section.getByRole("button", { name: "Look" })).toHaveCount(0);
+
+    // when
+    await section.getByRole("button", { name: "Update to 1.5.0…" }).click();
+    const update = section.getByRole("group", { name: "Update payments-skills" });
+
+    // then
+    await expect(update).toContainText("add-migration");
+
+    // when
+    await update.getByRole("button", { name: "add-endpoint" }).click();
+
+    // then
+    await expect(update.getByLabel("What changes in add-endpoint")).toContainText("+Steps for 1.5.0");
+    await expect(update).toContainText("This runs claude plugin marketplace update payments-market and claude plugin update payments-skills@payments-market; your terminal gets it too. 1.5.0 brings 1 hook (after each tool call) and 1 MCP server, adds add-migration and changes add-endpoint.");
+    await expect(update).toContainText("after each tool call: npm run lint");
+    expect(posted).toEqual(["noticed"]);
+
+    // when
+    await update.getByRole("button", { name: "Update to 1.5.0" }).click();
+
+    // then
+    await expect(section.getByRole("status")).toHaveText("Ran claude plugin update payments-skills@payments-market.");
+
+    // when
+    if (!(await section.getByRole("button", { name: "Remove…" }).isVisible())) await section.getByRole("button", { name: /payments-skills/ }).first().click();
+    await section.getByRole("button", { name: "Remove…" }).click();
+    const remove = section.getByRole("group", { name: "Remove payments-skills" });
+
+    // then
+    await expect(remove).toContainText("cannot be put back from here. Turn it off instead?");
+
+    // when
+    await remove.getByRole("button", { name: "Turn off" }).click();
+
+    // then
+    expect(posted).toEqual(["noticed", "update", "disable"]);
+  });
+
+  test("given three lessons waiting in the plugin's queue and none from a task, when Team opens, then Lessons to review counts the three and says where to review them, as does the head", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await page.route("**/api/lessons", (route) => route.fulfill({ json: { candidates: [], waiting: 3 } }));
+
+    // when
+    await page.goto("/demo/team");
+
+    // then
+    const lessons = page.getByRole("region", { name: /^Lessons to review/ });
+    await expect(lessons).toContainText("3 more wait from your own sessions; review them with /handbook:review in Claude Code.");
+    await expect(page.locator(".page-head")).toContainText("3 lessons wait for review");
+  });
+
+  test("given a plugin a known marketplace offers, when the person adds it, then the page says the exact install command before running it and the line after says it ran", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    const posted: unknown[] = [];
+    await page.route((url) => url.pathname === "/api/handbook/sources", (route) => route.fulfill({ json: { available: true, sources: [{ id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [], commands: [], mcpServers: [], hooks: [] }], readAt: new Date().toISOString() } }));
+    await page.route((url) => url.pathname === "/api/handbook/defaults", (route) => route.fulfill({ json: { off: { skills: [], commands: [], mcpServers: [] } } }));
+    await page.route((url) => url.pathname === "/api/handbook/plugins/available", (route) => route.fulfill({ json: { plugins: [{ id: "plugin:docs-kit@payments-market", name: "docs-kit", marketplace: "payments-market", version: "2.0.0", skills: 1, commands: 0, hooks: [{ name: "Stop", commands: ["echo docs-done"] }], mcpServers: ["wiki"] }] } }));
+    await page.route((url) => url.pathname === "/api/handbook/plugins/install", (route) => (posted.push(route.request().postDataJSON()), route.fulfill({ json: { ok: true, command: "claude plugin install docs-kit@payments-market" } })));
+
+    // when
+    await page.goto("/demo/team");
+    const section = page.getByRole("region", { name: /^Your handbooks/ });
+    const addRow = section.getByRole("button", { name: /Add a skill, a command/ });
+    const listEnd = await section.locator("ul.handbooks").first().boundingBox();
+    expect((await addRow.boundingBox())!.y).toBeGreaterThanOrEqual(listEnd!.y + listEnd!.height);
+    expect((await addRow.boundingBox())!.height).toBeGreaterThanOrEqual((await section.locator("li.handbook > .handbook-line").first().boundingBox())!.height);
+    await addRow.click();
+    const options = section.locator(".handbook-add-options");
+    const sectionBox = (await section.locator(".handbook-add").boundingBox())!;
+    const optionsBox = (await options.boundingBox())!;
+    const first = (await options.getByRole("button", { name: "New skill" }).boundingBox())!;
+    const last = (await options.getByRole("button", { name: "Cancel" }).boundingBox())!;
+    expect(Math.abs(first.x - sectionBox.x - (sectionBox.x + sectionBox.width - last.x - last.width))).toBeLessThan(16);
+    expect(optionsBox.height).toBeGreaterThan(0);
+    await section.getByRole("button", { name: "Add a plugin", exact: true }).click();
+    const add = section.getByRole("group", { name: "Add a plugin" });
+
+    // then
+    await expect(add).toContainText("docs-kit payments-market 2.0.0");
+    await add.getByLabel("Find a plugin").fill("nothing-like-this");
+    await expect(add).toContainText("No plugin matches.");
+    await add.getByLabel("Find a plugin").fill("");
+
+    // when
+    await add.getByRole("button", { name: "Install…" }).click();
+
+    // then
+    await expect(add).toContainText("This runs claude plugin install docs-kit@payments-market; your terminal gets it too. It runs 1 hook (when the agent stops) and 1 MCP server, in your terminal and in tasks started here.");
+    await expect(add).toContainText("when the agent stops: echo docs-done");
+    expect(posted).toEqual([]);
+
+    // when
+    await add.getByRole("button", { name: "Install docs-kit" }).click();
+
+    // then
+    await expect(section.getByRole("status")).toHaveText("Ran claude plugin install docs-kit@payments-market.");
+    expect(posted).toEqual([{ plugin: "plugin:docs-kit@payments-market" }]);
+  });
+
   test("given a local orchestrator with everything set up, when Team opens, then Getting set up is not drawn", async ({ page }) => {
     // given
     await onThisMachine(page, true);
@@ -1001,4 +1205,70 @@ test.describe("the welcome where tasks run on people's own machines", () => {
     await expect(page.getByRole("region", { name: "Connect this computer" })).toHaveCount(0);
     expect(pairs).toBe(0);
   });
+
+  test("given a computer of theirs paired to a team's server, when Team opens, then Your handbooks is read from that computer, a plugin's switch runs Claude Code's command there, and nothing is added from the page", async ({ page }) => {
+    // given
+    let me = "";
+    await page.route("**/api/me", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      me = body.user.id;
+      await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "cloud", runners: true, tasksRunHere: false } } });
+    });
+    await page.route("**/api/machines", (route) => route.fulfill({ json: { machines: [{ id: "m-other", name: "max-desktop", userId: "usr_someone_else", online: true, lastSeenAt: new Date().toISOString() }, { id: "m1", name: "ada-laptop", userId: me, online: true, lastSeenAt: new Date().toISOString() }] } }));
+    const plugin = { id: "plugin:docs-kit@payments-market", kind: "plugin", name: "docs-kit", version: "2.0.0", marketplace: "payments-market", scope: "user", enabled: true, skills: [{ name: "write-docs" }], commands: [], mcpServers: [], hooks: [] };
+    const asked: string[] = [];
+    await page.route((url) => url.pathname === "/api/handbook/sources", (route) => {
+      asked.push(new URL(route.request().url()).search);
+      return route.fulfill({ json: { available: true, sources: [plugin], machine: "ada-laptop", readAt: new Date().toISOString() } });
+    });
+    await page.route((url) => url.pathname === "/api/handbook/defaults", (route) => route.fulfill({ json: { off: { skills: [], commands: [], mcpServers: [] } } }));
+    await page.route((url) => url.pathname === "/api/handbook/plugins/disable", (route) => {
+      asked.push(`disable${new URL(route.request().url()).search}`);
+      return route.fulfill({ json: { ok: true, command: "claude plugin disable docs-kit@payments-market -s user" } });
+    });
+
+    // when
+    await page.goto("/demo/team");
+    const section = page.getByRole("region", { name: /^Your handbooks/ });
+
+    // then
+    await expect(section).toContainText("Read from your Claude Code on ada-laptop.");
+    await expect(section.getByRole("button", { name: /Add a skill, a command/ })).toHaveCount(0);
+
+    // when
+    await section.getByRole("switch", { name: /^Use docs-kit/ }).click();
+
+    // then
+    await expect(section.getByRole("status")).toHaveText("Ran claude plugin disable docs-kit@payments-market -s user.");
+    expect(asked.slice(0, 2)).toEqual(["?machine=m1", "disable?machine=m1"]);
+  });
 });
+
+test("given a plugin that is off, when Check for updates is pressed and the marketplace then holds a newer version, then the fixed command ran once and the off row offers Update… beside its versions", async ({ page }) => {
+  // given
+  await page.route("**/api/me", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+  });
+  let checked = 0;
+  const source = (latest: boolean) => ({ id: "plugin:docs-kit@payments-market", kind: "plugin", name: "docs-kit", version: "0.1.5", marketplace: "payments-market", scope: "user", enabled: false, skills: [{ name: "write-docs" }], commands: [], mcpServers: [], hooks: [], ...(latest ? { latest: { version: "0.1.6", added: [], changed: ["write-docs"], removed: [], hooks: [], mcpServers: [] } } : {}) });
+  await page.route((url) => url.pathname === "/api/handbook/sources", (route) => route.fulfill({ json: { available: true, sources: [source(checked > 0)], readAt: new Date().toISOString() } }));
+  await page.route((url) => url.pathname === "/api/handbook/defaults", (route) => route.fulfill({ json: { off: { skills: [], commands: [], mcpServers: [] } } }));
+  await page.route((url) => url.pathname === "/api/handbook/marketplaces/update", (route) => (checked += 1, route.fulfill({ json: { ok: true, command: "claude plugin marketplace update" } })));
+
+  // when
+  await page.goto("/demo/team");
+  const section = page.getByRole("region", { name: /^Your handbooks/ });
+  await section.getByRole("button", { name: /^Off/ }).click();
+  await expect(section.getByRole("button", { name: "Update…" })).toHaveCount(0);
+  await section.getByRole("button", { name: "Check for updates" }).click();
+
+  // then
+  await expect(section.getByRole("status")).toHaveText("Ran claude plugin marketplace update.");
+  await expect(section.getByText("0.1.5 → 0.1.6")).toBeVisible();
+  await expect(section.getByRole("button", { name: "Update…" })).toBeVisible();
+  expect(checked).toBe(1);
+});
+

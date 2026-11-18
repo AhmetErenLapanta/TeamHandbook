@@ -10,6 +10,7 @@ import { PageHead } from "../design/PageHead";
 import { SettingsSection } from "./SettingsSection";
 import { problemSentence } from "../Signup";
 import { ROLE_LABEL } from "./Members";
+import { DataSizeLine } from "./DataSize";
 
 /** Where a person goes once their account is deleted: no session is left to show anything else. */
 export const ACCOUNT_DELETED = "#/account-deleted";
@@ -234,6 +235,7 @@ export function AccountSettings({ me, nav, onChanged }: { me: Principal; nav: Re
           {me.mode === "cloud" ? <SignInWays /> : null}
           {me.mode === "local" ? (
             <SettingsSection name="Your data" why="It runs on this machine for you alone.">
+              <DataSizeLine />
               <p>Stopping the orchestrator and deleting its data directory removes all it keeps; your folders, repositories and their branches stay where they are.</p>
             </SettingsSection>
           ) : <Delete me={me} orgs={found.orgs} defaultOrg={found.defaultOrg} />}

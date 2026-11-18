@@ -13,7 +13,8 @@ export type TaskState =
   | "merged"
   | "undone"
   | "failed"
-  | "stopped";
+  | "stopped"
+  | "finished-nothing-changed";
 
 export interface TaskForge { kind: string; number: number; url: string }
 
@@ -29,6 +30,7 @@ const WORDS: Record<TaskState, string> = {
   undone: "undone",
   failed: "failed",
   stopped: "stopped",
+  "finished-nothing-changed": "finished, nothing changed",
 };
 
 const TONES: Record<TaskState, Tone> = {
@@ -43,6 +45,7 @@ const TONES: Record<TaskState, Tone> = {
   undone: "neutral",
   failed: "error",
   stopped: "neutral",
+  "finished-nothing-changed": "neutral",
 };
 
 /** A state as the word it is said in and the tone it is drawn in; one in review on a forge names the forge. */

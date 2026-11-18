@@ -49,12 +49,13 @@ button:disabled { cursor: default; background: var(--surface-sunken); border-col
 button.secondary, .button.secondary, a.button.secondary:visited { background: var(--surface); border-color: var(--border-field); color: var(--text); }
 button.secondary:hover:not(:disabled), .button.secondary:hover { background: var(--surface-hover); border-color: var(--border-field); color: var(--text); }
 button.secondary:disabled { background: transparent; border-color: var(--border); color: var(--text-muted); }
-button.ghost { background: transparent; color: var(--text); border-color: transparent; box-shadow: none; }
-button.ghost:hover { background: var(--surface-hover); border-color: transparent; color: var(--text); }
+button.ghost, a.button.ghost, a.button.ghost:visited { background: transparent; color: var(--text); border-color: transparent; box-shadow: none; }
+button.ghost:hover, a.button.ghost:hover { background: var(--surface-hover); border-color: transparent; color: var(--text); }
 button.danger, button.secondary.danger { background: var(--surface); border-color: var(--danger); color: var(--danger); }
 button.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 button.small, .button.small { min-height: var(--control-height-sm); padding: 0 10px; font-size: var(--text-xs); border-radius: var(--radius-sm); }
 button.link { display: inline; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); text-align: left; font: inherit; }
+.file-chips > p > button.link { display: inline-flex; align-items: center; min-height: 24px; }
 button.link:hover { background: none; color: var(--accent-hover); text-decoration: underline; }
 button.link:active { transform: none; }
 button.link[aria-pressed="true"] { font-weight: var(--weight-semibold); }
@@ -367,13 +368,16 @@ kbd, .kbd { display: inline-grid; place-items: center; min-width: 20px; height: 
 section.section, details.section { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); padding: var(--space-5) 0 0; margin-top: var(--space-5); border-top: 1px solid var(--border); }
 /* Right under the page head or its tabs, a section's own rule would draw a second line over an empty band. */
 :is(.page-head, .subnav) + section.section, .with-rail > .task-main > :is(section.section, details.section):first-child { margin-top: 0; padding-top: 0; border-top: 0; }
-section.section > h2, details.section > summary { margin: 0; font-size: var(--text-base); line-height: var(--leading); font-weight: var(--weight-semibold); }
+section.section > h2, section.section > .heading-row > h2, details.section > summary { margin: 0; font-size: var(--text-base); line-height: var(--leading); font-weight: var(--weight-semibold); }
 :where(section.section) h3 { margin: var(--space-2) 0 0; font-size: var(--text-sm); line-height: var(--leading); }
 :where(section.section) > p { margin: 0; }
 
 /* A state: a dot in its tone and the word in the text's own colour; the colour confirms the word. */
 .state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--weight-medium); color: var(--text); white-space: nowrap; }
 .state::before { content: ""; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--text-muted); flex: none; }
+/* In a Work card a column can be narrower than a state's words: there the words wrap, the dot staying on the first line. */
+.work-card-agent > .state { display: inline; white-space: normal; }
+.work-card-agent > .state::before { display: inline-block; margin-right: 6px; }
 .state.ok::before { background: var(--ok); }
 .state.warn::before { background: var(--warn); }
 .state.error::before { background: var(--danger); }
@@ -411,6 +415,11 @@ details:not(.hint) > summary::-webkit-details-marker { display: none; }
 /* One fold mark, drawn rather than a glyph so it is the same size in every font: a chevron that turns down when open. */
 details:not(.hint) > summary::before { content: ""; flex: none; display: inline-block; width: 6px; height: 6px; margin: 0 var(--space-2) 2px 2px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out); }
 details:not(.hint)[open] > summary::before { transform: rotate(45deg); }
+/* What opens under a fold starts under its name: the chevron and its gap in, on every fold, the same step again inside a fold. */
+details:not(.hint, .rail-fold, .diff-files > li > details) > :not(summary) { margin-left: var(--fold-indent); }
+/* A name that opens a row (a handbook, an item) opens its contents by the same step, and turns its chevron as a fold's does. */
+details:not(.hint, .rail-fold, .diff-files > li > details) > table { display: block; width: auto; max-width: 100%; overflow-x: auto; }
+.handbook-opened, .handbook-open { margin-left: var(--fold-indent); }
 select { appearance: none; padding-right: 28px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
 
 /*
@@ -488,6 +497,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .page-crumb { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
 .page-head .page-summary { margin: 0; max-width: 72ch; color: var(--text-muted); }
 .page-head.sticky { position: sticky; top: var(--topbar-height); z-index: 3; padding: var(--space-3) 0; background: var(--canvas); border-bottom: 1px solid var(--border); }
+/* On a phone the head and its plan took a third of a 390 screen and covered what a card asks: they scroll away, and the foot row keeps the action. */
+@media (max-width: 639px) { .page-head.sticky { position: static; } }
+/* On a phone a review's main action and its counterpart stand at the foot of the screen; a card waiting for an answer takes that place, so nothing sticks then. */
+.main-wide { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.foot-actions { display: none; }
+@media (max-width: 639px) {
+  .main-wide { display: none; }
+  .foot-actions { position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); padding: var(--space-3) 0; background: var(--canvas); border-top: 1px solid var(--border); }
+  main:has(.approval.pending) .foot-actions { position: static; }
+}
 @media (max-width: 639px) {
   .page-head { grid-template-columns: minmax(0, 1fr); }
   .page-head > .actions { grid-column: 1; grid-row: auto; margin-top: var(--space-2); }
@@ -512,7 +531,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .change-weight i.del { background: var(--danger); }
 
 /* The page's main surface wide on the left, a 320px rail beside it; on a phone the rail follows it. */
-.with-rail { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-8); align-items: start; }
+.with-rail { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-width, 320px); gap: var(--space-8); align-items: start; }
 .with-rail > * { min-width: 0; }
 .list-filter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
 /* Beside a list of tasks the rail is a fold on a narrow screen and plain beside the form on a wide one. */
@@ -527,6 +546,16 @@ aside.rail dt { color: var(--text-muted); }
 aside.rail dd { margin: 0; min-width: 0; }
 @media (max-width: 1023px) {
   .with-rail { grid-template-columns: minmax(0, 1fr); }
+}
+/* The new task form, wide: the form at its own width on the left, "This task will use" fixed at its right above the rail. */
+@media (min-width: 1100px) {
+  .with-rail.new-task { grid-template-columns: minmax(0, 1fr) var(--rail-width, 320px); grid-auto-flow: row; }
+  .with-rail.new-task > form { grid-column: 1; grid-row: 1 / span 3; }
+  .with-rail.new-task > .task-setup { grid-column: 2; grid-row: 1; }
+  .with-rail.new-task > aside, .with-rail.new-task > .rail-fold { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 1099px) {
+  .with-rail.new-task { grid-template-columns: minmax(0, 1fr); }
 }
 
 .search-button { gap: var(--space-2); color: var(--text-muted); }
@@ -660,3 +689,75 @@ dialog.side-panel > header .actions { margin: 0 0 0 auto; }
 dialog.side-panel > section { display: grid; gap: var(--space-2); margin: 0; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border); }
 dialog.side-panel > header + section { border-top: 0; }
 dialog.side-panel > section > h3 { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.file-chips { display: grid; gap: var(--space-1); }
+.file-chips p { margin: 0; }
+.file-chips.dropping { outline: 2px solid var(--focus-ring, var(--border-strong)); outline-offset: 2px; border-radius: var(--radius); }
+.file-chips .chip-pick.failed { border-color: var(--danger, currentColor); }
+.connection-band { margin: 0; padding: var(--space-2) var(--space-4); }
+.markdown .tok-comment { color: var(--hunk); font-style: italic; }
+.markdown .tok-string { color: var(--ok); }
+.markdown .tok-number { color: var(--warn); }
+.markdown .tok-keyword { color: var(--accent); }
+.heading-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.turn-select { flex: 0 1 280px; min-width: 0; }
+.handbook, .handbook-off { padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.handbook:first-child { border-top: 0; }
+.handbook-line, .handbook-thing-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+/* One line to a row: the name and its kind on the left (a long name cut with dots, the whole of it in its title), the switch at the right edge. */
+@media (min-width: 640px) {
+  .handbook-row > .handbook-line, .handbook > .handbook-line, .handbook-off > .handbook-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; column-gap: var(--space-3); }
+  .handbook-line > .handbook-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; justify-self: start; max-width: 100%; }
+  .handbook-line > .handbook-meta { flex-wrap: nowrap; white-space: nowrap; }
+  .handbook-line > .handbook-end { margin-left: 0; justify-self: end; }
+}
+.handbook-things { padding-top: var(--space-2); }
+.handbook-thing { padding: var(--space-1) 0; }
+.handbook-why { margin: 0; }
+.handbook-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); min-width: 0; }
+.handbook-end { margin-left: auto; display: inline-flex; align-items: center; gap: var(--space-2); }
+/* At 390 a row is two lines: the name and its switch above, the kind and what the row says under. */
+@media (max-width: 639px) {
+  .handbook-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-2); }
+  .handbook-line > .handbook-name { grid-column: 1; grid-row: 1; justify-self: start; }
+  .handbook-line > .handbook-end { grid-column: 2; grid-row: 1; }
+  .handbook-line > .handbook-meta { grid-column: 1 / -1; grid-row: 2; }
+}
+/* A handbook's and an item's name open in place; the chevron turns as a fold's does. */
+.handbook-name::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 var(--space-2) 2px 2px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out); }
+.handbook-name[aria-expanded="true"]::before { transform: rotate(45deg); }
+/* Started with: the count, the rows and the folds stand as far apart as the rows do. */
+.task-started { display: grid; gap: var(--space-1); }
+.task-started > p, .task-started > ul, .task-started > details { margin: 0; }
+/* A person's own file opened for editing in its row: the field as wide as the row, its actions under it. */
+.handbook-edit { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.handbook-edit textarea { width: 100%; min-height: 240px; font-size: var(--text-sm); }
+.handbook-add { margin-top: var(--space-2); }
+.handbook-add-row { display: flex; width: 100%; align-items: center; gap: var(--space-2); padding: var(--space-3) 0; min-height: var(--control-height); border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text-muted); font-size: var(--text-base); text-align: left; cursor: pointer; }
+.handbook-add-row::before { content: "+"; }
+.handbook-add-options { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; }
+@media (max-width: 639px) { .handbook-add-options { flex-direction: column; align-items: stretch; } .handbook-add-options > .link { align-self: center; } }
+.handbook-add-row:hover { color: var(--text); }
+.mcp-sign-in-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+
+/* "This task will use" heads the new task panel in the rail's own heading weight; its open list scrolls inside the panel, never past the screen. */
+.task-setup > h2 { margin: 0 0 var(--space-2); font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--weight-semibold); }
+.task-setup > p { margin: 0 0 var(--space-2); }
+.task-setup > p.task-setup-link { margin-top: var(--space-3); }
+.task-setup-list { max-height: 100vh; overflow-y: auto; }
+
+/* A table in the agent's words: drawn as a table, and scrolled sideways inside its own box where the screen is narrow. */
+.markdown-table { overflow-x: auto; max-width: 100%; margin: var(--space-2) 0; }
+.markdown-table table { border-collapse: collapse; font-size: var(--text-sm); }
+.markdown-table th, .markdown-table td { padding: var(--space-1) var(--space-3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.markdown-table th { font-weight: var(--weight-semibold); color: var(--text-muted); }
+
+/* The account menu's links stand one under the other, each the menu's full width, never run together. */
+.account-links { display: grid; gap: var(--space-1); }
+.account-links > a { display: block; padding: var(--space-1) 0; overflow-wrap: anywhere; }
+
+/* The rail's left edge: a thin bar in the gap between the page and the rail that drags, steps by arrow, and resets on a double press. */
+.rail-handle { position: absolute; top: 0; bottom: 0; right: calc(var(--rail-width, 320px) + var(--space-4) - 4px); width: 8px; cursor: col-resize; touch-action: none; display: none; }
+.rail-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; border-radius: var(--radius-full); background: transparent; }
+.rail-handle:hover::after, .rail-handle:focus-visible::after, .rail-handle.dragging::after { background: var(--border-strong); }
+.rail-handle:focus-visible { outline: 2px solid var(--focus-ring, var(--border-strong)); outline-offset: 0; }
+@media (min-width: 1100px) { .rail-handle { display: block; } }

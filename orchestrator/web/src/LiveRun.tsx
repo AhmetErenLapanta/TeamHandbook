@@ -6,6 +6,7 @@ import { DiffPatch } from "./design/DiffPatch";
 import { commandLine, OUTPUT_KEPT, toolResult, toolSaid, writtenDocument } from "./live-run";
 import type { CallStatus, LiveRun as Run, PlanStep, ToolLine } from "./live-run";
 import { Markdown } from "./Markdown";
+import { here } from "./router";
 
 const clock = (at: string) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
@@ -86,7 +87,12 @@ export function RunPlan({ plan }: { plan: PlanStep[] }) {
  * works, "Thinking…" stands in its place. Every word comes from the orchestrator already masked,
  * and is drawn as text, never as markup.
  */
-export function LiveRun({ run, working = false, withPlan = true, first = null }: { run: Run; working?: boolean; withPlan?: boolean; first?: ReactNode }) {
+/**
+ * `isMine` says whether words in the stream were the reader's own: on one person's own orchestrator every word is, and
+ * elsewhere the sender's name is the reader's. The stream records a name, never who it was, so "A teammate" (a person
+ * without a name) is the reader's own only where they are the one person.
+ */
+export function LiveRun({ run, working = false, withPlan = true, first = null, isMine = () => false }: { run: Run; working?: boolean; withPlan?: boolean; first?: ReactNode; isMine?: (by: string) => boolean }) {
   const last = run.stream.at(-1);
   const running = working && last?.kind === "tool" && last.status === "started" ? last.key : null;
   return (
@@ -101,7 +107,8 @@ export function LiveRun({ run, working = false, withPlan = true, first = null }:
         {run.stream.map((line) =>
           line.kind === "tool" ? <ToolRow key={line.key} line={line} current={line.key === running} />
             : line.kind === "time" ? <li key={line.key} className="run-line" data-kind="time"><time dateTime={line.at}>{clock(line.at)}</time></li>
-              : line.kind === "you" ? <li key={line.key} className="run-line" data-kind="you" dir="auto"><strong>{line.by ?? "You"}</strong> {line.text}</li>
+              : line.kind === "you" ? <li key={line.key} className="run-line" data-kind="you" dir="auto"><strong>{line.by && !isMine(line.by) ? line.by : "You"}</strong> {line.text}</li>
+              : line.kind === "started" ? <li key={line.key} className="run-line" data-kind="started" dir="auto">{line.text} <a href={here("tasks", line.from)}>Open it</a></li>
               : line.kind === "say" ? <li key={line.key} className="run-line" data-kind="say" data-seq={line.key.slice("say-".length)}><Markdown text={line.text} /></li>
               : <li key={line.key} className="run-line" data-kind={line.kind} dir="auto">{line.text}</li>,
         )}

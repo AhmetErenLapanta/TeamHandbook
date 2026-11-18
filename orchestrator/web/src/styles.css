@@ -289,8 +289,6 @@ details.hint > p { position: absolute; z-index: 5; top: 22px; left: 0; width: mi
 .integration-group { display: grid; gap: 8px; }
 .integration-group > h2 { margin: 8px 0 0; font-size: var(--text-md); }
 .integration-group > p { margin: 0; }
-/* Every group lists its cards the same way, one under another, so a group of one card is not half a row. */
-.integration-group > .cards { grid-template-columns: minmax(0, 1fr); max-width: 48rem; }
 .editor h4 { margin: 0; font-size: var(--text-base); }
 /* The Work board: the tracker's columns side by side, each a list of issue cards. */
 .work-picker { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 0 0 12px; }
@@ -307,7 +305,8 @@ details.hint > p { position: absolute; z-index: 5; top: 22px; left: 0; width: mi
 /* A segmented group shows itself; the column switch is for a phone alone, so it outranks that here. */
 .segmented.board-switch { display: none; }
 /* As a Jira board does, many columns scroll sideways in the board's own box; the page does not. */
-.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+/* 150px keeps a title to three lines and lets a sprint of seven statuses and Other sit side by side at 1440 with no rail. */
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(150px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 4px; }
 /* The columns past the edge are shown to be there: a shade on the side that has more, as a phone's table has. */
 .board {
   background:
@@ -331,7 +330,7 @@ details.hint > p { position: absolute; z-index: 5; top: 22px; left: 0; width: mi
 .work-card-title input[type="checkbox"] { margin-top: 2px; }
 /* A blocked issue waits on a person, so the card takes the waiting tone, as Jira flags it. */
 .work-card.flagged { background: var(--warn-soft); border-color: color-mix(in oklch, var(--warn) 45%, transparent); }
-.work-card-agent { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.work-card-agent { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; min-width: 0; overflow-wrap: anywhere; }
 .work-card-agent a.badge { text-decoration: none; }
 .small { font-size: var(--text-xs); }
 .empty .button { display: inline-block; }
@@ -352,6 +351,8 @@ button.switch:disabled { color: var(--muted); cursor: not-allowed; }
 button.switch[aria-checked="true"] .switch-track { background: var(--accent); }
 /* The knob slides by transform, which a reduced-motion preference stops with the duration tokens. */
 button.switch[aria-checked="true"] .switch-knob { transform: translateX(14px); }
+button.switch[aria-checked="mixed"] .switch-track { background: var(--accent); }
+button.switch[aria-checked="mixed"] .switch-knob { transform: translateX(7px); }
 .moves-offer h2 { font-size: var(--text-base); margin: 0 0 6px; }
 .moves-offer p { margin: 0 0 8px; }
 .work-card.picked, .work-card.chosen { border-color: var(--accent); box-shadow: var(--ring-accent); }

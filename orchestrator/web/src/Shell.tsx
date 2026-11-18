@@ -11,8 +11,12 @@ import { activityPageInMode, activityPagesFor, settingsSectionsFor } from "./nav
 import type { Org, PendingInvitation, Principal, RepoRecord } from "./api";
 import { applyTheme, THEME_KEY, usePref } from "./prefs";
 import type { Theme } from "./prefs";
-import { navigate, pathIn } from "./router";
+import { navigate, pathIn, placeOf } from "./router";
 import type { Section } from "./router";
+import { subscribePush, unsubscribePush } from "./push";
+import type { PushResult } from "./push";
+import { FIND_IN_TASK } from "./find-in-task";
+import { ConnectionBand } from "./ConnectionBand";
 
 // The four sections of the job: what needs doing, the tasks agents do, the team around them, and the
 // services they reach. Settings sit in the account menu and the repositories on Tasks' own rail.
@@ -222,22 +226,35 @@ function signOut(me: Principal): Promise<unknown> {
  * Whether this browser tells the person when a task of theirs needs them. The browser asks for
  * leave once; refused, the switch says where to give it, since only the browser can.
  */
-function NotifySwitch() {
+function NotifySwitch({ local }: { local: boolean }) {
   const [notify, setNotify] = usePref(NOTIFY_KEY);
   const [blocked, setBlocked] = useState(() => "Notification" in window && Notification.permission === "denied");
+  const [reach, setReach] = useState<PushResult | null>(null);
   if (!("Notification" in window)) return null;
   const on = notify === "yes" && Notification.permission === "granted";
   const flip = () => {
-    if (on) return setNotify(null);
+    if (on) {
+      setNotify(null);
+      setReach(null);
+      if (local) void unsubscribePush();
+      return;
+    }
     void Notification.requestPermission().then((answer) => {
-      if (answer === "granted") setNotify("yes");
       setBlocked(answer === "denied");
+      if (answer !== "granted") return;
+      setNotify("yes");
+      if (local) void subscribePush().then(setReach);
     });
   };
   return (
     <div className="notify-switch">
-      <label className="check"><input type="checkbox" checked={on} onChange={flip} />Notify me when my tasks need me</label>
-      {blocked ? <p className="muted small">This browser blocks notifications from this page; allow them in its site settings.</p> : null}
+      <label className="check"><input type="checkbox" checked={on} disabled={blocked} onChange={flip} />Notify me when my tasks need me</label>
+      <p className="muted small">
+        {blocked ? "This browser blocks notices; allow them in its site settings to turn this on."
+          : !on ? "A notice says only that a task needs you, failed or stopped; it opens the task."
+            : reach === "no-vault" ? "Notices with this page closed need this machine's vault."
+              : local && reach !== "unavailable" ? "On in this browser, with this page closed too." : "On in this browser while this page is open."}
+      </p>
     </div>
   );
 }
@@ -273,7 +290,7 @@ function UserMenu({ me, org, onSignedOut }: { me: Principal; org: string; onSign
               <label key={t} className="check"><input type="radio" name="theme" checked={(theme ?? "system") === t} onChange={() => pick(t)} />{t === "system" ? "Match the system" : t === "light" ? "Light" : "Dark"}</label>
             ))}
           </fieldset>
-          <NotifySwitch />
+          <NotifySwitch local={me.mode === "local"} />
           <nav className="account-links" aria-label="Account">
             <a href={pathIn(org, "settings")} onClick={close}>Settings</a>
             <a href={pathIn(org, "activity", "news")} onClick={close}>What's new</a>
@@ -290,15 +307,18 @@ function UserMenu({ me, org, onSignedOut }: { me: Principal; org: string; onSign
 export function Shell({ me, orgs, org, section, repos, onSignedOut, children }: { me: Principal; orgs: Org[]; org: string; section: Section | null; repos: RepoRecord[]; onSignedOut: () => void; children: ReactNode }) {
   const here = TABS.find((t) => t.section === section)?.label ?? "Sections";
   const [palette, setPalette] = useState(false);
-  const jumps = useMemo(() => jumpsOf(org, repos, me), [org, repos, me]);
+  const [reread, setReread] = useState(0);
+  const onTask = section === "tasks" && placeOf(window.location.pathname).rest.length > 0;
+  const jumps = useMemo(() => [...(onTask ? [{ label: "Find in this task", detail: "", to: "", group: "Actions" as const, pinned: true, run: () => window.dispatchEvent(new Event(FIND_IN_TASK)) }] : []), ...jumpsOf(org, repos, me)], [org, repos, me, onTask]);
   const readTasks = useCallback(() => taskJumps(org, repos), [org, repos]);
   const readFolders = useMemo(() => (me.mode === "local" ? folderJumps(org) : undefined), [org, me.mode]);
   const findTasks = useMemo(() => taskFinds(org, repos ?? []), [org, repos]);
   const search = useCallback((anywhere: boolean) => {
     const own = anywhere ? null : pageSearch();
     if (own) own.focus();
+    else if (!anywhere && onTask) window.dispatchEvent(new Event(FIND_IN_TASK));
     else setPalette(true);
-  }, []);
+  }, [onTask]);
   return (
     <div className="shell">
       <a className="skip" href="#content">Skip to content</a>
@@ -323,10 +343,11 @@ export function Shell({ me, orgs, org, section, repos, onSignedOut, children }: 
           <UserMenu me={me} org={org} onSignedOut={onSignedOut} />
         </div>
       </header>
+      <ConnectionBand onBack={() => setReread((n) => n + 1)} />
       <AttentionWatcher me={me} />
       <Shortcuts org={org} tabs={TABS} onSearch={search} />
       <CommandPalette open={palette} onClose={() => setPalette(false)} jumps={jumps} more={readTasks} finds={findTasks} {...(readFolders ? { folders: readFolders } : {})} />
-      <main id="content" tabIndex={-1}>{children}</main>
+      <main id="content" key={reread} tabIndex={-1}>{children}</main>
     </div>
   );
 }

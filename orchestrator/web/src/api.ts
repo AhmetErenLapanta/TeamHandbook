@@ -1,9 +1,12 @@
 import type { ActivitySummary, OrchestratorEvent, CurrentBudgets, EventPage, EventRecord, Leaderboard, Onboarding, Org, OrgList, RequestStatus, TaskStatus, UsageCount, UsageReport } from "../../shared/activity";
 import type { PermissionMode } from "../../shared/permission-mode";
 import type { HostedForge } from "../../shared/forge-def";
+import { typeOf } from "./attachments";
 import type { AgentQuestion, QuestionAnswers } from "./questions";
 import type { ChangedFile } from "./request-reads";
 import { sentence } from "./said";
+import { connection } from "./connection";
+import type { OnForgeRead } from "../../shared/forge-read";
 
 export type { ActivitySummary, OrchestratorEvent, CurrentBudgets, EventPage, EventRecord, Leaderboard, Onboarding, Org, OrgList, RequestStatus, TaskStatus, UsageCount, UsageReport };
 
@@ -162,15 +165,21 @@ export function call<T>(method: string, path: string, body?: unknown): Promise<T
   return send<T>(method, apiPath(path), body, csrf);
 }
 
-async function send<T>(method: string, url: string, body: unknown, token: string): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (body !== undefined) headers["content-type"] = "application/json";
+/** A body sent as it is, with the type and headers it carries: a file, not JSON. */
+interface RawBody { data: Blob; type: string; headers: Record<string, string> }
+
+async function send<T>(method: string, url: string, body: unknown, token: string, raw?: RawBody): Promise<T> {
+  const headers: Record<string, string> = { ...(raw?.headers ?? {}) };
+  if (raw) headers["content-type"] = raw.type;
+  else if (body !== undefined) headers["content-type"] = "application/json";
   if (method !== "GET") headers["x-csrf-token"] = token;
   // A dropped connection and a failure without a reason of its own say what happened and
   // what to do next, rather than the browser's "Failed to fetch" or a bare status text.
-  const res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }).catch(() => {
+  const res = await fetch(url, { method, headers, body: raw ? raw.data : body === undefined ? undefined : JSON.stringify(body) }).catch(() => {
+    connection.lost();
     throw new Error("The orchestrator did not answer. Check that it is running and reachable from here, then try again.");
   });
+  connection.found();
   const payload = await res.json().catch(() => ({}));
   // Every reason the server gives reaches the page as a sentence, so no screen shows one in lower case or runs it into the next.
   const reason = typeof payload.error === "string" && payload.error.trim() ? sentence(payload.error) : null;
@@ -351,7 +360,8 @@ export const organizationApi = {
 };
 
 /** The two limits a task stops at, whichever comes first; null is no limit. */
-export interface TaskLimits { maxUsd: number | null; maxMinutes: number | null }
+/** `secondSignIn`: the folder of another Claude Code profile a task at its plan's limit can go on with; off until named. Someone who does not manage it is told only that one is named, as `secondSignInSet`. */
+export interface TaskLimits { maxUsd: number | null; maxMinutes: number | null; secondSignIn?: string | null; secondSignInSet?: boolean }
 
 export const taskLimitsApi = {
   read: () => get<TaskLimits>("/api/settings/task-limits"),
@@ -517,6 +527,18 @@ export interface TaskRecord {
   followUp?: "steer" | "queue" | "continue" | null;
   /** Where the task stands as every screen says it, and its first forge request, as the orchestrator reads them. */
   state?: import("./task-state").TaskState;
+  /** Checks the folder's first task found and no one has approved yet; said once under its review. */
+  checksFound?: { command: string; source: string }[];
+  /** The setup the task started with, what it left out, and what its agent used, as the orchestrator recorded them. */
+  setup?: import("./handbook/handbook-read").HandbookSource[];
+  off?: import("./handbook/handbook-read").Off;
+  /** How many items the task's setup changed from the person's default when it started. */
+  offChanges?: number;
+  used?: import("./handbook/TaskUsed").TaskUsedRecord;
+  /** What the agent reported it loaded as its session opened; absent where it reported nothing. */
+  startedWith?: import("./handbook/TaskUsed").StartedWithReport;
+  /** `stopped`: the person stopped the agent's step and the task waits for what to do next. */
+  stage?: "stopped" | null;
   forge?: import("./task-state").TaskForge | null;
   /** How the task ended: a request on a Git project, or `changes` made in place in a folder without Git. */
   result?: "request" | "changes" | null;
@@ -526,7 +548,7 @@ export interface TaskRecord {
   /** What the task chose of its agent's options. */
   choices?: AgentChoices | null;
   /** Where the task stands, worked out by the orchestrator from the task and its requests. */
-  phase?: "planned" | "working" | "tests" | "request" | "review" | "merged" | "failed";
+  phase?: "planned" | "working" | "tests" | "request" | "review" | "merged" | "failed" | "finished";
   /** Present when the task ran on its starter's own machine; absent for one the orchestrator ran. */
   runner?: "local";
   /** Why an interrupted task stopped: its person's machine went away, or the orchestrator running it restarted. */
@@ -550,6 +572,14 @@ export interface TaskRecord {
   startedBy?: { name: string };
   /** Whether the orchestrator can read a plan this stopped task put to its starter, to approve and go on from. */
   planToApprove?: boolean;
+  /** How much of the agent's context its last request held, and the model's window when known; kept after the run. */
+  contextUsed?: { tokens: number; window: number | null } | null;
+  /** An earlier run's change of this task was kept: a discard of the present run leaves it. */
+  keptBefore?: boolean;
+  /** The agent's last words of a run that ended without changing a file: its answer. */
+  lastSaid?: string | null;
+  /** The task a queued one waits behind because that one waits on its person's answer to a card. */
+  waitingBehind?: { id: string; title: string } | null;
   /** How long the agent ran, as the orchestrator counts it without the time its cards waited; absent on a task still running or from before it was kept. */
   ranMs?: number;
   /** What its starter wrote to the agent that has not reached it yet, the oldest first: each can still be changed or taken back. */
@@ -574,12 +604,12 @@ export interface TaskSuggestion {
 export interface TaskRequest {
   id: string;
   kind: "command" | "file-read" | "file-change" | "mcp" | "permission" | "question" | "secret" | "plan";
-  payload: { tool?: string; summary?: string; questions?: AgentQuestion[]; plan?: string };
+  payload: { tool?: string; summary?: string; questions?: AgentQuestion[]; plan?: string; name?: string; why?: string };
   /** `withdrawn`: the agent took it back, so it takes no answer. */
   status: "pending" | "answered" | "expired" | "withdrawn";
   /** `not_resumable`: the agent's session ended, so an answer no longer reaches it. */
   responseCapability: "live" | "not_resumable";
-  answer: { decision: RequestDecision; note?: string } | { answers: QuestionAnswers } | null;
+  answer: { decision: RequestDecision; note?: string } | { answers: QuestionAnswers } | { provided: boolean } | null;
   answeredBy: string | null;
   createdAt: string;
   /** When it was answered, and when it would have run out; the time between its card and the answer is the person's, not the agent's. */
@@ -612,7 +642,8 @@ export type TaskTargets = "orchestrator" | string[];
 /** `kind` and `data`: on an agent's event, its type and the event as the orchestrator masked it (CANLI-GOREV-sozlesme.md); never trusted as a shape. */
 export interface TaskLogLine { seq: number; at: string; text: string; kind?: string; data?: Record<string, unknown> }
 /** `first` is the first failure, else the first warning, in a few fixed words; what the checks found is in the admin's readiness report. */
-export interface AgentSummary { ready: boolean; state: "ready" | "warnings" | "not-ready"; first?: string | null }
+/** `fix` is the command that repairs `first`, shown and never run. */
+export interface AgentSummary { ready: boolean; state: "ready" | "warnings" | "not-ready"; first?: string | null; fix?: string | null }
 /** A choice an agent offers for its runs, in values its own CLI takes; one it does not declare is not offered. */
 export interface AgentOption { id: "model" | "effort"; label: string; choices: { value: string; label: string }[] }
 /** What a task chose of its agent's options; one left out runs with the agent's own default. */
@@ -621,10 +652,41 @@ export interface TaskOptions { agents: { id: string; label: string; plan?: boole
   /** The code repositories a task may span, when there are two or more of them. */
   multiRepo?: { candidates: { id: string; name: string; team: string }[]; maxTargets: number } | null }
 export type CheckStatus = "ok" | "warn" | "fail" | "unknown";
-export interface Readiness { checkedAt: string; agents: { id: string; label: string; ready: boolean; checks: { name: string; status: CheckStatus; detail: string }[] }[] }
+export interface Readiness { checkedAt: string; agents: { id: string; label: string; ready: boolean; checks: { name: string; status: CheckStatus; detail: string; fix?: string }[] }[] }
 
 
-export interface TaskStartInput { planFirst?: boolean; title: string; description: string; issueUrl: string; repoId?: string; path?: string; withoutIssueText?: boolean; agent: string; template: TaskTemplate | null; targets?: TaskTargets; skills?: string[]; choices?: AgentChoices; mode?: PermissionMode; projectSkills?: { source: string; name: string }[]; mcpServers?: string[]; mcpConfirmed?: string[] }
+/** One turn of a task's change: the person's own first words, when, how many files it changed, and whether it was undone. */
+export interface TaskTurnRead { n: number; said: string; at: string; files: number; undone: boolean; newTaskId?: string }
+/** When a task starts by itself again: a day, the weekdays or one weekday, at a time of day on this machine, at most once a day. */
+export type TaskRepeatEvery = "day" | "weekday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+export interface TaskRepeat { id: string; title: string; every: TaskRepeatEvery; at: string; next: string; skipped?: { at: string; reason: string } }
+export interface TaskStartInput { off?: import("./handbook/handbook-read").Off; repeat?: { every: TaskRepeatEvery; at: string }; readOnly?: boolean; baseBranch?: string; attachments?: string[]; planFirst?: boolean; title: string; description: string; issueUrl: string; repoId?: string; path?: string; withoutIssueText?: boolean; agent: string; template: TaskTemplate | null; targets?: TaskTargets; skills?: string[]; choices?: AgentChoices; mode?: PermissionMode; projectSkills?: { source: string; name: string }[]; mcpServers?: string[]; mcpConfirmed?: string[] }
+
+/** A file given to a task: what the agent reads beside its words. */
+export interface TaskAttachment { id: string; taskId: string; name: string; mime: string; size: number; createdAt?: string }
+
+export const attachmentsApi = {
+  /** Sends one file as it is; the server checks its type by its first bytes and refuses one over 10 MB. */
+  upload: (taskId: string, file: File) =>
+    send<{ attachment: TaskAttachment }>("POST", apiPath(`/api/tasks/${taskId}/attachments`), undefined, csrf, { data: file, type: typeOf(file) || "application/octet-stream", headers: { "x-attachment-name": encodeURIComponent(file.name) } }).then((b) => b.attachment),
+  /** A file for a task that is not started yet: kept for the person for an hour, its id given to the start. */
+  uploadFree: (file: File) =>
+    send<{ attachment: TaskAttachment }>("POST", apiPath("/api/attachments"), undefined, csrf, { data: file, type: typeOf(file) || "application/octet-stream", headers: { "x-attachment-name": encodeURIComponent(file.name) } }).then((b) => b.attachment),
+  list: (taskId: string) => get<{ attachments?: TaskAttachment[] }>(`/api/tasks/${taskId}/attachments`).then((b) => b.attachments ?? []),
+  remove: (taskId: string, id: string) => call<{ removed: string }>("DELETE", `/api/tasks/${taskId}/attachments/${encodeURIComponent(id)}`),
+  /** A signed address for the file, good for a quarter of an hour. */
+  url: (taskId: string, id: string) => get<{ url: string; expiresAt: string }>(`/api/tasks/${taskId}/attachments/${encodeURIComponent(id)}/url`).then((b) => b.url),
+};
+
+/** The branches a task on a repository can start from, the newest first, and the one it starts from when none is picked. */
+export const branchesApi = { of: (repoId: string) => get<{ default: string | null; branches: string[] }>(`/api/repos/${encodeURIComponent(repoId)}/branches`) };
+
+/** What tasks like this one have cost: the middle half of the last weeks' finished ones; null while too few are known. */
+export interface CostRange { tasks: number; lowUsd: number | null; highUsd: number | null }
+/** One of an agent's usage windows as the person's own last reading has it; `used` is the share spent, 1 being the limit. */
+export interface LimitWindow { window: string; status: string; used: number | null; resetAt: string | null; at: string }
+export const limitApi = { windows: (agent: string) => get<{ windows: LimitWindow[] }>(`/api/agents/${encodeURIComponent(agent)}/limit`).then((b) => b.windows) };
+export const costApi = { range: (repo: string, agent: string) => get<CostRange>(`/api/tasks/cost-range?${new URLSearchParams({ repo, agent })}`) };
 
 /** What the orchestrator finds for words: the tasks whose title or issue key holds them and, for three letters or more, those whose log does. */
 export const searchApi = {
@@ -653,7 +715,17 @@ export const tasksApi = {
   /** The task and its log after a line, a page at a time: `next` is the line to read on from, null on the last page. */
   get: (id: string, after: number) => get<{ task: TaskRecord; log: TaskLogLine[]; outputCut: boolean; next?: number | null }>(`/api/tasks/${id}?after=${after}`),
   eventsUrl: (id: string, after: number) => `/api/tasks/${id}/events?after=${after}`,
+  /** The folder a start that names no project would work in, before it starts: null when the person is to pick one. */
+  where: (input: Pick<TaskStartInput, "title" | "description" | "issueUrl" | "agent">) =>
+    call<{ folder: { path: string; reason: string; fallback: boolean } | null; title: string }>("POST", "/api/tasks/where", input),
   start: (input: TaskStartInput) => call<{ task: TaskRecord }>("POST", "/api/tasks", input).then((b) => b.task),
+  /** A task that starts by itself at the times it names, and no run now: the repeat it made. */
+  startRepeating: (input: TaskStartInput) => call<{ repeat: TaskRepeat }>("POST", "/api/tasks", input).then((b) => b.repeat),
+  /** The tasks that start by themselves, with the next run of each. */
+  repeats: () => call<{ repeats: TaskRepeat[] }>("GET", "/api/tasks/repeats").then((r) => r.repeats),
+  stopRepeat: (id: string) => call("POST", `/api/tasks/repeats/${encodeURIComponent(id)}/stop`),
+  /** The agent's current step ends and the task waits for the person; a second call answers the same. */
+  stopStep: (id: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/stop-step`).then((b) => b.task),
   cancel: (id: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/cancel`).then((b) => b.task),
   /** The starter's answer to what a stopped run asked; the task goes back in line and takes it. */
   answerStopped: (id: string, answer: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${encodeURIComponent(id)}/answer`, { answer }).then((b) => b.task),
@@ -661,6 +733,11 @@ export const tasksApi = {
   move: (id: string, path: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${encodeURIComponent(id)}/move`, { path }),
   /** Answers what the agent asked; only the person who started the task may, and the first answer stands. */
   /** Every question of a question request answered by its key, sent once. */
+  /** The value of a secret the agent asked for goes to the vault, never into the chat or the log; the answer holds no value. */
+  giveSecret: (id: string, requestId: string, value: string) =>
+    call<{ request: { id: string; status: string } }>("POST", `/api/tasks/${id}/secrets/${encodeURIComponent(requestId)}`, { value }),
+  declineSecret: (id: string, requestId: string) =>
+    call<TaskRequest>("POST", `/api/tasks/${id}/requests/${encodeURIComponent(requestId)}`, { answer: { provided: false }, commandId: crypto.randomUUID() }),
   answerQuestions: (id: string, requestId: string, answers: QuestionAnswers) =>
     call<TaskRequest>("POST", `/api/tasks/${id}/requests/${encodeURIComponent(requestId)}`, { answer: { answers }, commandId: crypto.randomUUID() }),
   /** The plan the agent made before it changed anything: started with as it is, with the person's own version, or declined. */
@@ -670,8 +747,8 @@ export const tasksApi = {
     call<TaskRequest>("POST", `/api/tasks/${id}/requests/${encodeURIComponent(requestId)}`, { answer: { decision, ...(decision === "deny" && note ? { note } : {}) }, commandId: crypto.randomUUID() }),
   /** Continues an interrupted task on the same machine and the same agent session. */
   /** A retry with the same commandId is the same message, sent once. */
-  message: (id: string, input: { text: string; quotes: { path: string; lines: string; text: string }[] }, commandId: string) =>
-    call<{ followUp: TaskRecord["followUp"] }>("POST", `/api/tasks/${id}/messages`, { text: input.text, ...(input.quotes.length ? { quotes: input.quotes } : {}), commandId }).then((b) => b.followUp),
+  message: (id: string, input: { text: string; quotes: { path: string; lines: string; text: string }[]; attachments?: string[] }, commandId: string) =>
+    call<{ followUp: TaskRecord["followUp"] }>("POST", `/api/tasks/${id}/messages`, { text: input.text, ...(input.quotes.length ? { quotes: input.quotes } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), commandId }).then((b) => b.followUp),
   /** Changes the words, and the quotes when given, of a message that has not reached the agent; refused once it has. */
   editMessage: (id: string, messageId: string, input: { text: string; quotes?: QueuedMessage["quotes"] }) =>
     call<{ message: QueuedMessage }>("PATCH", `/api/tasks/${id}/messages/${encodeURIComponent(messageId)}`, input).then((b) => b.message),
@@ -684,12 +761,22 @@ export const tasksApi = {
   answerSuggestion: (id: string, suggestion: string, answer: "continue" | "dismiss") =>
     call<{ suggestion: { id: string; status: TaskSuggestion["status"] } }>("POST", `/api/tasks/${id}/suggestions/${encodeURIComponent(suggestion)}/${answer}`),
   /** Takes one file out of the task's open request: it goes back as the task's base had it, in one commit, and the request is checked again. */
+  /** The finished turns of a task's change, oldest first; none where the orchestrator kept no turn points. */
+  turns: (id: string) => call<{ turns: TaskTurnRead[] }>("GET", `/api/tasks/${id}/turns`).then((r) => r.turns),
+  /** A new task from the files as the turn left them; this task and its branch stay as they are. */
+  newFromTurn: (id: string, n: number, text: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/turns/${n}/new-task`, { commandId: crypto.randomUUID(), ...(text ? { text } : {}) }).then((r) => r.task),
+  /** The files go back to how the turn found them and the turns after it go too; answers the turns as they now stand. */
+  undoFromTurn: (id: string, n: number, reason: string) => call<{ turns: TaskTurnRead[] }>("POST", `/api/tasks/${id}/turns/${n}/undo`, { commandId: crypto.randomUUID(), ...(reason ? { reason } : {}) }).then((r) => r.turns),
+  /** A change kept on a machine that its starter opened on a forge, read once from there. */
+  targetOnForge: (id: string, position: number) => call<{ onForge: OnForgeRead }>("GET", `/api/tasks/${id}/targets/${position}/on-forge`).then((r) => r.onForge),
   dropFromRequest: (id: string, path: string) => call<{ head: string }>("POST", `/api/tasks/${id}/request/drop`, { path }),
   /** Puts the files a task changed in place back as they were; a file edited since is kept as it is. */
   undo: (id: string, only: { paths?: string[]; reason?: string } = {}) => call<{ task: TaskRecord; undone: string[]; kept: string[] }>("POST", `/api/tasks/${id}/undo`, { commandId: crypto.randomUUID(), ...only }),
   keep: (id: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/keep`, { commandId: crypto.randomUUID() }).then((b) => b.task),
   /** Pushes a change a machine kept on its branch and opens its request on the repository's forge; the task's starter alone. */
   openKept: (id: string, position: number) => call<{ target: TaskTarget }>("POST", `/api/tasks/${id}/targets/${position}/on-forge`),
+  /** A task at its plan's usage limit goes on at once with the second sign-in the person named. */
+  continueWithSecondSignIn: (id: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/continue`, { commandId: crypto.randomUUID(), secondSignIn: true }).then((b) => b.task),
   continue: (id: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/continue`, { commandId: crypto.randomUUID() }).then((b) => b.task),
   /** A stopped task goes on carrying out the plan it had not yet had an answer on; refused with no-plan when it holds none. */
   continueWithPlan: (id: string, plan?: string) => call<{ task: TaskRecord }>("POST", `/api/tasks/${id}/continue`, { commandId: crypto.randomUUID(), approvePlan: true, ...(plan ? { plan } : {}) }).then((b) => b.task),

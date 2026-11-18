@@ -23,6 +23,8 @@ export interface ToolLine {
   /** What a call acts on when its event names nothing: "an issue". */
   object: string | null;
   calls: ToolCall[];
+  /** A change of a file the agent has asked to make and nobody has allowed yet: it is not written. */
+  asking?: boolean;
   status: CallStatus;
   output: string[];
   /** How many lines the call printed, held or not; a file read keeps none of them. */
@@ -36,6 +38,7 @@ export type StreamLine =
   | { kind: "you"; key: string; at: string; text: string; by: string | null }
   | ToolLine
   | { kind: "card"; key: string; at: string; text: string }
+  | { kind: "started"; key: string; at: string; text: string; from: string }
   | { kind: "time"; key: string; at: string };
 
 export interface LiveRun { plan: PlanStep[]; stream: StreamLine[]; changed: { path: string; additions: number; deletions: number }[]; costUsd: number | null }
@@ -125,6 +128,7 @@ export function liveRun(log: TaskLogLine[], place: RunPlace = { folder: null, ho
   const calls = new Map<string, ToolCall>();
   // What each card asked, so its answer reads as one line once it is given.
   const asked = new Map<string, string>();
+  const asking = new Map<string, ToolLine>();
   const changed = new Map<string, { path: string; additions: number; deletions: number }>();
   const push = (line: StreamLine) => {
     const last = run.stream.at(-1);
@@ -137,6 +141,9 @@ export function liveRun(log: TaskLogLine[], place: RunPlace = { folder: null, ho
     if (line.kind === "message") {
       const said = text(data.text)?.trim();
       if (said) push({ kind: "say", key: `say-${line.seq}`, at: line.at, text: said });
+    } else if (line.kind === "started-from") {
+      const from = text(data.taskId);
+      if (from) push({ kind: "started", key: `started-${line.seq}`, at: line.at, text: line.text, from });
     } else if (line.kind === "steer") {
       const said = text(data.text)?.trim();
       if (said) push({ kind: "you", key: `you-${line.seq}`, at: line.at, text: said, by: text(data.by) });
@@ -208,7 +215,17 @@ export function liveRun(log: TaskLogLine[], place: RunPlace = { folder: null, ho
       const id = text(request?.id);
       const summary = text(request?.summary);
       if (id && summary) asked.set(id, request?.kind === "question" ? "the question" : summary);
+      // A file change put to its person is not a change yet: the call's line says it asks, until it is answered.
+      if (id && request?.kind === "file-change") {
+        const call = [...tools.values()].reverse().find((t) => t.status === "started" && (t.verb === "Wrote" || t.verb === "Edited") && t.calls.some((c) => c.target !== null && summary !== null && summary.includes(c.target)));
+        if (call) {
+          call.asking = true;
+          asking.set(id, call);
+        }
+      }
     } else if (line.kind === "request_resolved") {
+      const waited = asking.get(text(data.requestId) ?? "");
+      if (waited) waited.asking = false;
       const what = asked.get(text(data.requestId) ?? "");
       const said = what ? decided(data.decision, what) : null;
       if (said) push({ kind: "card", key: `card-${line.seq}`, at: line.at, text: said });
@@ -239,6 +256,7 @@ const listed = (items: string[], most: number, noun: string) => {
  * `target` is the part in mono, a path or a command; `after` follows it in the line's own words.
  */
 export function toolSaid(line: ToolLine): { before: string; target: string | null; after: string } {
+  if (line.asking) return { before: line.verb === "Wrote" ? "Asks to write" : "Asks to edit", target: line.calls[0]?.target ?? null, after: "" };
   const targets = line.calls.map((c) => c.target).filter((t): t is string => t !== null);
   const searched = line.verb === "Searched";
   const quoted = (t: string) => (searched ? `"${t}"` : t);

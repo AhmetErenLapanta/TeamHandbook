@@ -102,3 +102,28 @@ describe("safeHref", () => {
     expect(["https://a.example/x", "http://a.example", "javascript:alert(1)", "data:text/html,x", "mailto:a@example.test", "/relative"].map(safeHref)).toEqual(["https://a.example/x", "http://a.example/", null, null, null, null]);
   });
 });
+
+describe("tables", () => {
+  it("given a table of two columns, when read, then it is a table of its cells and the text after it is a paragraph", () => {
+    // given
+    const text = "| File | Change |\n|---|---|\n| a.ts | **new** |\n| b.ts | `edited` |\n\nDone.";
+
+    // when
+    const blocks = parseMarkdown(text);
+
+    // then
+    expect(blocks.map((b) => b.kind)).toEqual(["table", "paragraph"]);
+    const table = blocks[0] as Extract<(typeof blocks)[number], { kind: "table" }>;
+    expect(table.head.length).toBe(2);
+    expect(table.rows.length).toBe(2);
+    expect(table.rows[0]![1]![0]).toEqual({ kind: "strong", children: [{ kind: "text", text: "new" }] });
+  });
+
+  it("given a line with a bar and no divider under it, when read, then it stays a paragraph", () => {
+    // when
+    const blocks = parseMarkdown("a | b\nplain");
+
+    // then
+    expect(blocks.map((b) => b.kind)).toEqual(["paragraph"]);
+  });
+});

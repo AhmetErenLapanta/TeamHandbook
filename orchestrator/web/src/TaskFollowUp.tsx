@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { ApiError, tasksApi } from "./api";
+import { ApiError, attachmentsApi, tasksApi } from "./api";
 import type { QueuedMessage, TaskRecord } from "./api";
 import { AGENT_LOG } from "./diff-quote";
 import type { Quote } from "./diff-quote";
+import type { ChosenFile } from "./attachments";
+import { FileChips, uploadChosen } from "./FileChips";
 import { Hint } from "./Hint";
 
 /** The most a follow-up's own words hold, as the orchestrator takes them. */
@@ -46,26 +48,33 @@ export type FollowUpMode = NonNullable<TaskRecord["followUp"]> | "suggest";
  * as data beside them, or a teammate's suggestion of them. Shown only while the orchestrator takes
  * one, and never sent twice: a retry after a lost answer carries the same command.
  */
-export function TaskFollowUp({ task, kind, jump = null, stop = null, suggestTo = "", quotes, onQuotes, onSent }: { task: TaskRecord; jump?: ReactNode; stop?: ReactNode; kind: FollowUpMode; suggestTo?: string; quotes: Quote[]; onQuotes: (next: Quote[]) => void; onSent: () => void }) {
+export function TaskFollowUp({ personal = false, task, kind, jump = null, stop = null, suggestTo = "", quotes, onQuotes, onSent }: { personal?: boolean; task: TaskRecord; jump?: ReactNode; stop?: ReactNode; kind: FollowUpMode; suggestTo?: string; quotes: Quote[]; onQuotes: (next: Quote[]) => void; onSent: () => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [commandId, setCommandId] = useState(() => crypto.randomUUID());
+  const [files, setFiles] = useState<ChosenFile[]>([]);
   const suggesting = kind === "suggest";
   // A teammate's words go to the starter first, who passes them on to the agent or not; the server takes no suggestion without words.
   const mode = suggesting
     ? { label: `Suggest a follow-up to ${suggestTo}`, note: `${suggestTo} reads it first; the agent gets it only if they continue with it.`, send: "Suggest" }
-    : kind === "continue" && task.requestNumber === null
-      ? { ...MODE.continue, note: "A new run starts where this one left off, with your words, and its changes join this review." }
-      : MODE[kind];
+    : kind === "continue" && (task.state === "kept" || task.changes?.kept || task.request?.status === "merged")
+      ? { ...MODE.continue, note: "A new run starts from the kept change, with your words, and its new changes come to you for review." }
+      : kind === "continue" && task.requestNumber === null
+        ? { ...MODE.continue, note: "A new run starts where this one left off, with your words, and its changes join this review." }
+        : kind === "continue" && personal
+          ? { ...MODE.continue, note: "A new run starts where this one left off, with your words, and its changes join this review." }
+          : MODE[kind];
   const ready = suggesting ? Boolean(text.trim()) : Boolean(text.trim() || quotes.length);
   const send = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ready) return;
     setBusy(true);
     setError(null);
-    (suggesting ? tasksApi.suggest(task.id, { text: text.trim(), quotes }, commandId) : tasksApi.message(task.id, { text: text.trim(), quotes }, commandId)).then(() => {
+    // The files go first, one by one; the words carry their ids, so the next run reads them by name.
+    (suggesting ? tasksApi.suggest(task.id, { text: text.trim(), quotes }, commandId) : (files.length ? uploadChosen(files, (f) => attachmentsApi.upload(task.id, f), setFiles) : Promise.resolve([])).then((attachments) => tasksApi.message(task.id, { text: text.trim(), quotes, attachments }, commandId))).then(() => {
       setText("");
+      setFiles([]);
       onQuotes([]);
       setCommandId(crypto.randomUUID());
       onSent();
@@ -95,6 +104,7 @@ export function TaskFollowUp({ task, kind, jump = null, stop = null, suggestTo =
           rows={1}
           maxLength={MOST_TEXT}
         />
+        <FileChips files={files} onChange={setFiles} disabled={busy} onRetry={() => document.querySelector<HTMLFormElement>("form.run-steer")?.requestSubmit()} />
         <button type="submit" className={text.trim() ? undefined : "secondary"} disabled={busy || !text.trim()}>{mode.send}</button>
         {stop}
         <Hint label="what you tell the agent">{mode.note}</Hint>
@@ -111,6 +121,7 @@ export function TaskFollowUp({ task, kind, jump = null, stop = null, suggestTo =
           What the agent should do
           <textarea className="follow-text" dir="auto" value={text} onChange={(e) => setText(e.target.value)} rows={3} maxLength={MOST_TEXT} />
         </label>
+        {suggesting ? null : <FileChips files={files} onChange={setFiles} disabled={busy} onRetry={() => document.querySelector<HTMLFormElement>("form.follow-form")?.requestSubmit()} />}
         <p className="muted small">{mode.note}{quotes.length >= MOST_QUOTES ? ` A follow-up holds ${MOST_QUOTES} quotes; send these before quoting more.` : quotes.length ? " Quoted lines go to the agent as they are in the request." : null}{quotes.length ? null : <> <Hint label="quoting lines">Select lines in the request's changes to quote them.</Hint></>}</p>
         <div className="actions">
           <button type="submit" className="secondary" disabled={busy || !ready}>{mode.send}</button>

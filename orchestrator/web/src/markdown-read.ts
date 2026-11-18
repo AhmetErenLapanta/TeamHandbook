@@ -20,6 +20,7 @@ export type Block =
   | { kind: "code"; lang: string; text: string }
   | { kind: "quote"; children: Block[] }
   | { kind: "list"; ordered: boolean; items: Inline[][] }
+  | { kind: "table"; head: Inline[][]; rows: Inline[][][] }
   | { kind: "rule" };
 
 /** Only addresses a browser opens as a page; javascript:, data: and the like stay text. */
@@ -63,6 +64,13 @@ const LIST_ITEM = /^\s{0,3}(?:([-*+])|(\d{1,9})[.)])\s+(.*)$/;
  */
 export const MOST_QUOTE_DEPTH = 8;
 
+/** The cells of a table row: split on bars not escaped, the edge bars dropped. */
+const cellsOf = (line: string): string[] => line.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, "|").trim());
+const DIVIDER = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+/** The most columns and rows a table draws: a longer one is text a reader should not be flooded with. */
+export const MOST_TABLE_COLUMNS = 12;
+export const MOST_TABLE_ROWS = 200;
+
 export function parseMarkdown(text: string, depth = 0): Block[] {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const blocks: Block[] = [];
@@ -104,6 +112,20 @@ export function parseMarkdown(text: string, depth = 0): Block[] {
       i--;
       blocks.push({ kind: "quote", children: parseMarkdown(quoted.join("\n"), depth + 1) });
       continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length && DIVIDER.test(lines[i + 1]!) && lines[i + 1]!.includes("-")) {
+      const head = cellsOf(line);
+      if (head.length >= 2 && head.length <= MOST_TABLE_COLUMNS && cellsOf(lines[i + 1]!).length === head.length) {
+        endParagraph();
+        const rows: Inline[][][] = [];
+        for (i += 2; i < lines.length && lines[i]!.includes("|") && lines[i]!.trim() && rows.length < MOST_TABLE_ROWS; i++) {
+          const cells = cellsOf(lines[i]!);
+          rows.push(head.map((_, c) => parseInline(cells[c] ?? "")));
+        }
+        i--;
+        blocks.push({ kind: "table", head: head.map((h) => parseInline(h)), rows });
+        continue;
+      }
     }
     const item = LIST_ITEM.exec(line);
     if (item) {

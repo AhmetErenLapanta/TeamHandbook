@@ -38,6 +38,9 @@ for (const screen of SCREENS) {
 
           // A page that followed a live run ends scrolled to where the run was; the picture is of the page from its top.
           await page.evaluate(() => window.scrollTo(0, 0));
+          // A full-page picture keeps the viewport's height, so a phone's sticky foot row would be drawn over the page's
+          // last block at the viewport's edge; for the picture alone it sits in the flow, where it ends the main surface.
+          await page.addStyleTag({ content: ".foot-actions { position: static !important; }" });
 
           // then: what moves with the clock or the run is masked; two shots in a row have to agree before one counts
           await expect(page).toHaveScreenshot(`${screen.name}-${theme}-${width}.png`, { fullPage: true, animations: "disabled", caret: "hide", mask: [page.locator("time"), ...screen.moving(page)] });
