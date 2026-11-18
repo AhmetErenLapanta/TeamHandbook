@@ -61,7 +61,7 @@ export function createGiteaForge(config: ForgeConfig, token: string, fetchImpl: 
     async open(repo: RepoRecord, change: ChangeRequest): Promise<OpenedRequest> {
       checkBranch(change.branch);
       if (!change.files.length) throw new Error("the change has no files");
-      const { default_branch: base } = await http.request<{ default_branch: string }>("GET", repoPath);
+      const base = change.target ?? (await http.request<{ default_branch: string }>("GET", repoPath)).default_branch;
       const taken = await http.request("GET", `${repoPath}/branches/${segments(change.branch)}`).then(() => true, missing<boolean>);
       if (taken) throw new ForgeRefusal(`branch ${change.branch} already exists in ${repo.name}; remove it on Gitea, then try again`);
       // Read before anything is written, so a path Gitea would refuse leaves no branch behind.

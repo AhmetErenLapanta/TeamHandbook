@@ -29,6 +29,8 @@ export interface ChangeRequest {
   files: FileChange[];
   /** Who asked, as the orchestrator knows them; recorded as the commit author. */
   author: { name: string; email: string };
+  /** The branch the request goes into; the repository's default when left out. */
+  target?: string;
   /** The team's reviewers and labels from its team file, and the asker's forge login when known. */
   assignment?: RequestAssignment;
 }
@@ -88,6 +90,8 @@ export interface RequestRecord extends OpenedRequest {
   createdBy: string;
   /** When it was merged, as the forge says or the orchestrator merged it; absent for one not merged, or merged before the orchestrator kept the time. */
   mergedAt?: string;
+  /** The branch it goes into, kept when its task started from one other than the repository's default; absent for the default. */
+  targetBranch?: string;
   /** The last head of a task's request that passed the check of a pushed branch; absent before any. */
   checkedHead?: string;
   /** The head that failed that check and why: the request is held until a later head passes. Absent when it is not held. */

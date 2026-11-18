@@ -398,6 +398,17 @@ describe("a merge request for a branch a runner pushed", () => {
     expect(recorded.some((r) => r.path.includes("/repository/commits"))).toBe(false);
   });
 
+  it("given a change whose task started from develop, when it is opened, then its merge request goes into develop", async () => {
+    // given
+    const { recorded, forge } = await fakeGitLab(project());
+
+    // when
+    await forge.open(REPO, change({ target: "develop" }));
+
+    // then
+    expect(recorded.find((r) => r.method === "POST" && r.path === `${PROJECT}/merge_requests`)?.body).toMatchObject({ target_branch: "develop" });
+  });
+
   it("given the branch the machine named as its target, when its request is opened, then the merge request goes into that branch", async () => {
     // given
     const { recorded, forge } = await fakeGitLab(withBranch);

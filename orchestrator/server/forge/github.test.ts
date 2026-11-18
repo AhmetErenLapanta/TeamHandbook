@@ -344,6 +344,18 @@ describe("a pull request for a branch a runner pushed", () => {
     expect(recorded.filter((r) => r.path.includes("/git/") && r.method !== "GET")).toEqual([]);
   });
 
+  it("given a change whose task started from develop, when it is opened, then its pull request goes into develop without asking for the default", async () => {
+    // given
+    const { recorded, forge } = await fakeGitHub(repository());
+
+    // when
+    await forge.open(REPO, change({ target: "develop" }));
+
+    // then
+    expect(bodyOf(recorded, "POST", `${R}/pulls`)).toMatchObject({ base: "develop" });
+    expect(recorded.some((r) => r.method === "GET" && r.path === R)).toBe(false);
+  });
+
   it("given the branch the machine named as its target, when its request is opened, then the pull request goes into that branch without asking for the default", async () => {
     // given
     const { recorded, forge } = await fakeGitHub(withBranch);

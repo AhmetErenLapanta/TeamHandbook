@@ -45,8 +45,8 @@ export function localDescriptionRef(branch: string): string {
 export interface LocalRequestLedger {
   /** Reserves the next number for good: two callers never receive the same one. */
   nextNumber(tenant: string, repoId: string): Promise<number>;
-  /** The branch and head a request was recorded with, for reading where it stands; null for one never recorded. */
-  request?(tenant: string, repoId: string, number: number): Promise<{ branch: string; headSha: string } | null>;
+  /** The branch, head and target a request was recorded with, for reading where it stands; null for one never recorded. */
+  request?(tenant: string, repoId: string, number: number): Promise<{ branch: string; headSha: string; targetBranch?: string } | null>;
 }
 
 /** Every path the commit holds as a symbolic link (mode 120000). */
@@ -136,6 +136,8 @@ export function createLocalForge(workRoot: string, ledger: LocalRequestLedger, u
       if (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${change.branch}`], bare)) {
         throw new ForgeRefusal(`branch ${change.branch} already exists in ${repo.name}`);
       }
+      // The local forge keeps no target of its own: the request's record carries it, and its merge reads it there.
+      if (change.target) await targetRefusal(bare, repo.name, change.branch, change.target, change.baseSha);
       const work = await scratch(workRoot, "change-");
       try {
         const headSha = await changeCommit(bare, work, change, repo.name);
@@ -204,6 +206,7 @@ export function createLocalForge(workRoot: string, ledger: LocalRequestLedger, u
         }
         // A branch with nothing past the base is already in it, and would read as merged at once.
         if (headSha === pushed.baseSha) throw new ForgeRefusal(`branch ${pushed.branch} has no commit beyond the one the task started from`);
+        if (pushed.target) await targetRefusal(bare, repo.name, pushed.branch, pushed.target, pushed.baseSha);
         await gitAsync(["notes", "--ref", localDescriptionRef(pushed.branch), "add", "--force", "-m", pushed.body || pushed.title, headSha], bare);
         const number = await ledger.nextNumber(repo.tenant, repo.id);
         return { number, url: `${urlBase}/${repo.id}/${number}`, branch: pushed.branch, headSha };
@@ -218,7 +221,7 @@ export function createLocalForge(workRoot: string, ledger: LocalRequestLedger, u
       const bare = localRepoPath(repo.url);
       const request = await ledger.request?.(repo.tenant, repo.id, number);
       if (!bare || !request) throw new ForgeRefusal(`there is no request #${number} on ${repo.name}`);
-      const target = (await gitAsync(["symbolic-ref", "--short", "HEAD"], bare)).trim();
+      const target = await localTarget(bare, request.targetBranch);
       const head = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${request.branch}^{commit}`], bare))?.trim() || null;
       // The request's own branch checked out is being worked on, not merged into itself.
       if (target === request.branch) return forgeState("open", null, head);
@@ -240,6 +243,20 @@ export function createLocalForge(workRoot: string, ledger: LocalRequestLedger, u
       });
     },
   };
+}
+
+/** The branch a local request goes into: the one its task started from, or the branch checked out in the person's repository. */
+export async function localTarget(bare: string, targetBranch: string | undefined): Promise<string> {
+  return targetBranch ?? (await gitAsync(["symbolic-ref", "--short", "HEAD"], bare)).trim();
+}
+
+/** Why a request cannot go into `target`: a name git would misread, a branch the repository lacks, or one the task did not start from. */
+async function targetRefusal(bare: string, repoName: string, branch: string, target: string, baseSha: string): Promise<void> {
+  if (!BRANCH.test(target) || target.includes("..")) throw new ForgeRefusal(`invalid target branch ${JSON.stringify(target)}`);
+  if (target === branch) throw new ForgeRefusal(`branch ${branch} cannot go into itself`);
+  if (!(await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${target}^{commit}`], bare))) throw new ForgeRefusal(`branch ${target} is not in ${repoName}, so no request goes into it`);
+  // The base has to be in the target's own history: a request into a branch the task did not start from would carry that branch's difference too.
+  if ((await gitAsyncMaybe(["merge-base", "--is-ancestor", baseSha, `refs/heads/${target}`], bare)) === null) throw new ForgeRefusal(`the task started from ${baseSha.slice(0, 7)}, which is not in ${target}`);
 }
 
 /** The description the local forge keeps for the request on `branch`, or null when it keeps none. */
@@ -306,13 +323,14 @@ export function inLocalTurn<T>(repo: RepoRecord, work: () => Promise<T>): Promis
  * `expectedHead` is the head last checked: the branch read at any other commit is refused, and that
  * exact commit is what merges, so a push between the check and the merge never reaches the target.
  */
-export async function mergeLocalBranch(workRoot: string, repo: RepoRecord, branch: string, by: { name: string; email: string }, expectedHead?: string): Promise<string> {
+export async function mergeLocalBranch(workRoot: string, repo: RepoRecord, branch: string, by: { name: string; email: string }, expectedHead?: string, targetBranch?: string): Promise<string> {
   const bare = localRepoPath(repo.url);
   if (!bare) throw new Error(`${repo.name} is not reachable by path`);
-  const target = (await gitAsync(["symbolic-ref", "--short", "HEAD"], bare)).trim();
-  // In a working copy the default branch is the one checked out: it moves, with its files, only when
-  // nothing of the person's is in the way; otherwise they merge it there themselves.
-  const checkout = (await gitAsync(["rev-parse", "--is-bare-repository"], bare)).trim() !== "true";
+  const target = await localTarget(bare, targetBranch);
+  // In a working copy the branch checked out moves, with its files, only when nothing of the
+  // person's is in the way; otherwise they merge it there themselves. Any other target is a ref alone,
+  // and git refuses to move one checked out in another worktree.
+  const checkout = (await gitAsync(["rev-parse", "--is-bare-repository"], bare)).trim() !== "true" && (await gitAsync(["symbolic-ref", "--short", "HEAD"], bare)).trim() === target;
   if (checkout) {
     const busy = target === branch ? "the request's own branch is the one checked out" : await checkoutBusy(bare);
     if (busy) throw new TargetCheckedOut(branch, target, repo.name, busy);
