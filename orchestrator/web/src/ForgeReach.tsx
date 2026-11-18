@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api, ApiError } from "./api";
+import { OnForgeLine } from "./OnForgeLine";
+import { requestStatus } from "./request-reads";
 
 export const FORGE = {
   gitlab: { name: "GitLab", noun: "merge request", title: "Merge request", mark: "!" },
@@ -25,7 +27,7 @@ export function useForgeReach(repoId: string, number: number): { line: ReactNode
   if (state.url) {
     const n = state.number;
     return {
-      line: <p>{n !== null ? <>{forge.title} <a href={state.url} target="_blank" rel="noopener noreferrer">{forge.mark}{n}</a></> : <a href={state.url} target="_blank" rel="noopener noreferrer">A {forge.noun}</a>} is open on {forge.name}.</p>,
+      line: <><p>{n !== null ? <>{forge.title} <a href={state.url} target="_blank" rel="noopener noreferrer">{forge.mark}{n}</a></> : <a href={state.url} target="_blank" rel="noopener noreferrer">A {forge.noun}</a>} is open on {forge.name}.</p><OnForgeLine load={() => requestStatus(repoId, number).then((s) => s.onForge ?? null)} /></>,
       action: null,
       refusal: null,
     };

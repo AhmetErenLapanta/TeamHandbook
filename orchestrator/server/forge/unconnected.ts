@@ -11,7 +11,12 @@ import type { RepoRecord } from "../store.js";
 import { branchRefusal, branchRules } from "../tasks/pushed-check.js";
 import type { TaskRecord, TaskTarget } from "../tasks/types.js";
 import { FORGES } from "../../shared/forge-def.js";
-import { DEVICE_ENDPOINTS, deviceSignInState, personForgeToken } from "./device-sign-in.js";
+import { DEVICE_ENDPOINTS, deviceSignInState, personForgeToken, personLastingToken } from "./device-sign-in.js";
+import { githubAuth } from "./github.js";
+import { gitlabAuth } from "./gitlab.js";
+import { forgeHttp } from "./http.js";
+import { readFailure, readWatchWith } from "./read-model.js";
+import type { OnForgeWatch } from "./pushed.js";
 import type { DeviceEndpoints } from "./device-sign-in.js";
 import { APP_FORGES } from "./oauth.js";
 import type { AppForge } from "./oauth.js";
@@ -78,7 +83,7 @@ export async function openOnUnconnectedRemote(ctx: OrchestratorContext, user: Pi
   const folder = machineFolderOf(project.url);
   const machine = folder ? (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === folder.machineId) : undefined;
   if (!machine || machine.userId !== user.id) return { refused: "the task ran on a machine that is not yours" };
-  const token = await personForgeToken(ctx, user.id, kind);
+  const token = await personForgeToken(ctx, user, kind, { endpoints: endpoints[kind], send });
   const signedIn = await deviceSignInState(ctx, user, kind);
   if (!token || signedIn.state !== "done") return { refused: `sign in to ${FORGES[kind].label} on its card first, with the code it gives` };
   const web = new URL(endpoints[kind].code).origin;
@@ -126,3 +131,31 @@ export async function openOnUnconnectedRemote(ctx: OrchestratorContext, user: Pi
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * The request a press opened for a change kept on its person's machine, on a GitHub or GitLab no
+ * organization connected, read for the watch with GETs alone and the task starter's code sign-in
+ * while it lasts; nothing is renewed in the background. Null for a change not opened that way.
+ */
+export async function onMachineForge(ctx: OrchestratorContext, kept: TaskTarget, starter: Pick<Principal, "id"> | null, send: typeof fetch = fetch, endpoints: Record<AppForge, DeviceEndpoints> = DEVICE_ENDPOINTS): Promise<OnForgeWatch | null> {
+  const at = kept.forgeRequest && kept.origin ? originOf(kept.origin) : null;
+  const kind = at ? APP_FORGES.find((k) => endpoints[k].host === at.host) : undefined;
+  if (!at || !kind || !validProject(kind, at.project) || !kept.forgeRequest) return null;
+  const label = FORGES[kind].label;
+  const where = { kind, number: kept.forgeRequest.number, url: kept.forgeRequest.url };
+  const token = starter ? await personLastingToken(ctx, starter.id, kind) : null;
+  if (!token) return { ...where, paused: `the sign-in to ${label} it was opened with lapsed, and it is renewed only when you press for a request; sign in again on the ${label} card to have it read` };
+  const config = { repoId: kept.repoId, kind, apiUrl: FORGES[kind].apiUrlFor(new URL(new URL(endpoints[kind].code).origin)), project: at.project };
+  // A code sign-in's token is OAuth's: GitLab takes it as a bearer alone, never in PRIVATE-TOKEN.
+  const http = forgeHttp(label, config.apiUrl, token, kind === "github" ? githubAuth(token) : gitlabAuth(token, true), send);
+  const repo = { id: kept.repoId, name: at.project } as RepoRecord;
+  return {
+    ...where,
+    read: () =>
+      readWatchWith(http, config, kept.forgeRequest!.number).catch((err: Error) => {
+        if (err instanceof ForgeHttpError) throw readFailure(err, kind, repo, false);
+        throw err;
+      }),
+  };
+}
+

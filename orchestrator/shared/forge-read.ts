@@ -48,6 +48,8 @@ export interface RequestDetail {
   mergeability: Mergeability;
   review: ReviewSummary;
   checks: ChecksSummary;
+  /** Who merged it, where the forge says; absent otherwise. */
+  mergedBy?: string;
 }
 
 /**
@@ -84,5 +86,13 @@ export interface RequestWatch {
 export interface RequestStatusRead extends RequestWatch {
   source: "forge" | "local";
   capabilities: ForgeCapabilities | null;
+  /** A local request its person's press also opened on the clone's GitHub or GitLab: that request as the forge has it now, or why it was not read. */
+  onForge?: OnForgeRead;
 }
+
+/** A request a person's press opened on a forge, read once on a page's opening or its Read again; never in the background. */
+export type OnForgeRead = { kind: "github" | "gitlab"; number: number; url: string } & (
+  | { read: { status: RequestStatus; checks: ChecksSummary["state"]; approvals: number; comments: number; mergedBy: string | null; readAt: string } }
+  | { unread: string }
+);
 

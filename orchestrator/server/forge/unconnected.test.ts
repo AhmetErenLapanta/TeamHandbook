@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createUser, principalOf, setupFirstOwner } from "../accounts.js";
 import type { OrchestratorContext } from "../app.js";
 import { TEAM_PREFIX_FILE } from "../plugin.js";
@@ -13,13 +13,14 @@ import type { TaskTarget } from "../tasks/types.js";
 import { createVault, storeSecret } from "../vault.js";
 import { DEVICE_ENDPOINTS, personTokenName, signedInKey } from "./device-sign-in.js";
 import { plainGitServer } from "./stand-in-git.js";
-import { openOnUnconnectedRemote } from "./unconnected.js";
+import { onMachineForge, openOnUnconnectedRemote } from "./unconnected.js";
 
 const IDENTITY = ["-c", "user.name=Stand In", "-c", "user.email=stand-in@example.invalid"];
 const git = (cwd: string, ...args: string[]) => execFileSync("git", [...IDENTITY, ...args], { cwd, encoding: "utf8" }).trim();
 
 const servers: Server[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(servers.splice(0).map((s) => new Promise((done) => s.close(done))));
 });
 
@@ -66,6 +67,7 @@ async function adasTask(remote: Awaited<ReturnType<typeof unconnectedRemote>>, c
   await store.createTask({ tenant: "acme", id: "tsk_a", repoId: "code", team: "Payments", title: "Fix the service", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "needs-review", createdBy: ada.email, createdAt: at, startedAt: at, finishedAt: at, baseSha: null, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null, stage: "tests", skills: [], targetMode: "pinned" });
   const kept: TaskTarget = { repoId: "code", status: "local", reason: "not-connected", path: "service", head: remote.head, baseSha: remote.base, origin: `${remote.web}/acme/service.git`, targetBranch: "main", description: { title: "Fix the service", body: "Fixed." }, branch: "handbook/fix", tests: null, requestNumber: null, error: null, cost: { usd: null, inputTokens: null, outputTokens: null }, ...change, ...(change.reason === "not-mine" ? { reason: "not-connected" } : {}) };
   await store.setTaskTargets("acme", "tsk_a", [kept]);
+  vi.stubEnv("ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID", "gl-stand-in-app");
   await storeSecret(store, ctx.vault ?? null, "acme", personTokenName("gitlab", ada.id), "stand-in-person-token", ada.email);
   await store.setSetting("acme", signedInKey("gitlab", ada.id), JSON.stringify({ account: "ada", host: remote.endpoints.gitlab.host }));
   const calls: { method: string; url: string; auth: string | null; body: unknown }[] = [];
@@ -145,3 +147,31 @@ describe("a change a person's machine pushed to a remote no organization connect
     expect([...notMine.calls, ...elsewhere.calls]).toEqual([]);
   });
 });
+
+describe("a change opened on a GitLab no organization connected, read for its task's watch", () => {
+  it("given the starter's code sign-in, when the watch reads the merge request and again once the sign-in lapsed, then the first read is GETs alone with her token as a bearer and the second reads nothing and says why", async () => {
+    // given
+    const remote = await unconnectedRemote();
+    const { ctx, ada, kept } = await adasTask(remote);
+    const opened = { ...kept, status: "request" as const, forgeRequest: { forge: "GitLab", number: 5, url: `${remote.web}/acme/service/-/merge_requests/5` } };
+    const calls: { method: string; auth: string | null; path: string }[] = [];
+    const send = (async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      calls.push({ method: init?.method ?? "GET", auth: new Headers(init?.headers).get("authorization"), path });
+      const answer = path.endsWith("/merge_requests/5") ? { state: "opened", sha: remote.head, target_branch: "main", detailed_merge_status: "mergeable" } : path.endsWith("/approvals") ? { approved_by: [] } : [];
+      return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    // when
+    const reading = await onMachineForge(ctx, opened, ada, send, remote.endpoints);
+    const watch = reading && "read" in reading ? await reading.read() : null;
+    await storeSecret(ctx.store, ctx.vault ?? null, "acme", personTokenName("gitlab", ada.id), JSON.stringify({ accessToken: "stand-in-person-token", refreshToken: "r", expiresAt: "2026-01-01T00:00:00.000Z" }), ada.email);
+    const lapsed = await onMachineForge(ctx, opened, ada, send, remote.endpoints);
+
+    // then
+    expect(watch?.detail).toMatchObject({ number: 5, status: "open", headSha: remote.head });
+    expect(calls.every((c) => c.method === "GET" && c.auth === "Bearer stand-in-person-token" && c.path.startsWith("/api/v4/projects/acme%2Fservice/"))).toBe(true);
+    expect(lapsed).toMatchObject({ kind: "gitlab", paused: "the sign-in to GitLab it was opened with lapsed, and it is renewed only when you press for a request; sign in again on the GitLab card to have it read" });
+  });
+});
+

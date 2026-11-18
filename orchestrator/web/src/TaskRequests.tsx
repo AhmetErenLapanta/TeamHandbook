@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ApiError, tasksApi } from "./api";
+import { useEffect, useState } from "react";
+import { ApiError, taskLimitsApi, tasksApi } from "./api";
 import type { Principal, RequestDecision, TaskRecord, TaskRequest } from "./api";
 import { answerLine, answerReady, emptyAnswers, OTHER_MAX, pick, write } from "./questions";
 import type { AgentQuestion, QuestionAnswers } from "./questions";
@@ -35,6 +35,24 @@ function Card({ task, request, mine, onAnswered }: { task: TaskRecord; request: 
   };
   const pending = waiting(request);
   const what = [request.payload.tool, request.payload.summary].filter(Boolean).join(": ");
+  // Once answered it is one line: what was asked and who decided, the change left to lead the page.
+  if (request.status === "answered" && request.answer && "decision" in request.answer) {
+    const by = mine ? "You" : request.answeredBy ?? "Its starter";
+    const path = request.kind === "file-change" ? request.payload.summary : undefined;
+    if (path) {
+      const d = request.answer.decision;
+      return (
+        <li className="approval settled" aria-label={`The agent asks to ${KIND[request.kind]}`}>
+          <p className="muted small">{by} {d === "deny" ? "denied" : "allowed"} writing <span className="mono">{path}</span>{d === "allow_once" ? " once" : d === "allow_for_task" ? " for this task" : ""}{request.answer.note ? `: ${request.answer.note}` : ""}.</p>
+        </li>
+      );
+    }
+    return (
+      <li className="approval settled" aria-label={`The agent asks to ${KIND[request.kind]}`}>
+        <p className="muted small">The agent asked to {KIND[request.kind]}{what ? <>: <span className="mono">{what}</span></> : null}. {by} {ANSWER[request.answer.decision]}{request.answer.note ? `: ${request.answer.note}` : ""}.</p>
+      </li>
+    );
+  }
   return (
     <li className={`approval${pending ? " pending" : ""}`} aria-label={`The agent asks to ${KIND[request.kind]}`}>
       <p><strong>The agent asks to {KIND[request.kind]}</strong></p>
@@ -118,9 +136,9 @@ function QuestionCard({ task, request, mine, agent, onAnswered }: { task: TaskRe
         "answers" in answer ? (
           <dl className="facts">
             {questions.map((q) => <div key={q.key}><dt dir="auto">{q.title}</dt><dd dir="auto">{answerLine(q, answer.answers[q.key])}</dd></div>)}
-            <div><dt>Answered by</dt><dd>{request.answeredBy ?? "its starter"}</dd></div>
+            <div><dt>Answered by</dt><dd>{mine ? "You" : request.answeredBy ?? "its starter"}</dd></div>
           </dl>
-        ) : <p className="muted small">{request.answeredBy ?? "Its starter"} did not answer{answer.note ? `: ${answer.note}` : ""}.</p>
+        ) : <p className="muted small">{request.answeredBy ?? "Its starter"} did not answer{"note" in answer && answer.note ? `: ${answer.note}` : ""}.</p>
       ) : request.status === "withdrawn" ? (
         <p className="muted small">The agent took this back; it needs no answer.</p>
       ) : !pending ? (
@@ -172,6 +190,75 @@ function QuestionCard({ task, request, mine, agent, onAnswered }: { task: TaskRe
   );
 }
 
+/**
+ * A secret the agent asks for: its name, its reason as quoted data, one password field, and where the
+ * value goes. The value is kept nowhere on the page: the field empties once sent, and the answer holds none.
+ */
+function SecretCard({ task, request, mine, onAnswered }: { task: TaskRecord; request: TaskRequest; mine: boolean; onAnswered: () => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = request.payload.name ?? "a secret";
+  const pending = waiting(request);
+  const failed = (e: Error) => {
+    setValue("");
+    setError(e.message);
+    setBusy(false);
+    if (e instanceof ApiError && e.status === 409) onAnswered();
+  };
+  const give = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!value) return;
+    setBusy(true);
+    setError(null);
+    const sent = value;
+    setValue("");
+    tasksApi.giveSecret(task.id, request.id, sent).then(onAnswered, failed);
+  };
+  const decline = () => {
+    setBusy(true);
+    setError(null);
+    tasksApi.declineSecret(task.id, request.id).then(onAnswered, failed);
+  };
+  const given = request.answer && "provided" in request.answer ? request.answer.provided : null;
+  if (request.status === "answered" && given !== null) {
+    return (
+      <li className="approval settled" aria-label={`The agent asks for ${name}`}>
+        <p className="muted small">{mine ? "You" : request.answeredBy ?? "Its starter"} {given ? "gave" : "did not give"} <span className="mono">{name}</span>.</p>
+      </li>
+    );
+  }
+  if (request.status !== "pending" || !pending) {
+    return (
+      <li className="approval settled" aria-label={`The agent asks for ${name}`}>
+        <p className="muted small">The agent no longer waits for <span className="mono">{name}</span>.</p>
+      </li>
+    );
+  }
+  if (!mine) {
+    return (
+      <li className="approval pending" aria-label={`The agent asks for ${name}`}>
+        <p className="muted small">Waiting for {task.startedBy?.name ?? "the person who started this task"} to give <span className="mono">{name}</span>.</p>
+      </li>
+    );
+  }
+  return (
+    <li className="approval pending" aria-label={`The agent asks for ${name}`}>
+      <p><strong>The agent asks for <span className="mono">{name}</span></strong></p>
+      {request.payload.why ? <blockquote className="pre" dir="auto">{request.payload.why}</blockquote> : null}
+      <form className="form" onSubmit={give} aria-label={`Give ${name}`}>
+        <label>{name}<input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} disabled={busy} /></label>
+        <div className="actions">
+          <button type="submit" disabled={busy || !value}>Give it to the agent</button>
+          <button type="button" className="secondary" disabled={busy} onClick={decline}>Decline</button>
+        </div>
+      </form>
+      <p className="muted small">It is sealed for this task alone; the agent gets it by name, and the value is never in the chat or the log.</p>
+      {error ? <p className="error" role="alert">{error}</p> : null}
+    </li>
+  );
+}
+
 const waiting = (r: TaskRequest) => r.status === "pending" && r.responseCapability === "live";
 
 /** Whether the agent stands on a card for its answer now; the card is then the one thing to do on the page. */
@@ -188,8 +275,8 @@ export function waitingFirst(asked: TaskRequest[]): TaskRequest[] {
  * What the agent asked while it ran, each as a card: the person who started the task answers it
  * here, from this browser alone, and everyone else who can see the task reads who it waits on.
  */
-export function TaskRequests({ task, me, agent, onAnswered }: { task: TaskRecord; me: { email: string }; agent: string; onAnswered: () => void }) {
-  const asked = (task.requests ?? []).filter((r) => KIND[r.kind] || r.kind === "question");
+export function TaskRequests({ task, me, agent, onAnswered }: { task: TaskRecord; me: { email: string; mode?: string }; agent: string; onAnswered: () => void }) {
+  const asked = (task.requests ?? []).filter((r) => KIND[r.kind] || r.kind === "question" || r.kind === "secret");
   if (!asked.length) return null;
   const mine = task.createdBy === me.email;
   const open = asked.filter(waiting).length;
@@ -197,7 +284,7 @@ export function TaskRequests({ task, me, agent, onAnswered }: { task: TaskRecord
     <section className="section" aria-labelledby="task-requests-h">
       <h2 id="task-requests-h">{agent || "The agent"} asks you <span className="count">{open ? `${open} waiting` : asked.length}</span></h2>
       <ul className="plain approvals">
-        {waitingFirst(asked).map((r) => (r.kind === "plan" ? <PlanCard key={r.id} task={task} request={r} mine={mine} onAnswered={onAnswered} /> : r.kind === "question" ? <QuestionCard key={r.id} task={task} request={r} mine={mine} agent={agent} onAnswered={onAnswered} /> : <Card key={r.id} task={task} request={r} mine={mine} onAnswered={onAnswered} />))}
+        {waitingFirst(asked).map((r) => (r.kind === "secret" ? <SecretCard key={r.id} task={task} request={r} mine={mine} onAnswered={onAnswered} /> : r.kind === "plan" ? <PlanCard key={r.id} task={task} request={r} mine={mine} onAnswered={onAnswered} /> : r.kind === "question" ? <QuestionCard key={r.id} task={task} request={r} mine={mine} agent={agent} onAnswered={onAnswered} /> : <Card key={r.id} task={task} request={r} mine={mine} onAnswered={onAnswered} />))}
       </ul>
     </section>
   );
@@ -249,13 +336,26 @@ export function WaitingNote({ task, me, onContinued }: { task: TaskRecord; me: P
   const wait = machineWait(task, me);
   // On one's own machine the agent's sign-in command is on Agent readiness; there are no machines to list.
   const signIn = me.mode === "local" ? <a href={here("settings", "agents")}>Agent readiness</a> : machines;
-  const resume = task.status === "interrupted" && task.createdBy === me.email ? <button type="button" disabled={busy} onClick={go}>Pick up where it stopped</button> : null;
+  const [second, setSecond] = useState(false);
+  useEffect(() => {
+    if (task.waitingFor !== "limit" || task.createdBy !== me.email) return setSecond(false);
+    taskLimitsApi.read().then((l) => setSecond(Boolean(l.secondSignIn || l.secondSignInSet)), () => setSecond(false));
+  }, [task.waitingFor, task.id]);
+  const goSecond = () => {
+    setBusy(true);
+    setError(null);
+    tasksApi.continueWithSecondSignIn(task.id).then(onContinued, (e: Error) => {
+      setError(e.message);
+      setBusy(false);
+    });
+  };
+  const resume = task.waitingFor === "limit" && second ? <button type="button" disabled={busy} onClick={goSecond}>Continue with your second sign-in</button> : task.status === "interrupted" && task.createdBy === me.email ? <button type="button" disabled={busy} onClick={go}>Pick up where it stopped</button> : null;
   const line =
     wait ? <>{wait.line} <a href={here("settings", "machines")}>{wait.link}</a></>
       : task.waitingFor === "connect" || task.waitingFor === "machine" ? null
         : task.waitingFor === "limit" ? <>{limitLine(task.resetAt ?? null)}</>
           : task.waitingFor === "sign-in" ? <>The agent on your machine is signed out. Sign in there ({signIn} has the command), then continue.</>
-            : task.status === "interrupted" ? <>{task.interruptedBy === "restart" ? "Stopped when the orchestrator restarted." : "Stopped when your machine went away."}</>
+            : task.status === "interrupted" ? <>{task.interruptedBy === "restart" ? "Stopped when the orchestrator restarted." : task.interruptedBy === "machine" || !task.error ? "Stopped when your machine went away." : task.error}</>
               : null;
   if (!line) return null;
   return (

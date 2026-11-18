@@ -14,6 +14,9 @@ import { gitAsyncMaybe } from "../git.js";
 import { localRepoPath } from "./local.js";
 import { readRequestChanges, readRequestFile } from "./request-diff.js";
 import { readRequestTemplate } from "./templates.js";
+import { repoBranches } from "./branches.js";
+import { readOnForge } from "./pushed.js";
+import { shownProjects } from "../projects.js";
 import { route } from "../route-scopes.js";
 
 const ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -21,14 +24,17 @@ const ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 interface Source {
   dir: string;
   repoHead: string;
+  /** The branch the request goes into, where the source names it. */
+  target?: string;
   refs: string[];
 }
 
 /**
  * Where a request's commits are read. One on the local forge of a repository read by path is read
- * in the person's own repository, its branch against that repository's HEAD, as fresh as their
- * runner left it; any other from the orchestrator's mirror: the orchestrator's own by its branch,
- * a teammate's by the forge's ref for its number. Null for a request this repository has none of.
+ * in the person's own repository, its branch against the branch it goes into (that repository's
+ * HEAD unless its task started from another), as fresh as their runner left it; any other from the
+ * orchestrator's mirror: the orchestrator's own by its branch, a teammate's by the forge's ref for
+ * its number. Null for a request this repository has none of.
  */
 async function requestSource(ctx: OrchestratorContext, user: Principal, id: string, number: number): Promise<Source | null> {
   const repo = ID.test(id) && Number.isInteger(number) && number > 0 ? await ctx.store.getRepo(ctx.tenant, id) : null;
@@ -38,13 +44,17 @@ async function requestSource(ctx: OrchestratorContext, user: Principal, id: stri
   const kind = request?.provider ?? (await ctx.store.getForgeConfig(ctx.tenant, id))?.kind;
   if (!kind || (kind === "local" && !request)) return null;
   const own = localRepoPath(repo.url);
+  const chosen = request?.targetBranch;
   if (kind === "local" && own) {
-    const head = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], own))?.trim();
-    return head ? { dir: own, repoHead: head, refs: [`refs/heads/${request!.branch}`] } : null;
+    const head = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `${chosen ? `refs/heads/${chosen}` : "HEAD"}^{commit}`], own))?.trim();
+    const target = chosen ?? (await gitAsyncMaybe(["symbolic-ref", "--short", "HEAD"], own))?.trim();
+    return head ? { dir: own, repoHead: head, ...(target ? { target } : {}), refs: [`refs/heads/${request!.branch}`] } : null;
   }
   if (!repo.head) return null;
+  const dir = mirrorDir(ctx, id);
   const refs = kind === "local" ? [`refs/heads/${request!.branch}`] : [FORGES[kind].requestRef(number), ...(request ? [`refs/heads/${request.branch}`] : [])];
-  return { dir: mirrorDir(ctx, id), repoHead: repo.head, refs };
+  const targetHead = chosen ? (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${chosen}^{commit}`], dir))?.trim() : null;
+  return { dir, repoHead: targetHead || repo.head, refs };
 }
 
 /**
@@ -72,9 +82,9 @@ export function forgeReadRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv>
       // A clean merge is what git computes from objects alone, as the local forge's own merge does.
       const merges = request.status !== "open" ? null : (await gitAsyncMaybe(["merge-tree", "--write-tree", source.repoHead, head], source.dir)) !== null;
       const mergeability: Mergeability = merges === null ? { state: "not-open", reason: null } : merges ? { state: "mergeable", reason: null } : { state: "conflict", reason: "the branch conflicts with its base" };
-      const target = (await gitAsyncMaybe(["symbolic-ref", "--short", "HEAD"], source.dir))?.trim();
-      const detail: RequestDetail = { number, status: request.status, headSha: head, ...(target ? { target } : {}), mergeability, review: { decision: "none", approvedBy: [] }, checks: { state: "no-ci", checks: [] } };
-      const status: RequestStatusRead = { source: "local", capabilities: null, detail, comments: [], fingerprint: watchFingerprint(detail, []) };
+      const detail: RequestDetail = { number, status: request.status, headSha: head, ...(source.target ? { target: source.target } : {}), mergeability, review: { decision: "none", approvedBy: [] }, checks: { state: "no-ci", checks: [] } };
+      const onForge = await readOnForge(ctx, repo, request, c.get("user"));
+      const status: RequestStatusRead = { source: "local", capabilities: null, detail, comments: [], fingerprint: watchFingerprint(detail, []), ...(onForge ? { onForge } : {}) };
       return c.json({ status });
     }
     const config = await ctx.store.getForgeConfig(ctx.tenant, id);
@@ -123,6 +133,16 @@ export function forgeReadRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv>
     return new Response(media.body, {
       headers: { "content-type": media.type, "cache-control": "private, max-age=300", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" },
     });
+  });
+
+  // The branches a task can start from, for the start form; a folder on another person's machine is not shown, as in the project list.
+  route(app, "GET /api/repos/:id/branches", async (c) => {
+    const id = c.req.param("id") ?? "";
+    const repo = ID.test(id) ? (await shownProjects(ctx, c.get("user"), await ctx.store.listRepos(ctx.tenant))).find((r) => r.id === id) : undefined;
+    if (!repo) return c.json({ error: "unknown repository" }, 404);
+    const read = await repoBranches(ctx, repo);
+    if (!read) return c.json({ error: `${repo.name}'s branches are not read here yet: a folder on a machine is read by that machine, and a repository is read at its first sync`, code: "no-branches" }, 409);
+    return c.json(read);
   });
 
   route(app, "GET /api/repos/:id/request-template", async (c) => {

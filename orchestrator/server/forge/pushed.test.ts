@@ -6,15 +6,15 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OrchestratorContext } from "../app.js";
 import { openSqliteStore } from "../store.js";
 import { forgeTokenName } from "../propose.js";
 import { createVault, storeSecret } from "../vault.js";
 import type { CliResult, CliRun } from "./own-cli.js";
-import { dropFromRequest, openRequestOnForge, originRequest, remoteForge, requestForPushedBranch, requestOnForge, updateRequestBranch } from "./pushed.js";
+import { dropFromRequest, onForgeWatch, openRequestOnForge, readOnce, readOnForge, originRequest, remoteForge, requestForPushedBranch, requestOnForge, updateRequestBranch } from "./pushed.js";
 import { createUser, principalOf, setupFirstOwner } from "../accounts.js";
-import { DEVICE_ENDPOINTS, personTokenName } from "./device-sign-in.js";
+import { DEVICE_ENDPOINTS, personTokenName, signedInKey } from "./device-sign-in.js";
 import { copyOf } from "../test-fixtures.js";
 import { plainGitServer } from "./stand-in-git.js";
 
@@ -226,20 +226,25 @@ describe("a path repository's request opened on its forge with the task starter'
     const request = { ...answer.opened, tenant: "solo", repoId: made.repo.id, title: "Add the pushed skill", status: "open" as const, provider: "local" as const, createdAt: new Date().toISOString(), createdBy: ada.email, checkedHead: made.head };
     await ctx.store.saveRequest(request);
     await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName("gitlab", ada.id), "stand-in-person-token", ada.email);
+    await ctx.store.setSetting(ctx.tenant, signedInKey("gitlab", ada.id), JSON.stringify({ account: "ada", host: new URL(made.web).host }));
+    vi.stubEnv("ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID", "gl-stand-in-app");
     const publicHost = DEVICE_ENDPOINTS.gitlab.host;
     DEVICE_ENDPOINTS.gitlab.host = new URL(made.web).host;
     restore.push(() => (DEVICE_ENDPOINTS.gitlab.host = publicHost));
-    const calls: { method: string; url: string; auth: string | null }[] = [];
+    const calls: { method: string; url: string; auth: string | null; body?: unknown }[] = [];
     const send = (async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
-      calls.push({ method, url: String(url), auth: new Headers(init?.headers).get("authorization") });
+      calls.push({ method, url: String(url), auth: new Headers(init?.headers).get("authorization"), ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
       const answer = method === "POST" ? { iid: 3, web_url: `${made.web}/acme/skills/-/merge_requests/3`, state: "opened" } : { name: "handbook/pushed", commit: { id: made.head } };
       return new Response(JSON.stringify(answer), { status: method === "POST" ? 201 : 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     return { ...made, ctx, ada, request, calls, send };
   }
   const restore: (() => void)[] = [];
-  afterEach(() => restore.splice(0).forEach((undo) => undo()));
+  afterEach(() => {
+    restore.splice(0).forEach((undo) => undo());
+    vi.unstubAllEnvs();
+  });
 
   it("given the task's starter signed in to GitLab with a code, when they press, then the branch reaches the origin and the merge request opens with their token, and only they are offered the button", async () => {
     const { ctx, repo, request, ada, forgeRepo, head, calls, send } = await signedIn();
@@ -256,14 +261,93 @@ describe("a path repository's request opened on its forge with the task starter'
     expect(calls.find((c) => c.method === "POST")?.auth).toBe("Bearer stand-in-person-token");
   });
 
+  it("given a request whose task started from develop, when its starter presses, then the merge request on the origin goes into develop too", async () => {
+    // given
+    const { ctx, repo, request, ada, calls, send } = await signedIn();
+
+    // when
+    await openRequestOnForge(ctx, repo, { ...request, targetBranch: "develop" }, ada, undefined, send);
+
+    // then
+    expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({ source_branch: "handbook/pushed", target_branch: "develop" });
+  });
+
+  it("given the request opened on GitLab by her press, when the watch reads it with her sign-in and again after it lapsed, then the first read is GETs alone with her token and the second reads nothing and says why", async () => {
+    // given
+    const { ctx, repo, request, ada, send, calls, web } = await signedIn();
+    const merge = { number: 3, url: `${web}/acme/skills/-/merge_requests/3` };
+    await openRequestOnForge(ctx, repo, request, ada, undefined, send);
+    calls.splice(0);
+    const reads = (async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? "GET", url: String(url), auth: new Headers(init?.headers).get("authorization") });
+      const path = new URL(String(url)).pathname;
+      const answer = path.endsWith("/merge_requests/3") ? { state: "opened", sha: "c".repeat(40), target_branch: "main", detailed_merge_status: "mergeable" } : path.endsWith("/approvals") ? { approved_by: [] } : [];
+      return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    // when
+    const reading = await onForgeWatch(ctx, repo, request.number, ada, reads);
+    const watch = reading && "read" in reading ? await reading.read() : null;
+    await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName("gitlab", ada.id), JSON.stringify({ accessToken: "stand-in-person-token", refreshToken: "r", expiresAt: "2026-01-01T00:00:00.000Z" }), ada.email);
+    const lapsed = await onForgeWatch(ctx, repo, request.number, ada, reads);
+
+    // then
+    expect(reading).toMatchObject({ number: merge.number });
+    expect(watch?.detail).toMatchObject({ number: 3, status: "open", headSha: "c".repeat(40) });
+    expect(new Set(calls.map((c) => c.method))).toEqual(new Set(["GET"]));
+    expect(calls.every((c) => c.auth === "Bearer stand-in-person-token")).toBe(true);
+    expect(lapsed).toMatchObject({ kind: "gitlab", paused: "the sign-in to GitLab it was opened with lapsed, and it is renewed only when you press for a request; sign in again on the GitLab card to have it read" });
+  });
+
+  it("given the merge request merged on GitLab with an approval and comments, when its starter's page reads it and an admin's does, then the starter sees its facts and who merged it, and the admin is told it is read with the sign-in of whoever opened it", async () => {
+    // given
+    const { ctx, repo, request, ada, send } = await signedIn();
+    const bea = await principalOf(ctx.store, await createUser(ctx.store, "solo", new Set(), { email: "bea@example.invalid", role: "admin", teams: [] }, ada));
+    await openRequestOnForge(ctx, repo, request, ada, undefined, send);
+    const forge = (async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      const answer = path.endsWith("/merge_requests/3") ? { state: "merged", sha: "c".repeat(40), target_branch: "main", merged_by: { username: "grace" } }
+        : path.endsWith("/approvals") ? { approved: true, approved_by: [{ user: { username: "grace" } }] }
+        : path.endsWith("/notes") ? [{ id: 1, body: "Looks right.", author: { username: "grace" }, updated_at: "2026-11-12T10:00:00Z" }, { id: 2, body: "Pipeline passed.", author: { username: "project_7_bot" }, updated_at: "2026-11-12T10:01:00Z" }]
+        : [];
+      return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const opened = (await onForgeWatch(ctx, repo, request.number, ada, forge))!;
+
+    // when
+    const forAda = await readOnce(opened);
+    const forBea = await readOnForge(ctx, repo, request, bea);
+
+    // then
+    expect(forAda).toMatchObject({ kind: "gitlab", number: 3, read: { status: "merged", approvals: 1, comments: 1, mergedBy: "grace", readAt: expect.any(String) } });
+    expect(forBea).toMatchObject({ kind: "gitlab", number: 3, unread: "GitLab is read here only with your own CLI or a sign-in with a code" });
+  });
+
   it("given an admin who did not start the task, when they press, then it is refused and nothing is pushed or asked of the forge, even with a sign-in of their own", async () => {
     const { ctx, repo, request, ada, forgeRepo, calls, send } = await signedIn();
     const bea = await principalOf(ctx.store, await createUser(ctx.store, "solo", new Set(), { email: "bea@example.invalid", role: "admin", teams: [] }, ada));
     await storeSecret(ctx.store, ctx.vault ?? null, ctx.tenant, personTokenName("gitlab", bea.id), "bea-token", bea.email);
+    await ctx.store.setSetting(ctx.tenant, signedInKey("gitlab", bea.id), JSON.stringify({ account: "bea", host: DEVICE_ENDPOINTS.gitlab.host }));
 
     const pressing = openRequestOnForge(ctx, repo, request, bea, undefined, send);
 
     await expect(pressing).rejects.toMatchObject({ code: "not-one-person", message: "only the person who started the task opens its request on the forge" });
+    expect(calls).toEqual([]);
+    expect(execFileSync("git", ["branch", "--list", "handbook/*"], { cwd: forgeRepo, encoding: "utf8" }).trim()).toBe("");
+  });
+
+  it("given the task's starter signed in to GitLab with a code, when the operator turns GitLab's code sign-in off and she presses, then the button is not offered, nothing is pushed and the forge is not asked", async () => {
+    // given
+    const { ctx, repo, request, ada, forgeRepo, calls, send } = await signedIn();
+    vi.stubEnv("ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID", "off");
+
+    // when
+    const offered = await requestOnForge(ctx, repo, request.number, ada);
+    const pressing = openRequestOnForge(ctx, repo, request, ada, undefined, send);
+
+    // then
+    expect(offered.forge).toBeNull();
+    await expect(pressing).rejects.toMatchObject({ code: "not-one-person" });
     expect(calls).toEqual([]);
     expect(execFileSync("git", ["branch", "--list", "handbook/*"], { cwd: forgeRepo, encoding: "utf8" }).trim()).toBe("");
   });

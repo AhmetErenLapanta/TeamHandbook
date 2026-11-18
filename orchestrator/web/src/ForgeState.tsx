@@ -19,7 +19,7 @@ async function inTurn<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
-function checksLine(c: ChecksSummary): string {
+export function checksLine(c: ChecksSummary): string {
   const failing = c.checks.filter((x) => x.state === "failure").length;
   if (c.state === "failing") return `${failing || "some"} ${failing === 1 ? "check" : "checks"} failing`;
   return { passing: "checks passing", pending: "checks running", "no-ci": "no CI", unknown: "no check reported yet" }[c.state];

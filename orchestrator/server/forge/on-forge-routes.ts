@@ -5,7 +5,8 @@ import type { OrchestratorEnv } from "../auth.js";
 import { route } from "../route-scopes.js";
 import { seesRequest } from "./request-access.js";
 import { MachineRequestRefused, openKeptChange } from "./machine-request.js";
-import { OnForgeRefused, openRequestOnForge, requestOnForge } from "./pushed.js";
+import { OnForgeRefused, openRequestOnForge, readOnce, requestOnForge } from "./pushed.js";
+import { onMachineForge } from "./unconnected.js";
 
 const ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
@@ -39,6 +40,18 @@ export function onForgeRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
       if (!(err instanceof OnForgeRefused)) throw err;
       return c.json({ error: err.message, code: err.code, ...(err.createUrl ? { createUrl: err.createUrl } : {}) }, err.status);
     }
+  });
+
+  // A change kept on a machine that its starter's press opened on a forge, read once for its starter's page.
+  route(app, "GET /api/tasks/:id/targets/:position/on-forge", async (c) => {
+    const user = c.get("user");
+    const position = Number(c.req.param("position"));
+    const task = await ctx.store.getTask(ctx.tenant, c.req.param("id") ?? "");
+    const target = task && Number.isInteger(position) && position >= 0 ? task.targets?.[position] : undefined;
+    if (!task || !target || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown change" }, 404);
+    const opened = await onMachineForge(ctx, target, user);
+    if (!opened) return c.json({ error: "this change was not opened on a forge" }, 404);
+    return c.json({ onForge: await readOnce(opened) });
   });
 
   route(app, "POST /api/tasks/:id/targets/:position/on-forge", async (c) => {
