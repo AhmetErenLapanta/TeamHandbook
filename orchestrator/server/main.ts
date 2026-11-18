@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { startRepeats } from "./tasks/repeats.js";
 import { workFolders } from "./work-folders.js";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ import { createApp, inConfiguration, syncRepos } from "./app.js";
 import { addedCodeTarget, loadAddedRepos, yieldToFile } from "./connect.js";
 import { drainTurns } from "./git.js";
 import { reconcileLocalRequests } from "./propose.js";
+import { sweepTaskSecrets } from "./task-secrets.js";
 import type { OrchestratorContext } from "./app.js";
 import { allowedHosts, authMode, orchestratorAuth, secureOrchestrator } from "./auth.js";
 import { createOidcClient, oidcConfigFromEnv } from "./oidc.js";
@@ -32,7 +34,7 @@ import { operatorEmails, operatorRoutes } from "./operator.js";
 import { signupRoutes } from "./signup.js";
 import { orgName } from "./organization.js";
 import { socialClientsFromEnv } from "./social.js";
-import { backupSettings, startBackups } from "./backup.js";
+import { backupCommand, backupSettings, startBackups } from "./backup.js";
 import type { BackupSettings } from "./backup.js";
 import { readSecretEnv } from "./secret-env.js";
 import { identityEventDays } from "./identity-funnel.js";
@@ -58,7 +60,8 @@ import type { LogFormat } from "./log.js";
 import { metricsToken } from "./metrics.js";
 import type { ServedOrg } from "./orgs.js";
 import { dropLocalLink, localOnePerson, localOwner, mintLocalLink, oneAccountOnly } from "./accounts.js";
-import { ownForgeCliOffered, singlePersonOrchestrator, vaultFor } from "./vault.js";
+import { LOST_SEALED_FIX, lostSealedSay, ownForgeCliOffered, singlePersonOrchestrator, unopenedBy, vaultFor } from "./vault.js";
+import { startPushWatch } from "./push.js";
 import { recordEvent } from "./events.js";
 import { onePersonRefusal } from "./tasks/profile.js";
 import { storeKeys } from "./integrations/keys.js";
@@ -111,6 +114,8 @@ if (process.argv[2] === "migrate-store") process.exit(await migrateStoreCommand(
 if (process.argv[2] === "migrate") process.exit(await migrateCommand(process.argv.slice(3)));
 // `node dist/server.js doctor [--fix]` looks a stopped orchestrator's data over and says what is wrong, each with its fix.
 if (process.argv[2] === "doctor") process.exit(await doctorCommand(process.argv.slice(3)));
+// `handbook-orchestrator backup` asks the orchestrator running on this machine for a copy of its database now, and says where it is.
+if (process.argv[2] === "backup") process.exit(await backupCommand(orchestratorDataDir()));
 // `node dist/server.js log-summary <file>...` reads a JSON log on this machine and prints each route's count and times.
 if (process.argv[2] === "log-summary") process.exit(logSummaryCommand(process.argv.slice(3)));
 
@@ -198,7 +203,7 @@ try {
 // Read before the store opens, which takes its copy before an upgrade where these settings say.
 let backups: BackupSettings;
 try {
-  backups = backupSettings(process.env, dataDir);
+  backups = backupSettings(process.env, dataDir, localMode());
 } catch (err) {
   console.error(`${(err as Error).message}; this orchestrator stops`);
   process.exit(1);
@@ -216,7 +221,8 @@ try {
       }, { migrate: !cloud })
     : openSqliteStore(join(dataDir, "orchestrator.db"), { backupDir: backups.dir, say: console.log });
 } catch (err) {
-  console.error((err as Error).message);
+  // A database file that will not open is for doctor to look over and, with --fix, to put a copy back over.
+  console.error(`${(err as Error).message}${databaseUrl ? "" : "; run handbook-orchestrator doctor to look its data over"}`);
   process.exit(1);
 }
 const publicUrl = process.env.ORCHESTRATOR_PUBLIC_URL;
@@ -260,6 +266,13 @@ const sealing = (() => {
   }
 })();
 if (sealing.said) console.log(sealing.said);
+// A database restored from a copy holds sealed values and no key: a key made now opens none of them, which the first task to read one would otherwise be the first to say.
+if (sealing.vault) {
+  const sealed: { tenant: string; name: string; sealed: string }[] = [];
+  for (const tenant of tenants) for (const { name } of await store.listSecrets(tenant, "")) sealed.push({ tenant, name, sealed: (await store.getSecret(tenant, name)) ?? "" });
+  const lost = unopenedBy(sealing.vault, sealed);
+  if (lost) console.warn(`secrets: ${lostSealedSay(lost, sealed.length)}; ${LOST_SEALED_FIX}.`);
+}
 if (localMode()) localOnePerson(store, tenants);
 else if (sealing.source === "generated") oneAccountOnly(store, tenants);
 const vault = sealing.vault;
@@ -356,6 +369,8 @@ async function prepareOrg(org: OrgConfig): Promise<OrchestratorContext> {
 
   // What an orchestrator that died in the middle of a write left is set right before anyone is served.
   for (const line of await reconcileLocalRequests(ctx)) console.log(`start: ${line}`);
+  // A value given to a task the last run stopped without ending outlives it nowhere.
+  await sweepTaskSecrets(ctx);
   return ctx;
 }
 
@@ -379,7 +394,9 @@ const wire = (ctx: OrchestratorContext): ServedOrg => {
   });
   ctx.jobs = (repo) => jobs.get(repo.id) ?? { jobs: [], triggerSecret: null };
   startScheduler(ctx, ctx.tasks, ctx.jobs);
+  if (ctx.mode === "local") startRepeats(ctx, ctx.tasks);
   watches.push(startRequestWatch(ctx, storeFollowUps(ctx)));
+  watches.push(startPushWatch(ctx));
   ctx.lessons = lessonPlaceOf(process.env, tenants, ctx);
   if (ctx.lessons) watches.push(startLessonSweep(ctx, ctx.lessons));
   watches.push(startAutomationWatch(ctx, WORK_DEPS));
@@ -444,7 +461,8 @@ const signInLink = async () => {
   return `${address}api/auth/local?token=${pageToken}`;
 };
 if (localMode()) served[0]!.ctx.localSignedIn = async () => void signInPage(dataDir, await signInLink());
-const app = orgRoutes(served, { mode, secure, allowedHosts: hosts, logFormat: logAs, metricsToken: scrapeToken, dataDir, secrets: sealing.source, ...(cloudOrgs ? { cloud: cloudOrgs } : {}), ...(localMode() ? { local: localLinkRoutes(dataDir, signInLink) } : {}) });
+let copyNow: () => Promise<string | null> = async () => null;
+const app = orgRoutes(served, { mode, secure, allowedHosts: hosts, logFormat: logAs, metricsToken: scrapeToken, dataDir, secrets: sealing.source, ...(cloudOrgs ? { cloud: cloudOrgs } : {}), ...(localMode() ? { local: localLinkRoutes(dataDir, signInLink, () => copyNow()) } : {}) });
 const webRoot = resolve(process.env.ORCHESTRATOR_WEB_ROOT ?? "dist/web");
 app.use("/*", serveStatic({ root: webRoot }));
 app.get("*", serveStatic({ path: join(webRoot, "index.html") }));
@@ -464,7 +482,8 @@ const server = serve({ fetch: app.fetch, port, hostname }, (info) => {
 });
 
 // Copies of the orchestrator while it runs: on the schedule ORCHESTRATOR_BACKUP_HOURS sets, and on SIGUSR2.
-startBackups(store, async () => (await Promise.all(tenants.map((t) => store.listRepos(t)))).flat(), backups, console.log, console.error);
+// A local orchestrator's projects are its person's own folders, which stay where they are: its copy holds the database alone.
+copyNow = startBackups(store, async () => (localMode() ? [] : (await Promise.all(tenants.map((t) => store.listRepos(t)))).flat()), backups, console.log, console.error);
 
 // The mirrors are brought up to date while the orchestrator serves: what was read at the last start
 // stays readable meanwhile, and a repository read for the first time says so until it is.
