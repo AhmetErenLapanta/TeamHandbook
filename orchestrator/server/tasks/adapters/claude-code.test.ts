@@ -10,6 +10,8 @@ import { FORGE_REASON, releasePersonalGuard, TRACKER_REASON, writePersonalGuard 
 import { readTranscript } from "../transcript.js";
 import type { Step, Transcript } from "../transcript.js";
 import { claudeCodeCodec, claudeCodeDecoder } from "./claude-code.js";
+import { claudeOffCall, claudeOffDenies, claudeOffSettings } from "./claude-off.js";
+import { loadedDespiteOff } from "./contract.js";
 import type { AgentEvent } from "./contract.js";
 import { resetAtFrom } from "./failure.js";
 import { foldRun, foldStdout, logLineOf } from "./fold.js";
@@ -124,6 +126,42 @@ describe("the Claude Code decoder in a session of several turns", () => {
     expect(long).toBeCloseTo((50_000 * 0.5 + 50_001 * 0.05 + 10_000 * 2.5) / 1_000_000, 12);
     expect(fastOpus).toBe(8);
     expect(unsaid).toBe(8);
+  });
+
+  it("given the main thread's requests, a helper agent's request and a turn's end naming the model's window, when they are decoded, then the context in use follows the main thread's latest request, its window known from the turn's end on", () => {
+    // given
+    const decoder = claudeCodeDecoder();
+    const reply = (id: string, input: number, parent: string | null = null) => JSON.stringify({ type: "assistant", parent_tool_use_id: parent, message: { id, model: "claude-opus-5-5", usage: { input_tokens: input, cache_creation_input_tokens: 1_000, cache_read_input_tokens: 9_000, output_tokens: 10 }, content: [{ type: "text", text: "Working." }] } });
+    const ended = JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 1, result: "Done.", total_cost_usd: 0.1, usage: { input_tokens: 10, output_tokens: 10 }, modelUsage: { "claude-opus-5-5": { contextWindow: 200_000 } }, session_id: "session-1" });
+
+    // when
+    const used = [reply("msg_1", 30_000), reply("msg_1", 30_000), reply("msg_2", 40_000, "toolu_task"), reply("msg_3", 50_000), ended, reply("msg_4", 60_000)]
+      .flatMap((line) => decoder.decode(line))
+      .filter((e) => e.type === "context_used");
+
+    // then
+    expect(used).toEqual([
+      { type: "context_used", tokens: 40_000, window: null },
+      { type: "context_used", tokens: 60_000, window: null },
+      { type: "context_used", tokens: 60_000, window: 200_000 },
+      { type: "context_used", tokens: 70_000, window: 200_000 },
+    ]);
+  });
+
+  it("given a rate-limit event naming its limiting window and the others Claude Code tracks, when it is decoded, then each window says its status, its reset and how much of it is spent, and a window it cannot read is left out", () => {
+    // given
+    const soon = Math.floor(Date.now() / 1000) + 3_600;
+    const week = soon + 86_400;
+    const event = JSON.stringify({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", resetsAt: soon, rateLimitType: "five_hour", utilization: 0.82, unifiedWindows: { five_hour: { utilization: 0.82, resetsAt: soon, status: "allowed_warning" }, seven_day: { utilization: 0.66, resetsAt: week, status: "allowed" }, seven_day_overage_included: { utilization: 0.1, resetsAt: week } } } });
+
+    // when
+    const limits = claudeCodeDecoder().decode(event);
+
+    // then
+    expect(limits).toEqual([
+      { type: "limit", window: "five_hour", status: "warning", resetAt: resetAtFrom(soon), used: 0.82 },
+      { type: "limit", window: "seven_day", status: "allowed", resetAt: resetAtFrom(week), used: 0.66 },
+    ]);
   });
 
   it("given the init and result frames, when the run ends, then the terminal carries the agent's session id for a resume", () => {
@@ -439,6 +477,179 @@ describe("a Claude Code session that plans first", () => {
     expect(JSON.parse(readFileSync(guard, "utf8")).plansDirectory).toBe(".orchestrator-plans");
     await releasePersonalGuard(home.root);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("what a task leaves out of Claude Code", () => {
+  it("given a plugin, a skill of the person's own, a plugin's skill and an MCP server left out, when the task's settings and denies are made, then the plugin is switched off, the own skill hidden, the server never connected, and each skill and the server's tools refused if called", () => {
+    // given
+    const off = { plugins: ["team-handbook@acme"], skills: ["add-entity-field", "team-handbook:release-notes"], mcpServers: ["jira"] };
+
+    // when
+    const settings = claudeOffSettings(off);
+    const denies = claudeOffDenies(off);
+
+    // then
+    expect(settings).toEqual({ enabledPlugins: { "team-handbook@acme": false }, skillOverrides: { "add-entity-field": "off" }, deniedMcpServers: [{ serverName: "jira" }] });
+    expect(denies).toEqual(["Skill(add-entity-field)", "Skill(team-handbook:release-notes)", "mcp__jira__*"]);
+    expect([claudeOffSettings({ plugins: [], skills: [], mcpServers: [] }), claudeOffDenies({ plugins: [], skills: [], mcpServers: [] })]).toEqual([{}, []]);
+  });
+
+  const OFF = { plugins: ["team-handbook@acme"], skills: ["add-entity-field"], mcpServers: ["jira"] };
+
+  it("given a run as you that leaves a plugin, a skill and a server out, when it starts, then the task's own settings layer switches them off beside the guard it already holds, the start refuses their calls, and nothing is written outside the task's folder", async () => {
+    // given
+    const root = mkdtempSync(join(tmpdir(), "orchestrator-claude-off-"));
+    const home = taskPaths(root, "t", "0123456789ab");
+    mkdirSync(home.work, { recursive: true });
+    const setup: AgentSetup = { ...NO_MCP, off: OFF };
+
+    // when
+    const guard = await writePersonalGuard(home, [], [], { off: OFF });
+    const { call } = claudeCodeAdapter("claude").twoWay!.launch(home, setup, { mode: "auto", personal: true });
+
+    // then
+    const layer = JSON.parse(readFileSync(guard, "utf8"));
+    expect(layer).toMatchObject({ enabledPlugins: { "team-handbook@acme": false }, skillOverrides: { "add-entity-field": "off" }, deniedMcpServers: [{ serverName: "jira" }], disableAllHooks: false });
+    expect(layer.hooks.PreToolUse).toHaveLength(1);
+    expect(guard.startsWith(home.root)).toBe(true);
+    expect(call.args[call.args.indexOf("--settings") + 1]).toBe(guard);
+    expect(call.args[call.args.indexOf("--disallowedTools") + 1]).toContain("Skill(add-entity-field),mcp__jira__*");
+    await releasePersonalGuard(home.root);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("given a task's own profile that leaves a server out, when it is configured and started, then its settings deny the server and its start refuses the server's tools", async () => {
+    // given
+    const root = mkdtempSync(join(tmpdir(), "orchestrator-claude-off-"));
+    const home = taskPaths(root, "t", "0123456789ab");
+    const adapter = claudeCodeAdapter("claude");
+    const setup: AgentSetup = { ...NO_MCP, off: OFF };
+
+    // when
+    await adapter.configure(home, setup);
+    const call = adapter.invocation(home, { title: "t", prompt: "p" }, setup);
+
+    // then
+    expect(JSON.parse(readFileSync(join(home.home, ".claude", "settings.json"), "utf8"))).toMatchObject({ deniedMcpServers: [{ serverName: "jira" }], enabledPlugins: { "team-handbook@acme": false } });
+    expect(call.args[call.args.indexOf("--disallowedTools") + 1]).toContain("mcp__jira__*");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("given a session that leaves a server and a skill out, when the agent asks to call them anyway, then each is refused at once and no person is asked, and a call to another server still is", async () => {
+    // given
+    const setup: AgentSetup = { ...NO_MCP, off: OFF };
+    const { codec } = claudeCodeAdapter("claude").twoWay!.launch(paths, setup, { mode: "approval-required", personal: true });
+    const asks = (id: string, tool: string, input: Record<string, unknown>) => JSON.stringify({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: tool, input, tool_use_id: `toolu-${id}` } });
+
+    // when
+    const server = codec.decode(asks("r1", "mcp__jira__create_issue", {}));
+    const skill = codec.decode(asks("r2", "Skill", { skill: "add-entity-field" }));
+    const other = codec.decode(asks("r3", "mcp__docs__search", {}));
+
+    // then
+    expect([server[0], skill[0]]).toMatchObject([{ type: "tool_call", tool: "mcp__jira__create_issue", status: "refused" }, { type: "tool_call", tool: "Skill", status: "refused" }]);
+    expect(codec.pending().map((line) => JSON.parse(line).response.response.behavior)).toEqual(["deny", "deny"]);
+    expect(other).toMatchObject([{ type: "request" }]);
+    expect(claudeOffCall(undefined, "mcp__jira__create_issue", {})).toBe(false);
+  });
+
+  it("given Claude Code's first init frame, when it is decoded, then what it loaded is said once, and a plugin, a skill of the person's own or a server the task left out and Claude Code loaded anyway is named, a server it holds off is not", () => {
+    // given
+    const decoder = claudeCodeDecoder();
+    const first = JSON.stringify({ type: "system", subtype: "init", session_id: "session-1", plugins: [{ name: "team-handbook", source: "team-handbook@acme" }, { name: "local-tools" }], skills: ["add-entity-field", "team-handbook:release-notes"], mcp_servers: [{ name: "jira", status: "connected" }, { name: "docs", status: "disabled" }, { name: "slow", status: "pending" }] });
+
+    // when
+    const events = decoder.decode(first);
+    const again = decoder.decode(first);
+    const loaded = events.find((e) => e.type === "loaded")!;
+
+    // then
+    expect(loaded).toEqual({ type: "loaded", plugins: ["team-handbook@acme", "local-tools"], skills: ["add-entity-field", "team-handbook:release-notes"], mcpServers: [{ name: "jira", state: "connected" }, { name: "docs", state: "off" }, { name: "slow", state: "starting" }] });
+    expect(again.some((e) => e.type === "loaded")).toBe(false);
+    expect(loadedDespiteOff({ plugins: ["Team-Handbook@acme"], skills: ["add-entity-field", "team-handbook:release-notes"], mcpServers: ["jira", "docs", "absent"] }, loaded as never)).toEqual(["Team-Handbook@acme", "add-entity-field", "jira"]);
+    expect(loadedDespiteOff(OFF, { plugins: null, skills: null, mcpServers: null })).toEqual([]);
+  });
+});
+
+describe("what a Claude Code setup takes of the context", () => {
+  const opening = JSON.stringify({ type: "system", subtype: "init", session_id: "session-1" });
+  const answer = (id: string, subtype = "success") => JSON.stringify({ type: "control_response", response: { subtype, request_id: id, response: { mcpTools: [{ name: "search", serverName: "docs", tokens: 400 }, { name: "read", serverName: "docs", tokens: 250 }, { name: "create_issue", serverName: "jira", tokens: 900 }, { name: "broken", tokens: 5 }], skills: { totalSkills: 2, includedSkills: 2, tokens: 130, skillFrontmatter: [{ name: "add-entity-field", source: "userSettings", tokens: 80 }, { name: "team-handbook:release-notes", source: "plugin", pluginName: "team-handbook", tokens: 50 }] }, rawMaxTokens: 200_000 } } });
+
+  it("given a session whose runner asked for it, when its first init frame comes, then Claude Code is asked once for its own count, and its answer gives each server's tools added up and each skill's listing, in tokens", () => {
+    // given
+    const codec = claudeCodeCodec("auto", () => false, undefined, false, "dontAsk", undefined, true);
+
+    // when
+    codec.decode(opening);
+    const asked = codec.pending();
+    codec.decode(opening);
+    const again = codec.pending();
+    const parts = codec.decode(answer("context-parts"));
+
+    // then
+    expect(asked.map((line) => JSON.parse(line))).toEqual([{ type: "control_request", request_id: "context-parts", request: { subtype: "get_context_usage", detail: "summary" } }]);
+    expect(again).toEqual([]);
+    expect(parts).toEqual([{ type: "context_parts", mcpServers: [{ name: "docs", tokens: 650 }, { name: "jira", tokens: 900 }], skills: [{ name: "add-entity-field", tokens: 80 }, { name: "team-handbook:release-notes", tokens: 50 }], window: 200_000 }]);
+  });
+
+  it("given a session whose runner did not ask, or an answer to another request or one that failed, when they are decoded, then nothing is asked and nothing is said", () => {
+    // given
+    const quiet = claudeCodeCodec("auto");
+    const asking = claudeCodeCodec("auto", () => false, undefined, false, "dontAsk", undefined, true);
+
+    // when
+    quiet.decode(opening);
+
+    // then
+    expect(quiet.pending()).toEqual([]);
+    expect([...asking.decode(answer("mode-1")), ...asking.decode(answer("context-parts", "error"))]).toEqual([]);
+  });
+});
+
+describe("compacting a Claude Code conversation between turns", () => {
+  it("given a session between turns, when it is compacted, then Claude Code gets its own /compact, a second while that runs is refused, and the summary's size becomes the context in use", async () => {
+    // given
+    const boundary = { emit_inbound: { type: "system", subtype: "compact_boundary", session_id: "session-1", compact_metadata: { trigger: "manual", pre_tokens: 150_000, post_tokens: 12_000 } } };
+    const transport = replayTransport(script({ stdin: { type: "user", message: { role: "user", content: "/compact" }, parent_tool_use_id: null } }, boundary, done));
+    const session = openSession(claudeCodeCodec("auto"), transport);
+    let second: unknown = null;
+
+    // when
+    session.compact();
+    try {
+      session.compact();
+    } catch (error) {
+      second = error;
+    }
+    const events: AgentEvent[] = [];
+    for await (const e of session.events) events.push(e);
+
+    // then
+    expect(String(second)).toMatch(/in a turn/);
+    expect(events).toContainEqual({ type: "context_used", tokens: 12_000, window: null });
+    expect(events.at(-1)).toMatchObject({ type: "terminal", status: "completed" });
+  });
+});
+
+describe("a run as you that goes on with your second sign-in", () => {
+  const adapter = claudeCodeAdapter("claude");
+  const second = "/home/someone/claude-second";
+
+  it("given the folder of the person's second sign-in, when a run as them starts with it, then Claude Code takes it as its config folder and no file tool reads or writes in it", () => {
+    // when
+    const { call } = adapter.twoWay!.launch(paths, NO_MCP, { mode: "auto", personal: true, signIn: second });
+
+    // then
+    expect(call.env).toMatchObject({ CLAUDE_CONFIG_DIR: second });
+    expect(call.args.join(" ")).toContain(`Read(/${second}/**),Edit(/${second}/**),Write(/${second}/**),NotebookEdit(/${second}/**)`);
+    expect(adapter.twoWay!.launch(paths, NO_MCP, { mode: "auto", personal: true }).call.env).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+  });
+
+  it("given a second sign-in for the task's own profile, named in part, or with a session to resume, when the run starts, then it does not", () => {
+    expect(() => adapter.twoWay!.launch(paths, NO_MCP, { mode: "auto", signIn: second })).toThrow(/second sign-in/);
+    expect(() => adapter.twoWay!.launch(paths, NO_MCP, { mode: "auto", personal: true, signIn: "claude-second" })).toThrow(/second sign-in/);
+    expect(() => adapter.twoWay!.launch(paths, NO_MCP, { mode: "auto", personal: true, signIn: second, resume: "session-1" })).toThrow(/second sign-in/);
   });
 });
 
@@ -776,7 +987,7 @@ describe("the orchestrator's guard in the task's home", () => {
 describe("the account's usage windows", () => {
   const limit = (info: Record<string, unknown>) => claudeCodeDecoder().decode(JSON.stringify({ type: "rate_limit_event", rate_limit_info: info }));
 
-  it("given a warning on the five-hour window, when it arrives, then the window's state and reset cross and how full it is does not", () => {
+  it("given a warning on the five-hour window, when it arrives, then the window's state, its reset and how full it is cross, and the plan's overage state does not", () => {
     // given
     const soon = Math.floor(Date.now() / 1000) + 1800;
 
@@ -784,7 +995,7 @@ describe("the account's usage windows", () => {
     const events = limit({ status: "allowed_warning", resetsAt: soon, rateLimitType: "five_hour", utilization: 0.92, overageStatus: "allowed" });
 
     // then
-    expect(events).toEqual([{ type: "limit", window: "five_hour", status: "warning", resetAt: new Date(soon * 1000).toISOString() }]);
+    expect(events).toEqual([{ type: "limit", window: "five_hour", status: "warning", resetAt: new Date(soon * 1000).toISOString(), used: 0.92 }]);
   });
 
   it("given a window or a status Claude Code does not name, when it arrives, then nothing crosses", () => {
@@ -1076,11 +1287,11 @@ describe("MCP servers waiting for a sign-in when a session opens", () => {
     const none = claudeCodeDecoder().decode(opened([{ name: "docs", status: "connected" }]));
 
     // then
-    expect(waiting).toEqual([
+    expect(waiting.filter((e) => e.type !== "loaded")).toEqual([
       { type: "mcp_status", needsSignIn: ["gitlab", "notion"] },
       { type: "notice", text: "gitlab and notion need a sign-in, so their tools are not in this task. Sign them in on this machine, then start the task again." },
     ]);
-    expect(none).toEqual([]);
+    expect(none.filter((e) => e.type !== "loaded")).toEqual([]);
   });
 });
 

@@ -2,7 +2,7 @@ import type { AgentCapabilities, AgentCodec, AgentDecoder, AgentEvent, AgentFail
 import { failure, httpFailure, resetAtFromHeaders } from "./failure.js";
 import { MANIFEST } from "./manifest.js";
 import { answerValues, showable, UNSHOWN_QUESTION } from "./questions.js";
-import { createdPatch, editOf, firstContext, inFolder, num, opencodeMcp, outputLine, outputLines, parseLine, shownTarget, todosOf, tokensOf } from "./frames.js";
+import { contextMeter, createdPatch, editOf, firstContext, inFolder, num, opencodeMcp, outputLine, outputLines, parseLine, shownTarget, todosOf, tokensOf } from "./frames.js";
 
 /** An error's name is the agent's text and reaches the card's message, so only a plain identifier is kept as its code. */
 const ERROR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
@@ -101,6 +101,7 @@ export function opencodeCapabilities(mcp: boolean): AgentCapabilities {
  */
 export function opencodeDecoder(work?: string, servers: readonly string[] = []): AgentDecoder {
   const context = firstContext();
+  const meter = contextMeter();
   let lastText: string | null = null;
   let failed: AgentFailure | null = null;
   let aborted = false;
@@ -122,7 +123,8 @@ export function opencodeDecoder(work?: string, servers: readonly string[] = []):
       if (frame.type === "step_finish") {
         const tokens = (part.tokens ?? {}) as Record<string, unknown>;
         const cache = record(tokens.cache);
-        return [...context(tokensOf(tokens.input, cache.read, cache.write)), { type: "usage", cost: { usd: num(part.cost), inputTokens: num(tokens.input), outputTokens: num(tokens.output) } }];
+        const input = tokensOf(tokens.input, cache.read, cache.write);
+        return [...context(input), ...meter(input, null), { type: "usage", cost: { usd: num(part.cost), inputTokens: input, outputTokens: tokensOf(tokens.output, tokens.reasoning) } }];
       }
       if (frame.type === "error") {
         const why = errorFailure(frame.error ?? frame);
@@ -145,9 +147,14 @@ export function opencodeDecoder(work?: string, servers: readonly string[] = []):
   };
 }
 
-/** A session of `opencode serve` the runner holds: it answers its questions, and nothing it asks outlives the task. */
+/**
+ * A session of `opencode serve` the runner holds: it answers its questions, and nothing it asks
+ * outlives the task. It goes on in its task's session on Continue: the session is kept in the
+ * person's own OpenCode data, found by its id, and given the task's rules again, which come last
+ * and win (1.19.4's own code, ADAPTOR-sozlesme.md).
+ */
 export function opencodeServeCapabilities(mcp: boolean): AgentCapabilities {
-  return { ...opencodeCapabilities(mcp), runsAsYou: true, approvals: true };
+  return { ...opencodeCapabilities(mcp), runsAsYou: true, approvals: true, resume: true };
 }
 
 /**
@@ -156,7 +163,7 @@ export function opencodeServeCapabilities(mcp: boolean): AgentCapabilities {
  * how that version spells the call.
  */
 export interface OpencodeCall {
-  op: "session.promptAsync" | "session.abort" | "permission.reply" | "question.reply" | "question.reject";
+  op: "session.promptAsync" | "session.abort" | "session.summarize" | "permission.reply" | "question.reply" | "question.reject";
   args: Record<string, unknown>;
 }
 
@@ -170,9 +177,13 @@ export interface Opencode2Call {
  * A session of `opencode serve`, for the major version the runner read from the server before
  * the first prompt (2.x answers `GET /api/info`, 1.x `GET /global/health`): the calls written
  * differ between them from the very first one, so the version is never guessed from events.
+ * `windows` is each model's context window by `providerID/modelID`, as the runner read them from
+ * the server (`GET /config/providers`, a model's `limit.context`), since no event carries one; a
+ * 1.x reply names its model, and the context in use takes that model's window. The session's model
+ * is known only once a reply names it: the providers' `default` is not it (1.19.4's own code).
  */
-export function opencodeServeCodec(sessionID: string, major: 1 | 2 = 1, work?: string, questions = false, servers: readonly string[] = []): AgentCodec {
-  return major === 2 ? opencode2ServeCodec(sessionID, work, questions, servers) : opencode1ServeCodec(sessionID, work, questions, servers);
+export function opencodeServeCodec(sessionID: string, major: 1 | 2 = 1, work?: string, questions = false, servers: readonly string[] = [], windows: Readonly<Record<string, number>> = {}): AgentCodec {
+  return major === 2 ? opencode2ServeCodec(sessionID, work, questions, servers) : opencode1ServeCodec(sessionID, work, questions, servers, windows);
 }
 
 /**
@@ -251,10 +262,14 @@ const PERMISSION_KIND: Record<string, RequestKind> = {
  * `always`, which would write a standing rule; a grant for the task is keyed by the permission
  * and its full patterns.
  */
-function opencode1ServeCodec(sessionID: string, work?: string, questions = false, servers: readonly string[] = []): AgentCodec {
+function opencode1ServeCodec(sessionID: string, work?: string, questions = false, servers: readonly string[] = [], windows: Readonly<Record<string, number>> = {}): AgentCodec {
+  // The model the session's latest reply named, and its window.
+  let window: number | null = null;
+  let model: { providerID: string; modelID: string } | null = null;
   const held = new Map<string, { permission: string; patterns: unknown }>();
   const heldQuestions = new Map<string, AgentQuestion[]>();
   const context = firstContext();
+  const meter = contextMeter();
   const seenText = new Set<string>();
   const seenTools = new Set<string>();
   const endedTools = new Set<string>();
@@ -275,6 +290,14 @@ function opencode1ServeCodec(sessionID: string, work?: string, questions = false
       if (!event) return outputLine(line);
       if (otherGeneration(event, 1)) return mismatched ? [] : ((mismatched = true), [MISMATCH]);
       const props = (event.properties ?? {}) as Record<string, unknown>;
+      if (event.type === "message.updated") {
+        const info = (props.info ?? {}) as Record<string, unknown>;
+        if (info.sessionID === sessionID && info.role === "assistant" && typeof info.providerID === "string" && typeof info.modelID === "string") {
+          model = { providerID: info.providerID, modelID: info.modelID };
+          window = windows[`${info.providerID}/${info.modelID}`] ?? null;
+        }
+        return [];
+      }
       if (event.type === "message.part.updated") {
         const part = (props.part ?? {}) as Record<string, unknown>;
         if (part.sessionID !== sessionID) return [];
@@ -304,7 +327,8 @@ function opencode1ServeCodec(sessionID: string, work?: string, questions = false
         if (part.type === "step-finish") {
           const tokens = (part.tokens ?? {}) as Record<string, unknown>;
           const cache = record(tokens.cache);
-          return [...context(tokensOf(tokens.input, cache.read, cache.write)), { type: "usage", cost: { usd: num(part.cost), inputTokens: num(tokens.input), outputTokens: num(tokens.output) } }];
+          const input = tokensOf(tokens.input, cache.read, cache.write);
+          return [...context(input), ...meter(input, window), { type: "usage", cost: { usd: num(part.cost), inputTokens: input, outputTokens: tokensOf(tokens.output, tokens.reasoning) } }];
         }
         return [];
       }
@@ -369,6 +393,12 @@ function opencode1ServeCodec(sessionID: string, work?: string, questions = false
       return call("session.promptAsync", { sessionID, parts: [{ type: "text", text }] });
     },
     interrupt: () => call("session.abort", { sessionID }),
+    // OpenCode summarizes with a model named in the call (POST /session/:id/summarize, 1.19.4): the one its last reply used, so none before a reply.
+    compact() {
+      if (!model) return null;
+      busy = true;
+      return call("session.summarize", { sessionID, ...model });
+    },
     answer(requestId, decision) {
       // A question is turned down here; it goes ahead only with its answers.
       if (heldQuestions.has(requestId)) return decision === "deny" && heldQuestions.delete(requestId) ? call("question.reject", { requestID: requestId }) : null;
@@ -431,6 +461,7 @@ function opencode2ServeCodec(sessionID: string, work?: string, questions = false
   const held = new Map<string, { action: string; resources: string[] }>();
   const forms = new Map<string, AgentQuestion[]>();
   const context = firstContext();
+  const meter = contextMeter();
   const tools = new Map<string, { tool: string; input: Record<string, unknown> }>();
   const outbox: string[] = [];
   let lastText = "";
@@ -492,7 +523,7 @@ function opencode2ServeCodec(sessionID: string, work?: string, questions = false
           const tokens = (data.tokens ?? {}) as Record<string, unknown>;
           const cache = (tokens.cache ?? {}) as Record<string, unknown>;
           const input = tokensOf(tokens.input, cache.read, cache.write);
-          return [...context(input), { type: "usage", cost: { usd: num(data.cost), inputTokens: input, outputTokens: tokensOf(tokens.output, tokens.reasoning) } }];
+          return [...context(input), ...meter(input, null), { type: "usage", cost: { usd: num(data.cost), inputTokens: input, outputTokens: tokensOf(tokens.output, tokens.reasoning) } }];
         }
         case "session.retry.scheduled":
           return [{ type: "error", failure: error2Failure(data.error, "provider_retrying") }];

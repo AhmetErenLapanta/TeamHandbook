@@ -52,6 +52,41 @@ export function choicesProblem(options: readonly AgentOption[], choices: AgentCh
   return null;
 }
 
+/**
+ * What a task leaves out of the agent it starts, by name, the runner having resolved each source to
+ * names: plugins as `<name>@<marketplace>`, skills and commands by name (a plugin's as
+ * `<plugin>:<skill>`), MCP servers by the name the agent knows them by. KAPATMA-sozlesme.md says
+ * what each agent can leave out and how.
+ */
+export interface AgentOff {
+  plugins: readonly string[];
+  skills: readonly string[];
+  mcpServers: readonly string[];
+}
+
+/** What an agent says it loaded as its session opened, by name; null for a kind the agent does not report, which is not the same as none. */
+export interface AgentLoaded {
+  plugins: string[] | null;
+  skills: string[] | null;
+  mcpServers: { name: string; state: "connected" | "starting" | "needs-sign-in" | "failed" | "off" }[] | null;
+}
+
+/**
+ * What a task left out and the agent loaded anyway, by name: a plugin, a skill or command of the
+ * person's own (a plugin's skill stays listed and is refused when called, so its name here means
+ * nothing), and a server in any state but off. A task with any of these stops before its first
+ * step; a kind the agent does not report is not checked here.
+ */
+export function loadedDespiteOff(off: AgentOff, loaded: AgentLoaded): string[] {
+  const plugins = (loaded.plugins ?? []).map((id) => id.toLowerCase());
+  const servers = new Map((loaded.mcpServers ?? []).map((server) => [server.name, server.state]));
+  return [
+    ...off.plugins.filter((id) => plugins.includes(id.toLowerCase()) || plugins.includes(id.toLowerCase().split("@")[0]!)),
+    ...off.skills.filter((name) => !name.includes(":") && (loaded.skills ?? []).includes(name)),
+    ...off.mcpServers.filter((name) => servers.has(name) && servers.get(name) !== "off"),
+  ];
+}
+
 /** There is no "always": a decision never outlives the task it was given in. */
 export type Decision = "allow-once" | "allow-for-task" | "deny";
 
@@ -110,8 +145,8 @@ export interface AgentFailure {
 }
 
 /**
- * The one stream a session gives the runner. Raw CLI frames never cross it; they go only to the
- * diagnostics sink. Nothing here is shortened: the runner masks credentials and secrets first
+ * The one stream a session gives the runner. Raw CLI frames never cross it and are never
+ * kept. Nothing here is shortened: the runner masks credentials and secrets first
  * and only then cuts a long text, since a cut through a token leaves a part neither the
  * credential's value nor a secret pattern recognises.
  */
@@ -124,7 +159,7 @@ export type AgentEvent =
    * cut; `mcp` names an MCP tool's server and tool apart, so a page needs no agent's naming scheme,
    * and is absent when the name cannot be split for certain.
    */
-  | { type: "tool_call"; id?: string; tool: string; target: string | null; status: "started" | "done" | "failed" | "refused"; command?: string; mcp?: { server: string; tool: string }; refusal?: Refusal }
+  | { type: "tool_call"; id?: string; tool: string; target: string | null; status: "started" | "done" | "failed" | "refused"; command?: string; mcp?: { server: string; tool: string }; refusal?: Refusal; source?: string; sourceLabel?: string }
   /** A shell or test call's output as it comes, whole lines only, masked; never what a Read returned or a person's own MCP tool. */
   | { type: "tool_output"; id: string; lines: string[] }
   /** A file the agent changed, by its path in the task's folder; its patch is cut short, and a credential file's is left out. */
@@ -141,6 +176,22 @@ export type AgentEvent =
    * the log shows no line for it.
    */
   | { type: "context"; tokens: number }
+  /**
+   * How much of the model's context the agent's latest request filled: its input with the cache
+   * read and written, and the model's context window when the agent has said it (null until then).
+   * Its main thread's requests only; a helper agent it starts has a context of its own. Sent when
+   * either number moves; the log shows no line for it.
+   */
+  | { type: "context_used"; tokens: number; window: number | null }
+  /**
+   * How much of the context each MCP server's tools and each skill's listing take as the session
+   * opens, in tokens, as the agent itself counts them inside a task that is running anyway: nothing
+   * is started to measure. `window` is the model's context window where the agent says it, for
+   * the share they take. Once, and only where the runner asked for it; the log shows no line.
+   */
+  | { type: "context_parts"; mcpServers: { name: string; tokens: number }[]; skills: { name: string; tokens: number }[]; window?: number }
+  /** What the agent loaded as its session opened, once; the log shows no line for it. A task holds it against what it left out (loadedDespiteOff). */
+  | ({ type: "loaded" } & AgentLoaded)
   /** The MCP servers the agent found waiting for a sign-in when the session opened, by name; once, and only when there are some. */
   | { type: "mcp_status"; needsSignIn: string[] }
   /** An addition to what the task spent; a null part is unknown, never estimated. */
@@ -157,10 +208,11 @@ export type AgentEvent =
   | { type: "error"; failure: AgentFailure }
   /**
    * Where one of the account's usage windows stands, as the agent reports it; the latest for a
-   * window replaces the one before. Only what resuming needs crosses: how full a window is and
-   * the plan's overage state stay with the agent.
+   * window replaces the one before. `used` is how much of the window is spent, as a fraction (1 is
+   * the limit; past it is possible), when the agent says it, so a task can be warned of before it
+   * starts. The plan's overage state stays with the agent.
    */
-  | { type: "limit"; window: string; status: "allowed" | "warning" | "refused"; resetAt?: string }
+  | { type: "limit"; window: string; status: "allowed" | "warning" | "refused"; resetAt?: string; used?: number }
   /**
    * How many pieces of work the agent started in the background are still running: work that
    * outlives its turn and ends on its own. While any is, a turn's end is not the session's: its
@@ -219,6 +271,12 @@ export interface AgentCodec extends AgentDecoder {
    */
   approvePlan?(requestId: string, plan: string): string | null;
   /**
+   * The line that has the agent compact its conversation into a summary, so a later turn re-reads
+   * less, or null when it cannot yet (an agent that must name the model it has not named). Written
+   * only between turns: the agent works it as a turn of its own. Absent for an agent that cannot.
+   */
+  compact?(): string | null;
+  /**
    * What a grant for the task covers, built from the agent's own frame for a request it holds:
    * the call's full target, not the masked summary two different calls can share. It never
    * leaves the session, so it is never stored, shown or sent.
@@ -258,6 +316,11 @@ export interface AgentSession {
   reply(requestId: string, answers: AgentAnswers): void;
   /** Needs `plan`: approves the agent's plan as the person changed it, as data; the plan as it came is approved with `respond`. */
   approvePlan(requestId: string, plan: string): void;
+  /**
+   * Has the agent compact its conversation, between turns only: it runs as a turn, and its end is
+   * the turn's. Throws when the agent cannot, or is in a turn.
+   */
+  compact(): void;
   /** Ends the session once the turn in progress is done: stdin closes and the agent exits by itself. */
   close(): void;
   /** Ends the process now, the force-stop after a close or an interrupt was not enough. */

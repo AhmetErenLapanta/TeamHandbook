@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { opencodeAdapter } from "../agents.js";
+import { taskPaths } from "../isolation.js";
 import { readTranscript } from "../transcript.js";
 import type { Step, Transcript } from "../transcript.js";
 import type { AgentEvent } from "./contract.js";
@@ -379,6 +381,76 @@ describe("the context an OpenCode run starts with", () => {
 
     // then
     for (const found of [contexts((l) => run.decode(l), runStep), contexts((l) => serve1.decode(l), serveStep), contexts((l) => serve2.decode(l), step2)]) expect(found).toEqual([{ type: "context", tokens: 10_000 }]);
+  });
+
+  it("given steps that each report their tokens, in one-shot, 1.x serve and 2.x serve, when they are decoded, then each step's input with its cache is the context in use, its window unknown", () => {
+    // given
+    const runStep = (input: number) => JSON.stringify({ type: "step_finish", part: { type: "step-finish", cost: 0, tokens: { input, output: 3, cache: { read: 9_000, write: 400 } } } });
+    const serveStep = (input: number) => JSON.stringify({ type: "message.part.updated", properties: { part: { sessionID: S, id: `s${input}`, type: "step-finish", cost: 0, tokens: { input, output: 3, cache: { read: 9_000, write: 400 } } } } });
+    const step2 = (input: number) => JSON.stringify({ type: "session.step.ended", data: { sessionID: S, cost: 0, tokens: { input, output: 3, reasoning: 0, cache: { read: 9_000, write: 400 } } }, created: 1 });
+    const used = (decode: (line: string) => AgentEvent[], step: (n: number) => string) => [step(600), step(600), step(2_600)].flatMap(decode).filter((e) => e.type === "context_used");
+
+    const [run, serve1, serve2] = [opencodeDecoder(), opencodeServeCodec(S, 1), opencodeServeCodec(S, 2)];
+
+    // when
+    const found = [used((l) => run.decode(l), runStep), used((l) => serve1.decode(l), serveStep), used((l) => serve2.decode(l), step2)];
+
+    // then
+    for (const each of found) expect(each).toEqual([{ type: "context_used", tokens: 10_000, window: null }, { type: "context_used", tokens: 12_000, window: null }]);
+  });
+
+  it("given a 1.x session the runner gave each model's context window, when a reply names its model and its step ends, then the context in use carries that model's window, and a model it was given none for leaves it unknown", () => {
+    // given
+    const codec = opencodeServeCodec(S, 1, undefined, false, [], { "anthropic/claude-sonnet-5-5": 200_000 });
+    const reply = (modelID: string) => JSON.stringify({ type: "message.updated", properties: { info: { sessionID: S, role: "assistant", providerID: "anthropic", modelID } } });
+    const step = (input: number) => JSON.stringify({ type: "message.part.updated", properties: { part: { sessionID: S, id: `s${input}`, type: "step-finish", cost: 0, tokens: { input, output: 3, cache: { read: 9_000, write: 400 } } } } });
+
+    // when
+    const used = [reply("claude-sonnet-5-5"), step(600), reply("claude-haiku-5-5"), step(1_600)].flatMap((l) => codec.decode(l)).filter((e) => e.type === "context_used");
+
+    // then
+    expect(used).toEqual([{ type: "context_used", tokens: 10_000, window: 200_000 }, { type: "context_used", tokens: 11_000, window: null }]);
+  });
+});
+
+describe("compacting an OpenCode 1.x session", () => {
+  it("given a session whose reply named no model yet, then one whose reply did, when it is compacted, then the first cannot and the second summarizes with that model", () => {
+    // given
+    const codec = opencodeServeCodec(S, 1);
+    const before = codec.compact!();
+    codec.decode(JSON.stringify({ type: "message.updated", properties: { info: { sessionID: S, role: "assistant", providerID: "openrouter", modelID: "anthropic/claude-sonnet-5.5" } } }));
+
+    // when
+    const line = codec.compact!();
+
+    // then
+    expect(before).toBeNull();
+    expect(JSON.parse(line!)).toEqual({ op: "session.summarize", args: { sessionID: S, providerID: "openrouter", modelID: "anthropic/claude-sonnet-5.5" } });
+  });
+});
+
+describe("what an OpenCode run can do", () => {
+  it("given the OpenCode adapter, when its runs are asked what they can do, then a session of its server run as the person goes on in its session on Continue and a one-shot run does not", () => {
+    // given
+    const adapter = opencodeAdapter("opencode");
+
+    // then
+    expect(adapter.servedAsYou?.capabilities).toMatchObject({ resume: true, runsAsYou: true, approvals: true });
+    expect(adapter.capabilities.resume).toBe(false);
+  });
+
+  it("given a task that leaves an MCP server out, when OpenCode's server is started for it, then the task's own config layer holds that server off and no other, and a task that leaves none out adds no layer", () => {
+    // given
+    const adapter = opencodeAdapter("opencode");
+    const at = taskPaths("/data", "t", "0123456789ab");
+
+    // when
+    const env = adapter.servedAsYou!.env(at, { skills: [], mcpServers: {}, mcpTools: [], off: { plugins: [], skills: ["add-entity-field"], mcpServers: ["jira"] } });
+    const plain = adapter.servedAsYou!.env(at, { skills: [], mcpServers: {}, mcpTools: [] });
+
+    // then
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({ mcp: { jira: { enabled: false } } });
+    expect(plain).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
   });
 });
 

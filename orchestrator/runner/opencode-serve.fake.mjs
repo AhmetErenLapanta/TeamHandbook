@@ -51,6 +51,12 @@ const server = createServer((req, res) => {
     if (req.method === "POST" && req.url === "/session") {
       return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: session }));
     }
+    const known = /^\/session\/([\w-]+)$/.exec(req.url ?? "");
+    if (known && req.method === "GET") {
+      if (known[1] !== session) return void res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ name: "NotFoundError" }));
+      return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: session }));
+    }
+    if (known && req.method === "PATCH") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: session }));
     if (req.method === "GET" && req.url === "/mcp") {
       return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ notebook: { status: "connected" }, atlassian: { status: "connected" } }));
     }

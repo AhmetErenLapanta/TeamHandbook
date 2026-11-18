@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { standIn } from "./opencode-serve.fixture.js";
-import { startOpencodeSession } from "./opencode-session.js";
+import { contextWindows, startOpencodeSession } from "./opencode-session.js";
 
 describe("a task's OpenCode session over its own server", () => {
   const closers: (() => void)[] = [];
@@ -33,5 +33,35 @@ describe("a task's OpenCode session over its own server", () => {
 
     await expect(startOpencodeSession({ program: "opencode", cwd: "/", env: {}, permission: {}, spawn })).rejects.toThrow(/answered POST session with 500/);
     expect(stopped).toBe(true);
+  });
+
+  it("given a server turned off for the task that OpenCode left disabled and one it connected anyway, when the session starts, then the first starts with what loaded as its first event and the second starts no session at all", async () => {
+    // given
+    const servers: Parameters<typeof standIn>[0] = (req, res) => {
+      if (req.method !== "GET" || req.url !== "/mcp") return false;
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ tracker: { status: "connected" }, docs: { status: "disabled" }, notes: { status: "needs_auth" } }));
+      return true;
+    };
+    const left = standIn(servers);
+    const loadedAnyway = standIn(servers);
+
+    // when
+    const session = await startOpencodeSession({ program: "opencode", cwd: "/", env: {}, permission: {}, off: ["docs"], spawn: left.spawn });
+    closers.push(() => session.stop());
+    const refused = startOpencodeSession({ program: "opencode", cwd: "/", env: {}, permission: {}, off: ["tracker"], spawn: loadedAnyway.spawn });
+
+    // then
+    expect(session.codec.decode("{}")[0]).toEqual({ type: "loaded", plugins: null, skills: null, mcpServers: [{ name: "tracker", state: "connected" }, { name: "docs", state: "off" }, { name: "notes", state: "needs-sign-in" }] });
+    await expect(refused).rejects.toThrow("MCP server tracker is off for this task and was loaded anyway, so no session was started");
+    expect(loadedAnyway.seen.some((s) => s.path === "/session")).toBe(false);
+  });
+
+  it("given OpenCode's provider table, when the session starts, then each model's context window is known by provider and model, and a model with no usable limit is left out", () => {
+    // when
+    const windows = contextWindows({ providers: [{ id: "stand-in-cloud", models: { "big-model": { limit: { context: 200_000, output: 8_000 } }, "odd-model": { limit: { context: "lots" } } } }, { id: "local", models: { tiny: { limit: { context: 8_192 } } } }], default: { "stand-in-cloud": "big-model" } });
+
+    // then
+    expect(windows).toEqual({ "stand-in-cloud/big-model": 200_000, "local/tiny": 8_192 });
+    expect(contextWindows(null)).toEqual({});
   });
 });

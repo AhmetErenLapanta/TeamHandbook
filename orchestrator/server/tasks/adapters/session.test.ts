@@ -26,16 +26,14 @@ async function collect(events: AsyncIterable<AgentEvent>, onEach: (e: AgentEvent
 }
 
 describe("a session over a recorded run", () => {
-  it("given the stand-in's run with a refused call, when it is replayed, then every frame reaches the sink and the events end in one completed terminal", async () => {
+  it("given the stand-in's run with a refused call, when it is replayed, then the events end in one completed terminal", async () => {
     // given
     const transcript = fixture("fake-refused");
-    const frames: string[] = [];
 
     // when
-    const events = await collect(openSession(fakeDecoder(), replayTransport(transcript), { frames: (line) => void frames.push(line) }).events);
+    const events = await collect(openSession(fakeDecoder(), replayTransport(transcript)).events);
 
     // then
-    expect(frames).toEqual(emitted(transcript));
     expect(events).toEqual([
       { type: "message", text: "reading the task: Add an on-call note" },
       { type: "message", text: "wrote skills/add-an-on-call-note/SKILL.md" },
