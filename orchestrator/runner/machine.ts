@@ -3,6 +3,8 @@ import { killTaskGroup } from "../server/tasks/orphans.js";
 import { checksInFolder, machineFolders, undoInFolder } from "./folders.js";
 import { lessonOpHere, queueLessonHere } from "./lessons.js";
 import { httpLink } from "./http-link.js";
+import { setupHere } from "./handbooks.js";
+import type { SetupAsk } from "./link.js";
 import { startRunnerLoop } from "./loop.js";
 import type { LoopOptions, RunnerLoop } from "./loop.js";
 import { connectedOrgs, orgDir, readProfile } from "./profile.js";
@@ -43,6 +45,7 @@ export interface MachineOptions extends Omit<LoopOptions, "state"> {
   org?: string;
   fetch?: Fetch;
   kill?: typeof killTaskGroup;
+  claude?: string;
 }
 
 /**
@@ -50,7 +53,7 @@ export interface MachineOptions extends Omit<LoopOptions, "state"> {
  * with its own record of the agents it started, so a crash is cleaned up per organization and
  * never touches what the local orchestrator on the same machine runs.
  */
-export function startMachineRunner({ dataDir, home, env = {}, working = new Set(), slots, executor, org, fetch: fetchImpl, kill = killTaskGroup, agents, ...options }: MachineOptions): MachineRunner {
+export function startMachineRunner({ dataDir, home, env = {}, working = new Set(), slots, executor, org, fetch: fetchImpl, kill = killTaskGroup, agents, claude, ...options }: MachineOptions): MachineRunner {
   const orgs = org ? [org] : connectedOrgs(dataDir);
   const loops: RunnerLoop[] = [];
   const links: ReturnType<typeof httpLink>[] = [];
@@ -63,7 +66,7 @@ export function startMachineRunner({ dataDir, home, env = {}, working = new Set(
     const link = httpLink(profile, fetchImpl);
     links.push(link);
     const where = { home, dataDir, shadows: join(orgDir(dataDir, name), "shadow") };
-    loops.push(startRunnerLoop(link, executor, { ...options, state, listFolders: (ask) => machineFolders(ask.under, ask.q, where), undoInFolder: (ask) => undoInFolder(ask, where, working), readChecks: (ask) => checksInFolder(ask, where), queueLesson: async (ask) => queueLessonHere(ask, home, env), lessonOp: async (ask) => lessonOpHere(ask, home, env), ...(slots ? { slots } : {}) }));
+    loops.push(startRunnerLoop(link, executor, { ...options, state, listFolders: (ask) => machineFolders(ask.under, ask.q, where), undoInFolder: (ask) => undoInFolder(ask, where, working), readChecks: (ask) => checksInFolder(ask, where), queueLesson: async (ask) => queueLessonHere(ask, home, env), lessonOp: async (ask) => lessonOpHere(ask, home, env), ...(claude ? { setupHere: (ask: SetupAsk) => setupHere(ask, where, env, claude) } : {}), ...(slots ? { slots } : {}) }));
   }
   // A status that does not go through is sent again at the next round; it never holds a task up.
   const announced = new Set<ReturnType<typeof httpLink>>();

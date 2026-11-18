@@ -65,6 +65,7 @@ export interface TaskOptions {
 
 export const LOST_LEASE = "This machine lost the task's lease; the orchestrator holds it as interrupted.";
 export const STOPPED = "Stopped by the person who started the task.";
+export const IDLE_CLOSED = "The agent waited half an hour for an answer, so its session was closed to free this machine; Continue brings it back where it left off.";
 export const SHUT_DOWN = "The task stopped when its runner stopped; Continue picks it up again.";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -214,7 +215,7 @@ export function runLeasedTask(lease: Lease, link: RunnerLink, executor: TaskExec
     taskId: task.id,
     command(command) {
       if (command.taskId !== task.id) return;
-      if (command.type === "stop") stop.abort(new Error(STOPPED));
+      if (command.type === "stop") stop.abort(new Error(command.idle ? IDLE_CLOSED : STOPPED));
       else if (command.type === "follow_up") {
         if (!followUps.some((f) => f.id === command.followUp.id)) followUps.push(command.followUp);
       } else {

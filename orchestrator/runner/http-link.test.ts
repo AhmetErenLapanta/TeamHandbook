@@ -136,6 +136,6 @@ describe("a machine's runner reaching a team's orchestrator over HTTP", () => {
     expect(ran).toBe("tsk_http_2");
     expect((await org.store.getTask("acme", "tsk_http_2"))!.status).toBe("interrupted");
     expect((await org.store.listMachines("acme", null))[0]!.agents).toEqual([{ id: "claude-code", installed: true, version: "2.1.316", supported: "ok", signIn: "signed-in" }]);
-    expect((await org.store.listMachines("acme", null))[0]!.features).toEqual(["workspace-continues"]);
+    expect((await org.store.listMachines("acme", null))[0]!.features).toEqual(["workspace-continues", "turn-undo", "idle-stop", "task-off", "handbook-setup", "read-only"]);
   });
 });

@@ -1,3 +1,5 @@
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Hono } from "hono";
 import type { OrchestratorContext } from "../app.js";
@@ -9,10 +11,16 @@ import type { AgentSession, Orchestrator } from "../mcp/orchestrator-tools.js";
 import { refusalText, ToolRefused } from "../mcp/tools.js";
 import { route } from "../route-scopes.js";
 import { verifyTaskToken } from "../task-tokens.js";
+import { cleanSecretName, secretsForTask } from "../task-secrets.js";
+import { localMachineId } from "../local.js";
+import { newId } from "../ids.js";
+
+import { taskPaths } from "./isolation.js";
+import { Redactor } from "./redact.js";
 import { DEFAULT_MODE, isPermissionMode, lowerMode } from "../../shared/permission-mode.js";
 import { fence } from "./changes.js";
 import { MAX_DESCRIPTION, MAX_TITLE, startTask } from "./routes.js";
-import { keepChildEnd } from "./runner.js";
+import { keepChildEnd, printable } from "./runner.js";
 import type { TaskRunner } from "./runner.js";
 import type { TaskRecord } from "./types.js";
 
@@ -22,6 +30,9 @@ export const ORCHESTRATOR_PATH = "/api/orchestrator/mcp";
 export const ORCHESTRATOR_CALLS_PER_MINUTE = 120;
 /** How often a delegation that waits reads its child again. */
 const WAIT_POLL_MS = 2000;
+/** How long a request for a secret waits for its person: as long as a delegation is allowed to. */
+const SECRET_WAIT_MS = 30 * 60_000;
+const SECRET_REASON_MAX = 300;
 
 const INVALID_REQUEST = -32600;
 const PARSE_ERROR = -32700;
@@ -73,6 +84,47 @@ export function taskOrchestrator(ctx: OrchestratorContext, runner: TaskRunner): 
     },
     async cancel(_session, taskId) {
       await runner.cancel(taskId);
+    },
+    async requestSecret(session, { name, why }) {
+      const task = await ctx.store.getTask(ctx.tenant, session.task.id);
+      if (task?.status !== "running") throw new ToolRefused("this task is no longer running, so it asks for nothing");
+      if (!ctx.vault) throw new ToolRefused("this orchestrator keeps no secrets: it has no ORCHESTRATOR_SECRET_KEY");
+      // A run on a person's machine is handed its values over its lease; until that is written there, it is told so.
+      const holder = task.runner === "local" ? (await ctx.store.taskLease(ctx.tenant, task.id))?.claimedBy : null;
+      if (holder && holder !== (await localMachineId(ctx.store, ctx.tenant))) throw new ToolRefused("a task running on a person's machine is not given secrets yet; ask them to set it as a task secret of the repository");
+      let clean: string;
+      try {
+        clean = cleanSecretName(name);
+      } catch (err) {
+        throw new ToolRefused((err as Error).message);
+      }
+      const reason = new Redactor([]).line(printable(why.trim())).slice(0, SECRET_REASON_MAX);
+      if (!reason) throw new ToolRefused("say in one sentence what the value is for; the person reads it");
+      const has = async () => (await secretsForTask(ctx, task.repoId, task.team, undefined, task.id)).find((s) => s.name === clean)?.value ?? null;
+      let value = await has();
+      if (value === null) {
+        const asked = await ctx.store.recordTaskRequest({ tenant: ctx.tenant, id: newId("req"), taskId: task.id, targetPosition: null, sourceKey: `secret:${clean}`, kind: "secret", payload: { name: clean, why: reason }, createdAt: new Date().toISOString(), expiresAt: null });
+        if (asked.created) await ctx.store.appendTaskLog(ctx.tenant, task.id, [`The agent asks for ${clean}: ${reason} It waits for ${session.user.name} to give it on this task's page.`]);
+        const until = Date.now() + SECRET_WAIT_MS;
+        for (;;) {
+          const now = (await ctx.store.taskRequests(ctx.tenant, task.id)).find((r) => r.id === asked.request.id);
+          if (now?.status === "answered") break;
+          if (now?.status !== "pending" || (await ctx.store.getTask(ctx.tenant, task.id))?.status !== "running" || Date.now() >= until) throw new ToolRefused(`nobody gave ${clean}; go on without it, or say what is missing`);
+          await sleep(WAIT_POLL_MS);
+        }
+        const answered = (await ctx.store.taskRequests(ctx.tenant, task.id)).find((r) => r.id === asked.request.id)!;
+        if (!(answered.answer as { provided?: boolean } | null)?.provided) return { given: false, said: `${session.user.name} declined to give ${clean}; go on without it.` };
+        value = await has();
+        if (value === null) throw new ToolRefused(`${clean} was given and is no longer kept; go on without it`);
+      }
+      runner.secretGiven(task.id, value);
+      // In the task's own folder, outside its working tree, for this run alone: the folder goes when the run ends.
+      const dir = join(taskPaths(ctx.dataDir, ctx.tenant, task.id).root, "secrets");
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const file = join(dir, clean);
+      await writeFile(file, value, { mode: 0o600 });
+      await chmod(file, 0o600);
+      return { given: true, name: clean, use: `${clean} is set for this task. In a command use "$(cat ${file})" where the value goes; never print it, echo it or read the file into the conversation.` };
     },
     async family(session) {
       return (await ctx.store.taskDescendants(ctx.tenant, session.task.id)).map((task) => task.id);

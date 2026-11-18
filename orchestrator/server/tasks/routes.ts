@@ -1,14 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { isId, newId, OLDER_IDS } from "../ids.js";
+import { followUpAttachments, startAttachments } from "../attachments.js";
+import { lastLimits } from "./agent-limits.js";
+import { branchHead, filesAsAt, placeOfTurn } from "./turns.js";
+import { noteChecksFound } from "./verify-routes.js";
+import { newRepeat, readRepeat, REPEATS_MAX, runTimes } from "./repeats.js";
+import { offChanges, readOff, setupOf } from "./handbook-use.js";
+import { handbookOff } from "../handbook-defaults.js";
+import { localRepoPath } from "../forge/local.js";
+import { repoBranches } from "../forge/branches.js";
 import type { Context } from "hono";
 import type { OrchestratorContext } from "../app.js";
 import { inConfiguration, maskUrl, memberUrl, mirrorDir, NOT_CONFIGURED, NOT_READ_YET, syncRepo } from "../app.js";
-import { dropFromRequest, remoteForge } from "../forge/pushed.js";
+import { dropFromRequest, remoteForge, updateRequestBranch } from "../forge/pushed.js";
 import { recheckRequest } from "./pushed-check.js";
 import { taskMask } from "./task-text.js";
 import { canEditTeam, manages, secureOrchestrator, stillAuthorized } from "../auth.js";
@@ -41,7 +50,7 @@ import { recordEvent } from "../events.js";
 import { route } from "../route-scopes.js";
 import type { FollowUpQuote } from "../task-followups.js";
 import { Redactor } from "./redact.js";
-import { withSuggestions } from "../task-suggestions.js";
+import { nameReader, withSuggestions } from "../task-suggestions.js";
 import { choicesProblem } from "./adapters/contract.js";
 import type { AgentChoices } from "./adapters/contract.js";
 import { DEFAULT_MODE, highestWithin, isPermissionMode, MODE_LABEL, PERMISSION_MODES } from "../../shared/permission-mode.js";
@@ -49,19 +58,20 @@ import { agentTimeMs, answerProblem } from "../task-requests.js";
 import type { TaskAnswer, TaskRequestRecord } from "../task-requests.js";
 import { memberTags } from "../directory.js";
 import { localMachineId } from "../local.js";
+import { ownCliHere } from "../forge/own-cli-here.js";
 import { localMode } from "../mode.js";
 import { inPlaceFolder, opensInPlace, projectTrust, setFolderTrust, trustsOwnFolder } from "./folder-trust.js";
 import type { FolderTrust } from "./folder-trust.js";
 import { budgetLedger, ownSetupFor, taskCreators, taskStartRefusal, unnamedMode } from "../policies.js";
 import { orchestratorPolicies } from "../policy-routes.js";
-import { autoContinuedKey, CODE_TEMPLATE, MAX_CHILD_TASKS, TASK_LIMITS_SETTING, taskLimits, MAX_DELEGATION_DEPTH, namingFor, NO_RUNNER, ORCHESTRATOR_ONLY, OUTPUT_CUT, machineWaits, printable, START_REFUSED, SUGGESTIONS_AT_ONCE } from "./runner.js";
+import { autoContinuedKey, CODE_TEMPLATE, waitingBehind, MAX_CHILD_TASKS, TASK_LIMITS_SETTING, taskLimits, MAX_DELEGATION_DEPTH, namingFor, NO_RUNNER, ORCHESTRATOR_ONLY, OUTPUT_CUT, machineWaits, printable, START_REFUSED, SUGGESTIONS_AT_ONCE } from "./runner.js";
 import { machineOffers } from "../../runner/machine-agents.js";
 import type { FollowUpOffer, TaskRunner } from "./runner.js";
 import { taskPaths } from "./isolation.js";
 import { CLAUDE_PLANS_DIR } from "./profile.js";
 import { PLAN_TEXT_MAX } from "../../shared/runner-wire.js";
-import { shadowChanges, shadowFile, shadowPlaceOf, shadowUndo } from "../shadow-git.js";
-import { inWorkspace, ORCHESTRATOR_AGENT, FINISHED } from "./types.js";
+import { shadowChanges, shadowFile, shadowPlaceOf, shadowSnapshot, shadowUndo } from "../shadow-git.js";
+import { inPlaceReview, inWorkspace, ORCHESTRATOR_AGENT, FINISHED } from "./types.js";
 import { folderLoaded, loadedLine, mostUsed, routed, routingLine, routingPrompt } from "./routing.js";
 import { taskForge, taskState } from "./state.js";
 import { approvedVerification, approveVerification, changedSince, repoReader } from "./verify.js";
@@ -123,6 +133,11 @@ export const STREAMS_PER_PERSON = 12;
 export const STREAM_RETRY_MS = 2_000;
 /** Lines a read of a task's log returns at most; the answer says where the next read starts. */
 export const LOG_PAGE = 2_000;
+/** What a find in a task's log takes and gives: words of a few characters, and the first hundred lines, each cut short. */
+const FIND_MIN = 2;
+const FIND_MAX = 100;
+const FIND_LINES = 100;
+const FIND_TEXT = 300;
 let streams = 0;
 const streamsOf = new Map<string, number>();
 export const MAX_TITLE = 120;
@@ -226,7 +241,7 @@ async function machineRefusal(ctx: OrchestratorContext, user: Principal, repo: R
  * the orchestrator's MCP server alike. Starting one takes the same right as proposing any other
  * change to that team's repository.
  */
-export async function startTask(ctx: OrchestratorContext, runner: TaskRunner, user: Principal, body: Record<string, unknown> | null, parent?: TaskRecord): Promise<{ task: TaskRecord } | { error: string; status: 400 | 403 | 404 | 409; code?: string }> {
+export async function startTask(ctx: OrchestratorContext, runner: TaskRunner, user: Principal, body: Record<string, unknown> | null, parent?: TaskRecord, seedFrom?: { taskId: string; n: number }): Promise<{ task: TaskRecord } | { error: string; status: 400 | 403 | 404 | 409; code?: string }> {
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   const description = typeof body?.description === "string" ? body.description.trim() : "";
   const repoId = typeof body?.repoId === "string" ? body.repoId : "";
@@ -258,6 +273,25 @@ export async function startTask(ctx: OrchestratorContext, runner: TaskRunner, us
   if (targets && template) return { error: "a task over several repositories works on an issue, not from a template", status: 400 };
   const picked = readSkills(body?.skills);
   if (picked && !Array.isArray(picked)) return { error: picked.error, status: 400 };
+  // A start that says nothing of what to leave out takes its person's own list; one that says it, an empty list
+  // included, holds as sent.
+  const ownOff = await handbookOff(ctx.store, ctx.tenant, user.id);
+  const off = readOff(body?.off ?? ownOff);
+  if (off && "error" in off) return { error: off.error, status: 400 };
+  const offMoved = body?.off === undefined || body.off === null ? 0 : offChanges(off, ownOff);
+  if (body?.readOnly !== undefined && typeof body.readOnly !== "boolean") return { error: "readOnly is true or false", status: 400 };
+  const readOnly = body?.readOnly === true;
+  if (readOnly && (template || targets)) return { error: "a question reads one repository or folder, from no template", status: 400 };
+  const baseBranch = typeof body?.baseBranch === "string" && body.baseBranch.trim() ? body.baseBranch.trim() : undefined;
+  if (body?.baseBranch !== undefined && body.baseBranch !== null && typeof body.baseBranch !== "string") return { error: "baseBranch is a branch's name", status: 400 };
+  const branches = baseBranch ? await repoBranches(ctx, repo) : null;
+  // Named only as refs/heads/<name> from here on, and only a name the orchestrator's own copy of the repository has.
+  const onCopy = baseBranch && branches?.branches.includes(baseBranch) ? await gitAsyncMaybe(["--git-dir", mirrorDir(ctx, repo.id), "rev-parse", "--verify", "--quiet", `refs/heads/${baseBranch}^{commit}`], mirrorDir(ctx, repo.id)) : null;
+  if (baseBranch && !onCopy) return { error: `${baseBranch} is not a branch of ${repo.name} a task can start from`, status: 400, code: "unknown-base-branch" };
+  // The default is no choice: a task on it keeps following the repository's default, as one started without picking does.
+  const baseChoice = baseBranch && baseBranch !== branches?.default ? baseBranch : undefined;
+  const attachments = await startAttachments(ctx, user, body?.attachments);
+  if (!attachments) return { error: "attachments names files you uploaded for this start in the last hour, each once", status: 400, code: "attachment-unknown" };
   if (picked?.length) {
     const known = (await skillsOf(ctx, runner, await skillRepos(ctx, runner, user, repo, targets))).map((skill) => skill.name);
     const unknown = picked.find((name) => !known.includes(name));
@@ -363,8 +397,18 @@ export async function startTask(ctx: OrchestratorContext, runner: TaskRunner, us
         }
       }
     }
-    const task = await runner.start({ repo, title: titled, description, issue, agent: runBy, user, template, mode, ...(choices ? { choices } : {}), ...(targets ? { targets } : {}), ...(picked?.length ? { skills: picked } : {}), tools, ...(parent ? { parent } : {}), ...(planFirst ? { planFirst } : {}) });
+    const task = await runner.start({ repo, title: titled, description, issue, agent: runBy, user, template, mode, ...(choices ? { choices } : {}), ...(targets ? { targets } : {}), ...(picked?.length ? { skills: picked } : {}), tools, ...(parent ? { parent } : {}), ...(planFirst ? { planFirst } : {}), ...(attachments.length ? { attachments } : {}), ...(baseChoice ? { baseBranch: baseChoice } : {}), ...(readOnly ? { readOnly } : {}), ...(seedFrom ? { seedFrom } : {}), ...(off ? { off } : {}) });
     await recordEvent(ctx, user, "task.started", { repoId: repo.id, subject: `task:${task.id}`, detail: `${task.title} on ${repo.name}` });
+    if (offMoved) {
+      await ctx.store.updateTask(ctx.tenant, task.id, { offChanges: offMoved });
+      task.offChanges = offMoved;
+    }
+    // What the person's handbooks held as the task started, kept by name for its page; read after the start, so no task waits on it.
+    void runner
+      .handbookSources(localRepoPath(repo.url) ?? undefined)
+      .then((read) => (read ? ctx.store.updateTask(ctx.tenant, task.id, { setup: setupOf(read.sources) }) : undefined))
+      .catch((err: Error) => console.error(`task ${task.id}: the handbooks it started with were not kept: ${err.message}`));
+    if (!task.template && !task.targetMode && !task.readOnly) void noteChecksFound(ctx, repo, task.id).catch((err: Error) => console.error(`task ${task.id}: its folder's checks were not read: ${err.message}`));
     return { task };
   });
 }
@@ -411,6 +455,8 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const asking = new Set<string>();
     for (const task of tasks.filter((t) => t.status === "running")) if ((await ctx.store.taskRequests(ctx.tenant, task.id)).some((r) => r.status === "pending")) asking.add(task.id);
     const requestOf = (repoId: string, number: number) => byNumber.get(`${repoId}#${number}`);
+    // A task in line behind one that waits on its person's answer says which.
+    const behind = await waitingBehind(ctx, tasks);
     // A task on a folder of repositories goes on from what it left only on a machine that knows how.
     const goesOn = new Set<string>();
     for (const task of tasks.filter(inWorkspace)) if (await workspaceGoesOn(ctx, task)) goesOn.add(task.id);
@@ -430,6 +476,7 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
         // Kept for the starter's own machine while none of theirs can take it: the card says how to connect one, or that it is away.
         // Cut off at their usage limit, it says when the limit resets and the task goes on.
         waitingFor,
+        ...(behind.has(task.id) ? { waitingBehind: behind.get(task.id) } : {}),
         ...(task.limitResetAt ? { resetAt: task.limitResetAt } : {}),
         state: taskState(task, requestOf, waitingFor, asking.has(task.id)),
         forge: taskForge(task, requestOf),
@@ -460,7 +507,7 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     return {
       ...view,
       ...(view.finishedAt && ranMs !== undefined ? { ranMs } : {}),
-      requests: asked.map(shownRequest),
+      requests: await shownRequests(ctx, asked),
       messages: (await ctx.store.pendingFollowUps(ctx.tenant, view.id)).filter((f) => f.source === "person").map(({ id, text, quotes, createdAt }) => ({ id, text, quotes, createdAt })),
     };
   };
@@ -498,13 +545,15 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     // path on the host, what it printed - is in the readiness report, which is the admin's.
     const machineAgents = await machineAgentOffers(ctx, runner, user);
     const agents = machineAgents
-      ? machineAgents.map(({ signIn, ...agent }) => ({ ...agent, readiness: { ready: signIn !== "signed-out", state: signIn === "signed-out" ? "not-ready" : "ready", first: signIn === "signed-out" ? "not signed in on your machine" : null }, personal: null }))
+      ? machineAgents.map(({ signIn: _signIn, ...agent }) => ({ ...agent, personal: null }))
       : runner.agents().map((agent) => {
       const found = checked?.agents.find((a) => a.id === agent.id);
       const state = !found ? null : !found.ready ? "not-ready" : found.checks.some((check) => check.status === "warn") ? "warnings" : "ready";
       // The first failure, else the first warning, in its fixed few words: never what the check found.
-      const first = found ? (found.checks.find((check) => check.status === "fail") ?? found.checks.find((check) => check.status === "warn"))?.short ?? null : null;
-      return { ...agent, readiness: found ? { ready: found.ready, state, first } : null, personal: setup && agent.id === "claude-code" ? { commands: setup.commands, plugins: setup.plugins, mcpServers: setup.mcpServers, claudeMd: setup.claudeMd, readAt: setup.readAt } : null };
+      const worst = found ? (found.checks.find((check) => check.status === "fail") ?? found.checks.find((check) => check.status === "warn")) : undefined;
+      // The repair is a command on the orchestrator's host, the readiness report's to give: only those who see the report get it.
+      const repair = manages(user) ? { code: worst?.code ?? null, fix: worst?.fix ?? null } : {};
+      return { ...agent, readiness: found ? { ready: found.ready, state, first: worst?.short ?? null, ...repair } : null, personal: setup && agent.id === "claude-code" ? { commands: setup.commands, plugins: setup.plugins, mcpServers: setup.mcpServers, claudeMd: setup.claudeMd, readAt: setup.readAt } : null };
     });
     // Whether each repository's branch rule wants a ticket, so the form asks for an issue link
     // before a start is refused for the lack of one.
@@ -545,6 +594,12 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     return c.json({ trust: await setFolderTrust(ctx, user, repo.id, body.trusted) });
   });
 
+  // What an agent last said of the person's own usage windows, for the line under Start; a week-old reading says nothing.
+  route(app, "GET /api/agents/:id/limit", async (c) => {
+    const user = c.get("user");
+    return c.json({ windows: await lastLimits(ctx.store, ctx.tenant, c.req.param("id") ?? "", user.email) });
+  });
+
   app.get("/api/agents/readiness", async (c) => {
     if (!manages(c.get("user"))) return c.json({ error: "only an owner or an admin can see agent readiness" }, 403);
     return c.json(await runner.readiness(c.req.query("fresh") === "1"));
@@ -568,11 +623,51 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     return c.json({ tasks: await shown(page.tasks, requests, user), next: page.next ? Buffer.from(JSON.stringify(page.next)).toString("base64url") : null });
   });
 
+  // A person's own tasks that start again on a schedule; a start that names a repeat keeps it, and starts nothing now.
+  app.get("/api/tasks/repeats", async (c) => {
+    const user = c.get("user");
+    const now = new Date();
+    const mine = (await ctx.store.listRepeats(ctx.tenant)).filter((r) => r.createdBy === user.email && !r.stoppedAt);
+    return c.json({ repeats: mine.map((r) => ({ id: r.id, title: r.title, every: r.every, at: r.at, next: runTimes(r, now).next.toISOString(), ...(r.skipped ? { skipped: r.skipped } : {}) })) });
+  });
+
+  route(app, "POST /api/tasks/repeats/:id/stop", async (c) => {
+    const user = c.get("user");
+    const repeat = (await ctx.store.listRepeats(ctx.tenant)).find((r) => r.id === c.req.param("id") && r.createdBy === user.email);
+    if (!repeat) return c.json({ error: "unknown repeat" }, 404);
+    await ctx.store.stopRepeat(ctx.tenant, repeat.id, new Date().toISOString());
+    return c.json({ stopped: repeat.id });
+  });
+
   app.post("/api/tasks", async (c) => {
     const user = c.get("user");
-    const started = await startAnywhere(ctx, runner, user, (await c.req.json().catch(() => null)) as Record<string, unknown> | null);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (body?.repeat !== undefined) {
+      if (ctx.mode !== "local" || user.key) return c.json({ error: "a task repeats on a person's own orchestrator, set from its form" }, 400);
+      const when = readRepeat(body.repeat);
+      if ("error" in when) return c.json({ error: when.error }, 400);
+      const { repeat: _repeat, ...start } = body;
+      const repo = typeof start.repoId === "string" ? await ctx.store.getRepo(ctx.tenant, start.repoId) : null;
+      const title = typeof start.title === "string" ? start.title.trim() : "";
+      if (!repo || !title || typeof start.agent !== "string") return c.json({ error: "a repeat names the project, a title and an agent, as a start does" }, 400);
+      if ((await ctx.store.listRepeats(ctx.tenant)).filter((r) => r.createdBy === user.email && !r.stoppedAt).length >= REPEATS_MAX) return c.json({ error: `a person keeps at most ${REPEATS_MAX} repeating tasks; stop one first`, code: "too-many-repeats" }, 409);
+      const kept = newRepeat(ctx.tenant, user.email, start, title, when);
+      await ctx.store.addRepeat(kept);
+      return c.json({ repeat: { id: kept.id, title, every: kept.every, at: kept.at, next: runTimes(kept, new Date()).next.toISOString() } }, 201);
+    }
+    const started = await startAnywhere(ctx, runner, user, body);
     if ("error" in started) return c.json({ error: started.error, ...(started.code ? { code: started.code } : {}) }, started.status);
     return c.json({ task: (await shown([started.task], [], user))[0] }, 201);
+  });
+
+  // Where a start that names no project would go, before it starts: a form shows the folder, and a start that sends it
+  // back as its path is not routed again. `folder` is null when the person is to pick one.
+  route(app, "POST /api/tasks/where", async (c) => {
+    const user = c.get("user");
+    if (!manages(user) || ctx.mode !== "local" || !ctx.workFolders) return c.json({ error: "only the person whose orchestrator it is starts a task without naming its project" }, 403);
+    const where = await whereTo(ctx, runner, user, ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>);
+    if ("error" in where) return c.json({ error: where.error, ...(where.code ? { code: where.code } : {}) }, where.status);
+    return c.json({ folder: where.routing ? { path: where.routing.path, reason: where.routing.reason, fallback: where.routing.fallback } : null, title: where.title });
   });
 
   // The folders a task with no project named is sent among, the newest first; none where the orchestrator picks no folder.
@@ -672,6 +767,17 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     return c.json({ started: await shown(started, [], user), refused });
   });
 
+  // Where a word is in a task's log, across every page of it: the lines' numbers and their masked text, for a find row that jumps to them.
+  app.get("/api/tasks/:id/find", async (c) => {
+    const id = c.req.param("id");
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!task || !readsTask(c.get("user"), task)) return c.json({ error: "unknown task" }, 404);
+    const words = (c.req.query("q") ?? "").trim();
+    if (words.length < FIND_MIN || words.length > FIND_MAX) return c.json({ error: `find with ${FIND_MIN} to ${FIND_MAX} characters`, code: "bad-find" }, 400);
+    const found = await ctx.store.findInTaskLog(ctx.tenant, id, words, FIND_LINES + 1);
+    return c.json({ matches: found.slice(0, FIND_LINES).map((m) => ({ seq: m.seq, text: m.text.slice(0, FIND_TEXT) })), more: found.length > FIND_LINES });
+  });
+
   app.get("/api/tasks/:id", async (c) => {
     const id = c.req.param("id");
     const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
@@ -764,8 +870,17 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const id = c.req.param("id") ?? "";
     const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
     if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
-    const body = (await c.req.json().catch(() => null)) as { commandId?: unknown; approvePlan?: unknown; plan?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as { commandId?: unknown; approvePlan?: unknown; plan?: unknown; secondSignIn?: unknown } | null;
     if (typeof body?.commandId !== "string" || !COMMAND_ID.test(body.commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
+    // At its usage limit, a task on the person's own orchestrator goes on with their second sign-in only when they set one and click it.
+    if (body.secondSignIn === true) {
+      if (!(await ownCliHere(ctx))) return c.json({ error: "your Claude Code is reached only by an orchestrator on your own machine that you alone use", code: "not-own-machine" }, 409);
+      if (!(await taskLimits(ctx.store, ctx.tenant)).secondSignIn) return c.json({ error: "no second sign-in is set; name it under Settings, Task limits", code: "no-second-sign-in" }, 409);
+      if (task.status !== "interrupted" || !task.limitResetAt) return c.json({ error: "only a task stopped at its usage limit goes on with the second sign-in", code: "not-at-limit" }, 409);
+      const holder = (await ctx.store.taskLease(ctx.tenant, id))?.claimedBy;
+      if (holder && holder !== (await localMachineId(ctx.store, ctx.tenant))) return c.json({ error: "a task on another machine goes on with that machine's sign-in", code: "on-another-machine" }, 409);
+      await ctx.store.updateTask(ctx.tenant, id, { secondSignIn: true });
+    }
     const commandId = body.commandId;
     // The plan its run put to its starter and nobody answered before it stopped: approved here, it goes with the run that goes on.
     // The plan the page shows, as its person approves it, comes first: a run from before plans were kept left it in the log alone.
@@ -817,17 +932,40 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     return answer();
   });
 
-  route(app, "GET /api/settings/task-limits", async (c) => c.json(await taskLimits(ctx.store, ctx.tenant)));
+  // The second sign-in's folder is told to whoever sets it alone; anyone else reads only whether one is set.
+  route(app, "GET /api/settings/task-limits", async (c) => {
+    const { secondSignIn, ...limits } = await taskLimits(ctx.store, ctx.tenant);
+    return c.json({ ...limits, ...(secondSignIn ? (manages(c.get("user")) ? { secondSignIn } : { secondSignInSet: true }) : {}) });
+  });
+
+  /**
+   * The second sign-in a person names: a Claude Code profile folder of their own, in full, that is a folder and is not the
+   * one their own Claude Code uses already. Only a person's own orchestrator takes one, and only from them signed in.
+   * Null clears it; the folder is never read here, only handed to Claude Code as its profile.
+   */
+  async function secondSignInRefusal(ctx: OrchestratorContext, user: Principal, value: unknown): Promise<string | null | undefined | { error: string }> {
+    if (value === undefined || value === null) return value;
+    // The folder is the person's own Claude Code profile: only an orchestrator on their own machine that they alone use is told it.
+    if (ctx.mode !== "local" || user.key || !(await ownCliHere(ctx))) return { error: "a second sign-in is set on a person's own orchestrator on their own machine, signed in" };
+    if (typeof value !== "string" || !isAbsolute(value) || value.length > 4096 || /[\0\r\n]/.test(value)) return { error: "secondSignIn is the full path of a Claude Code profile folder" };
+    const own = resolve(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
+    if (resolve(value) === own) return { error: "that is the profile your Claude Code uses already; name a second one" };
+    if (!(await stat(value).then((s) => s.isDirectory(), () => false))) return { error: "no folder is at that path; sign in with that profile first, then name it" };
+    return resolve(value);
+  }
 
   route(app, "PUT /api/settings/task-limits", async (c) => {
     const user = c.get("user");
     if (!manages(user)) return c.json({ error: "only an owner or an admin sets a task's limits" }, 403);
-    const body = (await c.req.json().catch(() => null)) as { maxUsd?: unknown; maxMinutes?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as { maxUsd?: unknown; maxMinutes?: unknown; secondSignIn?: unknown } | null;
     const usd = body?.maxUsd;
     const minutes = body?.maxMinutes;
+    const second = await secondSignInRefusal(ctx, user, body?.secondSignIn);
+    if (typeof second === "object" && second) return c.json({ error: second.error }, 400);
     if (usd !== null && !(typeof usd === "number" && Number.isFinite(usd) && usd > 0 && usd <= TASK_LIMIT_USD_MAX)) return c.json({ error: `maxUsd is null or a number of dollars above 0 and at most ${TASK_LIMIT_USD_MAX}` }, 400);
     if (minutes !== null && !(typeof minutes === "number" && Number.isInteger(minutes) && minutes > 0 && minutes <= TASK_LIMIT_MINUTES_MAX)) return c.json({ error: `maxMinutes is null or a whole number of minutes above 0 and at most ${TASK_LIMIT_MINUTES_MAX}` }, 400);
-    const limits = { maxUsd: usd === null ? null : Math.round(usd * 100) / 100, maxMinutes: minutes };
+    const kept = await taskLimits(ctx.store, ctx.tenant);
+    const limits = { maxUsd: usd === null ? null : Math.round(usd * 100) / 100, maxMinutes: minutes, ...(body?.secondSignIn === undefined ? (kept.secondSignIn ? { secondSignIn: kept.secondSignIn } : {}) : second ? { secondSignIn: second } : {}) };
     await ctx.store.setSetting(ctx.tenant, TASK_LIMITS_SETTING, JSON.stringify(limits));
     await recordEvent(ctx, user, "settings.task-limits", { subject: "settings:task-limits", detail: `set a task's limits to ${limits.maxUsd === null ? "no cost limit" : `$${limits.maxUsd.toFixed(2)}`} and ${limits.maxMinutes === null ? "no time limit" : `${limits.maxMinutes} minutes`}` });
     return c.json(limits);
@@ -838,7 +976,7 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
     if (!task || !readsTask(c.get("user"), task)) return c.json({ error: "unknown task" }, 404);
     await ctx.store.expireTaskRequests(new Date().toISOString());
-    return c.json({ requests: (await ctx.store.taskRequests(ctx.tenant, id)).map(shownRequest) });
+    return c.json({ requests: await shownRequests(ctx, await ctx.store.taskRequests(ctx.tenant, id)) });
   });
 
   // What the agent asked is answered by the person it runs as, from their own signed-in browser:
@@ -856,13 +994,15 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const answer = body?.answer;
     const problem = answer && typeof answer === "object" && !Array.isArray(answer) ? answerProblem(asked, answer as TaskAnswer) : { code: "answer-shape", message: "send the answer" };
     if (problem) return c.json({ error: problem.message, code: problem.code }, 400);
+    // A secret is given only with its value, on its card, which seals the value in the vault before it answers.
+    if (asked.kind === "secret" && (answer as { provided?: boolean }).provided) return c.json({ error: "a secret is given on its card, with its value", code: "secret-on-card" }, 400);
     const answered = await ctx.store.answerTaskRequest(ctx.tenant, asked.id, answer as TaskAnswer, user.email, "web", new Date().toISOString());
     if (!answered) return c.json({ error: "this request is no longer waiting for an answer" }, 409);
     // The runner waiting in a long poll hears the answer now, not at its next look at the store.
     ctx.runnerService?.wake();
-    const given = "decision" in answered.answer! ? answered.answer.decision : "answers" in answered.answer! ? "an answer" : "whether it was provided";
+    const given = "decision" in answered.answer! ? answered.answer.decision : "answers" in answered.answer! ? "an answer" : "a decline";
     await recordEvent(ctx, user, "task.request.answered", { repoId: task.repoId, subject: `task:${task.id}`, detail: `answered the agent's ${asked.kind} request with ${given}` });
-    return c.json({ request: shownRequest(answered) });
+    return c.json({ request: (await shownRequests(ctx, [answered]))[0] });
   });
 
   /** The folder a task worked on in place and its two snapshots, or null for a task that changed none. */
@@ -873,6 +1013,137 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
   };
   // A folder on a person's machine keeps its record there: its files are read and undone on that machine.
   const onMachine = (c: Context<OrchestratorEnv>) => c.json({ error: "this task's change is in a folder of its person's machine; its files are read there, not here", code: "changes-on-machine" }, 409);
+
+  // A task's turns, each named by the person's own words, for the Changes section's Select; none where no turn was kept.
+  route(app, "GET /api/tasks/:id/turns", async (c) => {
+    const id = c.req.param("id") ?? "";
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!task || !readsTask(c.get("user"), task)) return c.json({ error: "unknown task" }, 404);
+    const turns = (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null);
+    const started = await Promise.all(turns.map((t) => ctx.store.getSetting(ctx.tenant, `turn-new-task:${task.id}:${t.n}`)));
+    return c.json({ turns: turns.map((t, i) => ({ n: t.n, said: t.said, at: t.at, files: t.files, undone: t.undoneAt !== null, ...(started[i] ? { newTaskId: started[i] } : {}) })) });
+  });
+
+  // What one turn changed, in the shape a request's changes are shown in.
+  route(app, "GET /api/tasks/:id/turns/:n/changes", async (c) => {
+    const id = c.req.param("id") ?? "";
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!task || !readsTask(c.get("user"), task)) return c.json({ error: "unknown task" }, 404);
+    const turn = (await ctx.store.taskTurns(ctx.tenant, task.id)).find((t) => t.n === Number(c.req.param("n")));
+    const repo = turn?.end ? await ctx.store.getRepo(ctx.tenant, task.repoId) : null;
+    if (!turn?.end || !repo) return c.json({ error: "unknown turn" }, 404);
+    if (turn.place === "machine") return onMachine(c);
+    const changes = await shadowChanges(placeOfTurn(ctx, turn, repo), turn.start, turn.end);
+    return typeof changes === "string" ? c.json({ error: changes }, 409) : c.json({ changes });
+  });
+
+  // The starter undoes a turn and every one after it: the files go back to how that turn found them, the conversation stays.
+  // A folder without git is undone in place, held as an undo is; a request gets one commit on its branch, never a forced one.
+  route(app, "POST /api/tasks/:id/turns/:n/undo", async (c) => {
+    const user = c.get("user");
+    const id = c.req.param("id") ?? "";
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
+    const body = (await c.req.json().catch(() => null)) as { commandId?: unknown; reason?: unknown } | null;
+    if (typeof body?.commandId !== "string" || !COMMAND_ID.test(body.commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
+    if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.length > UNDO_REASON_MAX || /[\r\n]/.test(body.reason))) return c.json({ error: `reason is one line of at most ${UNDO_REASON_MAX} characters` }, 400);
+    const reason = typeof body.reason === "string" && body.reason.trim() ? new Redactor([]).line(printable(body.reason.trim())) : null;
+    if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working; undo a turn once it ends", code: "task-running" }, 409);
+    const turns = (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null);
+    const turn = turns.find((t) => t.n === Number(c.req.param("n")));
+    const last = turns.at(-1);
+    const repo = await ctx.store.getRepo(ctx.tenant, task.repoId);
+    if (!turn || !last || !repo) return c.json({ error: "unknown turn" }, 404);
+    if (turn.undoneAt) return c.json({ error: "this turn was already undone", code: "already-undone" }, 409);
+    const after = turns.filter((t) => t.n > turn.n && !t.undoneAt).length;
+    const said = `“${turn.said}”`;
+    const done = async (back: number, where: string) => {
+      await ctx.store.undoTaskTurns(ctx.tenant, task.id, turn.n, new Date().toISOString());
+      await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} undid the change from ${said} on${after ? `, and the ${after} turn(s) after it` : ""}: ${back} file(s) back ${where}.${reason ? ` Why: ${reason}` : ""}`]);
+      await recordEvent(ctx, user, "task.turns.undone", { repoId: task.repoId, subject: `task:${task.id}`, detail: `undid from turn ${turn.n}, ${back} file(s)${reason ? `: ${reason}` : ""}` });
+      return c.json({ turns: (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null).map((t) => ({ n: t.n, said: t.said, at: t.at, files: t.files, undone: t.undoneAt !== null })) });
+    };
+    if (turn.place === "machine") {
+      const folder = await changedFolder(task);
+      if (!folder?.onMachine) return c.json({ error: "this task's turns are not kept on a machine", code: "not-undoable" }, 409);
+      if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
+      if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
+      const at = machineFolderOf(repo.url)!;
+      const machine = (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === at.machineId);
+      // A runner from before turns would ignore which turn and undo the whole change.
+      if (!machine?.features?.includes("turn-undo")) return c.json({ error: `${machine?.name ?? "Its machine"} runs a runner that undoes a whole change only; update it to undo from a turn`, code: "machine-too-old" }, 409);
+      const undone = await undoOnMachine(ctx, repo, folder, { start: turn.start, end: last.end! });
+      if ("refused" in undone) return c.json({ error: undone.refused, code: undone.code }, undone.status);
+      if (undone.left && undone.after && undone.files) await ctx.store.setTaskChanges(ctx.tenant, task.id, { files: undone.files, undone: null, before: folder.before, after: undone.after });
+      else await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) });
+      return await done(undone.undone.length, `in ${repo.name} on ${machine.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}`);
+    }
+    if (turn.place === "project") {
+      const folder = await changedFolder(task);
+      if (!folder || folder.onMachine) return c.json({ error: "this task's turns are not kept here", code: "not-undoable" }, 409);
+      if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
+      if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
+      const holder = `undo:${task.id}`;
+      if (!(await ctx.store.takeProjectLock(ctx.tenant, repo.id, holder, new Date().toISOString()))) return c.json({ error: `a task is working in ${repo.name} now; undo this one when it ends`, code: "folder-busy" }, 409);
+      try {
+        const undone = await shadowUndo(folder.place, turn.start, folder.after);
+        if ("refused" in undone) return c.json({ error: undone.refused, code: "undo-refused" }, 409);
+        // The task's change is what is left of it: from where it started to the folder as the undo leaves it.
+        const now = await shadowSnapshot(folder.place, `after undoing ${task.id} from turn ${turn.n}`);
+        if ("refused" in now) return c.json({ error: now.refused, code: "undo-refused" }, 409);
+        const left = await shadowChanges(folder.place, folder.before, now.sha);
+        if (typeof left === "string") return c.json({ error: left, code: "undo-refused" }, 409);
+        if (left.files.length || left.untracked.length) await ctx.store.setTaskChanges(ctx.tenant, task.id, { files: left.files, undone: null, before: folder.before, after: now.sha });
+        else await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) });
+        return await done(undone.undone.length, `in ${repo.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}`);
+      } finally {
+        await ctx.store.releaseProjectLock(ctx.tenant, repo.id, holder);
+      }
+    }
+    const request = task.requestNumber !== null ? await ctx.store.getRequest(ctx.tenant, repo.id, task.requestNumber) : null;
+    if (request?.status !== "open") return c.json({ error: "this task's request is not open, so its turns are not undone on it", code: "request-not-open" }, 409);
+    const files = await filesAsAt(placeOfTurn(ctx, turn, repo), turn.start, last.end!);
+    if ("refused" in files) return c.json({ error: files.refused, code: "undo-refused" }, 409);
+    if (!files.length) return await done(0, `on request #${request.number}`);
+    const synced = await syncRepo(ctx, repo.id);
+    if ("error" in synced) return c.json({ error: `the repository could not be read to undo the turn (${maskUrl(synced.error)})` }, 502);
+    const head = await branchHead(mirrorDir(ctx, repo.id), request.branch);
+    if (!head) return c.json({ error: `${request.branch} is no longer on the repository`, code: "moved" }, 409);
+    let moved: { headSha: string };
+    try {
+      moved = await updateRequestBranch(ctx, repo, request.branch, { files, title: `Undo the change from ${said} on`, commitBody: `Undone by the TeamHandbook Orchestrator for task ${task.id}, at its starter's ask.`, author: { name: user.name, email: user.email }, expectedHead: head });
+    } catch (err) {
+      return c.json({ error: (err as Error).message, code: "moved" }, 409);
+    }
+    await recheckRequest(ctx, repo, request, moved.headSha);
+    return await done(files.length, `on request #${request.number}`);
+  });
+
+  // A new task from one turn of this one: the same ask, worked from the files as that turn left them; this task stays.
+  route(app, "POST /api/tasks/:id/turns/:n/new-task", async (c) => {
+    const user = c.get("user");
+    const id = c.req.param("id") ?? "";
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
+    const body = (await c.req.json().catch(() => null)) as { commandId?: unknown; text?: unknown } | null;
+    if (typeof body?.commandId !== "string" || !COMMAND_ID.test(body.commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
+    if (body.text !== undefined && (typeof body.text !== "string" || body.text.length > MESSAGE_MAX)) return c.json({ error: `text is at most ${MESSAGE_MAX} characters` }, 400);
+    const key = `new-from-turn:${task.id}:${body.commandId}`;
+    const made = await ctx.store.getSetting(ctx.tenant, key);
+    if (made) return c.json({ task: (await shown([(await ctx.store.getTask(ctx.tenant, made))!], [], user))[0] }, 200);
+    const turn = (await ctx.store.taskTurns(ctx.tenant, task.id)).find((t) => t.n === Number(c.req.param("n")));
+    if (!turn?.end) return c.json({ error: "unknown turn" }, 404);
+    if (turn.place !== "task") return c.json({ error: "a folder has one state at a time, so a new task does not start from its turn; undo from that turn instead", code: "not-from-turn" }, 409);
+    const text = typeof body.text === "string" && body.text.trim() ? maskedFollowUp(body.text.trim(), null).text : "";
+    const description = [task.description, ...(text ? ["", text] : [])].join("\n").trim();
+    const started = await startTask(ctx, runner, user, { repoId: task.repoId, title: task.title, description, agent: task.agent, mode: task.mode, ...(task.issueUrl ? { issueUrl: task.issueUrl } : {}), ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}) }, undefined, { taskId: task.id, n: turn.n });
+    if ("error" in started) return c.json({ error: started.error, ...(started.code ? { code: started.code } : {}) }, started.status);
+    await ctx.store.setSetting(ctx.tenant, key, started.task.id);
+    await ctx.store.setSetting(ctx.tenant, `turn-new-task:${task.id}:${turn.n}`, started.task.id);
+    await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} started task ${started.task.id} from the change as “${turn.said}” left it.`]);
+    await ctx.store.appendTaskLog(ctx.tenant, started.task.id, [{ text: `Started from “${turn.said}” in ${task.title}`, kind: "started-from", data: { type: "started-from", taskId: task.id, n: turn.n } }]);
+    return c.json({ task: (await shown([started.task], [], user))[0] }, 201);
+  });
 
   // What a task in a folder without git changed there, in the shape a request's changes are shown in.
   route(app, "GET /api/tasks/:id/changes", async (c) => {
@@ -895,6 +1166,20 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     if (folder?.onMachine) return onMachine(c);
     const file = folder ? await shadowFile(folder.place, folder.before, folder.after, c.req.param("path") ?? "") : null;
     if (file === null) return c.json({ error: "this task did not change that file" }, 404);
+    return typeof file === "string" ? c.json({ error: file }, 409) : c.json({ file });
+  });
+
+  // One file's patch within one turn, masked as a change's file is, when the Select has a turn picked.
+  route(app, "GET /api/tasks/:id/turns/:n/changes/:path{.+}", async (c) => {
+    const id = c.req.param("id") ?? "";
+    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!task || !readsTask(c.get("user"), task)) return c.json({ error: "unknown task" }, 404);
+    const turn = (await ctx.store.taskTurns(ctx.tenant, task.id)).find((t) => t.n === Number(c.req.param("n")));
+    const repo = turn?.end ? await ctx.store.getRepo(ctx.tenant, task.repoId) : null;
+    if (!turn?.end || !repo) return c.json({ error: "unknown turn" }, 404);
+    if (turn.place === "machine") return onMachine(c);
+    const file = await shadowFile(placeOfTurn(ctx, turn, repo), turn.start, turn.end, c.req.param("path") ?? "");
+    if (file === null) return c.json({ error: "this turn did not change that file" }, 404);
     return typeof file === "string" ? c.json({ error: file }, 409) : c.json({ file });
   });
 
@@ -993,6 +1278,16 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     }
   });
 
+  // The starter stops what the agent is doing now; the task and its session stay, and their next words go on from there.
+  route(app, "POST /api/tasks/:id/stop-step", async (c) => {
+    const task = await startersTask(c);
+    if (!task) return c.json({ error: "unknown task" }, 404);
+    if (task.status !== "running") return c.json({ error: "the task is not working now, so there is no step to stop", code: "not-running" }, 409);
+    if (task.stage === "stopped") return c.json({ task: (await shown([task], await requestsOf(task), c.get("user")))[0] });
+    if (!(await runner.stopStep(task.id))) return c.json({ error: "this task's agent is not in a session it can be stopped in and told more; stop the task instead", code: "no-session" }, 409);
+    return c.json({ task: (await shown([(await ctx.store.getTask(ctx.tenant, task.id))!], await requestsOf(task), c.get("user")))[0] });
+  });
+
   // The starter's follow-up to a task's agent, from their own signed-in browser: it steers what the
   // agent does next, so no key, no teammate and no tool sends it. One commandId is one message.
   route(app, "POST /api/tasks/:id/messages", async (c) => {
@@ -1000,13 +1295,15 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const id = c.req.param("id") ?? "";
     const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
     if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
-    const body = (await c.req.json().catch(() => null)) as { text?: unknown; quotes?: unknown; commandId?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as { text?: unknown; quotes?: unknown; commandId?: unknown; attachments?: unknown } | null;
     const text = typeof body?.text === "string" ? body.text.trim() : "";
     if (!text || text.length > MESSAGE_MAX) return c.json({ error: `a follow-up is 1 to ${MESSAGE_MAX} characters`, code: "message-too-long" }, 400);
     const commandId = typeof body?.commandId === "string" ? body.commandId : "";
     if (!COMMAND_ID.test(commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
     const quotes = readQuotes(body?.quotes);
     if (quotes && "error" in quotes) return c.json({ error: quotes.error, code: "quote-outside-request" }, 400);
+    const files = await followUpAttachments(ctx, task.id, body?.attachments);
+    if (!files) return c.json({ error: "attachments names files uploaded to this task, each once", code: "attachment-unknown" }, 400);
     const request = task.requestNumber !== null ? await ctx.store.getRequest(ctx.tenant, task.repoId, task.requestNumber) : null;
     const offered = offeredFollowUp(runner, task, request, inWorkspace(task) && (await workspaceGoesOn(ctx, task)));
     if (!offered) return c.json({ error: NO_FOLLOW_UP, code: "follow-up-not-offered" }, 409);
@@ -1017,17 +1314,19 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     const masked = maskedFollowUp(text, quotes);
     let kept;
     try {
-      kept = await ctx.store.addFollowUp({ tenant: ctx.tenant, id: newId("fup"), taskId: task.id, source: "person", key: `person:${commandId}`, text: masked.text, quotes: masked.quotes, createdAt: new Date().toISOString(), createdBy: user.email });
+      kept = await ctx.store.addFollowUp({ tenant: ctx.tenant, id: newId("fup"), taskId: task.id, source: "person", key: `person:${commandId}`, text: masked.text, quotes: masked.quotes, createdAt: new Date().toISOString(), createdBy: user.email, ...(files.length ? { attachments: files } : {}) });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
-    if (!kept.created && (kept.followUp.text !== masked.text || JSON.stringify(kept.followUp.quotes) !== JSON.stringify(masked.quotes))) {
+    if (!kept.created && (kept.followUp.text !== masked.text || JSON.stringify(kept.followUp.quotes) !== JSON.stringify(masked.quotes) || JSON.stringify(kept.followUp.attachments ?? []) !== JSON.stringify(files))) {
       return c.json({ error: "that commandId already sent another follow-up", code: "command-reused" }, 409);
     }
     if (kept.created) await recordEvent(ctx, user, "task.followup", { repoId: task.repoId, subject: `task:${task.id}`, detail: `sent a follow-up of ${masked.text.length} characters${masked.quotes ? ` with ${masked.quotes.length} quote(s)` : ""}` });
     // Only the message that takes the task out of review puts it back in line; a retry, or more words while it waits, queue nothing.
     if (kept.created && offered === "continue" && task.status !== "queued") {
-      await goOn(ctx, task, task.requestNumber !== null ? `${user.name} asked for more on request #${task.requestNumber}; the task goes on from its branch.` : `${user.name} asked for more; the task goes on from the branch it left in each repository.`);
+      const from = request?.status === "merged" ? `; the task goes on from the change kept in request #${request.number}, on a branch of its own` : task.requestNumber !== null ? ` on request #${task.requestNumber}; the task goes on from its branch` : inPlaceReview(task) ? "; the task goes on in the folder from the files as it left them" : task.status === "nothing-changed" ? "; the task goes on from where it worked, with the agent's answer" : "; the task goes on in each repository from what it left";
+      if (await goesOnAfterKeep(ctx, task, request)) await ctx.store.updateTask(ctx.tenant, task.id, { keptBefore: true });
+      await goOn(ctx, task, `${user.name} asked for more${from}.`);
     }
     return c.json({ followUp: { id: kept.followUp.id, status: kept.followUp.status, createdAt: kept.followUp.createdAt } }, kept.created ? 202 : 200);
   });
@@ -1088,7 +1387,8 @@ const DROP_PATH_MAX = 1024;
 export function offeredFollowUp(runner: TaskRunner, task: TaskRecord, request: RequestRecord | null | undefined, workspaceOpen = false): FollowUpOffer {
   const offered = runner.followUp(task);
   if (offered !== "continue") return offered;
-  return (task.requestNumber !== null ? request?.status === "open" : workspaceOpen) ? "continue" : null;
+  // A request kept goes on as one in review does: the next round starts from the repository that holds the kept change.
+  return (task.requestNumber !== null ? request?.status === "open" || request?.status === "merged" : inPlaceReview(task) || task.status === "nothing-changed" || workspaceOpen) ? "continue" : null;
 }
 
 /**
@@ -1106,7 +1406,18 @@ export async function workspaceGoesOn(ctx: OrchestratorContext, task: TaskRecord
   for (const target of task.targets ?? []) {
     if (target.path === undefined) continue;
     if (target.status === "local" && target.head) return true;
-    if (target.status === "request" && target.requestNumber !== null && (await ctx.store.getRequest(ctx.tenant, target.repoId, target.requestNumber))?.status === "open") return true;
+    // A request still open goes on from its head; one kept goes on from the repository's HEAD, which holds it.
+    const status = target.status === "request" && target.requestNumber !== null ? (await ctx.store.getRequest(ctx.tenant, target.repoId, target.requestNumber))?.status : undefined;
+    if (status === "open" || status === "merged") return true;
+  }
+  return false;
+}
+
+/** Whether a task goes on from a change its person kept, in its request, its folder or one of its repositories. */
+async function goesOnAfterKeep(ctx: OrchestratorContext, task: TaskRecord, request: RequestRecord | null): Promise<boolean> {
+  if (request?.status === "merged" || task.changes?.kept) return true;
+  for (const target of inWorkspace(task) ? task.targets! : []) {
+    if (target.status === "request" && target.requestNumber !== null && (await ctx.store.getRequest(ctx.tenant, target.repoId, target.requestNumber))?.status === "merged") return true;
   }
   return false;
 }
@@ -1161,6 +1472,20 @@ const fromHome = (path: unknown): unknown => (typeof path === "string" && /^~(\/
  * the person ran the most Claude Code sessions in; with none known, they are asked which folder, in one line.
  */
 async function routedStart(ctx: OrchestratorContext, runner: TaskRunner, user: Principal, body: Record<string, unknown>): Promise<{ body: Record<string, unknown>; routing: Routing; checked: string | null } | { error: string; status: 400 | 409; code?: string }> {
+  const where = await whereTo(ctx, runner, user, body);
+  if ("error" in where) return where;
+  const { routing, title } = where;
+  if (!routing) return { error: "Which folder does this task work in? Pick one or type its path.", status: 409, code: "pick-folder" };
+  const opened = await openProject(ctx, user, routing.path).catch((err: Error) => err);
+  if (opened instanceof Error) return { error: opened.message, status: 409, code: opened instanceof AccountError ? opened.code : "folder-refused" };
+  return { body: { ...body, title, repoId: opened.project.id }, routing: { ...routing, path: opened.project.url, loaded: await folderLoaded(opened.project.url) }, checked: await routedChecks(ctx, user, opened.project.id, opened.project.url) };
+}
+
+/**
+ * The folder a start that names no project goes to and the title it starts with, or null for the folder when the person
+ * is to pick one; read before a start, too, so a form shows where a task goes before it is started.
+ */
+async function whereTo(ctx: OrchestratorContext, runner: TaskRunner, user: Principal, body: Record<string, unknown>): Promise<{ routing: Routing | null; title: string } | { error: string; status: 400 | 409; code?: string }> {
   const description = typeof body.description === "string" ? body.description.trim() : "";
   const issueUrl = typeof body.issueUrl === "string" ? body.issueUrl.trim() : "";
   // With an issue, the words beside its link are a note on it: the task is named after the issue, not after the note.
@@ -1170,10 +1495,7 @@ async function routedStart(ctx: OrchestratorContext, runner: TaskRunner, user: P
   if (issue && "error" in issue) return issue;
   const title = given || issue?.title || "";
   const routing = typeof body.path === "string" && body.path.trim() ? { path: String(fromHome(body.path)), reason: "", fallback: false } : await askedRouting(ctx, runner, user, body, [title, description, issueUrl].filter(Boolean).join("\n"));
-  if (!routing) return { error: "Which folder does this task work in? Pick one or type its path.", status: 409, code: "pick-folder" };
-  const opened = await openProject(ctx, user, routing.path).catch((err: Error) => err);
-  if (opened instanceof Error) return { error: opened.message, status: 409, code: opened instanceof AccountError ? opened.code : "folder-refused" };
-  return { body: { ...body, title, repoId: opened.project.id }, routing: { ...routing, path: opened.project.url, loaded: await folderLoaded(opened.project.url) }, checked: await routedChecks(ctx, user, opened.project.id, opened.project.url) };
+  return { routing, title };
 }
 
 /**
@@ -1304,4 +1626,10 @@ export function readQuotes(raw: unknown): FollowUpQuote[] | null | { error: stri
 /** A request as a page shows it: the tenant is the orchestrator's own. */
 function shownRequest({ tenant: _tenant, ...request }: TaskRequestRecord): Omit<TaskRequestRecord, "tenant"> {
   return request;
+}
+
+/** A task's cards as its page shows them: the person who answered one by their name, never by the address the record keeps. */
+async function shownRequests(ctx: OrchestratorContext, requests: readonly TaskRequestRecord[]): Promise<Omit<TaskRequestRecord, "tenant">[]> {
+  const nameOf = nameReader(ctx);
+  return Promise.all(requests.map(async (request) => ({ ...shownRequest(request), ...(request.answeredBy ? { answeredBy: await nameOf(request.answeredBy) } : {}) })));
 }

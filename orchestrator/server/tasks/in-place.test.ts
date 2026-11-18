@@ -58,6 +58,127 @@ async function folderProject(body: string) {
 }
 
 describe("a task in a folder that is not a git repository", { timeout: 120_000 }, () => {
+  it("given a folder task whose change waits for review, when its person asks for more, then the new run's change joins that review, which still starts from the folder as the first run found it", async () => {
+    // given
+    const { ctx, app, folder, start } = await folderProject('const fs = await import("node:fs"); if (fs.existsSync("todo.md")) writeFileSync("todo.md", fs.readFileSync("todo.md", "utf8") + "- two\\n"); else writeFileSync("todo.md", "- one\\n");');
+    const first = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+    const before = (await ctx.store.taskChangeSnapshots(ctx.tenant, first))!.before;
+
+    // when
+    const sent = await app.request(`/api/tasks/${first}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Add a second item.", commandId: "more-review-0001" }) });
+    await ctx.tasks!.idle();
+
+    // then
+    expect(sent.status).toBe(202);
+    expect((await ctx.store.taskChangeSnapshots(ctx.tenant, first))!.before).toBe(before);
+    expect((await ctx.store.getTask(ctx.tenant, first))!.changes).toMatchObject({ files: [expect.objectContaining({ path: "todo.md" })], undone: null });
+    expect(readFileSync(join(folder, "todo.md"), "utf8")).toBe("- one\n- two\n");
+  });
+
+  it("given a folder task whose change its person kept, when they ask for more, then a new run starts from the files as it left them, its review holds only what it changed, the words reach it once, and an undone one takes no more", async () => {
+    // given
+    const { ctx, app, folder, start, keep, undo } = await folderProject('const fs = await import("node:fs"); if (fs.existsSync("todo.md")) writeFileSync("todo.md", fs.readFileSync("todo.md", "utf8") + "- two\\n"); else writeFileSync("todo.md", "- one\\n");');
+    const first = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+    await keep(first);
+    const read = async (id: string) => (await (await app.request(`/api/tasks/${id}`)).json()).task as { followUp: string | null };
+    const send = (id: string, commandId: string) => app.request(`/api/tasks/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Add a second item.", commandId }) });
+
+    // when
+    const offeredAfterKeep = (await read(first)).followUp;
+    const sent = await send(first, "more-folder-0001");
+    await ctx.tasks!.idle();
+    const second = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+    await undo(second);
+    const offeredAfterUndo = (await read(second)).followUp;
+
+    // then
+    expect([offeredAfterKeep, sent.status, offeredAfterUndo]).toEqual(["continue", 202, null]);
+    const turns = (await (await app.request(`/api/tasks/${first}/turns`)).json()).turns;
+    expect(turns).toMatchObject([{ n: 1, files: 1, undone: false }, { n: 2, said: "Add a second item.", files: 1, undone: false }]);
+    expect((await (await app.request(`/api/tasks/${first}/turns/2/changes`)).json()).changes.files.map((f: { path: string }) => f.path)).toEqual(["todo.md"]);
+    expect([(await ctx.store.getTask(ctx.tenant, first))!.keptBefore, (await ctx.store.getTask(ctx.tenant, second))!.keptBefore]).toEqual([true, undefined]);
+    const went = (await ctx.store.getTask(ctx.tenant, first))!;
+    expect(went).toMatchObject({ status: "needs-review", result: "changes", changes: { files: [expect.objectContaining({ path: "todo.md" })], undone: null } });
+    expect(went.changes!.kept).toBeUndefined();
+    expect(readFileSync(join(folder, "todo.md"), "utf8")).not.toBe("- one\n");
+    expect(await ctx.store.pendingFollowUps(ctx.tenant, first)).toEqual([]);
+    expect((await ctx.store.taskLog(ctx.tenant, first, 0)).map((l) => l.text)).toContain("Ada Example asked for more; the task goes on in the folder from the files as it left them.");
+  });
+
+  it("given a folder task asked for more while in review, when its starter undoes from the second turn and then from the first, then the folder is back as each turn found it, the second keeps the first turn's change for review, and the first leaves nothing to review", async () => {
+    // given
+    const { ctx, app, folder, start } = await folderProject('const fs = await import("node:fs"); if (fs.existsSync("todo.md")) writeFileSync("todo.md", fs.readFileSync("todo.md", "utf8") + "- two\\n"); else writeFileSync("todo.md", "- one\\n");');
+    const id = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+    await app.request(`/api/tasks/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Add a second item.", commandId: "turns-more-0001" }) });
+    await ctx.tasks!.idle();
+    const undo = (n: number, commandId: string, reason?: string) => app.request(`/api/tasks/${id}/turns/${n}/undo`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandId, ...(reason ? { reason } : {}) }) });
+
+    // when
+    const patch = (await (await app.request(`/api/tasks/${id}/turns/2/changes/todo.md`)).json()).file;
+    const second = await undo(2, "turns-undo-0002", "one item is enough");
+    const afterSecond = { file: readFileSync(join(folder, "todo.md"), "utf8"), task: (await ctx.store.getTask(ctx.tenant, id))! };
+    const again = await undo(2, "turns-undo-0003");
+    const first = await undo(1, "turns-undo-0001");
+
+    // then
+    expect((await second.json()).turns).toMatchObject([{ n: 1, undone: false }, { n: 2, said: "Add a second item.", undone: true }]);
+    expect(afterSecond.file).toBe("- one\n");
+    expect(patch.patch).toContain("+- two");
+    expect(patch.patch).not.toContain("+- one");
+    expect(afterSecond.task.changes).toMatchObject({ files: [expect.objectContaining({ path: "todo.md" })], undone: null });
+    expect([again.status, (await again.json()).code]).toEqual([409, "already-undone"]);
+    expect(first.status).toBe(200);
+    expect(existsSync(join(folder, "todo.md"))).toBe(false);
+    expect((await ctx.store.getTask(ctx.tenant, id))!.changes!.undone).not.toBeNull();
+    expect((await ctx.store.taskLog(ctx.tenant, id, 0)).map((l) => l.text)).toContain("Ada Example undid the change from “Add a second item.” on: 1 file(s) back in notes. Why: one item is enough");
+  });
+
+  it("given a folder whose package.json names a test and a lint script and no check approved, when two tasks start there, then the first notes both for its review and the second notes none", async () => {
+    // given
+    const { ctx, folder, start } = await folderProject('writeFileSync("todo.md", "- one\\n");');
+    writeFileSync(join(folder, "package.json"), JSON.stringify({ name: "notes", scripts: { test: "node --test", lint: "eslint ." } }));
+
+    // when
+    const first = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+    await vi.waitFor(async () => expect((await ctx.store.getTask(ctx.tenant, first))!.checksFound).toBeDefined(), { timeout: 20_000 });
+    const second = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+
+    // then
+    expect((await ctx.store.getTask(ctx.tenant, first))!.checksFound!.map((c) => c.command)).toEqual(expect.arrayContaining(["npm test", "npm run lint"]));
+    expect((await ctx.store.getTask(ctx.tenant, first))!.checksFound!.every((c) => c.source.includes("package.json"))).toBe(true);
+    expect((await ctx.store.getTask(ctx.tenant, second))!.checksFound).toBeUndefined();
+  });
+
+  it("given a folder whose files name no check and an agent that names one at the end of every run, when two tasks run there, then what the first was asked for is kept for its review and offered on the folder for approval, which takes it, and the second, not asked, keeps none", async () => {
+    // given
+    const body = 'writeFileSync("todo.md", "- one\\n"); console.log(JSON.stringify({ type: "result", summary: "Added the list.\\nCHECK: sh scripts/check.sh (from scripts/check.sh)\\nCHECK: ../../escape (from ../outside)" })); process.exit(0);';
+    const { ctx, app, folder, project, start } = await folderProject(body);
+    mkdirSync(join(folder, "scripts"));
+    writeFileSync(join(folder, "scripts", "check.sh"), "test -f todo.md\n");
+
+    // when
+    const first = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+    const second = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+
+    const offered = (await (await app.request(`/api/projects/${project.id}/verification`)).json()).detected.checks;
+    const approved = await app.request(`/api/projects/${project.id}/verification`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ checks: [offered[0]], setup: null }) });
+
+    // then
+    expect((await ctx.store.getTask(ctx.tenant, first))!.checksFound).toEqual([{ command: "sh scripts/check.sh", source: "scripts/check.sh" }]);
+    expect((await ctx.store.getTask(ctx.tenant, second))!.checksFound).toBeUndefined();
+    expect(offered).toMatchObject([{ command: "sh scripts/check.sh", source: "scripts/check.sh (named by the agent)" }]);
+    expect(approved.status).toBe(200);
+    expect((await approved.json()).approved.checks.map((c: { command: string }) => c.command)).toEqual(["sh scripts/check.sh"]);
+  });
+
   it("given a folder opened as a project, when a task edits it, then the folder keeps the edit, the task's result is its changes, the screen reads them, and the task's own directory is gone", async () => {
     // given
     const { ctx, app, folder, project, start } = await folderProject('writeFileSync("README.md", "Notes.\\nA second line.\\n"); writeFileSync("todo.md", "- one\\n");');
@@ -320,6 +441,8 @@ process.stdin.setEncoding("utf8").on("data", (chunk) => {
   it("given a folder the person opened, when they trust its settings on the task's page and later take that back, then the next task loads its project and local settings and the one after loads their user settings alone, and the page reads each answer", async () => {
     // given
     const { ctx, ada, folder, project } = await folderProject("");
+    mkdirSync(join(folder, ".claude"), { recursive: true });
+    writeFileSync(join(folder, ".claude", "settings.json"), "{}\n");
     const home = join(folder, "..");
     const bin = claudeArgvStandIn(home);
     ctx.tasks = createTaskRunner(ctx, { agents: [claudeCodeAdapter(bin)], isolation: { mode: "process", network: "open" }, testCommand: () => null, hostEnv: { PATH: process.env.PATH, HOME: home }, profile: "personal" });
@@ -356,9 +479,27 @@ process.stdin.setEncoding("utf8").on("data", (chunk) => {
     expect(odd.status).toBe(400);
   });
 
+  it("given a folder the person opened with no Claude Code settings of its own, when its project is read before and after a settings file appears, then nothing is asked until there is something to trust", async () => {
+    // given
+    const { ctx, ada, folder, project } = await folderProject("");
+    const app = createApp(ctx, as(ada));
+    const trustOf = async () => ((await (await app.request("/api/projects")).json()).projects as { id: string; trust: unknown }[]).find((p) => p.id === project.id)?.trust;
+
+    // when
+    const bare = await trustOf();
+    mkdirSync(join(folder, ".claude"), { recursive: true });
+    writeFileSync(join(folder, ".claude", "settings.json"), "{}\n");
+    const withSettings = await trustOf();
+
+    // then
+    expect([bare, withSettings]).toEqual([null, "unasked"]);
+  });
+
   it("given a folder the person opened and a project the orchestrator clones, when the projects are listed before and after the folder is trusted, then the folder's row carries its trust as it stands and the clone's carries none", async () => {
     // given
-    const { ctx, ada, project } = await folderProject("");
+    const { ctx, ada, folder, project } = await folderProject("");
+    mkdirSync(join(folder, ".claude"), { recursive: true });
+    writeFileSync(join(folder, ".claude", "settings.local.json"), "{}\n");
     await ctx.store.upsertRepo({ tenant: ctx.tenant, id: "cloned", team: project.team, name: "cloned", url: "https://git.example.invalid/acme/cloned.git" });
     const app = createApp(ctx, as(ada));
     const trustOf = async (id: string) => ((await (await app.request("/api/projects")).json()).projects as { id: string; trust: unknown }[]).find((p) => p.id === id)?.trust;

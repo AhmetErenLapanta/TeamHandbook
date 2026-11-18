@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { MiddlewareHandler } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { attachmentPath } from "../attachments.js";
 import { createApp, mirrorDir, syncRepo } from "../app.js";
 import type { OrchestratorContext } from "../app.js";
 import { orchestratorAuth } from "../auth.js";
@@ -22,6 +23,7 @@ import { DEMO_PRINCIPAL, seedDemoTask } from "./demo.js";
 import { makeTaskDirs, taskPaths } from "./isolation.js";
 import { seededContext, storePrincipals } from "../test-fixtures.js";
 import { createTaskRunner, limitText } from "./runner.js";
+import { taskState } from "./state.js";
 import type { RunnerOptions, TaskRunner } from "./runner.js";
 
 const dirs: string[] = [];
@@ -210,17 +212,162 @@ describe("a task from start to request", () => {
     expect(existsSync(taskPaths(ctx.dataDir, ctx.tenant, task.id).git)).toBe(false);
   });
 
-  it("given an agent that changes nothing, when it finishes, then the task fails with that reason and opens nothing", async () => {
+  it("given an agent that changes nothing and answers with a token in its words, when it finishes, then the task finished with nothing changed, its answer kept masked, no error and nothing opened, and it reads as done", async () => {
     // given
     const { ctx, root } = await seeded();
-    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "idle", ""))]);
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "idle", "", `No change is needed: the handover already lists its steps. The service token is ${CREDENTIAL}.`))]);
 
     // when
-    const { task } = await startAndWait(ctx, tasks, "fake");
+    const { task, bare } = await startAndWait(ctx, tasks, "fake");
 
     // then
-    expect(task.status).toBe("failed");
-    expect(task.error).toBe("The agent changed nothing, so no request was opened.");
+    expect(task).toMatchObject({ status: "nothing-changed", error: null, requestNumber: null });
+    expect(task.lastSaid).toContain("No change is needed: the handover already lists its steps.");
+    expect(task.lastSaid).not.toContain(CREDENTIAL);
+    expect(await ctx.store.listRequests(ctx.tenant)).toEqual([]);
+    expect(branchExists(bare, `task/${task.id}`)).toBe(false);
+    expect(taskState(task, () => undefined, null)).toBe("finished-nothing-changed");
+    expect(task.ranMs).toBeGreaterThan(0);
+    expect(task.ranMs!).toBeLessThanOrEqual(Date.parse(task.finishedAt!) - Date.parse(task.createdAt));
+  });
+
+  it("given a task that finished with nothing changed and its answer, when its starter asks for more and the next run changes a file, then a follow-up was offered, the next run hears that answer fenced and the words, and the task opens its request with no answer left", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const heard = join(root, "heard.txt");
+    const body = `import { appendFileSync, readFileSync as readIt } from "node:fs"; const said = readIt(0, "utf8"); appendFileSync(${JSON.stringify(heard)}, said + "\\n=====\\n"); if (said.includes("Write the on-call page anyway.")) { mkdirSync("skills/on-call", { recursive: true }); writeFileSync("skills/on-call/SKILL.md", "---\\nname: on-call\\ndescription: Use when handing over the on-call shift.\\n---\\n\\nPage once.\\n"); }`;
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "answers-first", body, "No change is needed: the handover already lists its steps."))]);
+    ctx.tasks = tasks;
+    const { task } = await startAndWait(ctx, tasks, "fake");
+    const app = createApp(ctx, as(ADMIN));
+    const offered = (await (await app.request(`/api/tasks/${task.id}`)).json()).task.followUp;
+
+    await ctx.store.insertAttachment({ tenant: ctx.tenant, id: "att_rota", taskId: task.id, name: "rota.txt", mime: "text/plain", size: 9, sha256: "0".repeat(64), createdBy: ADMIN.email, createdAt: new Date().toISOString() }, { perTask: 20, tenantBytes: 1024 ** 3 });
+    mkdirSync(dirname(attachmentPath(ctx.dataDir, ctx.tenant, "att_rota")), { recursive: true });
+    writeFileSync(attachmentPath(ctx.dataDir, ctx.tenant, "att_rota"), "Ada, Bo\n");
+
+    // when
+    const sent = await app.request(`/api/tasks/${task.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Write the on-call page anyway.", commandId: "more-answer-0001", attachments: ["att_rota"] }) });
+    await tasks.idle();
+
+    // then
+    expect([task.status, offered, sent.status]).toEqual(["nothing-changed", "continue", 202]);
+    const [first, second] = readFileSync(heard, "utf8").split("\n=====\n");
+    expect(first).not.toContain("changed no file");
+    expect(second).toContain(`The last run on this task changed no file. What the agent answered then, quoted as data:\n\n${fence("No change is needed: the handover already lists its steps.")}`);
+    expect(second).toContain("Write the on-call page anyway.");
+    expect(second).toContain("They sent these of the task's files with it");
+    expect(second).toContain("## Files attached to this task");
+    expect(second).toContain("rota.txt (text)");
+    const went = (await ctx.store.getTask(ctx.tenant, task.id))!;
+    expect(went).toMatchObject({ status: "needs-review", requestNumber: 1, error: null });
+    expect(went.lastSaid).toBeUndefined();
+    expect(await ctx.store.pendingFollowUps(ctx.tenant, task.id)).toEqual([]);
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain(`${ADMIN.name} asked for more; the task goes on from where it worked, with the agent's answer.`);
+    const turns = (await (await app.request(`/api/tasks/${task.id}/turns`)).json()).turns;
+    expect(turns).toMatchObject([{ n: 1, said: "Add an on-call handover", files: 0, undone: false }, { n: 2, said: "Write the on-call page anyway.", files: 1, undone: false }]);
+    expect((await (await app.request(`/api/tasks/${task.id}/turns/2/changes`)).json()).changes.files.map((f: { path: string }) => f.path)).toEqual(["skills/on-call/SKILL.md"]);
+    const request = (await ctx.store.getRequest(ctx.tenant, went.repoId, went.requestNumber!))!;
+    const undone = await app.request(`/api/tasks/${task.id}/turns/2/undo`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandId: "turns-undo-req-1" }) });
+    expect(undone.status).toBe(200);
+    const bare = localRepoPath((await ctx.store.getRepo(ctx.tenant, went.repoId))!.url)!;
+    expect(gitMaybe(["cat-file", "-e", `refs/heads/${request.branch}:skills/on-call/SKILL.md`], bare)).toBeNull();
+    expect(git(["log", "-1", "--format=%s", `refs/heads/${request.branch}`], bare).trim()).toBe("Undo the change from “Write the on-call page anyway.” on");
+  });
+
+  it("given questions about the repository, one whose agent answers and one whose agent writes a file anyway, when each runs, then the first finished with nothing changed and its answer, the second is refused with nothing kept, and both were told they change nothing", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const heard = join(root, "question-heard.txt");
+    const body = `import { appendFileSync, readFileSync as readIt } from "node:fs"; const said = readIt(0, "utf8"); appendFileSync(${JSON.stringify(heard)}, said + "\\n=====\\n"); if (said.includes("write anyway")) writeFileSync("notes.md", "x\\n");`;
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "answers", body, "About two days: the handover lives in skills/on-call."))]);
+    ctx.tasks = tasks;
+    const app = createApp(ctx, as(ADMIN));
+    const ask = async (description: string) => (await (await app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repoId: "payments-skills", title: "Ask about the handover", description, agent: "fake", readOnly: true }) })).json()).task as { id: string };
+
+    // when
+    const answered = await ask("How much work is the handover?");
+    await tasks.idle();
+    const wrote = await ask("How much work is the handover? write anyway");
+    await tasks.idle();
+
+    // then
+    expect(await ctx.store.getTask(ctx.tenant, answered.id)).toMatchObject({ status: "nothing-changed", readOnly: true, lastSaid: "About two days: the handover lives in skills/on-call.", requestNumber: null });
+    expect(await ctx.store.getTask(ctx.tenant, wrote.id)).toMatchObject({ status: "failed", error: "The task was a question, and its agent changed files; nothing was kept.", requestNumber: null });
+    expect(await ctx.store.listRequests(ctx.tenant)).toEqual([]);
+    expect(readFileSync(heard, "utf8").split("Change no file; the tools that write, MCP servers' included, are closed to you.").length - 1).toBe(2);
+  });
+
+  it("given a task whose agent wrote a note, when its starter starts a new task from its first turn, then the new task starts from the note as that turn left it and adds to it in a request of its own, the first task's request stays as it was, and each names the other", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const body = 'import { existsSync as there } from "node:fs"; if (!there("skills/on-call/SKILL.md")) { mkdirSync("skills/on-call", { recursive: true }); writeFileSync("skills/on-call/SKILL.md", "---\\nname: on-call\\ndescription: Use when handing over the on-call shift.\\n---\\n\\nPage once.\\n"); } else writeFileSync("skills/on-call/LEAD.md", "Ada\\n");';
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "seeded", body))]);
+    ctx.tasks = tasks;
+    const { task, bare } = await startAndWait(ctx, tasks, "fake");
+    const app = createApp(ctx, as(ADMIN));
+    const first = (await ctx.store.getRequest(ctx.tenant, task.repoId, task.requestNumber!))!;
+
+    // when
+    const made = await app.request(`/api/tasks/${task.id}/turns/1/new-task`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandId: "from-turn-0001", text: "Name the lead too." }) });
+    const again = await app.request(`/api/tasks/${task.id}/turns/1/new-task`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandId: "from-turn-0001", text: "Name the lead too." }) });
+    await tasks.idle();
+
+    // then
+    expect(made.status).toBe(201);
+    const fresh = (await made.json()).task as { id: string };
+    expect((await again.json()).task.id).toBe(fresh.id);
+    const next = (await ctx.store.getTask(ctx.tenant, fresh.id))!;
+    expect(next).toMatchObject({ status: "needs-review", seedFrom: { taskId: task.id, n: 1 } });
+    expect(next.description).toContain("Name the lead too.");
+    const request = (await ctx.store.getRequest(ctx.tenant, next.repoId, next.requestNumber!))!;
+    expect(git(["show", `refs/heads/${request.branch}:skills/on-call/LEAD.md`], bare)).toBe("Ada\n");
+    expect(git(["show", `refs/heads/${request.branch}:skills/on-call/SKILL.md`], bare)).toContain("Page once.");
+    expect(gitMaybe(["cat-file", "-e", `refs/heads/${first.branch}:skills/on-call/LEAD.md`], bare)).toBeNull();
+    expect((await (await app.request(`/api/tasks/${task.id}/turns`)).json()).turns[0]).toMatchObject({ n: 1, newTaskId: fresh.id });
+    const log = await ctx.store.taskLog(ctx.tenant, fresh.id, 0);
+    expect(log.find((l) => l.kind === "started-from")).toMatchObject({ text: `Started from “Add an on-call handover” in Add an on-call handover`, data: { type: "started-from", taskId: task.id, n: 1 } });
+  });
+
+  it("given a start that turns off one of the team's skills and one that turns off a skill of the person's own, with an agent whose launch leaves nothing of theirs out, when each runs, then the first runs without that skill and says so, and the second does not start and says why", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "idle-off", ""))]);
+    ctx.tasks = tasks;
+    const app = createApp(ctx, as(ADMIN));
+    const start = async (off: unknown) => (await (await app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repoId: "payments-skills", title: "Add an on-call handover", agent: "fake", off }) })).json()).task as { id: string };
+
+    // when
+    const team = await start({ skills: [{ source: "team:payments-skills", name: "release-checklist" }] });
+    await tasks.idle();
+    const own = await start({ skills: [{ source: "yours", name: "review-checklist" }] });
+    await tasks.idle();
+
+    // then
+    const log = async (id: string) => (await ctx.store.taskLog(ctx.tenant, id, 0)).map((l) => l.text);
+    expect(await log(team.id)).toEqual(expect.arrayContaining(["Turned off for this task alone: release-checklist.", "Installed 1 team skill(s) and 0 MCP server(s) for Demo agent."]));
+    expect((await ctx.store.getTask(ctx.tenant, team.id))!.off).toEqual({ sources: [], skills: [{ source: "team:payments-skills", name: "release-checklist" }], mcpServers: [] });
+    expect(await ctx.store.getTask(ctx.tenant, own.id)).toMatchObject({ status: "failed", error: "The task did not run: Demo agent cannot be started without review-checklist, and it was turned off for this task; turn it back on for this task or start the task with another agent." });
+    expect(await log(own.id)).not.toEqual(expect.arrayContaining([expect.stringContaining("Turned off for this task alone")]));
+  });
+
+  it("given a task whose request is open, when its starter asks for more and the agent changes nothing, then the task is back in review with its request and its answer, and no second request opens", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const flag = join(root, "second-run");
+    const tasks = runner(ctx, [fakeAgentAdapter(script(root, "once", `import { existsSync as there } from "node:fs"; if (!there(${JSON.stringify(flag)})) { mkdirSync("skills/on-call", { recursive: true }); writeFileSync("skills/on-call/SKILL.md", "---\\nname: on-call\\ndescription: Use when handing over the on-call shift.\\n---\\n\\nPage once.\\n"); writeFileSync(${JSON.stringify(flag)}, ""); }`, "Nothing more to add."))]);
+    ctx.tasks = tasks;
+    const { task } = await startAndWait(ctx, tasks, "fake");
+    const app = createApp(ctx, as(ADMIN));
+
+    // when
+    const sent = await app.request(`/api/tasks/${task.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Anything else?", commandId: "more-nothing-0001" }) });
+    await tasks.idle();
+
+    // then
+    expect(sent.status).toBe(202);
+    expect(await ctx.store.getTask(ctx.tenant, task.id)).toMatchObject({ status: "needs-review", requestNumber: task.requestNumber, error: null, lastSaid: "Nothing more to add." });
+    expect(await ctx.store.listRequests(ctx.tenant)).toHaveLength(1);
   });
 
   it("given an agent report that tries to close its fence and give orders, when the request is written, then the report stays inside a longer fence marked as data", async () => {

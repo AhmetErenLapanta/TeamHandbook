@@ -52,8 +52,9 @@ export async function openPushedRequest(ctx: OrchestratorContext, taskId: string
   const task = await ctx.store.getTask(ctx.tenant, taskId);
   // The words a run that went on from the task's request was handed stay pending until it ends, so a lease taken
   // again hands them out again; once it ends, however it ended, none is handed out a second time.
-  if (task && (task.requestNumber !== null || inWorkspace(task))) {
-    const handed = await ctx.store.pendingFollowUps(ctx.tenant, task.id);
+  if (task) {
+    const goesOn = task.requestNumber !== null || inWorkspace(task);
+    const handed = (await ctx.store.pendingFollowUps(ctx.tenant, task.id)).filter((f) => goesOn || f.handedLease);
     if (handed.length) await ctx.store.markFollowUpsDelivered(ctx.tenant, handed.map((f) => f.id), new Date().toISOString());
   }
   if (task && outcome.status === "needs-review" && outcome.repos?.length) return workspaceRequests(ctx, task, outcome.repos, run);
@@ -91,7 +92,7 @@ export async function openPushedRequest(ctx: OrchestratorContext, taskId: string
   const own = evidence && !outcome.request.body.includes("\n## Verification\n") ? [[...evidenceMarkdown(evidence), ...ranOn].join("\n")] : [];
   const told = masked([outcome.request.body, ...own, ...("warnings" in checked ? checked.warnings.map((w) => `Look at this before merging: ${w}`) : [])].join("\n\n"));
   const body = (await removesAgentCredits(ctx, repo.id)) ? withoutAgentCredits(told) : told;
-  const answer = await requestForPushedBranch(ctx, repo, { title, body, branch: outcome.branch, baseSha: task.baseSha, assignment: await teamAssignment(ctx, repo, user) }, run).catch((err: Error) => ({ refused: stoppedFromOutside(err) ? STOPPED : err.message }));
+  const answer = await requestForPushedBranch(ctx, repo, { title, body, branch: outcome.branch, baseSha: task.baseSha, ...(task.baseBranch ? { target: task.baseBranch } : {}), assignment: await teamAssignment(ctx, repo, user) }, run).catch((err: Error) => ({ refused: stoppedFromOutside(err) ? STOPPED : err.message }));
   if ("refused" in answer) return void (await ctx.store.appendTaskLog(ctx.tenant, task.id, [`The request for ${outcome.branch} was not opened: ${answer.refused}`]));
   if ("createUrl" in answer) return void (await ctx.store.appendTaskLog(ctx.tenant, task.id, [`The request for ${outcome.branch} was not opened here: ${answer.reason}. Open it on the forge: ${answer.createUrl}`]));
   const kept = await keepTaskRequest(ctx, task, repo, user, answer.opened, title, "pushed by a runner on this machine");
@@ -274,7 +275,7 @@ export async function openTargetRequest(ctx: OrchestratorContext, taskId: string
  */
 export async function keepTaskRequest(ctx: OrchestratorContext, task: TaskRecord, repo: RepoRecord, user: Principal, opened: OpenedRequest, title: string, how: string): Promise<RequestRecord> {
   const provider = localRepoPath(repo.url) ? "local" : (await ctx.store.getForgeConfig(repo.tenant, repo.id))!.kind;
-  const record: RequestRecord = { ...opened, tenant: repo.tenant, repoId: repo.id, title, status: "open", provider, createdAt: new Date().toISOString(), createdBy: user.email };
+  const record: RequestRecord = { ...opened, tenant: repo.tenant, repoId: repo.id, title, status: "open", provider, createdAt: new Date().toISOString(), createdBy: user.email, ...(task.baseBranch ? { targetBranch: task.baseBranch } : {}) };
   await ctx.store.saveRequest(record);
   await ctx.store.updateTask(ctx.tenant, task.id, { requestNumber: record.number });
   await ctx.store.appendTaskLog(ctx.tenant, task.id, [`Opened request #${record.number} on ${record.branch}. It waits for a person to review and merge it.`]);

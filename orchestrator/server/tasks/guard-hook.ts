@@ -7,7 +7,7 @@
  * theirs, as in their own sessions. Every other MCP tool is left to the person's own permission rules and the task's
  * mode, which ask on its card or refuse.
  */
-export function guardHookSource({ work, editTools, readingTool, refused, editReason, gitReason, unreadReason, readReason }: { readReason: string; work: string; editTools: readonly string[]; readingTool: RegExp; refused: { families: readonly { tool: RegExp; reason: string }[]; prefix: RegExp }; editReason: string; gitReason: string; unreadReason: string }): string {
+export function guardHookSource({ work, editTools, readingTool, refused, editReason, gitReason, unreadReason, readReason, closedReason }: { closedReason?: string; readReason: string; work: string; editTools: readonly string[]; readingTool: RegExp; refused: { families: readonly { tool: RegExp; reason: string }[]; prefix: RegExp }; editReason: string; gitReason: string; unreadReason: string }): string {
   return [
     'import { realpathSync } from "node:fs";',
     'import { basename, dirname, resolve, sep } from "node:path";',
@@ -42,6 +42,8 @@ export function guardHookSource({ work, editTools, readingTool, refused, editRea
     // Any server's tool that reads, by every way of splitting its name, runs; a deny rule of the guard's still holds over it.
     `} else if (name.startsWith("mcp__") && name.slice(5).split("__").slice(1).map((_, at, all) => all.slice(at).join("__")).every((part) => ${readingTool.toString()}.test(part.replace(${refused.prefix.toString()}, "")))) {`,
     `  allow(${JSON.stringify(readReason)});`,
+    // A question's agent reads: any other server's tool that does not read is closed to it, whatever the person's own rules allow.
+    ...(closedReason ? ['} else if (name.startsWith("mcp__")) {', `  deny(${JSON.stringify(closedReason)});`] : []),
     "}",
     "",
     

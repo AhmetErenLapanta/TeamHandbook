@@ -1,11 +1,14 @@
 import { EventEmitter } from "node:events";
-import type { AgentRequest, Decision } from "./tasks/adapters/contract.js";
+import { plainFailure } from "./tasks/plain-failure.js";
+import { startedWithOf, readOff, SOURCE_ID, UNKNOWN_SOURCE } from "./tasks/handbook-use.js";
+import type { AgentEvent, AgentRequest, Decision } from "./tasks/adapters/contract.js";
 import { calledSkill } from "./skill-rules.js";
 import { agentTimeMs, PLAN_DECLINED } from "./task-requests.js";
 import type { TaskDecision, TaskRequestKind, TaskRequestStore } from "./task-requests.js";
 import type { TaskStore, TestOutcome } from "./tasks/types.js";
+import { LAST_SAID_MAX } from "./tasks/types.js";
 import type { FollowUpStore } from "./task-followups.js";
-import type { LeasedTaskEnd, RunnerEvent, RunnerStore } from "./runner-store.js";
+import type { LeasedTaskEnd, MachineFeature, RunnerEvent, RunnerStore } from "./runner-store.js";
 import type { MachineMcpServer } from "../runner/machine-mcp.js";
 import type { Lease, NumberedEvent, RemoteWork, RunnerCommand, TaskOutcome, TaskProgress } from "../runner/link.js";
 import { newId } from "./ids.js";
@@ -23,7 +26,7 @@ export const POLL_TICK_MS = 1_000;
  */
 export type RunnerServiceStore = Pick<RunnerStore, "claimLocalTask" | "renewLease" | "heldTasks" | "appendRunnerEvents" | "updateLeasedTask" | "finishLeasedTask" | "taskLease" | "requestStop"> &
   Pick<TaskRequestStore, "recordTaskRequest" | "taskRequests" | "endTaskRequests" | "withdrawTaskRequest"> &
-  Pick<TaskStore, "appendTaskLog" | "noteTaskContext" | "noteUsedSkill" | "updateTask"> &
+  Pick<TaskStore, "appendTaskLog" | "noteTaskContext" | "noteTaskContextUsed" | "noteUsedSkill" | "noteTaskUse" | "updateTask"> &
   Pick<FollowUpStore, "pendingFollowUps" | "markFollowUpsDelivered">;
 
 /**
@@ -56,7 +59,8 @@ export function checkedWork<W extends RemoteWork>(work: W): W {
   const tools = work.setup.mcpTools.map(({ server, tool }) => ({ server, tool }));
   const plugin = work.setup.plugin && { name: work.setup.plugin.name, version: work.setup.plugin.version };
   const servers = work.setup.mcpServers ? checkedServers(work.setup.mcpServers) : null;
-  return { ...work, setup: { plugin, mcpTools: tools, deniedTools: work.setup.deniedTools.filter((t): t is string => typeof t === "string"), ownSetup: work.setup.ownSetup === true, folderSettings: work.setup.folderSettings === true, ...(servers ? { mcpServers: servers } : {}) } };
+  const off = readOff(work.setup.off);
+  return { ...work, setup: { plugin, mcpTools: tools, deniedTools: work.setup.deniedTools.filter((t): t is string => typeof t === "string"), ownSetup: work.setup.ownSetup === true, folderSettings: work.setup.folderSettings === true, ...(servers ? { mcpServers: servers } : {}), ...(off && !("error" in off) ? { off } : {}) } };
 }
 
 const strings = (value: unknown): value is Record<string, string> => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((v) => typeof v === "string");
@@ -89,6 +93,8 @@ export class NotHeld extends Error {
   }
 }
 
+const sourceOf = (event: { source?: string; sourceLabel?: string }) => (event.source && event.sourceLabel && SOURCE_ID.test(event.source) ? { source: event.source, sourceLabel: event.sourceLabel } : UNKNOWN_SOURCE);
+
 const DECISIONS: Record<TaskDecision, Decision> = { allow_once: "allow-once", allow_for_task: "allow-for-task", deny: "deny" };
 
 /** The line a runner event leaves in the task's log. */
@@ -113,6 +119,12 @@ export function eventText(event: RunnerEvent): string {
       return `context at the start: ${event.tokens} tokens`;
     case "mcp_status":
       return `MCP servers waiting for a sign-in: ${event.needsSignIn.join(", ")}`;
+    case "context_parts":
+      return "the agent counted what its setup takes of the context";
+    case "loaded":
+      return "the agent's setup was read";
+    case "context_used":
+      return `context in use: ${event.tokens} tokens${event.window ? ` of ${event.window}` : ""}`;
     case "spend":
       return `estimated cost of this turn so far: $${event.usd.toFixed(4)}`;
     case "request":
@@ -133,12 +145,14 @@ export function eventText(event: RunnerEvent): string {
       return event.pending ? `background work still running: ${event.pending}` : "background work done";
     case "terminal":
       return `agent ended: ${event.status}${event.failure ? `, ${event.failure.message}` : ""}`;
+    case "turn":
+      return `turn ${event.n} ended: ${event.files} file(s) changed`;
   }
 }
 
 export interface RunnerService {
   /** `work`: the holder is a machine away from the orchestrator, so its lease carries the task's whole description. */
-  poll(person: string, holder: string, waitMs: number, canTake: boolean, signal: AbortSignal, options?: { work?: boolean }): Promise<{ lease: Lease | null; commands: RunnerCommand[] }>;
+  poll(person: string, holder: string, waitMs: number, canTake: boolean, signal: AbortSignal, options?: { work?: boolean; features?: readonly MachineFeature[] }): Promise<{ lease: Lease | null; commands: RunnerCommand[] }>;
   renew(taskId: string, leaseId: string): Promise<boolean>;
   events(taskId: string, leaseId: string, events: NumberedEvent[]): Promise<void>;
   request(taskId: string, leaseId: string, request: AgentRequest): Promise<void>;
@@ -164,6 +178,14 @@ export interface RunnerServiceOptions {
   now?: () => number;
   /** Told when a runner reported a task's end, for what follows it on the orchestrator: the request from the pushed branch. */
   onFinished?: (taskId: string, outcome: TaskOutcome) => Promise<void>;
+  /** After a task a runner held ends, however it ended: what its starter gave it for this run is dropped. */
+  onEnded?: (taskId: string) => Promise<void>;
+  /** What the agent said of one of its person's usage windows, kept for the warning before their next start. */
+  onLimit?: (taskId: string, event: Extract<AgentEvent, { type: "limit" }>) => Promise<void>;
+  /** What the task's agent counted of the context its person's setup takes; kept for the person, never a line of the log. */
+  onContextParts?: (taskId: string, event: Extract<AgentEvent, { type: "context_parts" }>) => Promise<void>;
+  /** A turn of a change a machine kept in its folder's shadow, kept here as the task's turn. */
+  onTurn?: (taskId: string, turn: Extract<RunnerEvent, { type: "turn" }>) => Promise<void>;
   /** What a machine away from the orchestrator is handed of a task it leased; a task this cannot describe ends failed with its reason. */
   describeWork?: (taskId: string) => Promise<RemoteWork>;
   /**
@@ -177,6 +199,9 @@ export interface RunnerServiceOptions {
    * kept, so the task's cost cap stops it before the turn's own end.
    */
   onSpend?: (taskId: string, usd: number) => Promise<unknown>;
+  nameOf?: (who: string) => Promise<string>;
+  /** Whether a task is a question, which changes nothing wherever it runs. */
+  isQuestion?: (taskId: string) => Promise<boolean>;
 }
 
 /**
@@ -185,7 +210,12 @@ export interface RunnerServiceOptions {
  * again on every poll until the request is no longer waiting; the runner hands each answer to its
  * agent once, so a repeat after a restart changes nothing.
  */
-export function createRunnerService({ tenant, store, now = Date.now, onFinished = async () => {}, describeWork, checks, onSpend }: RunnerServiceOptions): RunnerService {
+/** How long a run's session waits on its person's card before it closes. */
+export const IDLE_SESSION_MS = 30 * 60_000;
+
+export const QUESTION_CHANGED_AWAY = "The task was a question, and its agent changed files on your machine; none of it was kept here and no request was opened. What it changed is still on that machine.";
+
+export function createRunnerService({ tenant, store, now = Date.now, onFinished = async () => {}, onEnded = async () => {}, onLimit, onContextParts, onTurn, describeWork, checks, onSpend, nameOf, isQuestion }: RunnerServiceOptions): RunnerService {
   const woken = new EventEmitter();
   // What each holder was already handed. A command stays in the store until its task ends, so
   // without this every poll would come back at once with the same answer: a poll that never
@@ -196,16 +226,19 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
   const keyOf = (command: RunnerCommand) => (command.type === "stop" ? `${command.taskId} stop` : command.type === "follow_up" ? `${command.taskId} follow ${command.followUp.id}` : `${command.taskId} answer ${command.requestId}`);
 
   /** The commands for the tasks a holder leases that it has not been handed yet; handing them marks them. */
-  const commandsFor = async (holder: string): Promise<RunnerCommand[]> => {
+  const commandsFor = async (holder: string, idles: boolean): Promise<RunnerCommand[]> => {
     const commands: RunnerCommand[] = [];
     const tasks = await store.heldTasks(tenant, holder, iso(now()));
     const seen = handed.get(holder) ?? new Set<string>();
     const live = new Set(tasks.map((t) => t.taskId));
     for (const key of seen) if (!live.has(key.split(" ")[0]!)) seen.delete(key);
     handed.set(holder, seen);
-    for (const { taskId, stopRequested } of tasks) {
+    for (const { taskId, leaseId, stopRequested } of tasks) {
+      const requests = await store.taskRequests(tenant, taskId);
       if (stopRequested) commands.push({ type: "stop", taskId });
-      for (const request of await store.taskRequests(tenant, taskId)) {
+      // A session left waiting on a card closes rather than hold the machine; the task waits as interrupted for Continue.
+      else if (idles && requests.some((r) => r.status === "pending" && now() - Date.parse(r.createdAt) >= IDLE_SESSION_MS)) commands.push({ type: "stop", taskId, idle: true });
+      for (const request of requests) {
         if (request.status !== "answered" || request.answeredVia !== "web" || !request.answer) continue;
         if ("answers" in request.answer) commands.push({ type: "answer", taskId, requestId: request.sourceKey, decision: "allow-once", answers: request.answer.answers });
         else if ("decision" in request.answer) {
@@ -215,7 +248,8 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
           if (request.kind === "plan" && decision === "deny" && !stopRequested && (await store.requestStop(tenant, taskId, iso(now()), PLAN_DECLINED))) commands.push({ type: "stop", taskId });
         }
       }
-      for (const { id, source, text, quotes, createdBy } of await store.pendingFollowUps(tenant, taskId)) commands.push({ type: "follow_up", taskId, followUp: { id, source, text, quotes, createdBy } });
+      // Words the lease's first message already carried are not handed again.
+      for (const { id, source, text, quotes, createdBy, handedLease, attachments } of await store.pendingFollowUps(tenant, taskId)) if (handedLease !== leaseId) commands.push({ type: "follow_up", taskId, followUp: { id, source, text, quotes, createdBy, ...(attachments ? { attachments } : {}) } });
     }
     const fresh = commands.filter((c) => !seen.has(keyOf(c)));
     for (const c of fresh) seen.add(keyOf(c));
@@ -243,7 +277,7 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
     async poll(person, holder, waitMs, canTake, signal, options = {}) {
       const deadline = now() + waitMs;
       for (;;) {
-        const commands = await commandsFor(holder);
+        const commands = await commandsFor(holder, !options.work || options.features?.includes("idle-stop") === true);
         if (canTake && !signal.aborted) {
           const leaseId = newId("eff", now());
           const claimed = await store.claimLocalTask(tenant, person, holder, leaseId, iso(now() + LEASE_MS), iso(now()));
@@ -257,6 +291,8 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
             }
             const work = await (describeWork ? describeWork(task.id).then(checkedWork) : Promise.reject(new Error("this orchestrator runs tasks only on the machine it runs on")))
               .then((described) => {
+                if (described.readOnly && !options.features?.includes("read-only")) throw new Error("its runner is older than holding a question to reading, so it could change files or write through a tool; update the runner and ask again");
+                if (described.setup.off && !options.features?.includes("task-off")) throw new Error("its runner is older than leaving things out of a task, so it would run with them on; update the runner and start the task again");
                 if (("folder" in described && described.folder.machineId !== holder) || ("workspace" in described && described.workspace.machineId !== holder)) throw new Error("its folder is on another of its person's machines");
                 return described;
               })
@@ -273,14 +309,23 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
     renew(taskId, leaseId) {
       return store.renewLease(tenant, taskId, leaseId, iso(now() + LEASE_MS), iso(now()));
     },
-    async events(taskId, leaseId, events) {
-      const rows = events.filter(({ event }) => event.type !== "context" && event.type !== "mcp_status" && event.type !== "spend").map(({ n, event }) => ({ n, kind: event.type, text: eventText(event), data: event }));
+    async events(taskId, leaseId, given) {
+      const events = nameOf ? await Promise.all(given.map(async (numbered) => (numbered.event.type === "steer" ? { ...numbered, event: { ...numbered.event, by: await nameOf(numbered.event.by) } } : numbered))) : given;
+      const rows = events.filter(({ event }) => event.type !== "context" && event.type !== "context_used" && event.type !== "context_parts" && event.type !== "loaded" && event.type !== "mcp_status" && event.type !== "spend").map(({ n, event }) => ({ n, kind: event.type, text: eventText(event), data: event }));
       await held(() => store.appendRunnerEvents(tenant, taskId, leaseId, rows));
       for (const { event } of events) {
         if (event.type === "request_withdrawn") await store.withdrawTaskRequest(tenant, taskId, event.requestId, iso(now()));
         else if (event.type === "context") await store.noteTaskContext(tenant, taskId, event.tokens);
+        else if (event.type === "context_used") await store.noteTaskContextUsed(tenant, taskId, { tokens: event.tokens, window: event.window });
+        else if (event.type === "context_parts") await onContextParts?.(taskId, event);
+        else if (event.type === "loaded") await store.updateTask(tenant, taskId, { startedWith: startedWithOf(event) });
+        else if (event.type === "limit") await onLimit?.(taskId, event);
+        else if (event.type === "turn") await onTurn?.(taskId, event);
         else if (event.type === "mcp_status") await store.updateTask(tenant, taskId, { mcpNeedsSignIn: event.needsSignIn });
-        else if (event.type === "tool_call" && event.tool.toLowerCase() === "skill" && event.status === "started" && calledSkill(event.target)) await store.noteUsedSkill(tenant, taskId, calledSkill(event.target)!);
+        else if (event.type === "tool_call" && event.tool.toLowerCase() === "skill" && event.status === "started" && calledSkill(event.target)) {
+          await store.noteUsedSkill(tenant, taskId, calledSkill(event.target)!);
+          await store.noteTaskUse(tenant, taskId, "skills", calledSkill(event.target)!, sourceOf(event));
+        } else if (event.type === "tool_call" && event.mcp?.server && event.status === "started") await store.noteTaskUse(tenant, taskId, "mcpServers", event.mcp.server, sourceOf(event));
         else if (event.type === "spend") await onSpend?.(taskId, event.usd);
       }
       // The latest estimate of the turn is kept on the task until the turn's own cost replaces it.
@@ -319,12 +364,20 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
       const reached = ids.filter((id) => own.has(id));
       if (reached.length) await store.markFollowUpsDelivered(tenant, reached, iso(now()));
     },
-    async finish(taskId, leaseId, outcome) {
+    async finish(taskId, leaseId, sent) {
+      // A question changes nothing: a machine whose agent changed files all the same has its run end failed here, with
+      // none of it kept and no request opened, whatever the machine did with what it changed.
+      const outcome: TaskOutcome = sent.status === "needs-review" && (await isQuestion?.(taskId)) ? { ...sent, status: "failed", error: QUESTION_CHANGED_AWAY, branch: null, request: null } : sent;
       // A reset that is no time, already past or a month off is not believed: the task stays interrupted for its person.
       const limitResetAt = outcome.status === "interrupted" ? resetAtFromTime(outcome.limitResetAt, now()) : undefined;
       const since = (await store.taskLease(tenant, taskId))?.runStartedAt;
       const ranMs = since ? agentTimeMs(since, now(), await store.taskRequests(tenant, taskId)) : null;
-      const end: LeasedTaskEnd = { status: outcome.status, error: outcome.error, nativeSession: outcome.nativeSessionId, branch: outcome.branch, ...(ranMs !== null ? { ranMs } : {}), ...(limitResetAt ? { limitResetAt } : {}) };
+      // A run that changed nothing finished; what it said last is its answer, kept only when nothing in it looks like a secret.
+      const unchanged = outcome.status === "failed" && outcome.nothingChanged === true;
+      // A run that went on from a review and changed nothing more comes back for review with its answer too.
+      const answers = unchanged || outcome.status === "needs-review";
+      const lastSaid = answers && outcome.lastSaid && !detectSecret(outcome.lastSaid) ? outcome.lastSaid.slice(0, LAST_SAID_MAX) : null;
+      const end: LeasedTaskEnd = { status: unchanged ? "nothing-changed" : outcome.status, error: unchanged ? null : outcome.status === "failed" && outcome.error ? plainFailure(outcome.error) : outcome.error, nativeSession: outcome.nativeSessionId, branch: outcome.branch, ...(ranMs !== null ? { ranMs } : {}), ...(limitResetAt ? { limitResetAt } : {}), ...(lastSaid ? { lastSaid } : {}) };
       await held(() => store.finishLeasedTask(tenant, taskId, leaseId, end, iso(now())));
       await store.endTaskRequests(tenant, taskId, iso(now()));
       try {
@@ -332,6 +385,7 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
       } finally {
         // What follows the end is done, however it went: the task is in review, and its page stops following it.
         if (outcome.status === "needs-review") await store.updateTask(tenant, taskId, { stage: null });
+        await onEnded(taskId);
       }
     },
     wake() {
@@ -347,6 +401,7 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
       for (const { taskId, leaseId } of await store.heldTasks(tenant, holder, iso(now()))) {
         if (!(await store.finishLeasedTask(tenant, taskId, leaseId, { status: "interrupted", error: reason, nativeSession: null, branch: null }, iso(now())))) continue;
         await store.endTaskRequests(tenant, taskId, iso(now()));
+        await onEnded(taskId);
         ended.push(taskId);
       }
       return ended;

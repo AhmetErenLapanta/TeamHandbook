@@ -1,4 +1,10 @@
+import { keepMeasuredContext } from "./tasks/handbook-context.js";
 import { createHash } from "node:crypto";
+import { TURN_SAID_MAX, TURNS_MAX } from "./tasks/turns.js";
+import { SOURCE_ID } from "./tasks/handbook-use.js";
+import { dropTaskSecrets } from "./task-secrets.js";
+import { noteLimit } from "./tasks/agent-limits.js";
+import { nameReader } from "./task-suggestions.js";
 import { readFile } from "node:fs/promises";
 import { Hono } from "hono";
 import { attachmentPath, contentDisposition, MAX_ATTACHMENT_BYTES } from "./attachments.js";
@@ -8,7 +14,7 @@ import type { OrchestratorEnv, Principal } from "./auth.js";
 import { recordEvent } from "./events.js";
 import { matchRunnerRequest } from "./forge/runner-request.js";
 import { keepMachineChanges } from "./machine-changes.js";
-import { checksAnswer, insideFolder, lessonAnswer, lessonOpAnswer, machineAnswer, machineAsksOf, pushAnswer, undoAnswer } from "./machine-folders.js";
+import { checksAnswer, insideFolder, lessonAnswer, lessonOpAnswer, machineAnswer, machineAsksOf, pushAnswer, setupAnswer, undoAnswer } from "./machine-folders.js";
 import type { ChangedFile } from "./forge/request-diff.js";
 import { SHADOW_MAX_FILES } from "./shadow-git.js";
 import { runnerHolds, runnerOf } from "./machines.js";
@@ -26,6 +32,7 @@ import type { AgentFailure, AgentQuestion, AgentRequest, Decision, FailureClass,
 import { SECRET_NAME } from "./forge/project-git.js";
 import { taskMask } from "./tasks/task-text.js";
 import type { TaskCost, TestOutcome } from "./tasks/types.js";
+import { LAST_SAID_MAX } from "./tasks/types.js";
 import type { NumberedEvent, TaskOutcome, TaskProgress } from "../runner/link.js";
 import { AGENTS_MAX, COMMAND_MAX, EVENTS_PER_BATCH, FOLDER_ENTRIES_MAX, OUTPUT_LINES_MAX, OUTPUT_LINE_MAX, PATCH_LINES_MAX, PLAN_TEXT_MAX, POLL_WAIT_MAX_MS, PROTOCOL_HEADER, RUNNER_PROTOCOL, TESTS_OUTPUT, TODOS_MAX, TODO_TEXT_MAX } from "../shared/runner-wire.js";
 import type { ForgeRequestAnswer, ProtocolRefusal } from "../shared/runner-wire.js";
@@ -34,6 +41,8 @@ const OUTCOMES: readonly TaskOutcome["status"][] = ["needs-review", "failed", "i
 
 type Caller = { machine: MachineRecord; user: Principal; service: RunnerService; body: Record<string, unknown> };
 
+const NAMES_MAX = 300;
+const LOADED_STATES = new Set(["connected", "starting", "needs-sign-in", "failed", "off"]);
 const isText = (value: unknown, max = 200): value is string => typeof value === "string" && value.length > 0 && value.length <= max;
 const textOrNull = (value: unknown) => value === null || typeof value === "string";
 
@@ -117,6 +126,7 @@ export function eventOf(raw: unknown, mask: Mask): RunnerEvent | null {
       const refusal = e.refusal as { kind?: unknown; reason?: unknown } | undefined;
       const named = mcp && isText(mcp.server, 200) && isText(mcp.tool, 200) ? { server: mask(mcp.server), tool: mask(mcp.tool) } : null;
       const refused = refusal && REFUSAL_KINDS.has(refusal.kind as string) && isText(refusal.reason, 500) ? { kind: refusal.kind as Refusal["kind"], reason: mask(refusal.reason) } : null;
+      const sourced = isText(e.source, 4000) && SOURCE_ID.test(e.source) && !e.source.startsWith("folder:/") && isText(e.sourceLabel, 120) && !/[\u0000-\u001f\u007f]/.test(e.sourceLabel) ? { source: mask(e.source), sourceLabel: mask(e.sourceLabel) } : null;
       return {
         type: "tool_call",
         ...(e.id === undefined ? {} : { id: e.id as string }),
@@ -126,6 +136,7 @@ export function eventOf(raw: unknown, mask: Mask): RunnerEvent | null {
         ...(e.command === undefined ? {} : { command: mask(e.command as string).slice(0, COMMAND_MAX) }),
         ...(named ? { mcp: named } : {}),
         ...(refused ? { refusal: refused } : {}),
+        ...(sourced ? sourced : {}),
       };
     case "tool_output": {
       // Whole lines only, each masked: a secret split across two parts was joined before it got here.
@@ -172,11 +183,34 @@ export function eventOf(raw: unknown, mask: Mask): RunnerEvent | null {
       return failure ? { type: "error", failure } : null;
     }
     case "limit":
-      return isText(e.window, 100) && (e.status === "allowed" || e.status === "warning" || e.status === "refused") && (e.resetAt === undefined || isText(e.resetAt, 40))
-        ? { type: "limit", window: mask(e.window), status: e.status, ...(e.resetAt === undefined ? {} : { resetAt: e.resetAt as string }) }
+      return isText(e.window, 100) && (e.status === "allowed" || e.status === "warning" || e.status === "refused") && (e.resetAt === undefined || isText(e.resetAt, 40)) && (e.used === undefined || (typeof e.used === "number" && Number.isFinite(e.used) && e.used >= 0 && e.used <= 1000))
+        ? { type: "limit", window: mask(e.window), status: e.status, ...(e.resetAt === undefined ? {} : { resetAt: e.resetAt as string }), ...(e.used === undefined ? {} : { used: e.used as number }) }
         : null;
+    case "context_used":
+      // How much of its context the agent's last request holds, and the model's window when it is known.
+      return Number.isInteger(e.tokens) && (e.tokens as number) >= 0 && (e.window === null || (Number.isInteger(e.window) && (e.window as number) >= 1)) ? { type: "context_used", tokens: e.tokens as number, window: e.window as number | null } : null;
+    case "loaded": {
+      const listed = (value: unknown) => (value === null ? null : Array.isArray(value) && value.length <= NAMES_MAX && value.every((name) => isText(name)) ? (value as string[]).map(mask) : undefined);
+      const plugins = listed(e.plugins);
+      const skills = listed(e.skills);
+      const servers = e.mcpServers === null ? null : Array.isArray(e.mcpServers) && e.mcpServers.length <= NAMES_MAX && e.mcpServers.every((s: { name?: unknown; state?: unknown }) => isText(s?.name) && LOADED_STATES.has(s.state as string)) ? (e.mcpServers as { name: string; state: string }[]).map((s) => ({ name: mask(s.name), state: s.state as "connected" })) : undefined;
+      return plugins !== undefined && skills !== undefined && servers !== undefined ? { type: "loaded", plugins, skills, mcpServers: servers } : null;
+    }
+    case "context_parts": {
+      const parts = (value: unknown) => (Array.isArray(value) && value.length <= NAMES_MAX && value.every((p: { name?: unknown; tokens?: unknown }) => isText(p?.name) && Number.isInteger(p.tokens) && (p.tokens as number) >= 0) ? (value as { name: string; tokens: number }[]).map((p) => ({ name: mask(p.name), tokens: p.tokens })) : null);
+      const mcpServers = parts(e.mcpServers);
+      const skills = parts(e.skills);
+      // A machine whose runner predates the window sends none.
+      const window = Number.isInteger(e.window) && (e.window as number) >= 1 ? { window: e.window as number } : {};
+      return mcpServers && skills && (e.window === undefined || "window" in window) ? { type: "context_parts", mcpServers, skills, ...window } : null;
+    }
     case "background":
       return Number.isInteger(e.pending) && (e.pending as number) >= 0 ? { type: "background", pending: e.pending as number } : null;
+    case "turn":
+      // A turn of a change in a folder on the machine: its snapshots there, and the person's words that named it, masked.
+      return Number.isInteger(e.n) && (e.n as number) >= 1 && (e.n as number) <= TURNS_MAX && typeof e.said === "string" && e.said.length <= TURN_SAID_MAX * 4 && SNAPSHOT.test(String(e.start)) && SNAPSHOT.test(String(e.end)) && Number.isInteger(e.files) && (e.files as number) >= 0
+        ? { type: "turn", n: e.n as number, said: mask(e.said).slice(0, TURN_SAID_MAX), start: e.start as string, end: e.end as string, files: e.files as number }
+        : null;
     case "terminal": {
       if ((e.status !== "completed" && e.status !== "interrupted" && e.status !== "failed") || !isString(e.summary) || (e.nativeSessionId !== undefined && !exact(e.nativeSessionId, mask))) return null;
       const failure = e.failure === undefined ? undefined : failureOf(e.failure, mask);
@@ -247,7 +281,7 @@ function outcomeOf(raw: unknown, mask: Mask): TaskOutcome | null {
   const changes = o.changes === undefined || o.changes === null ? null : changesOf(o.changes, mask);
   if (changes === undefined) return null;
   const request = o.request ? { title: mask(o.request.title), body: mask(o.request.body) } : null;
-  return { status: o.status!, error: o.error === null ? null : mask(o.error!), nativeSessionId: o.nativeSessionId!, branch: o.branch!, position: o.position!, request, ...(changes ? { changes } : {}), ...(typeof o.limitResetAt === "string" ? { limitResetAt: o.limitResetAt } : {}) };
+  return { status: o.status!, error: o.error === null ? null : mask(o.error!), nativeSessionId: o.nativeSessionId!, branch: o.branch!, position: o.position!, request, ...(changes ? { changes } : {}), ...(typeof o.limitResetAt === "string" ? { limitResetAt: o.limitResetAt } : {}), ...(o.nothingChanged === true ? { nothingChanged: true as const } : {}), ...(typeof o.lastSaid === "string" ? { lastSaid: mask(o.lastSaid.slice(0, LAST_SAID_MAX)) } : {}) };
 }
 
 const SNAPSHOT = SHA;
@@ -291,6 +325,8 @@ export function organizationRunners(ctx: OrchestratorContext): RunnerService {
     store: ctx.store,
     describeWork: (taskId) => ctx.tasks!.describeWork(taskId),
     onSpend: (taskId, usd) => ctx.tasks!.holdSpend(taskId, usd),
+    nameOf: nameReader(ctx),
+    isQuestion: async (taskId) => (await ctx.store.getTask(ctx.tenant, taskId))?.readOnly === true,
     checks: {
       record: async (taskId, raw) => {
         const task = await ctx.store.getTask(ctx.tenant, taskId);
@@ -301,6 +337,20 @@ export function organizationRunners(ctx: OrchestratorContext): RunnerService {
     onFinished: async (taskId, outcome) => {
       await keepMachineChanges(ctx, taskId, outcome);
       await openPushedRequest(ctx, taskId, outcome);
+    },
+    onEnded: (taskId) => dropTaskSecrets(ctx, taskId),
+    onTurn: async (taskId, turn) => {
+      await ctx.store.openTaskTurn({ tenant: ctx.tenant, taskId, n: turn.n, at: new Date().toISOString(), said: turn.said, place: "machine", start: turn.start });
+      await ctx.store.endTaskTurn(ctx.tenant, taskId, turn.n, turn.end, turn.files);
+    },
+    onContextParts: async (taskId, event) => {
+      const task = await ctx.store.getTask(ctx.tenant, taskId);
+      const starter = task ? await ctx.store.getUserByEmail(ctx.tenant, task.createdBy) : null;
+      if (starter) await keepMeasuredContext(ctx.store, ctx.tenant, starter.id, event, new Date().toISOString());
+    },
+    onLimit: async (taskId, event) => {
+      const task = await ctx.store.getTask(ctx.tenant, taskId);
+      if (task) await noteLimit(ctx.store, ctx.tenant, task.agent, task.createdBy, event, new Date().toISOString());
     },
   });
 }
@@ -364,7 +414,7 @@ export function runnerRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
       const ready = asks.take();
       // Tasks record who started them by email, and a lease names the machine that holds it. A
       // machine away from the orchestrator is handed the work with the lease: it reads nothing here.
-      const answer = await call.service.poll(call.user.email, call.machine.id, ready.folders.length || ready.undos.length || ready.lessons.length || ready.checks.length || ready.lessonOps.length || ready.pushes.length ? 0 : waitMs, call.body.canTake === true, AbortSignal.any([signal, asks.signal]), { work: true });
+      const answer = await call.service.poll(call.user.email, call.machine.id, ready.folders.length || ready.undos.length || ready.lessons.length || ready.checks.length || ready.lessonOps.length || ready.pushes.length || ready.setups.length ? 0 : waitMs, call.body.canTake === true, AbortSignal.any([signal, asks.signal]), { work: true, features: call.machine.features ?? [] });
       const later = asks.take();
       const folders = [...ready.folders, ...later.folders];
       const undos = [...ready.undos, ...later.undos];
@@ -372,7 +422,8 @@ export function runnerRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
       const checks = [...ready.checks, ...later.checks];
       const lessonOps = [...ready.lessonOps, ...later.lessonOps];
       const pushes = [...ready.pushes, ...later.pushes];
-      return c.json({ ...answer, ...(folders.length ? { folders } : {}), ...(undos.length ? { undos } : {}), ...(lessons.length ? { lessons } : {}), ...(checks.length ? { checks } : {}), ...(lessonOps.length ? { lessonOps } : {}), ...(pushes.length ? { pushes } : {}) });
+      const setups = [...ready.setups, ...later.setups];
+      return c.json({ ...answer, ...(folders.length ? { folders } : {}), ...(undos.length ? { undos } : {}), ...(lessons.length ? { lessons } : {}), ...(checks.length ? { checks } : {}), ...(lessonOps.length ? { lessonOps } : {}), ...(pushes.length ? { pushes } : {}), ...(setups.length ? { setups } : {}) });
     } finally {
       asks.end();
     }
@@ -420,6 +471,15 @@ export function runnerRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
     const answer = lessonOpAnswer(call.body.answer);
     if (!machineAsksOf(ctx).answer(call.machine.id, "lessonOps", c.req.param("nonce")!, answer ?? "invalid")) return notFound(c);
     if (!answer) return c.json({ error: "a lesson's read or decision answers with the lesson, the decision, or why not" }, 400);
+    return c.body(null, 204);
+  });
+
+  route(app, "POST /api/runner/setups/:nonce", async (c) => {
+    const call = await caller(c);
+    if (call instanceof Response) return call;
+    const answer = setupAnswer(call.body.answer);
+    if (!machineAsksOf(ctx).answer(call.machine.id, "setups", c.req.param("nonce")!, answer ?? "invalid")) return notFound(c);
+    if (!answer) return c.json({ error: "a setup answer is what was asked for, or why not" }, 400);
     return c.body(null, 204);
   });
 

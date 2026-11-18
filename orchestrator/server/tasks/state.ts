@@ -16,7 +16,8 @@ export type TaskState =
   | "merged"
   | "undone"
   | "failed"
-  | "stopped";
+  | "stopped"
+  | "finished-nothing-changed";
 
 /** The request a task's change opened on GitLab or GitHub, linked by the forge's own number. */
 export interface TaskForge {
@@ -50,9 +51,10 @@ export function taskForge(task: Pick<TaskRecord, "repoId" | "requestNumber" | "t
  */
 export function taskState(task: TaskRecord, requestOf: RequestOf, waitingFor: string | null, asking = false): TaskState {
   if (task.question && !task.question.answer && task.status !== "queued" && task.status !== "running") return "needs-you";
-  if (task.status === "running") return asking ? "needs-you" : "working";
+  if (task.status === "running") return asking || task.stage === "stopped" ? "needs-you" : "working";
   if (task.status === "queued") return waitingFor === "limit" ? "usage-limit" : waitingFor ? "waiting-machine" : "waiting";
   if (task.status === "interrupted" && waitingFor === "limit") return "usage-limit";
+  if (task.status === "nothing-changed") return "finished-nothing-changed";
   if (task.status === "cancelled" || task.status === "interrupted") return "stopped";
   if (task.status === "failed") return "failed";
   if (task.changes?.undone) return "undone";

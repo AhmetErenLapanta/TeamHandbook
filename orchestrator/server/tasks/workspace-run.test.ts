@@ -103,6 +103,41 @@ describe("a task in a folder that holds git working copies", { timeout: 120_000 
     expect(said).toContain(`alpha: went on in request #${opened.requestNumber} on ${request.branch}.`);
   });
 
+  it("given a folder task whose request on one repository its person kept, when they ask for more and this orchestrator's own runner takes it, then that repository starts from its HEAD holding the kept change, on a branch of its own, a second request opens there, and the kept one stays as it was", async () => {
+    // given
+    const { ctx, folder, start } = await folderOfRepositories('const fs = await import("node:fs"); const now = fs.readFileSync("alpha/README.md", "utf8"); writeFileSync("alpha/README.md", now.includes("A second line.") ? now + "A third line.\\n" : "alpha\\nA second line.\\n");');
+    const alpha = join(folder, "alpha");
+    const started = await start();
+    await ctx.tasks!.idle();
+    const first = (await ctx.store.getTask(ctx.tenant, started.task.id))!;
+    const opened = first.targets![0]!;
+    const request = (await ctx.store.getRequest(ctx.tenant, opened.repoId, opened.requestNumber!))!;
+    git(["merge", "--quiet", "--ff-only", request.branch], alpha);
+    const kept = git(["rev-parse", "HEAD"], alpha).trim();
+    await ctx.store.setRequestStatus(ctx.tenant, opened.repoId, request.number, "merged", new Date().toISOString());
+    await ctx.store.addFollowUp({ tenant: ctx.tenant, id: "fup_ws_kept", taskId: first.id, source: "person", key: "person:ws-kept-01", text: "Add a third line.", quotes: null, createdAt: new Date().toISOString(), createdBy: first.createdBy });
+    await ctx.store.updateTask(ctx.tenant, first.id, { status: "queued" });
+    const said: string[] = [];
+    const hooks: ExecutorHooks = { signal: new AbortController().signal, onEvent: () => {}, log: (line) => void said.push(line), record: () => {}, onProcess: () => {}, decide: async () => ({ decision: "allow-once" }), leaseHeld: async () => true };
+
+    // when
+    await ctx.tasks!.leased().run({ id: first.id, title: first.title, agent: "fake", nativeSession: null }, hooks);
+
+    // then
+    const round = `${request.branch}-2`;
+    const head = git(["rev-parse", round], alpha).trim();
+    expect(git(["rev-parse", `${head}^`], alpha).trim()).toBe(kept);
+    expect(git(["show", `${round}:README.md`], alpha)).toBe("alpha\nA second line.\nA third line.\n");
+    expect(git(["rev-parse", request.branch], alpha).trim()).toBe(kept);
+    expect(said).toContain(`Went on from the changes kept in alpha #${request.number}; each repository starts from its HEAD.`);
+    const target = (await ctx.store.getTask(ctx.tenant, first.id))!.targets![0]!;
+    expect(target).toMatchObject({ path: "alpha", status: "request" });
+    expect(target.requestNumber).not.toBe(request.number);
+    expect(await ctx.store.getRequest(ctx.tenant, opened.repoId, target.requestNumber!)).toMatchObject({ status: "open", branch: round });
+    expect(await ctx.store.getRequest(ctx.tenant, opened.repoId, request.number)).toMatchObject({ status: "merged", branch: request.branch });
+    expect(await ctx.store.pendingFollowUps(ctx.tenant, first.id)).toEqual([]);
+  });
+
   it("given a folder of two repositories each with its check approved, when the repair of the second breaks the first after the first passed, then the first is checked again and its evidence says it broke, and the task's tests failed", async () => {
     // given
     const swap = 'const fs = await import("node:fs"); if (fs.existsSync("beta/broken.flag")) { fs.unlinkSync("beta/broken.flag"); writeFileSync("alpha/broken.flag", "the repair broke alpha"); } else { writeFileSync("beta/README.md", "beta\\nHalf.\\n"); writeFileSync("beta/broken.flag", "the line is half"); }';
@@ -225,7 +260,7 @@ describe("a task in a folder that holds git working copies", { timeout: 120_000 
     expect((await ctx.store.getTask(ctx.tenant, started.task.id))!).toMatchObject({ status: "needs-review", error: "Stopped by the person who started the task.", targets: [{ status: "request", requestNumber: 1 }] });
   });
 
-  it("given a folder of two repositories, when the agent changes neither, then the task fails saying so and no request or record is made", async () => {
+  it("given a folder of two repositories, when the agent changes neither, then the task finished with nothing changed and no request or record is made", async () => {
     // given
     const { ctx, folder, project, start } = await folderOfRepositories("");
     const before = copyState(join(folder, "alpha"));
@@ -235,7 +270,7 @@ describe("a task in a folder that holds git working copies", { timeout: 120_000 
     await ctx.tasks!.idle();
 
     // then
-    expect((await ctx.store.getTask(ctx.tenant, started.task.id))!).toMatchObject({ status: "failed", error: "The agent changed no repository, so no request was opened." });
+    expect((await ctx.store.getTask(ctx.tenant, started.task.id))!).toMatchObject({ status: "nothing-changed", error: null, lastSaid: "Done." });
     expect(await ctx.store.listRequests(ctx.tenant)).toEqual([]);
     expect((await ctx.store.listRepos(ctx.tenant)).map((r) => r.id)).toEqual([project.id]);
     expect(copyState(join(folder, "alpha"))).toEqual(before);

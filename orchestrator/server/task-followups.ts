@@ -11,6 +11,13 @@ export type FollowUpSource = "person" | "watch" | "child" | "reviewer";
  */
 export type FollowUpStatus = "proposed" | "pending" | "delivered" | "closed" | "dismissed";
 
+/** A file sent with a follow-up: one of the task's attachments, named as the agent reads it. */
+export interface FollowUpAttachment {
+  id: string;
+  name: string;
+  kind: "image" | "pdf" | "text";
+}
+
 /** A passage the follow-up points at: a file, its lines, and the text quoted from them. */
 export interface FollowUpQuote {
   path: string;
@@ -30,6 +37,10 @@ export interface FollowUpRecord {
   createdAt: string;
   deliveredAt: string | null;
   createdBy: string;
+  /** The task's files sent with it. */
+  attachments?: FollowUpAttachment[];
+  /** The lease whose first message carried it: no command hands it to that lease again, and a lease taken anew carries it anew. */
+  handedLease?: string;
 }
 
 export type NewFollowUp = Omit<FollowUpRecord, "status" | "deliveredAt">;
@@ -45,6 +56,8 @@ export interface FollowUpStore {
   editFollowUp(tenant: string, taskId: string, id: string, text: string, quotes?: FollowUpQuote[] | null): Promise<boolean>;
   /** Takes back a person's follow-up that still waits for the agent; false once it reached it or was removed. */
   dropFollowUp(tenant: string, taskId: string, id: string): Promise<boolean>;
+  /** Keeps these pending follow-ups to the lease whose first message carries them; says how many were. */
+  handFollowUps(tenant: string, ids: readonly string[], leaseId: string): Promise<number>;
   /** Marks these pending follow-ups delivered; says how many were. */
   markFollowUpsDelivered(tenant: string, ids: readonly string[], at: string): Promise<number>;
   /** The task ended: its follow-ups still pending are closed and no longer delivered; says how many. */

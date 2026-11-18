@@ -12,6 +12,13 @@ const key = (tenant: string, taskId: string) => `${tenant}\0${taskId}`;
 
 export function taskWritten(tenant: string, taskId: string): void {
   bus.emit(key(tenant, taskId));
+  bus.emit(tenant, taskId);
+}
+
+/** Calls `listener` with the id of every task of this tenant written in this process; returns how to stop. */
+export function onAnyTaskWrite(tenant: string, listener: (taskId: string) => void): () => void {
+  bus.on(tenant, listener);
+  return () => void bus.off(tenant, listener);
 }
 
 /** Resolves on the task's next write here, or after `ms`, whichever comes first. */

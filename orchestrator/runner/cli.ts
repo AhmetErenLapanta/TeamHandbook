@@ -95,6 +95,7 @@ async function runOrgs(orgs: readonly string[], io: RunnerCliIo, tasks = DEFAULT
   }
   const hostEnv = io.hostEnv ?? process.env;
   const adapters = io.adapters ?? machineAdapters(hostEnv);
+  const claudeProgram = adapters.find((a) => a.id === "claude-code")?.probe?.program;
   // One record for every organization this start runs: a folder is the person's whatever team's task works in it.
   const working = new Set<string>();
   // The machine's slots are shared: a task one organization runs is one fewer another takes.
@@ -107,7 +108,7 @@ async function runOrgs(orgs: readonly string[], io: RunnerCliIo, tasks = DEFAULT
     runner = startMachineRunner({ dataDir: io.dataDir, home: hostEnv.HOME || homedir(), env: hostEnv, working, slots: () => free(() => runner), onRefused: (error) => {
       refused.push(org);
       io.err(`handbook-orchestrator: ${org}: ${error.message}\n`);
-    }, org, executor: machineExecutor({ dataDir: io.dataDir, org, machineId: readProfile(io.dataDir, org)!.machineId, working, adapters, hostEnv, ...git }), pushBranch: machinePush({ dataDir: io.dataDir, org, hostEnv, ...git }), mask: (t) => new Redactor().line(t), agents: () => agentStatus(adapters), ...(io.fetch ? { fetch: io.fetch } : {}) });
+    }, org, executor: machineExecutor({ dataDir: io.dataDir, org, machineId: readProfile(io.dataDir, org)!.machineId, working, adapters, hostEnv, ...git }), pushBranch: machinePush({ dataDir: io.dataDir, org, hostEnv, ...git }), mask: (t) => new Redactor().line(t), agents: () => agentStatus(adapters), ...(claudeProgram ? { claude: claudeProgram } : {}), ...(io.fetch ? { fetch: io.fetch } : {}) });
     runners.push(runner);
   }
   io.out(`Running the tasks you start in ${orgs.join(", ")} on this machine; Ctrl-C stops.\n`);

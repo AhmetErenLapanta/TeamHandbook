@@ -13,15 +13,31 @@ import type { TeamSetup } from "../server/inventory.js";
  * Only an install for the person, or one their organization manages, counts: a project's or a
  * folder's install belongs to another checkout.
  */
-export function installedTeamPlugin(env: Record<string, string | undefined>, plugin: { name: string; version: string }): { dir: string } | { missing: string } {
-  const home = env.HOME ?? "";
-  const root = env.CLAUDE_CODE_PLUGIN_CACHE_DIR || join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "plugins");
-  let record: { version?: unknown; plugins?: Record<string, unknown> };
+type PluginRecord = { version?: unknown; plugins?: Record<string, unknown> };
+
+function pluginRecord(env: Record<string, string | undefined>): PluginRecord | null {
+  const root = env.CLAUDE_CODE_PLUGIN_CACHE_DIR || join(env.CLAUDE_CONFIG_DIR || join(env.HOME ?? "", ".claude"), "plugins");
   try {
-    record = JSON.parse(readFileSync(join(root, "installed_plugins.json"), "utf8")) as typeof record;
+    return JSON.parse(readFileSync(join(root, "installed_plugins.json"), "utf8")) as PluginRecord;
   } catch {
-    return { missing: `the team's plugin ${plugin.name} is not installed in your Claude Code` };
+    return null;
   }
+}
+
+/** The plugins installed for the person, or managed for them, as Claude Code records them; none when it keeps no record this runner reads. */
+export function installedPlugins(env: Record<string, string | undefined>): { name: string; marketplace: string; version: string }[] {
+  const record = pluginRecord(env);
+  if (record?.version !== 2 || !record.plugins || typeof record.plugins !== "object") return [];
+  return Object.entries(record.plugins).flatMap(([id, entries]) => {
+    const at = id.lastIndexOf("@");
+    const install = (Array.isArray(entries) ? (entries as Record<string, unknown>[]) : []).find((entry) => (entry.scope === "user" || entry.scope === "managed") && typeof entry.version === "string");
+    return at > 0 && install ? [{ name: id.slice(0, at), marketplace: id.slice(at + 1), version: install.version as string }] : [];
+  });
+}
+
+export function installedTeamPlugin(env: Record<string, string | undefined>, plugin: { name: string; version: string }): { dir: string } | { missing: string } {
+  const record = pluginRecord(env);
+  if (!record) return { missing: `the team's plugin ${plugin.name} is not installed in your Claude Code` };
   if (record.version !== 2 || !record.plugins || typeof record.plugins !== "object") return { missing: "your Claude Code keeps its installed plugins in a form this runner does not read" };
   const installs = Object.entries(record.plugins)
     .filter(([id]) => id.slice(0, id.lastIndexOf("@")) === plugin.name)
