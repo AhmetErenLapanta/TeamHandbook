@@ -1,0 +1,88 @@
+# Why the Intel Mac (darwin-x64) executable fails the release build's `--version` check. Run by hand
+# from the Actions tab; nothing publishes, no tag starts it, and the release workflow does not use it.
+# It builds the executable the way the release does, then tries it under the conditions that tell
+# the possible causes apart (its environment, its signature) and keeps the file and the system's
+# own words about it.
+name: Orchestrator Intel Mac diagnosis
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      # The release builds with this Node; the executable is its binary with the application injected.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '26.8.1'
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: orchestrator
+
+      - name: The release build, as the release runs it
+        id: build
+        continue-on-error: true
+        run: npm run build:release
+        working-directory: orchestrator
+
+      - name: What this machine and Node are
+        working-directory: orchestrator
+        run: |
+          uname -a
+          sw_vers
+          node -p 'process.version + " " + process.arch + " " + process.execPath'
+          file "$(node -p process.execPath)"
+          codesign -dvv "$(node -p process.execPath)" 2>&1 | head -12 || true
+
+      - name: The executable, tried under each condition
+        working-directory: orchestrator
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          binary="package-out/release/handbook-orchestrator-$version-darwin-x64/handbook-orchestrator"
+          echo "build step: ${{ steps.build.outcome }}"
+          [ -f "$binary" ] || { echo "no executable at $binary"; exit 0; }
+          ls -la "$binary"
+          file "$binary"
+          lipo -archs "$binary" || true
+          try() {
+            echo "--- $1"
+            shift
+            "$@" > /tmp/out.txt 2> /tmp/err.txt
+            status=$?
+            echo "exit $status"; head -c 600 /tmp/out.txt; echo "[stderr] $(head -c 600 /tmp/err.txt)"
+          }
+          try "as the build ran it: empty PATH" env -i PATH= "$binary" --version
+          try "with the runner's own environment" "$binary" --version
+          try "with a plain PATH" env -i PATH=/usr/bin:/bin "$binary" --version
+          echo "--- signature as built"
+          codesign -dvvv "$binary" 2>&1 || true
+          codesign --verify --strict --verbose=4 "$binary" 2>&1 || true
+          echo "--- a copy with its signature removed, then signed again ad hoc"
+          cp "$binary" /tmp/copy-unsigned && codesign --remove-signature /tmp/copy-unsigned 2>&1 || true
+          try "unsigned copy" /tmp/copy-unsigned --version
+          cp "$binary" /tmp/copy-resigned && codesign --sign - --force /tmp/copy-resigned 2>&1 || true
+          try "re-signed copy" env -i PATH= /tmp/copy-resigned --version
+          echo "--- libraries it links"
+          otool -L "$binary" 2>&1 | head -12 || true
+          echo "--- what the system logged about it"
+          log show --last 10m --style compact --predicate 'process == "amfid" OR process == "kernel" OR process == "syspolicyd" OR eventMessage CONTAINS "handbook-orchestrator"' 2>&1 | grep -i -E 'handbook-orchestrator|amfid|code signature|syspolicyd|killed' | tail -40 || true
+          echo "--- crash reports"
+          ls -la "$HOME/Library/Logs/DiagnosticReports" 2>&1 | head -20 || true
+
+      # The executable and the logs of this run, for taking apart elsewhere.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: intel-executable
+          path: orchestrator/package-out/release/handbook-orchestrator-*-darwin-x64/handbook-orchestrator
+          if-no-files-found: ignore
+          retention-days: 3
