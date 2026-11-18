@@ -7,6 +7,8 @@ import { Select } from "../Select";
 import { AgentChoicesPicker, chosen as picked } from "../AgentChoices";
 import { NextStep } from "../NextStep";
 import { SkillChips } from "../SkillChips";
+import { homeRelative, projectsRead } from "../projects-read";
+import type { WorkFolder } from "../projects-read";
 import { Loading, LoadFailed } from "../Status";
 import type { WorkItem } from "./api";
 
@@ -32,6 +34,11 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
   const [suggested, setSuggested] = useState<Record<string, SkillSuggestions | { error: string }> | null>(null);
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Record<string, string[]>>({});
+  // On one person's own orchestrator each issue's folder is shown before the start, and a change of it or a pick is sent as its path.
+  const [folders, setFolders] = useState<WorkFolder[]>([]);
+  const [home, setHome] = useState<string | null>(null);
+  const [wheres, setWheres] = useState<Record<string, { path: string | null; reason: string }>>({});
+  const [places, setPlaces] = useState<Record<string, string>>({});
   const read = () => {
     setError(null);
     tasksApi.options().then((o) => {
@@ -43,6 +50,23 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
     }, (e: Error) => setError(e.message));
   };
   useEffect(read, []);
+  useEffect(() => {
+    if (!local || !options || !agent) return;
+    let current = true;
+    void projectsRead.workFolders().then((r) => current && setFolders(r.folders), () => undefined);
+    // The orchestrator's home is the folder list's first answer: paths read from it as ~, as the rest of the page says them.
+    void projectsRead.folders().then((r) => current && setHome(r.under), () => undefined);
+    for (const item of items) {
+      tasksApi.where({ title: item.summary, description: "", issueUrl: item.url, agent }).then((r) => {
+        if (!current) return;
+        setWheres((now) => ({ ...now, [item.key]: { path: r.folder?.path ?? null, reason: r.folder?.reason ?? "" } }));
+      }, () => current && setWheres((now) => ({ ...now, [item.key]: { path: null, reason: "" } })));
+    }
+    return () => {
+      current = false;
+    };
+  }, [local, options, agent, items.map((i) => i.key).join(",")]);
+  const pathOf = (key: string) => places[key] ?? wheres[key]?.path ?? null;
   const code = options?.repos.filter((r) => r.kind === "code") ?? [];
   const letAgentPick = Boolean(options?.multiRepo) && spread === "orchestrator";
   const repoId = letAgentPick ? code[0]?.id ?? "" : repo;
@@ -109,7 +133,8 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
     const results: Outcome[] = [];
     for (const item of items) {
       try {
-        const task = await tasksApi.start({ title: item.summary, description: "", issueUrl: item.url, agent, template: null, ...(picked(choices) ? { choices: picked(choices) } : {}) });
+        const path = pathOf(item.key);
+        const task = await tasksApi.start({ title: item.summary, description: "", issueUrl: item.url, agent, template: null, ...(path ? { path } : {}), ...(picked(choices) ? { choices: picked(choices) } : {}) });
         results.push({ key: item.key, task });
       } catch (err) {
         results.push({ key: item.key, error: (err as Error).message, ...(err instanceof ApiError ? { code: err.code } : {}) });
@@ -146,6 +171,15 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
           return (
             <li key={item.key} className="picked-issue" aria-label={`${item.key} ${item.summary}`}>
               <p><span className="mono">{item.key}</span> {item.summary}</p>
+              {local ? (
+                <>
+                  {wheres[item.key] === undefined ? <p className="muted small">Finding its folder…</p> : (
+                    <Select label={`Folder for ${item.key}`} value={pathOf(item.key) ?? ""} placeholder="Pick a folder" onChange={(v) => setPlaces({ ...places, [item.key]: v })}
+                      options={[...(pathOf(item.key) && !folders.some((f) => f.path === pathOf(item.key)) ? [{ value: pathOf(item.key)!, label: homeRelative(pathOf(item.key)!, home) }] : []), ...folders.map((f) => ({ value: f.path, label: homeRelative(f.path, home), ...(f.about ? { hint: f.about } : {}) }))]} />
+                  )}
+                  {wheres[item.key]?.path && !places[item.key] && wheres[item.key]!.reason ? <p className="muted small">{wheres[item.key]!.reason}</p> : null}
+                </>
+              ) : null}
               {local || suggestError ? null : !suggested ? <p className="muted small">Asking the agent which skills fit…</p>
                 : !read ? null
                   : "error" in read ? <p className="muted small">No suggestion: {read.error} The agent still has {skillsWord}.</p>
@@ -167,7 +201,7 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
       <AgentChoicesPicker options={options.agents.find((a) => a.id === agent)?.options} value={choices} onChange={setChoices} />
       <p className="muted">{local ? "Each agent works in the folder picked from its issue; you review every change before you keep it." : "Each agent opens its own request for review; nothing merges on its own."}</p>
       <div className="actions">
-        <button type="submit" disabled={busy || (!local && !repoId) || !agent}>{items.length === 1 ? "Start 1 agent" : `Start ${items.length} agents`}</button>
+        <button type="submit" disabled={busy || (!local && !repoId) || !agent || (local && items.some((i) => !pathOf(i.key)))}>{items.length === 1 ? "Start 1 agent" : `Start ${items.length} agents`}</button>
         <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
       </div>
     </form>,

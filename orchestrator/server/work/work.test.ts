@@ -85,6 +85,22 @@ describe("the orchestrator tasks an issue was started from", () => {
     expect((await taskLinks(ctx, ADA, ["PAY-142"])).get("PAY-142")).toHaveLength(3);
   });
 
+  it("given a task on PAY-142 and two questions asked about it, when the links are read, then the questions are left out of its tasks and the newest one is its card's asked line", async () => {
+    // given
+    const ctx = orchestrator_();
+    await ctx.store.createTask(task("tsk_working00001", { issueKey: "PAY-142", createdAt: "2026-11-01T09:00:00.000Z" }));
+    await ctx.store.createTask(task("tsk_askold000001", { issueKey: "PAY-142", createdAt: "2026-11-01T10:00:00.000Z", status: "nothing-changed", readOnly: true }));
+    await ctx.store.createTask(task("tsk_asknew000001", { issueKey: "PAY-142", createdAt: "2026-11-01T11:00:00.000Z", status: "nothing-changed", readOnly: true }));
+    const asked = new Map<string, { taskId: string; at: string }>();
+
+    // when
+    const links = await taskLinks(ctx, PAT, ["PAY-142"], asked);
+
+    // then
+    expect(links.get("PAY-142")!.map((l) => l.taskId)).toEqual(["tsk_working00001"]);
+    expect(asked.get("PAY-142")).toEqual({ taskId: "tsk_asknew000001", at: "2026-11-01T11:00:00.000Z" });
+  });
+
   it("given a failed task with a multi-line error and a running one, when the links are read, then the failed one says why in one line and the running one says nothing", async () => {
     // given
     const ctx = orchestrator_();

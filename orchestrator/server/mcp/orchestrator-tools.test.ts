@@ -33,6 +33,7 @@ async function orchestrator_() {
     delegate: async (_s, input) => (asked.push(`delegate ${input.repoId} wait=${input.wait} ${input.timeoutSeconds}${input.mode ? ` mode=${input.mode}` : ""}`), { taskId: "tsk_new00000001", status: "queued" }),
     cancel: async (_s, id) => void asked.push(`cancel ${id}`),
     family: async () => ["tsk_child0000001"],
+    requestSecret: async (_s, input) => (asked.push(`secret ${input.name}`), { given: false, said: "declined" }),
   };
   const session: AgentSession = { task: (await ctx.store.getTask("acme", "tsk_parent000001"))!, user: PAT };
   const tool = (name: string) => ORCHESTRATOR_TOOLS.find((t) => t.name === name)!;
@@ -104,7 +105,7 @@ describe("the orchestrator's tools in a task's agent session", () => {
     const bytes = Buffer.byteLength(described);
 
     // then
-    expect(ORCHESTRATOR_TOOLS.map((t) => t.name)).toEqual(["delegate_task", "task_status", "task_cancel", "request_status", "suggest_skill"]);
+    expect(ORCHESTRATOR_TOOLS.map((t) => t.name)).toEqual(["delegate_task", "task_status", "request_secret", "task_cancel", "request_status", "suggest_skill"]);
     expect(bytes).toBeLessThan(2_500);
   });
 });

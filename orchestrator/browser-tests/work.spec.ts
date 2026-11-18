@@ -63,7 +63,9 @@ test.describe("the sprint board", () => {
     await expect(review.getByRole("link", { name: "in review on GitLab" })).toBeVisible();
     await expect(review.getByRole("link", { name: "Merge request !42 on GitLab" })).toHaveAttribute("href", "https://forge.example/acme/payments-api/merge_requests/42");
     await expect(board.getByRole("listitem", { name: "PAY-105 Block a card from the app" })).toContainText("Blocked");
-    await expect(board.getByRole("listitem", { name: "PAY-107 Name the payee on the receipt" }).getByRole("link", { name: "payments-api #40" })).toHaveAttribute("href", "/demo/tasks/tsk_merged");
+    const kept = board.getByRole("listitem", { name: "PAY-107 Name the payee on the receipt" });
+    await expect(kept.getByRole("link", { name: "kept on this machine" })).toHaveAttribute("href", "/demo/tasks/tsk_merged");
+    await expect(kept.getByRole("link", { name: "payments-api #40" })).toHaveCount(0);
     await expect(board.getByRole("listitem", { name: "PAY-101 Round refunds half to even" }).getByRole("link", { name: "PAY-101" })).toHaveAttribute("href", "https://acme.atlassian.example/browse/PAY-101");
 
     const progress = page.getByRole("region", { name: "Sprint progress" });
@@ -72,7 +74,7 @@ test.describe("the sprint board", () => {
     await expect(progress).toContainText("1 flagged");
     await expect(progress).toContainText("for $1.65, some unreported");
     await expect(progress).toContainText("9 of 24 points done");
-    await expect(page.getByText("Read from the tracker at 09:00 UTC")).toBeVisible();
+    await expect(page.getByText(/Read from the tracker at \d\d:\d\d$/)).toBeVisible();
   });
 
   test("given issues assigned to the person and tasks they started, when My work is picked, then only those show, each card says who started its agent, and the address keeps the filter", async ({ page }) => {
@@ -102,7 +104,7 @@ test.describe("the sprint board", () => {
     await page.goto("/demo/work");
 
     // then
-    await expect(page.getByRole("status").filter({ hasText: "Read from the tracker at 09:00 UTC" })).toContainText("refreshing The tracker is being read again");
+    await expect(page.getByRole("status").filter({ hasText: /Read from the tracker at \d\d:\d\d/ })).toContainText("refreshing The tracker is being read again");
   });
 
   test("given a running agent, when the board asks again, then its card's badge follows the task without a reload", async ({ page }) => {
@@ -127,6 +129,48 @@ test.describe("the sprint board", () => {
 
     // then
     await expect(card.getByRole("link", { name: "needs you" })).toBeVisible();
+  });
+
+  test("given a picked issue, when its question is asked, then a task that only reads is started with the question, and a card with an answer links it", async ({ page }) => {
+    // given
+    let sent: Record<string, unknown> | null = null;
+    await standInWork(page, {
+      items: () => {
+        const read = sprintItems();
+        // Today at 10:42 on the browser's clock, so the card says the time and not the day, whatever day the test runs.
+        const today = new Date();
+        today.setHours(10, 42, 0, 0);
+        read.items.find((i) => i.key === "PAY-102")!.asked = { taskId: "tsk_asked", at: today.toISOString() };
+        return read;
+      },
+    });
+    await page.route("**/api/tasks/tsk_asked?*", (route) => route.fulfill({ json: { task: { id: "tsk_asked", title: "Question about PAY-102", description: "Estimate PAY-102.", status: "nothing-changed", lastSaid: "# Estimate\nRoughly three files, all in the retry helper.\nMore below." }, log: [], outputCut: false } }));
+    await page.route("**/api/tasks", (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      sent = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({ status: 201, json: { task: { id: "tsk_asked", title: "Question about PAY-102", status: "queued" } } });
+    });
+    await page.goto("/demo/work");
+    const card = page.getByRole("listitem", { name: "PAY-102 Show the fee before a transfer" });
+    await expect(card.getByRole("link", { name: "Asked at 10:42" })).toBeVisible();
+
+    // when
+    await card.getByRole("button", { name: "Show the fee before a transfer" }).click();
+    const rail = page.getByRole("complementary", { name: "The picked issue" });
+    await rail.getByRole("button", { name: "Ask about it…" }).click();
+    await expect(rail.getByLabel("Your question")).toHaveValue("How big is this, and which files would it touch?");
+    await expect(rail.getByText("It reads; nothing in your folder changes.")).toBeVisible();
+    await expect(rail.getByText("You asked: Estimate PAY-102.")).toBeVisible();
+    await expect(rail.getByRole("heading", { name: /^The agent's answer, \d\d:\d\d$/ })).toBeVisible();
+    await expect(rail.getByText("Roughly three files, all in the retry helper.")).toBeVisible();
+    await expect(rail.getByRole("link", { name: "Read it" })).toHaveAttribute("href", /\/tasks\/tsk_asked$/);
+    // only Start an agent is a filled button in the rail
+    await expect(rail.getByRole("link", { name: "Open the issue" })).not.toHaveClass(/button/);
+    await rail.getByRole("button", { name: "Ask", exact: true }).click();
+
+    // then
+    await expect(rail.getByRole("link", { name: "See the answer" })).toBeVisible();
+    expect(sent).toMatchObject({ readOnly: true, description: "How big is this, and which files would it touch?" });
   });
 
   test("given a later sprint picked, when the board reloads, then the address keeps the pick", async ({ page }) => {
@@ -306,6 +350,12 @@ test.describe("starting agents on picked issues", () => {
       const real = await route.fetch().then((r) => r.json());
       await route.fulfill({ json: { ...real, repos: [], multiRepo: null } });
     });
+    // The first issue's folder is known, the second's is not: it is picked before the start.
+    await page.route("**/api/tasks/where", (route) => {
+      const body = route.request().postDataJSON() as { title: string };
+      return route.fulfill({ json: { folder: body.title.startsWith("Round") ? { path: "/work/payments", reason: "the folder you last worked in", fallback: false } : null, title: body.title } });
+    });
+    await page.route("**/api/work-folders", (route) => route.fulfill({ json: { folders: [{ path: "/work/payments", name: "payments", about: null, usedAt: null }, { path: "/work/ledger", name: "ledger", about: null, usedAt: null }] } }));
     const sent: Record<string, unknown>[] = [];
     await page.route("**/api/tasks", (route) => {
       if (route.request().method() !== "POST") return route.fallback();
@@ -327,11 +377,20 @@ test.describe("starting agents on picked issues", () => {
     await expect(panel.getByRole("group", { name: "Repositories" })).toHaveCount(0);
     await expect(panel.getByLabel("Repository")).toHaveCount(0);
 
+    // then the folder of the first issue is shown with why, and the second's is asked for before anything starts
+    await expect(panel.getByRole("combobox", { name: "Folder for PAY-101" })).toContainText("/work/payments");
+    await expect(panel).toContainText("the folder you last worked in");
+    await expect(panel.getByRole("button", { name: "Start 2 agents" })).toBeDisabled();
+
     // when
+    const second = panel.getByRole("combobox", { name: /^Folder for PAY-102/ });
+    await second.click();
+    await page.getByRole("option", { name: /\/work\/ledger/ }).click();
     await panel.getByRole("button", { name: "Start 2 agents" }).click();
 
     // then
     await expect(panel.getByRole("status")).toContainText("2 agents started");
+    expect(sent.map((b) => b.path)).toEqual(["/work/payments", "/work/ledger"]);
     expect(sent.map((b) => [b.title, "repoId" in b])).toEqual([["Round refunds half to even", false], [expect.any(String), false]]);
     expect(sent.every((b) => typeof b.issueUrl === "string" && b.issueUrl)).toBe(true);
   });
@@ -453,4 +512,19 @@ test("given the organization's Jira connected, when Work opens, then the orchest
     await disconnect();
     server.close();
   }
+});
+
+test("given a sprint of seven statuses and Other with no issue picked, when Work opens at 1440, then every column sits side by side without the board scrolling", async ({ page }) => {
+  // given
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await standInWork(page);
+
+  // when
+  await page.goto("/demo/work");
+  const board = page.getByRole("group", { name: "Payments Sprint 31 board" });
+  await expect(board.getByRole("heading", { level: 2 })).toHaveCount(8);
+
+  // then
+  const fits = await board.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+  expect(fits).toBe(true);
 });

@@ -23,6 +23,8 @@ export interface Orchestrator {
   delegate(session: AgentSession, input: { repoId: string; prompt: string; wait: boolean; timeoutSeconds: number; mode?: string }): Promise<{ taskId: string; status: TaskStatus }>;
   cancel(session: AgentSession, taskId: string): Promise<void>;
   family(session: AgentSession): Promise<string[]>;
+  /** Asks the task's starter for a secret on the task's page and waits for it: where the value is, or that they declined. */
+  requestSecret(session: AgentSession, input: { name: string; why: string }): Promise<{ given: true; name: string; use: string } | { given: false; said: string }>;
 }
 
 type Schema = Record<string, unknown>;
@@ -96,6 +98,14 @@ export const ORCHESTRATOR_TOOLS: OrchestratorTool[] = [
       const requests = await requestsOf(ctx, task);
       const phase = taskPhase(task, (repoId, number) => requests.find((r) => r.repo === repoId && r.number === number)?.status ?? null);
       return { task: task.id, status: task.status, phase, repo: task.repoId, targets: (task.targets ?? []).map((t) => ({ repo: t.repoId, status: t.status })), requests, error: task.error };
+    },
+  },
+  {
+    name: "request_secret",
+    description: "Ask the person who started this task for a secret value (a token, a password) the work needs. It waits until they give it or decline. You get where the value is, never the value: use it only inside commands, never print it.",
+    inputSchema: { type: "object", properties: { name: { type: "string", description: "An environment variable name, capital letters, digits and underscores." }, why: { type: "string", description: "One sentence the person reads: what the value is for." } }, required: ["name", "why"] },
+    async run(args, _ctx, session, orchestrator) {
+      return orchestrator.requestSecret(session, { name: typeof args.name === "string" ? args.name : "", why: typeof args.why === "string" ? args.why : "" });
     },
   },
   {

@@ -101,6 +101,7 @@ function fakeRunner(started: unknown[]): TaskRunner {
     personal: async () => null,
     runsHere: () => true,
     keptForMachine: () => false,
+    handbookSources: async () => null,
     start: async (input: { repo: { id: string; team: string }; title: string; user: Principal }) => {
       started.push(input);
       return { id: "abcdef012345", repoId: input.repo.id, team: input.repo.team, title: input.title, status: "queued", agent: "fake", createdBy: input.user.email } as TaskRecord;
