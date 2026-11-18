@@ -373,12 +373,56 @@ test("given an issue nothing reads, when the person starts on its link, then the
   expect(sent[1]).toMatchObject({ issueUrl: "https://acme.atlassian.example/browse/PAY-239", withoutIssueText: true });
 });
 
+test("given a server that needs sign-in, when its button is pressed, then nothing starts before the press, the sign-in opens in another tab, the page waits and says it is signed in once it is, and a refusal says why", async ({ page }) => {
+  // given
+  await asLocal(page);
+  const at = new Date().toISOString();
+  const record = (needs: string[]) => ({ id: "t9", title: "Earlier work", status: "failed", phase: "failed", repoId: "code", team: "Mine", description: "", issueUrl: null, issueKey: null, agent: "fake", createdBy: "ada@example.invalid", createdAt: at, startedAt: at, finishedAt: at, baseSha: null, tests: null, cost: { usd: null }, requestNumber: null, error: null, template: null, queuePosition: null, request: null, mcpNeedsSignIn: needs });
+  await page.route((url) => url.pathname === "/api/tasks", (route) => (route.request().method() === "GET" ? route.fulfill({ json: { tasks: [record(["gitlab", "notion"])], next: null } }) : route.fallback()));
+  const calls: string[] = [];
+  let polled = 0;
+  await page.route((url) => url.pathname.startsWith("/api/me/claude-mcp/"), (route) => {
+    const server = decodeURIComponent(route.request().url().split("/claude-mcp/")[1]!.split("/")[0]!);
+    calls.push(`${route.request().method()} ${server}`);
+    if (route.request().method() === "POST") return server === "notion" ? route.fulfill({ status: 409, json: { error: "Claude Code refused: the server's policy blocks a sign-in." } }) : route.fulfill({ json: { authorizeUrl: "https://auth.example.invalid/authorize?state=x" } });
+    polled += 1;
+    return route.fulfill({ json: polled < 2 ? { state: "waiting" } : { state: "signed-in" } });
+  });
+  await page.context().route("https://auth.example.invalid/**", (route) => route.fulfill({ body: "sign in" }));
+
+  // when
+  await page.goto("/demo/tasks");
+  const form = await newTaskForm(page);
+
+  // then the buttons are inside the fold, shown once it is opened
+  await expect(form.getByRole("button", { name: "Sign in to GitLab" })).toBeHidden();
+  await form.getByRole("note").locator("summary").click();
+  await expect(form.getByRole("button", { name: "Sign in to GitLab" })).toBeVisible();
+  expect(calls).toEqual([]);
+
+  // when
+  const opened = page.context().waitForEvent("page");
+  await form.getByRole("button", { name: "Sign in to GitLab" }).click();
+
+  // then
+  await (await opened).waitForURL(/auth\.example\.invalid\/authorize/);
+  await expect(form.getByRole("status").filter({ hasText: "Waiting for the sign-in" })).toBeVisible();
+  await expect(form.getByRole("status").filter({ hasText: "Signed in to GitLab" })).toBeVisible({ timeout: 15_000 });
+  await expect(form.getByRole("button", { name: "Sign in to GitLab" })).toHaveCount(0);
+
+  // when
+  await form.getByRole("button", { name: "Sign in to Notion" }).click();
+
+  // then
+  await expect(form.getByRole("alert")).toContainText("policy blocks a sign-in");
+});
+
 test("given the newest task found two MCP servers that need sign-in, when the task form opens, then it says so before Start, and a newest task with none says nothing", async ({ page }) => {
   // given
   await asLocal(page);
   const at = new Date().toISOString();
   const record = (needs: string[]) => ({ id: "t9", title: "Earlier work", status: "failed", phase: "failed", repoId: "code", team: "Mine", description: "", issueUrl: null, issueKey: null, agent: "fake", createdBy: "ada@example.invalid", createdAt: at, startedAt: at, finishedAt: at, baseSha: null, tests: null, cost: { usd: null }, requestNumber: null, error: null, template: null, queuePosition: null, request: null, mcpNeedsSignIn: needs });
-  let needs = ["gitlab", "notion"];
+  let needs = ["gitlab", "gitlab", "notion"];
   await page.route((url) => url.pathname === "/api/tasks", (route) => (route.request().method() === "GET" ? route.fulfill({ json: { tasks: [record(needs)], next: null } }) : route.fallback()));
 
   // when
@@ -390,7 +434,10 @@ test("given the newest task found two MCP servers that need sign-in, when the ta
   const signIn = form.getByRole("note").filter({ hasText: "sign-in" });
   await expect(signIn.locator("summary")).toHaveText("2 MCP servers need sign-in");
   await signIn.locator("summary").click();
-  await expect(signIn).toContainText("GitLab, Notion.");
+  await expect(signIn.getByRole("button", { name: "Sign in to GitLab" })).toHaveCount(1);
+  await expect(signIn.getByRole("button", { name: "Sign in to GitLab" })).toBeVisible();
+  await expect(signIn.getByRole("button", { name: "Sign in to Notion" })).toBeVisible();
+  await expect(signIn).toContainText("Or run claude Copy, then /mcp, in your terminal.");
 
   // when
   needs = [];

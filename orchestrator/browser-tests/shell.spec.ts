@@ -381,3 +381,20 @@ test.describe("as a team's owner", () => {
     await expect(nav.getByRole("link")).toHaveText(["Usage", "Leaderboard", "AI requests", "Logs", "What's new"]);
   });
 });
+
+test("given the account menu, when it opens at 1440 and at 390, then its links stand one under the other without overlapping", async ({ page }) => {
+  for (const width of [1440, 390]) {
+    // given
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/demo/tasks");
+
+    // when
+    await page.getByRole("button", { name: /^Account:/ }).click();
+    const boxes = await page.locator(".account-links > a").evaluateAll((links) => links.map((a) => { const b = a.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left }; }));
+
+    // then
+    expect(boxes.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < boxes.length; i++) expect(boxes[i]!.top).toBeGreaterThanOrEqual(boxes[i - 1]!.bottom - 1);
+    await page.keyboard.press("Escape");
+  }
+});

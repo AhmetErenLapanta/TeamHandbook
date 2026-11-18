@@ -16,6 +16,7 @@ export interface ExperienceDifference {
 export const EXPERIENCE_DIFFERENCES: ExperienceDifference[] = [
   { screen: "task", only: "personal", item: "alpha", why: "Nouns that say whose or where: a Personal task works in a folder, so its change sits under the repository's name; a Team task works in one repository" },
   { screen: "team", only: "team", item: "Automations", why: "Other computers: a tracker's changes reach a shared server, not one person's own computer" },
+  { screen: "team", only: "team", item: "Getting set up", why: "Other people: its steps are a team repository and invitations; a person's own orchestrator finds a task's folder itself" },
   { screen: "team", only: "team", item: "Owners", why: "Other people: a Personal orchestrator has one person" },
   { screen: "team", only: "team", item: "Admins", why: "Other people" },
   { screen: "team", only: "team", item: "Members", why: "Other people" },
