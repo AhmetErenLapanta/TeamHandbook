@@ -16,5 +16,5 @@ export default defineConfig({
   workers: 1,
   outputDir: join(labDir(), "test-results"),
   reporter: [["list"], ["html", { outputFolder: join(labDir(), "report"), open: "never" }]],
-  use: { trace: "retain-on-failure" },
+  use: { trace: "retain-on-failure", actionTimeout: 15_000 },
 });

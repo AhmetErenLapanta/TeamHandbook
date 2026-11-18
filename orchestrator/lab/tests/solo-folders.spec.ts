@@ -50,7 +50,7 @@ async function endpointTask(solo: SoloSession, projectId: string): Promise<{ id:
 /** The task's page on the person's own orchestrator, under the organization it signs them in to. */
 async function taskPage(solo: SoloSession, id: string): Promise<void> {
   await solo.page.goto(solo.base);
-  await solo.page.waitForURL(/\/activity$/);
+  await solo.page.waitForURL(/\/(activity|tasks)$/);
   const org = new URL(solo.page.url()).pathname.split("/")[1]!;
   await drawnTaskPage(solo.page, `${solo.base}/${org}/tasks/${id}`, TITLE);
 }
@@ -86,19 +86,23 @@ test.describe("the orchestrator alone opens a folder of the person's", () => {
 
       // and its page draws Review changes with the changed file and its diff
       await taskPage(solo, id);
-      const review = solo.page.getByRole("region", { name: /Changes in this folder/ });
+      const review = solo.page.getByRole("region", { name: /^Changes/ });
       await expect(review.locator("ul.diff-files > li")).toHaveCount(1);
       const file = review.locator("ul.diff-files > li summary", { hasText: "src/endpoints/delivery-window.ts" });
       await file.click();
       await expect(review.locator("ul.diff-files > li")).toContainText('path: "/delivery-window"');
-      await expect(review.getByRole("button", { name: "Make this a Git repository" })).toBeVisible();
+
+      // and it offers to go on from where this one left off
+      await expect(solo.page.getByText("Continue with a follow-up")).toBeVisible();
+      await expect(solo.page.getByText(/where this one left off/)).toBeVisible();
 
       // when they press Undo on that page and confirm
-      await review.getByRole("button", { name: "Undo these changes…" }).click();
+      await solo.page.getByRole("button", { name: "Undo these changes…" }).click();
       await solo.page.getByRole("button", { name: "Undo changes" }).click();
 
       // then the page says it was undone, and the folder is byte for byte as it was before the task
-      await expect(review.getByText(/^Undone by /)).toBeVisible();
+      await expect(solo.page.getByText(/^Undone by /)).toBeVisible();
+      await expect(solo.page.getByText("Continue with a follow-up")).toHaveCount(0);
       expect(contents(folder)).toEqual(before);
       const after = await solo.call<{ task: Done }>("GET", `/api/tasks/${id}`);
       expect(after.task.changes?.undone).toEqual(expect.objectContaining({ kept: [] }));
@@ -186,17 +190,17 @@ test.describe("the orchestrator alone opens a folder of the person's", () => {
       // when
       const { project } = await solo.call<Opened>("POST", "/api/projects", { path: repo });
       const { id, done } = await endpointTask(solo, project.id);
-      // The line about the origin is written once the request is recorded, a moment after the task waits for review.
-      const said = (t: string) => t.startsWith("Not opened on the repository's forge:");
-      const { log } = await until(() => solo.call<{ log: { text: string }[] }>("GET", `/api/tasks/${id}`), (r) => r.log.some((l) => said(l.text)), 120);
-
-      // then
+      // then the task opened only the request here, and the forge says what it would take to open one there
       expect(project.facts).toMatchObject({ git: "origin", origin: { forge: "gitlab" } });
       expect([done.status, done.error]).toEqual(["needs-review", null]);
       expect(done.requestNumber).not.toBeNull();
-      const told = log.map((l) => l.text).find(said) ?? "";
-      expect(told).toContain("glab is not installed on this machine");
-      const link = new URL(/Open it there: (\S+)$/.exec(told)?.[1] ?? "https://link.example.invalid");
+      const onForge = `/api/repos/${project.id}/requests/${done.requestNumber}/on-forge`;
+      expect(await solo.call("GET", onForge)).toEqual({ forge: "gitlab", url: null, number: null });
+      const refused = await solo.page.request.post(`${solo.base}${onForge}`, { headers: { "x-csrf-token": (await (await solo.page.request.get(`${solo.base}/api/me`)).json() as { csrf: string }).csrf } });
+      const body = (await refused.json()) as { code: string; error: string; createUrl: string };
+      expect([refused.status(), body.code]).toEqual([409, "not-opened"]);
+      expect(body.error).toContain("glab is not installed on this machine");
+      const link = new URL(body.createUrl);
       expect(`${link.origin}${link.pathname}`).toBe("https://gitlab.com/solo-person/delivery-service/-/merge_requests/new");
       expect([link.searchParams.get("merge_request[source_branch]"), link.searchParams.get("merge_request[target_branch]")]).toEqual([done.request!.branch, "main"]);
       await taskPage(solo, id);

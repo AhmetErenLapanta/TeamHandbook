@@ -213,6 +213,11 @@ const pascal = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("")
 const camel = pascal.charAt(0).toLowerCase() + pascal.slice(1);
 
 const shapeOf = (dir) => (existsSync(join(dir, "endpoints")) ? "gateway" : existsSync(join(dir, "src", "controllers")) ? "bff" : existsSync(join(dir, "src", "endpoints")) ? "service" : null);
+// An interrupt ends the turn wherever the agent waits, a permission question included.
+const interrupted = () => {
+  say({ type: "result", subtype: "error_during_execution", is_error: true, result: "Request interrupted by user", num_turns: 1, total_cost_usd: 0.05, usage: { input_tokens: 600, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 80 }, terminal_reason: "aborted_streaming", session_id });
+  process.exit(0);
+};
 const written = [];
 // `stand-in: ask before writing`, in a two-way session whose questions go over stdio
 // (`--permission-prompt-tool stdio`), asks before each write as Claude Code does in a mode that
@@ -228,7 +233,10 @@ const write = async (dir, file, content) => {
     const request_id = `request-${++questions}`;
     say({ type: "control_request", request_id, request: { subtype: "can_use_tool", tool_name: "Write", display_name: "Write", input, description: file, tool_use_id } });
     let answer = await nextFrame();
-    while (answer.type !== "control_response" || answer.response?.request_id !== request_id) answer = await nextFrame();
+    while (answer.type !== "control_response" || answer.response?.request_id !== request_id) {
+      if (answer.type === "control_request" && answer.request?.subtype === "interrupt") interrupted();
+      answer = await nextFrame();
+    }
     if (answer.response?.response?.behavior !== "allow") {
       denials.push({ tool_name: "Write", tool_use_id, tool_input: input });
       return;
@@ -276,8 +284,7 @@ if (twoWay) {
       if (read.done) break;
       const frame = JSON.parse(read.value);
       if (frame.type === "control_request" && frame.request?.subtype === "interrupt") {
-        say({ type: "result", subtype: "error_during_execution", is_error: true, result: "Request interrupted by user", num_turns: 1, total_cost_usd: 0.05, usage: { input_tokens: 600, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 80 }, terminal_reason: "aborted_streaming", session_id });
-        process.exit(0);
+        interrupted();
       }
       if (frame.type === "control_response") answers.set(frame.response?.request_id, frame.response?.response ?? {});
       if (frame.type === "user" && typeof frame.message?.content === "string") followUps.push(frame.message.content);
