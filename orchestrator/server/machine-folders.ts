@@ -312,7 +312,7 @@ const fits = (want: SetupWant, answer: SetupAnswer): boolean => {
   if ("refused" in answer) return true;
   if (want.want === "sources") return "sources" in answer;
   if (want.want === "skill") return "content" in answer && !("digest" in answer);
-  if (want.want === "plugin") return "ok" in answer;
+  if (want.want === "plugin" || want.want === "marketplaces") return "ok" in answer;
   if (want.act === "read") return "content" in answer && "digest" in answer;
   return want.act === "write" ? "digest" in answer && !("content" in answer) : "deleted" in answer;
 };
