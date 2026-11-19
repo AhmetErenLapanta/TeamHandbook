@@ -376,7 +376,7 @@ describe("a pull request for a branch a runner pushed", () => {
     const opening = forge.openForBranch!(REPO, pushed);
 
     // then
-    await expect(opening).rejects.toThrow("branch handbook/pushed is not in payments-skills; the runner pushes it first");
+    await expect(opening).rejects.toThrow("branch handbook/pushed is not in payments-skills: it was not pushed there, or it was deleted since; push it again, then open the request");
     expect(recorded.some((r) => r.method === "POST")).toBe(false);
   });
 });

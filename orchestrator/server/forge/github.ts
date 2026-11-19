@@ -1,6 +1,6 @@
 import type { RepoRecord } from "../store.js";
 import { checkBranch, forgeHttp, ForgeHttpError } from "./http.js";
-import { ForgeRefusal } from "./local.js";
+import { ForgeRefusal, missingBranch } from "./local.js";
 import { forgeState, forgeTime, PENDING_LIMIT, shownText, shownUrl } from "./types.js";
 import type { BranchUpdate, ChangeRequest, CommitCheck, FileChange, ForgeConfig, ForgeProvider, ForgeState, OpenedRequest, PendingShare, PushedBranch, RequestAssignment } from "./types.js";
 
@@ -93,11 +93,11 @@ export function createGitHubForge(config: ForgeConfig, token: string, fetchImpl:
     async openForBranch(repo: RepoRecord, pushed: PushedBranch): Promise<OpenedRequest> {
       checkBranch(pushed.branch);
       const ref = await http.request<{ object?: { sha?: unknown } }>("GET", `${repoPath}/git/ref/heads/${refPath(pushed.branch)}`).catch((err) => {
-        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(`branch ${pushed.branch} is not in ${repo.name}; the runner pushes it first`);
+        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(missingBranch(pushed.branch, repo.name));
         throw err;
       });
       const headSha = ref.object?.sha;
-      if (typeof headSha !== "string") throw new ForgeRefusal(`branch ${pushed.branch} is not in ${repo.name}; the runner pushes it first`);
+      if (typeof headSha !== "string") throw new ForgeRefusal(missingBranch(pushed.branch, repo.name));
       const base = pushed.target ?? (await http.request<{ default_branch: string }>("GET", repoPath)).default_branch;
       // The branch is the runner's: a pull request GitHub refuses leaves it where it was pushed.
       const pull = await http.request<{ number: number; html_url: string }>("POST", `${repoPath}/pulls`, { title: pushed.title, head: pushed.branch, base, body: pushed.body });
@@ -110,7 +110,7 @@ export function createGitHubForge(config: ForgeConfig, token: string, fetchImpl:
       checkBranch(branch);
       if (!update.files.length) throw new Error("the change has no files");
       const ref = await http.request<{ object?: { sha?: unknown } }>("GET", `${repoPath}/git/ref/heads/${refPath(branch)}`).catch((err) => {
-        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(`branch ${branch} is not in ${repo.name}; open the request again`);
+        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(`branch ${branch} is no longer in ${repo.name} on GitHub: it was deleted there, so nothing was written to it; open the request again`);
         throw err;
       });
       if (ref.object?.sha !== update.expectedHead) throw new ForgeRefusal(`${branch} moved since the change was prepared; read the request again`);

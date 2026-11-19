@@ -37,6 +37,9 @@ export class ForgeRefusal extends OrchestratorError {
   }
 }
 
+/** A branch a request was to open from that is not in the repository: never pushed there, or deleted since. */
+export const missingBranch = (branch: string, repoName: string) => `branch ${branch} is not in ${repoName}: it was not pushed there, or it was deleted since; push it again, then open the request`;
+
 /** Where the local forge keeps the description of the request on `branch`. */
 export function localDescriptionRef(branch: string): string {
   return `refs/notes/orchestrator/${branch}`;
@@ -200,7 +203,7 @@ export function createLocalForge(workRoot: string, ledger: LocalRequestLedger, u
       if (!BRANCH.test(pushed.branch) || pushed.branch.includes("..")) throw new Error(`invalid branch name ${JSON.stringify(pushed.branch)}`);
       return oneAtATime(bare, async () => {
         const headSha = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${pushed.branch}^{commit}`], bare))?.trim();
-        if (!headSha) throw new ForgeRefusal(`branch ${pushed.branch} is not in ${repo.name}; the runner pushes it first`);
+        if (!headSha) throw new ForgeRefusal(missingBranch(pushed.branch, repo.name));
         if ((await gitAsyncMaybe(["merge-base", "--is-ancestor", pushed.baseSha, headSha], bare)) === null) {
           throw new ForgeRefusal(`branch ${pushed.branch} does not start from the commit the task started from`);
         }
