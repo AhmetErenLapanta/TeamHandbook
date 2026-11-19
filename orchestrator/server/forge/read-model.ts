@@ -71,16 +71,51 @@ export class ForgeReadError extends OrchestratorError {
   }
 }
 
-/** The forge's refusal as a reason and the fix for this repository: reconnect, a new token, or wait. */
-export function readFailure(err: ForgeHttpError, forge: HostedForge, repo: RepoRecord, throughConnection: boolean): ForgeReadError {
+/** How the orchestrator reaches a forge for a repository: the organization's connection, a token entered for it, or a person's own sign-in with a code. */
+export type ForgeAccess = "connection" | "token" | "sign-in";
+
+/** What fixes a forge that no longer takes the access, said to whoever reads it. */
+function accessFix(name: string, repo: RepoRecord, access: ForgeAccess): string {
+  if (access === "connection") return `an owner or an admin connects ${name} again under Integrations`;
+  if (access === "token") return `an owner or an admin enters a new token for ${repo.name} under Integrations`;
+  return `sign in to ${name} again on its card under Integrations`;
+}
+
+/**
+ * A forge's refusal of a read or a write, in one sentence that says what happened and what fixes it:
+ * an access the forge no longer takes, one that may not do this, a repository or request it does not
+ * show, a wait it asked for, or the forge not answering. Its own words stay only where no fix is known.
+ */
+export function forgeRefusalSentence(err: ForgeHttpError, forge: HostedForge, repo: RepoRecord, access: ForgeAccess, doing: "read" | "write"): { reason: ReadFailure; sentence: string } {
+  const told = forgeTold(err, forge);
+  const { reason, sentence } = plainRefusal(err, forge, repo, access, doing);
+  // The forge's own words, when it gave any, stay beside the fix: a permission it names is what to grant.
+  return { reason, sentence: told && reason !== "unreachable" && sentence !== err.message ? `${sentence} (${FORGES[forge].label} said: ${told})` : sentence };
+}
+
+/** What the forge itself said with a refusal, after the method and path; null when it said nothing. */
+function forgeTold(err: ForgeHttpError, forge: HostedForge): string | null {
+  const said = new RegExp(`^${FORGES[forge].label} answered \\d+ on \\S+ \\S+: (.+)$`).exec(err.message)?.[1]?.trim();
+  return said || null;
+}
+
+function plainRefusal(err: ForgeHttpError, forge: HostedForge, repo: RepoRecord, access: ForgeAccess, doing: "read" | "write"): { reason: ReadFailure; sentence: string } {
   const name = FORGES[forge].label;
-  const access = throughConnection ? `an owner or an admin connects ${name} again under Integrations` : `an owner or an admin enters a new token for ${repo.name} under Integrations`;
-  if (err.retryAt) return new ForgeReadError("rate-limited", `${name} asks the orchestrator to wait until ${err.retryAt} before reading more`, err.retryAt);
-  if (err.status === 401) return new ForgeReadError("unauthenticated", `${name} no longer accepts the orchestrator's access to ${repo.name}; ${access}`);
-  if (err.status === 403) return new ForgeReadError("forbidden", `${name} does not let the orchestrator's access read ${repo.name}'s requests; ${access}, one that reads them`);
-  if (err.status === 404) return new ForgeReadError("not-found", `${name} has no such request in ${repo.name}, or the orchestrator's access does not see it; open it again from the list of requests, and if it is there, ${access}`);
-  if (err.status === 0) return new ForgeReadError("unreachable", err.message);
-  return new ForgeReadError("failed", err.message);
+  const fix = accessFix(name, repo, access);
+  const whose = access === "sign-in" ? "your sign-in" : "the orchestrator's access";
+  if (err.retryAt) return { reason: "rate-limited", sentence: `${name} asks the orchestrator to wait until ${err.retryAt} before ${doing === "read" ? "reading more" : "it changes anything more"}; nothing was ${doing === "read" ? "read" : "changed"}, try again after that` };
+  if (err.status === 401) return { reason: "unauthenticated", sentence: `${name} no longer accepts ${whose} to ${repo.name}; ${fix}` };
+  if (err.status === 403) return { reason: "forbidden", sentence: doing === "read" ? `${name} does not let ${whose} read ${repo.name}'s requests; ${fix}, one that reads them` : `${name} does not let ${whose} open requests in ${repo.name}; nothing was changed there, and ${fix}, one that writes to it` };
+  if (err.status === 404) return { reason: "not-found", sentence: doing === "read" ? `${name} has no such request in ${repo.name}, or ${whose} does not see it; open it again from the list of requests, and if it is there, ${fix}` : `${name} has no ${repo.name}, or ${whose} does not see it; nothing was changed there, and if it is there, ${fix}` };
+  if (err.status === 0) return { reason: "unreachable", sentence: err.message };
+  if (err.status >= 500) return { reason: "failed", sentence: `${name} failed on its side (${err.status}); nothing was ${doing === "read" ? "read" : "changed"}, try again in a few minutes` };
+  return { reason: "failed", sentence: err.message };
+}
+
+/** The forge's refusal of a read as a reason and the fix for this repository: reconnect, a new token, sign in again, or wait. */
+export function readFailure(err: ForgeHttpError, forge: HostedForge, repo: RepoRecord, access: ForgeAccess): ForgeReadError {
+  const { reason, sentence } = forgeRefusalSentence(err, forge, repo, access, "read");
+  return new ForgeReadError(reason, sentence, reason === "rate-limited" ? err.retryAt : null);
 }
 
 const BLOCKED: Record<string, string> = {
@@ -278,7 +313,7 @@ async function withForge<T>(ctx: OrchestratorContext, repo: RepoRecord, read: (h
     return await read(http, config);
   } catch (err) {
     if (err instanceof OwnCliRefused) throw new ForgeReadError("unauthenticated", err.message);
-    if (err instanceof ForgeHttpError) throw readFailure(err, config.kind, repo, Boolean(ctx.addedRepos?.get(repo.id)?.connection));
+    if (err instanceof ForgeHttpError) throw readFailure(err, config.kind, repo, ctx.addedRepos?.get(repo.id)?.connection ? "connection" : "token");
     throw err;
   }
 }

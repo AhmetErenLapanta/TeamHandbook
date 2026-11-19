@@ -1949,6 +1949,28 @@ test.describe("on a phone", () => {
     // then
     await expect(page.locator(".foot-actions")).toHaveCSS("position", "static");
   });
+
+  test("given a task in review on a phone with a follow-up box, when the box has the focus, then the foot row stops sticking over it, and sticks again once the focus leaves", async ({ page }) => {
+    // given
+    const at = new Date().toISOString();
+    await page.route("**/api/tasks/t1?*", (route) => route.fulfill({ json: { task: task({ status: "needs-review", phase: "review", startedAt: at, finishedAt: at, requestNumber: 7, followUp: "continue", createdBy: "ada@example.invalid", request: { status: "open", provider: "local", branch: "handbook/task-t1", url: "local://requests/payments-skills/7" }, requests: [] }), log: [], outputCut: false } }));
+    await page.route("**/api/tasks/t1/events*", (route) => route.fulfill({ status: 204 }));
+    await page.goto("/demo/tasks/t1");
+    const foot = page.locator(".foot-actions");
+    await expect(foot).toHaveCSS("position", "sticky");
+
+    // when the person types in the follow-up box
+    await page.locator("textarea.follow-text").focus();
+
+    // then
+    await expect(foot).toHaveCSS("position", "static");
+
+    // when the focus leaves
+    await page.locator("textarea.follow-text").blur();
+
+    // then
+    await expect(foot).toHaveCSS("position", "sticky");
+  });
 });
 
 test("given a running task, when its starter stops the agent's step, then the task reads needs you with the sentence and the button is gone, and a refusal shows beside it", async ({ page }) => {
