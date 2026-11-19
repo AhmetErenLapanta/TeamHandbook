@@ -4,9 +4,13 @@ import type { ChangedFile } from "../forge/request-diff.js";
 
 /** `interrupted`: a task on a person's machine whose lease ran out; it waits for Continue on that machine and is not finished. */
 /** `nothing-changed`: the agent finished without changing anything, which is an outcome, not a failure; its last words are the answer. */
-export type TaskStatus = "queued" | "running" | "interrupted" | "needs-review" | "failed" | "cancelled" | "nothing-changed";
+/**
+ * `needs-answer`: the agent's run ended asking its starter something, with nothing changed. Nothing failed: the task
+ * waits for their answer and goes on from it, so no count, filter or notice of failures takes it for one.
+ */
+export type TaskStatus = "queued" | "running" | "interrupted" | "needs-review" | "needs-answer" | "failed" | "cancelled" | "nothing-changed";
 
-export const FINISHED: readonly TaskStatus[] = ["needs-review", "failed", "cancelled", "nothing-changed"];
+export const FINISHED: readonly TaskStatus[] = ["needs-review", "needs-answer", "failed", "cancelled", "nothing-changed"];
 
 export type TestOutcome = "passed" | "failed" | "skipped";
 

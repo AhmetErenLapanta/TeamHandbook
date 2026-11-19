@@ -2496,7 +2496,8 @@ export function createStore(db: SqlDriver): Store {
     },
     async interruptTasks(tenant, reason) {
       // A task on a person's machine runs there through a restart here; its lease decides its end.
-      return db.run("UPDATE tasks SET status = 'failed', error = ?, finished_at = ? WHERE tenant = ? AND status IN ('queued', 'running') AND runner = 'server'", [
+      // Where its run stood goes with the run: a step its person had stopped would otherwise still ask for their next words.
+      return db.run("UPDATE tasks SET status = 'failed', stage = NULL, error = ?, finished_at = ? WHERE tenant = ? AND status IN ('queued', 'running') AND runner = 'server'", [
         reason,
         new Date().toISOString(),
         tenant,
