@@ -26,6 +26,9 @@ each with what it costs ("In every task about 1.2k tokens, 3% of the context."),
 ("Used in 3 tasks, last Nov 4.") and, for a skill, its text. What is off folds under **Off (N)**, and a
 search box, "Find in this list", shows past 20 items.
 
+- **Check for updates** beside **Add** runs Claude Code's own `claude plugin marketplace update` when
+  you press it, and is the only thing on the page that asks the network; a plugin with a newer
+  version then shows "1.4.2 → 1.5.0", and an off plugin with one offers **Update** beside its versions.
 - **Switches.** A plugin's switch runs Claude Code's own command and the page says "Ran <command>."; it
   holds in your terminal too. A skill, command or server of yours or the folder's is left out of the
   agents started here ("Off for agents started here. Your terminal still has it."). A plugin's server
@@ -75,9 +78,8 @@ folded. A rail beside it holds **The ask** (the description, when there is more 
 
 On Tasks and a task's page a task reads queued, running, needs review, failed, cancelled or
 interrupted, **finished, nothing changed** when a run changed no file, and once a person decides, merged or closed for a request and changes kept or changes
-undone for a folder without Git. A card on the Work board is an issue, so it says what each state
-belongs to (**Agent working**, **Request closed**, **Changes to review**, **Changes kept**), where
-the task screens say the state alone.
+undone for a folder without Git. A task on a Work board's card carries the same one word every list says it in (**working**, **in review**, **merged**,
+**kept on this machine**, and the rest above), with " on GitLab" or " on GitHub" where a forge holds its request.
 
 On your own machine (`local`, see [the README](../../README.md#run-it-on-your-machine)) the
 tabs are Work once it reads issues, Tasks, Team and Integrations, and Settings has Your account,

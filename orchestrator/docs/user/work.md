@@ -77,7 +77,7 @@ Boards read with the organization's token or a connection are mapped to teams an
 same way. Only Jira boards move issues as the agent works, and only they show the switch for it. A board
 or sprint id the page sends back is honoured only when it is one the person is shown, and only
 a project key and a sprint id held to their shapes reach a Jira query. The tracker's answers
-are kept in the orchestrator process for a minute: a board read again within it is answered from
+are kept in the orchestrator process for two minutes: a board read again within it is answered from
 there, an older answer is shown at once while a new read runs behind it, and **Read the tracker
 again** asks the tracker at most every 15 seconds. They are never written to the database, a backup or an export.
 A summary, label or name is masked against the credential that read it and withheld when it

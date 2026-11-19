@@ -32,8 +32,8 @@ short tour of the four layers; `docker compose down -v` stops it. When something
 
 **The compose demo signs everyone in as one built-in admin** (`ORCHESTRATOR_AUTH=dev-admin`). That
 is why its port is bound to 127.0.0.1, and why it answers only to the loopback host names. A
-real install leaves `ORCHESTRATOR_AUTH` unset. The orchestrator then starts in `local` mode, prints a
-setup code to its log, and whoever enters that code on the first screen creates the first owner:
+real install sets `ORCHESTRATOR_AUTH=local` (and a secret key). The orchestrator then runs in
+`self-hosted` mode, prints a setup code to its log, and whoever enters that code on the first screen creates the first owner:
 
 ```sh
 ORCHESTRATOR_AUTH=local ORCHESTRATOR_SECRET_KEY="$(openssl rand -base64 32)" docker compose up --build

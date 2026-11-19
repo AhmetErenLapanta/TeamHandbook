@@ -170,6 +170,16 @@ Under **Repeats** on Tasks each repeat is listed with **Stop repeating…**; eve
 the list, started as you through the same start, under the same limits and approvals. A run whose time
 passed while the orchestrator was not running is not started late; the repeat says so in one line.
 
+### Lessons to review
+
+**Lessons to review** on Team lists every lesson waiting, whether a task or a session taught it, with
+where it came from and the day. A lesson opens in the rail with "You said: <your words>" and the
+skill it would add. **Keep in** picks where it lands: **Yours**, **This folder** or **Team**; **Keep**
+writes it as a skill file there and every later task loads it, and **Reject** turns it down (with
+**Never suggest it again** to mute it). Tick several rows and the same **Keep in**, **Keep** and **Reject**
+decide them together ("2 picked"); keeping for the team asks for a commit message first. The count
+falls as each is decided, and `/handbook:review` shows the same queue.
+
 ### What a task starts with
 
 On the new task form, "This task will use your default setup, 12 items" folds the list Your handbooks

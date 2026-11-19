@@ -68,8 +68,8 @@ On one machine, no account and no server:
 
 - **Work** shows your Jira board, a GitLab project or a GitHub repository. Connect each in one click:
   **Sign in with Atlassian**, or **Sign in with GitHub** / **GitLab** through your own `gh` or `glab`
-  (or, for GitHub, with a one-time code and nothing to install; GitLab.com does the same once an
-  application is registered for it).
+  (or, for GitHub and GitLab.com, with a one-time code and nothing to install; a self-managed GitLab
+  keeps `glab`).
   Pick an issue, press **Start**, watch the agent live, read **Changes**, press **Keep**.
 - Or name a folder and write what should change. The Claude Code signed in on this machine does it
   with your own settings, skills and MCP servers, behind a guard that keeps it inside the folder.
