@@ -4,9 +4,9 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.36.0] - 2026-11-19
 
-### Orchestrator 0.3.1: Added
+### Orchestrator 0.4.0: Added
 
 - **Lessons to review.** On Team, every waiting lesson, from a task or a session, in one list: open one to
   read it, pick where it lands (**Yours**, **This folder** or **Team**), and **Keep** or **Reject** one
@@ -25,7 +25,7 @@ All notable changes to this project are documented here. The format follows
 - **On a team's orchestrator you edit your own skill, check for plugin updates and update a plugin**
   through your own computer, which nobody else can ask.
 
-### Orchestrator 0.3.1: Changed
+### Orchestrator 0.4.0: Changed
 
 - **A lesson leads with its first sentence** and names the task that taught it, with a link, and says
   "session" only when a session taught it; Lessons to review keeps one filled action.
@@ -43,7 +43,7 @@ All notable changes to this project are documented here. The format follows
   to do** in one sentence: an expired sign-in, a project it will not show, a wait the forge asks for, a
   deleted branch or issue, a reused invitation. A task you typed survives signing in again.
 
-### Orchestrator 0.3.1: Fixed
+### Orchestrator 0.4.0: Fixed
 
 - **What an agent changed before it crashed or ended without a result waits for review** on its request,
   with the cause in a sentence (a full disk, an unreachable service), where it used to go with the task's
