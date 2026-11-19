@@ -9,7 +9,7 @@ import type { Principal } from "../auth.js";
 import { openSqliteStore } from "../store.js";
 import type { IssueLink } from "../tasks/issue.js";
 import { createVault, storeSecret } from "../vault.js";
-import { readIssue } from "./issue-read.js";
+import { issueGone, readIssue } from "./issue-read.js";
 import { saveEnabled } from "./records.js";
 import { TRACKER, TRACKER_TOKEN_SECRET } from "./tracker.js";
 import type { TrackerConfig } from "./tracker.js";
@@ -130,7 +130,40 @@ describe("reading the issue a task works on", () => {
     const read = await readIssue(ctx, JIRA_ISSUE, ADMIN, send);
 
     // then
-    expect(read).toEqual({ problem: "the tracker refused the token (401)" });
+    expect(read).toEqual({ problem: "the tracker refused the token (401); check the token and its permissions under Integrations" });
+  });
+
+  it("given a tracker limiting requests, a deleted issue and a dropped connection, when the issue is read, then each says what happened and what to do, with no address or token", async () => {
+    // given
+    const ctx = await connected({ kind: "jira", url: SITE, email: "bot@example.invalid" });
+    const limited = (async () => new Response("{}", { status: 429, headers: { "retry-after": "30" } })) as typeof fetch;
+    const unlimited = (async () => new Response("{}", { status: 429 })) as typeof fetch;
+    const gone = tracker({ "/rest/api/3/issue/PAY-142?": {} }, 404).send;
+    const dropped = (async () => { throw new TypeError(`fetch failed for ${SITE} with ${TOKEN}`); }) as typeof fetch;
+
+    // when
+    const reads = [limited, unlimited, gone, dropped].map((send) => readIssue(ctx, JIRA_ISSUE, ADMIN, send));
+
+    // then
+    expect(await Promise.all(reads)).toEqual([
+      { problem: "the tracker is limiting requests; try again in 30 seconds" },
+      { problem: "the tracker is limiting requests; try again in a minute" },
+      { problem: "the tracker has no such issue; it was deleted, or the token cannot see it" },
+      { problem: "the tracker was not reached; check the connection and try again" },
+    ]);
+  });
+
+  it("given an issue the tracker no longer has, when a question about it is checked, then the person is told it is gone and to ask about another, and any other failure or a found issue passes", async () => {
+    // given
+    const ctx = await connected({ kind: "jira", url: SITE, email: "bot@example.invalid" });
+    const gone = await readIssue(ctx, JIRA_ISSUE, ADMIN, tracker({ "/rest/api/3/issue/PAY-142?": {} }, 404).send);
+    const limited = await readIssue(ctx, JIRA_ISSUE, ADMIN, (async () => new Response("{}", { status: 429 })) as typeof fetch);
+
+    // when
+    const checked = [issueGone(gone, "PAY-142"), issueGone(limited, "PAY-142"), issueGone(null, "PAY-142")];
+
+    // then
+    expect(checked).toEqual(["PAY-142 was deleted, or this token cannot see it any more. Ask about another issue.", null, null]);
   });
 
   it("given a tracker with no token, when the issue is read, then nothing is asked and the agent keeps the link", async () => {
