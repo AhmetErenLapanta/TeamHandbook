@@ -39,7 +39,7 @@ const PROGRAM = [
   'const done = () => console.log(JSON.stringify({ type: "result", summary: "Done." }));',
   'const first = setTimeout(done, 10_000);',
   'for await (const line of createInterface({ input: process.stdin })) {',
-  '  if (line === "interrupt") { clearTimeout(first); done(); continue; }',
+  '  if (line === "interrupt") { clearTimeout(first); appendFileSync(heard, "(interrupted)\\n---\\n"); done(); continue; }',
   '  if (line === "compact") { appendFileSync(heard, "(compacted)\\n---\\n"); done(); continue; }',
   '  if (!line.startsWith("turn ")) continue;',
   '  turns++;',
@@ -67,7 +67,7 @@ async function working(steer = true, promptCacheMs?: number, endsOnStop = false)
   dirs.push(root);
   const program = join(root, "steering-agent.mjs");
   // An agent that ends its session when its step is stopped, as one whose process does not outlive an interrupt.
-  writeFileSync(program, endsOnStop ? PROGRAM.replace('clearTimeout(first); done(); continue; }', 'clearTimeout(first); done(); process.exit(0); }') : PROGRAM);
+  writeFileSync(program, endsOnStop ? PROGRAM.replace('done(); continue; }', 'done(); process.exit(0); }') : PROGRAM);
   const stand = fakeAgentAdapter(FAKE_AGENT);
   const agent: AgentAdapter = {
     ...stand,
@@ -118,6 +118,7 @@ describe("a follow-up to a task's agent while it works", { timeout: 120_000 }, (
     expect(await ctx.store.pendingFollowUps(ctx.tenant, task.id)).toEqual([]);
     expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain("Sent 1 follow-up(s) to the agent while it works.");
     expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text).filter((l) => l.startsWith(`${ADA.name}: `))).toHaveLength(1);
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).find((l) => l.kind === "steer")?.data).toMatchObject({ type: "steer", by: ADA.name, byId: ADA.id });
   });
 
   it("given an agent at work that takes messages, when its starter quotes lines of the agent's own log, then the message names the log and its lines and the quote is data", async () => {
@@ -244,6 +245,35 @@ describe("a follow-up to a task's agent while it works", { timeout: 120_000 }, (
     expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain("Ada Example stopped the agent's step; it waits for what they say next.");
   });
 
+  it("given a message already waiting for an agent that takes one after its turn, when its starter stops the step, then the waiting message does not start the agent again by itself: the task stays stopped and needing them, the log says the message goes with their next words, and what they write next takes both to the agent, the older first", async () => {
+    // given
+    const { ctx, task, send, heard } = await working(false);
+    await steerable(ctx, task, "queue");
+    const app = createApp(ctx, as(ADA));
+    const queued = await send(ADA, { text: "Written before the stop.", commandId: "cmd-before-stop" });
+
+    // when
+    let stopped = await app.request(`/api/tasks/${task.id}/stop-step`, { method: "POST" });
+    for (let tries = 0; stopped.status === 409 && tries < 100; tries++) {
+      await new Promise((r) => setTimeout(r, 50));
+      stopped = await app.request(`/api/tasks/${task.id}/stop-step`, { method: "POST" });
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    const waiting = (await ctx.store.getTask(ctx.tenant, task.id))!;
+    const heardWhileStopped = heard();
+    await send(ADA, { text: "Written after the stop.", commandId: "cmd-after-stop-2" });
+    await ctx.tasks!.idle();
+
+    // then
+    expect([queued.status, stopped.status]).toEqual([202, 200]);
+    expect(waiting).toMatchObject({ status: "running", stage: "stopped" });
+    expect(heardWhileStopped).not.toContain("Written before the stop.");
+    expect(heard().indexOf("Written before the stop.")).toBeGreaterThan(-1);
+    expect(heard().indexOf("Written before the stop.")).toBeLessThan(heard().indexOf("Written after the stop."));
+    expect((await ctx.store.taskLog(ctx.tenant, task.id, 0)).map((l) => l.text)).toContain("Ada Example stopped the agent's step; it waits for what they say next. The message sent before the stop goes with it.");
+    expect((await ctx.store.getTask(ctx.tenant, task.id))!.stage).not.toBe("stopped");
+  });
+
   it("given an agent that ends its session when its step is stopped, when its starter stops the step and then says to go on, then the run ends with no step left stopped, their words start the next run, and the task comes back for review", async () => {
     // given
     const { ctx, task, send } = await working(true, undefined, true);
@@ -277,6 +307,9 @@ describe("a follow-up to a task's agent while it works", { timeout: 120_000 }, (
       await new Promise((r) => setTimeout(r, 50));
       stopped = await app.request(`/api/tasks/${task.id}/stop-step`, { method: "POST" });
     }
+    // The stopped turn has to end before the words come, or they join it and nothing is compacted: waited for, since a
+    // loaded machine takes its time to start the agent, and then the moment its end takes to be read.
+    while (!heard().includes("(interrupted)")) await new Promise((r) => setTimeout(r, 50));
     await new Promise((r) => setTimeout(r, 300));
 
     // when

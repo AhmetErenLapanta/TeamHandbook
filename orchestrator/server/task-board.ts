@@ -114,7 +114,7 @@ function changeSize(task: TaskRecord): BoardCard["changes"] {
 export async function taskBoard(ctx: OrchestratorContext, user: Principal, now = Date.now(), repoId?: string): Promise<TaskBoard> {
   const visible = { ...visibleTasks(user), ...(repoId ? { repoId } : {}) };
   const week = new Date(now - WEEK_MS).toISOString();
-  const open = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["queued", "running", "interrupted"] });
+  const open = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["queued", "running", "interrupted", "needs-answer"] });
   const reviewed = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["needs-review"], finishedSince: new Date(now - REVIEW_DAYS * 86_400_000).toISOString() });
   const ended = await everyTask(ctx.store, ctx.tenant, { ...visible, statuses: ["failed", "cancelled", "nothing-changed"], finishedSince: week });
   const tasks = [...open, ...reviewed, ...ended];

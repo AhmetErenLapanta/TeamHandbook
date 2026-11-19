@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { access, realpath, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, lstat, readlink, realpath, stat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { onPath } from "../update.js";
 import type { Invocation } from "./isolation.js";
 
@@ -94,6 +94,34 @@ async function resolved(places: CheckPlaces): Promise<CheckPlaces> {
   return { hidden: await kept(places.hidden), tools: await kept(places.tools), secrets: await kept(places.secrets), readable: await kept(places.readable), writable: await kept(places.writable) };
 }
 
+// Far more than a path holds links, and enough to end a loop of them.
+const LINK_HOPS = 40;
+
+/**
+ * Each symbolic link on the way to `path`, as the kernel names it: its real directory and its own name. A place is
+ * opened by its real path, and a link to it kept inside a hidden directory stays hidden: reading the link is refused,
+ * not found missing, and a search of the PATH that stops at a refusal (Node's spawn does) never reaches the
+ * directories after it, so every `npm test` under a PATH with such a directory failed with no output (exit 255).
+ */
+async function linksTo(path: string): Promise<string[]> {
+  const links: string[] = [];
+  let rest = path.split("/").filter(Boolean);
+  let at = "/";
+  while (rest.length && links.length < LINK_HOPS) {
+    const next = join(at, rest.shift()!);
+    const info = await lstat(next).catch(() => null);
+    if (!info) break;
+    if (!info.isSymbolicLink()) {
+      at = next;
+      continue;
+    }
+    links.push(next);
+    rest = [...resolve(at, await readlink(next)).split("/").filter(Boolean), ...rest];
+    at = "/";
+  }
+  return links;
+}
+
 /**
  * A check's places for a task: the task's directories open, the person's home and the data directory
  * kept from it, the tool places open again with the sign-in places hidden inside them. Each directory
@@ -121,8 +149,10 @@ export function checkPlaces(task: { work: string; tmp: string; home: string; git
  * the keychain's service and every unix socket outside the task's own directories refused (an
  * ssh-agent's, a keyring's), name lookups' own socket aside; writes go only to the task's directories
  * and the standard streams. In seatbelt a later rule wins, which is what lets a layer open inside another.
+ * `links` are the symbolic links that lead to an opened place: each is readable as a link, itself alone, and
+ * a sign-in place hides one inside it again.
  */
-export function seatbeltProfile(places: CheckPlaces): { profile: string; params: string[] } {
+export function seatbeltProfile(places: CheckPlaces, links: readonly string[] = []): { profile: string; params: string[] } {
   const params: string[] = [];
   const names = (kind: string, paths: string[]) =>
     paths.map((path, i) => {
@@ -132,6 +162,10 @@ export function seatbeltProfile(places: CheckPlaces): { profile: string; params:
   const rule = (paths: string[], make: (filters: string) => string) => (paths.length ? [make(paths.join(" "))] : []);
   const hidden = names("HIDE", places.hidden);
   const tools = names("TOOL", places.tools);
+  const linked = links.map((path, i) => {
+    params.push("-D", `LINK${i}=${path}`);
+    return `(literal (param "LINK${i}"))`;
+  });
   const secrets = names("SECRET", places.secrets);
   const readable = names("READ", places.readable);
   const writable = names("WRITE", places.writable);
@@ -153,6 +187,7 @@ export function seatbeltProfile(places: CheckPlaces): { profile: string; params:
     '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
     ...rule(hidden, (f) => `(deny file-read* file-write* ${f})`),
     ...rule(tools, (f) => `(allow file-read* ${f})`),
+    ...rule(linked, (f) => `(allow file-read* ${f})`),
     ...rule(secrets, (f) => `(deny file-read* file-write* ${f})`),
     ...rule(above, (f) => `(allow file-read-metadata ${f})`),
     ...rule(readable, (f) => `(allow file-read* ${f})`),
@@ -206,7 +241,8 @@ export async function findCheckSandbox(platform: NodeJS.Platform = process.platf
 export async function sandboxed(box: Exclude<CheckSandbox, { refused: string }>, places: CheckPlaces, inv: Invocation): Promise<Invocation> {
   const at = await resolved(places);
   if (box.tool === "seatbelt") {
-    const { profile, params } = seatbeltProfile(at);
+    const links = [...new Set((await Promise.all([...places.tools, ...places.readable, ...places.writable].map(linksTo))).flat())];
+    const { profile, params } = seatbeltProfile(at, links);
     return { ...inv, program: box.program, args: ["-p", profile, ...params, inv.program, ...inv.args] };
   }
   // bubblewrap empties a hidden directory and blanks a hidden file: which one each is, read before the check runs.

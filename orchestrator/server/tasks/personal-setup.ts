@@ -69,7 +69,19 @@ async function commandsOf(program: string, env: Record<string, string>, cwd: str
 }
 
 /** The person's plugins as `claude plugin list --json` lists them, which reads their servers without connecting them; paths are left out. */
-export async function listedPlugins(program: string, env: Record<string, string>, cwd: string, timeoutMs: number): Promise<Record<string, unknown>[] | null> {
+export function listedPlugins(program: string, env: Record<string, string>, cwd: string, timeoutMs: number): Promise<Record<string, unknown>[] | null> {
+  // The handbook list and the setup read both ask for it together: one run of the CLI answers the two.
+  const key = `${program}\u0000${env.CLAUDE_CONFIG_DIR ?? ""}\u0000${env.HOME ?? ""}`;
+  const running = listing.get(key);
+  if (running) return running;
+  const run = readListedPlugins(program, env, cwd, timeoutMs).finally(() => listing.delete(key));
+  listing.set(key, run);
+  return run;
+}
+
+const listing = new Map<string, Promise<Record<string, unknown>[] | null>>();
+
+async function readListedPlugins(program: string, env: Record<string, string>, cwd: string, timeoutMs: number): Promise<Record<string, unknown>[] | null> {
   const listed = await runProcess({ program, args: ["plugin", "list", "--json"], env, cwd }, { timeoutMs, signal: new AbortController().signal, onLine: () => {} });
   if (listed.code !== 0) return null;
   let items: unknown;
@@ -142,3 +154,13 @@ export async function probePersonalSetup(program: string, env: Record<string, st
   const project = (await Promise.all(folders.map((folder) => serversIn(join(folder, ".mcp.json"), "project")))).flat();
   return { commands, plugins: plugins?.plugins ?? [], mcpServers: [...user, ...project, ...(plugins?.servers ?? [])], claudeMd, readAt: new Date().toISOString() };
 }
+
+/**
+ * The three reads the handbook list is built from, started together: Claude Code's plugin list, the managed settings
+ * and the setup probe do not depend on one another, so the list waits for the slowest instead of the sum.
+ */
+export async function readHandbookInputs<M>(read: { plugins: () => Promise<Record<string, unknown>[] | null>; managed: () => Promise<M>; personal: () => Promise<PersonalSetup | null> }): Promise<{ plugins: Record<string, unknown>[]; managed: M; personal: PersonalSetup | null }> {
+  const [plugins, managed, personal] = await Promise.all([read.plugins(), read.managed(), read.personal()]);
+  return { plugins: plugins ?? [], managed, personal };
+}
+

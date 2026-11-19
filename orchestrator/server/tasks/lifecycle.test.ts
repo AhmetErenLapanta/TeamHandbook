@@ -62,8 +62,10 @@ function runner(ctx: OrchestratorContext, agentScript: string, overrides: Partia
   });
 }
 
-async function until(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
-  for (let i = 0; i < 100; i++) {
+// A deadline, not a count of waits: a loaded machine stretches every wait, and a count then runs out before the work does.
+async function until(check: () => boolean | Promise<boolean>, what: string, withinMs = 25_000): Promise<void> {
+  const deadline = Date.now() + withinMs;
+  while (Date.now() < deadline) {
     if (await check()) return;
     await new Promise((r) => setTimeout(r, 100));
   }

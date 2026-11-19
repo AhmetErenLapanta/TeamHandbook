@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -167,6 +167,28 @@ describe("the sandbox a check runs in on a person's own orchestrator", { timeout
 
     // then
     expect(said.trim().split("\n")).toEqual(["RESOLVED", "LOADED"]);
+  });
+
+  it.runIf(onMac)("given a PATH whose first directory is under the person's home behind a link kept in that home, as a linked node_modules is, when a check's Node starts a program by its name, then the search goes on past that directory and the program runs, a tool behind the link runs too, and the home still neither lists nor reads", async () => {
+    // given
+    const at = places();
+    const kept = join(at.outside, "node_modules");
+    mkdirSync(join(kept, ".bin"), { recursive: true });
+    writeFileSync(join(kept, ".bin", "linked-tool"), "#!/bin/sh\necho LINKED-TOOL\n", { mode: 0o755 });
+    mkdirSync(join(at.home, "app"));
+    symlinkSync(kept, join(at.home, "app", "node_modules"));
+    const path = `${join(at.home, "app", "node_modules", ".bin")}:${process.env.PATH ?? ""}`;
+    const box = await findCheckSandbox("darwin");
+    if ("refused" in box) throw new Error(box.refused);
+    const starts = (name: string) => `node -e "const r = require('child_process').spawnSync('${name}', [], { encoding: 'utf8' }); console.log(r.error ? r.error.code : r.stdout.trim() || r.status)"`;
+    const script = [starts("true"), starts("linked-tool"), `ls '${at.home}' >/dev/null 2>&1 && echo LISTED-HOME`, `cat '${at.home}/other-project/.env' 2>/dev/null && echo READ-HOME`, "exit 0"].join("; ");
+
+    // when
+    const inv = await sandboxed(box, checkPlaces(at.task, { home: at.home, path }, at.data, "darwin"), { program: "/bin/sh", args: ["-c", script], env: { PATH: path }, cwd: at.task.work });
+    const said = execFileSync(inv.program, inv.args, { cwd: inv.cwd, env: inv.env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+
+    // then
+    expect(said.trim().split("\n")).toEqual(["0", "LINKED-TOOL"]);
   });
 
   it.runIf(onMac)("given a local orchestrator on this Mac and a check that reaches for the person's sign-in and outside the task, when the task runs, then the check runs in seatbelt: neither reaches, and its own writes land", async () => {

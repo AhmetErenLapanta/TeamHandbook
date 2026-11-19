@@ -184,6 +184,7 @@ export type SetupWant =
   | { want: "sources"; folder: SetupFolder | null }
   | { want: "skill"; source: string; name: string; folder: SetupFolder | null }
   | { want: "plugin"; op: PluginOp; plugin: string }
+  | { want: "marketplaces" }
   | { want: "file"; act: "read" | "write" | "delete"; source: string; kind: FileKind; name: string; content?: string; expectedDigest?: string | null; folder: SetupFolder | null };
 
 export type SetupAnswer =
@@ -218,8 +219,8 @@ export type LessonOpAnswer =
   | { decided: "approved" | "rejected"; muted: boolean }
   | { refused: string };
 
-/** A follow-up the person sent a running task, as the agent is given it. */
-export type RelayedFollowUp = Pick<FollowUpRecord, "id" | "source" | "text" | "quotes" | "createdBy" | "attachments">;
+/** A follow-up the person sent a running task, as the agent is given it; when it was written tells words sent before a stopped step from those after it. */
+export type RelayedFollowUp = Pick<FollowUpRecord, "id" | "source" | "text" | "quotes" | "createdBy" | "attachments"> & { createdAt?: string };
 
 /** What the orchestrator hands a runner between leases: a person's answer, a follow-up, or a Stop. */
 export type RunnerCommand =
@@ -266,6 +267,8 @@ export interface TaskOutcome {
    * that knows the flag ends the task as finished with nothing changed, `lastSaid` its answer.
    */
   nothingChanged?: true;
+  /** A run that ended asking its starter something, sent with status "failed" for an orchestrator from before; one that knows the flag ends the task as waiting for their answer. */
+  asked?: true;
   lastSaid?: string;
   /**
    * A run in a folder holding several repositories (the person's one working folder): each
@@ -301,6 +304,7 @@ export interface RunnerLink {
   request(taskId: string, leaseId: string, request: AgentRequest): Promise<void>;
   progress(taskId: string, leaseId: string, progress: TaskProgress): Promise<void>;
   finish(taskId: string, leaseId: string, outcome: TaskOutcome): Promise<void>;
+  lateChanges?(taskId: string, changes: NonNullable<TaskOutcome["changes"]>): Promise<void>;
   /**
    * A request the machine opened with the person's own gh or glab, for the orchestrator to check on
    * the forge before it counts as the task's; reported before the finish, which gives the lease up.

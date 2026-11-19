@@ -1,11 +1,12 @@
 import { rm } from "node:fs/promises";
 import { detectSecret } from "../plugin.js";
-import { CLAUDE_TOOLS } from "./agents.js";
+import { CLAUDE_DENIED, CLAUDE_TOOLS } from "./agents.js";
 import type { AgentAdapter, AgentSetup } from "./agents.js";
 import { fence } from "./changes.js";
 import type { IssueLink } from "./issue.js";
 import type { IsolationConfig } from "./isolation.js";
 import { containerInvocation, makeTaskDirs, runProcess, taskEnv, taskPaths } from "./isolation.js";
+import { personalEnv, releasePersonalGuard, writePersonalGuard } from "./profile.js";
 import { Redactor } from "./redact.js";
 import { neutralizeReferences } from "./references.js";
 import { MODEL_ENV, openTaskProxy } from "./egress.js";
@@ -79,6 +80,11 @@ export interface SuggestionDeps {
   tenant: string;
   /** In cloud, the runner's model key, which the proxy puts on the agent's model requests. */
   model: ModelRoute | null;
+  /**
+   * Tasks run as the person: the agent signs in with their own profile. A question started with a home of its own has
+   * no sign-in to find, so it must start the way those tasks do, holding the same sign-in-only, tool-less line.
+   */
+  personal: boolean;
 }
 
 /**
@@ -100,22 +106,32 @@ export async function askAgent(title: string, prompt: string, deps: SuggestionDe
 
 async function askOnce(title: string, prompt: string, deniedTools: string[], deps: SuggestionDeps, id: string): Promise<{ summary: string | null; redactor: Redactor; cost: TaskCost }> {
   const paths = taskPaths(deps.dataDir, deps.tenant, id);
+  const personal = deps.personal && deps.agent.runsAsYou === true;
   let held: TaskProxy | null = null;
   try {
     await makeTaskDirs(paths);
     const credentials = deps.model ? [] : [...deps.agent.credentialEnv, ...deps.passEnv];
     held = deps.model ? await openTaskProxy(paths, [], deps.model) : null;
     const redactor = new Redactor(credentials.map((name) => deps.hostEnv[name]).filter((v): v is string => !!v));
-    const setup: AgentSetup = { skills: [], mcpServers: {}, mcpTools: [], deniedTools };
+    // A run as the person has the shell and the web unless they are named: a question reads, and answers.
+    const setup: AgentSetup = { skills: [], mcpServers: {}, mcpTools: [], deniedTools: personal ? [...deniedTools, ...CLAUDE_DENIED] : deniedTools, ...(personal ? { personal: { ownSetup: false, folderSettings: false } } : {}) };
     await deps.agent.configure(paths, setup);
-    const call = deps.agent.invocation(paths, { title, prompt }, setup);
-    const inv = { ...call, env: { ...taskEnv(deps.hostEnv, paths, credentials), ...call.env, ...(deps.model ? MODEL_ENV : {}) }, cwd: paths.work };
+    if (personal) await writePersonalGuard(paths, [], [], { readOnly: true });
+    const call = deps.agent.invocation(paths, { title, prompt }, setup, personal);
+    const base = personal ? personalEnv(deps.hostEnv, paths, credentials) : taskEnv(deps.hostEnv, paths, credentials);
+    const inv = { ...call, env: { ...base, ...call.env, ...(deps.model ? MODEL_ENV : {}) }, cwd: paths.work };
     const wrapped = deps.isolation.mode === "container" ? containerInvocation(inv, paths, deps.isolation, `th-skills-${id.slice(-12)}`, deps.hostEnv, held) : inv;
-    const outcome = await runProcess(wrapped, { timeoutMs: deps.timeoutMs, signal: new AbortController().signal, onLine: () => {} });
+    let said = "";
+    const outcome = await runProcess(wrapped, { timeoutMs: deps.timeoutMs, signal: new AbortController().signal, onLine: (stream, line) => { if (stream === "stderr" && line.trim()) said = line; } });
     const report = deps.agent.report(outcome.stdout, outcome.code);
+    if (outcome.timedOut || !report.ok) {
+      const why = outcome.timedOut ? "it ran past its time" : `exit code ${outcome.code ?? outcome.signal ?? "none"}`;
+      process.stderr.write(`ask "${title}": the agent gave no answer (${why})${said ? `: ${redactor.line(said).slice(0, 300)}` : ""}\n`);
+    }
     return { summary: outcome.timedOut || !report.ok ? null : report.summary, redactor, cost: report.cost };
   } finally {
     await held?.proxy.close();
+    await releasePersonalGuard(paths.root);
     await Promise.all([rm(paths.root, { recursive: true, force: true }), rm(paths.git, { recursive: true, force: true })]);
   }
 }

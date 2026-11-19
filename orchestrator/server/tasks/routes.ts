@@ -35,7 +35,7 @@ import { REFRESH_COMMIT_TITLE } from "../plugin.js";
 import { SKILL_SLUG } from "../skill-rules.js";
 import { issuePreview, issueReach, reachText } from "../integrations/issue-preview.js";
 import { issueAddress, readTracker } from "../integrations/tracker.js";
-import { readIssue } from "../integrations/issue-read.js";
+import { issueGone, readIssue } from "../integrations/issue-read.js";
 import { tooMany, windowLimiter } from "../limits.js";
 import { canStartOnTeam, readsTask, seesTask, visibleTasks } from "./guards.js";
 import { taskPhase } from "./phase.js";
@@ -282,6 +282,8 @@ export async function startTask(ctx: OrchestratorContext, runner: TaskRunner, us
   if (body?.readOnly !== undefined && typeof body.readOnly !== "boolean") return { error: "readOnly is true or false", status: 400 };
   const readOnly = body?.readOnly === true;
   if (readOnly && (template || targets)) return { error: "a question reads one repository or folder, from no template", status: 400 };
+  const gone = readOnly && issue ? issueGone(await readIssue(ctx, issue, user), issue.key) : null;
+  if (gone) return { error: gone, status: 409 };
   const baseBranch = typeof body?.baseBranch === "string" && body.baseBranch.trim() ? body.baseBranch.trim() : undefined;
   if (body?.baseBranch !== undefined && body.baseBranch !== null && typeof body.baseBranch !== "string") return { error: "baseBranch is a branch's name", status: 400 };
   const branches = baseBranch ? await repoBranches(ctx, repo) : null;
@@ -1042,81 +1044,84 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
   route(app, "POST /api/tasks/:id/turns/:n/undo", async (c) => {
     const user = c.get("user");
     const id = c.req.param("id") ?? "";
-    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
-    if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
+    const found = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!found || !seesTask(user, found) || (found.createdBy !== user.email && found.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
     const body = (await c.req.json().catch(() => null)) as { commandId?: unknown; reason?: unknown } | null;
     if (typeof body?.commandId !== "string" || !COMMAND_ID.test(body.commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
     if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.length > UNDO_REASON_MAX || /[\r\n]/.test(body.reason))) return c.json({ error: `reason is one line of at most ${UNDO_REASON_MAX} characters` }, 400);
     const reason = typeof body.reason === "string" && body.reason.trim() ? new Redactor([]).line(printable(body.reason.trim())) : null;
-    if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working; undo a turn once it ends", code: "task-running" }, 409);
-    const turns = (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null);
-    const turn = turns.find((t) => t.n === Number(c.req.param("n")));
-    const last = turns.at(-1);
-    const repo = await ctx.store.getRepo(ctx.tenant, task.repoId);
-    if (!turn || !last || !repo) return c.json({ error: "unknown turn" }, 404);
-    if (turn.undoneAt) return c.json({ error: "this turn was already undone", code: "already-undone" }, 409);
-    const after = turns.filter((t) => t.n > turn.n && !t.undoneAt).length;
-    const said = `“${turn.said}”`;
-    const done = async (back: number, where: string) => {
-      await ctx.store.undoTaskTurns(ctx.tenant, task.id, turn.n, new Date().toISOString());
-      await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} undid the change from ${said} on${after ? `, and the ${after} turn(s) after it` : ""}: ${back} file(s) back ${where}.${reason ? ` Why: ${reason}` : ""}`]);
-      await recordEvent(ctx, user, "task.turns.undone", { repoId: task.repoId, subject: `task:${task.id}`, detail: `undid from turn ${turn.n}, ${back} file(s)${reason ? `: ${reason}` : ""}` });
-      return c.json({ turns: (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null).map((t) => ({ n: t.n, said: t.said, at: t.at, files: t.files, undone: t.undoneAt !== null })) });
-    };
-    if (turn.place === "machine") {
-      const folder = await changedFolder(task);
-      if (!folder?.onMachine) return c.json({ error: "this task's turns are not kept on a machine", code: "not-undoable" }, 409);
-      if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
-      if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
-      const at = machineFolderOf(repo.url)!;
-      const machine = (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === at.machineId);
-      // A runner from before turns would ignore which turn and undo the whole change.
-      if (!machine?.features?.includes("turn-undo")) return c.json({ error: `${machine?.name ?? "Its machine"} runs a runner that undoes a whole change only; update it to undo from a turn`, code: "machine-too-old" }, 409);
-      const undone = await undoOnMachine(ctx, repo, folder, { start: turn.start, end: last.end! });
-      if ("refused" in undone) return c.json({ error: undone.refused, code: undone.code }, undone.status);
-      if (undone.left && undone.after && undone.files) await ctx.store.setTaskChanges(ctx.tenant, task.id, { files: undone.files, undone: null, before: folder.before, after: undone.after });
-      else await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) });
-      return await done(undone.undone.length, `in ${repo.name} on ${machine.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}`);
-    }
-    if (turn.place === "project") {
-      const folder = await changedFolder(task);
-      if (!folder || folder.onMachine) return c.json({ error: "this task's turns are not kept here", code: "not-undoable" }, 409);
-      if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
-      if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
-      const holder = `undo:${task.id}`;
-      if (!(await ctx.store.takeProjectLock(ctx.tenant, repo.id, holder, new Date().toISOString()))) return c.json({ error: `a task is working in ${repo.name} now; undo this one when it ends`, code: "folder-busy" }, 409);
-      try {
-        const undone = await shadowUndo(folder.place, turn.start, folder.after);
-        if ("refused" in undone) return c.json({ error: undone.refused, code: "undo-refused" }, 409);
-        // The task's change is what is left of it: from where it started to the folder as the undo leaves it.
-        const now = await shadowSnapshot(folder.place, `after undoing ${task.id} from turn ${turn.n}`);
-        if ("refused" in now) return c.json({ error: now.refused, code: "undo-refused" }, 409);
-        const left = await shadowChanges(folder.place, folder.before, now.sha);
-        if (typeof left === "string") return c.json({ error: left, code: "undo-refused" }, 409);
-        if (left.files.length || left.untracked.length) await ctx.store.setTaskChanges(ctx.tenant, task.id, { files: left.files, undone: null, before: folder.before, after: now.sha });
+    return oneAtATime(settleKey(found.id), async () => {
+      const task = (await ctx.store.getTask(ctx.tenant, found.id))!;
+      if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working; undo a turn once it ends", code: "task-running" }, 409);
+      const turns = (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null);
+      const turn = turns.find((t) => t.n === Number(c.req.param("n")));
+      const last = turns.at(-1);
+      const repo = await ctx.store.getRepo(ctx.tenant, task.repoId);
+      if (!turn || !last || !repo) return c.json({ error: "unknown turn" }, 404);
+      if (turn.undoneAt) return c.json({ error: "this turn was already undone", code: "already-undone" }, 409);
+      const after = turns.filter((t) => t.n > turn.n && !t.undoneAt).length;
+      const said = `“${turn.said}”`;
+      const done = async (back: number, where: string) => {
+        await ctx.store.undoTaskTurns(ctx.tenant, task.id, turn.n, new Date().toISOString());
+        await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} undid the change from ${said} on${after ? `, and the ${after} turn(s) after it` : ""}: ${back} file(s) back ${where}.${reason ? ` Why: ${reason}` : ""}`]);
+        await recordEvent(ctx, user, "task.turns.undone", { repoId: task.repoId, subject: `task:${task.id}`, detail: `undid from turn ${turn.n}, ${back} file(s)${reason ? `: ${reason}` : ""}` });
+        return c.json({ turns: (await ctx.store.taskTurns(ctx.tenant, task.id)).filter((t) => t.end !== null).map((t) => ({ n: t.n, said: t.said, at: t.at, files: t.files, undone: t.undoneAt !== null })) });
+      };
+      if (turn.place === "machine") {
+        const folder = await changedFolder(task);
+        if (!folder?.onMachine) return c.json({ error: "this task's turns are not kept on a machine", code: "not-undoable" }, 409);
+        if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
+        if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
+        const at = machineFolderOf(repo.url)!;
+        const machine = (await ctx.store.listMachines(ctx.tenant, null)).find((m) => m.id === at.machineId);
+        // A runner from before turns would ignore which turn and undo the whole change.
+        if (!machine?.features?.includes("turn-undo")) return c.json({ error: `${machine?.name ?? "Its machine"} runs a runner that undoes a whole change only; update it to undo from a turn`, code: "machine-too-old" }, 409);
+        const undone = await undoOnMachine(ctx, repo, folder, { start: turn.start, end: last.end! });
+        if ("refused" in undone) return c.json({ error: undone.refused, code: undone.code }, undone.status);
+        if (undone.left && undone.after && undone.files) await ctx.store.setTaskChanges(ctx.tenant, task.id, { files: undone.files, undone: null, before: folder.before, after: undone.after });
         else await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) });
-        return await done(undone.undone.length, `in ${repo.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}`);
-      } finally {
-        await ctx.store.releaseProjectLock(ctx.tenant, repo.id, holder);
+        return await done(undone.undone.length, `in ${repo.name} on ${machine.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}`);
       }
-    }
-    const request = task.requestNumber !== null ? await ctx.store.getRequest(ctx.tenant, repo.id, task.requestNumber) : null;
-    if (request?.status !== "open") return c.json({ error: "this task's request is not open, so its turns are not undone on it", code: "request-not-open" }, 409);
-    const files = await filesAsAt(placeOfTurn(ctx, turn, repo), turn.start, last.end!);
-    if ("refused" in files) return c.json({ error: files.refused, code: "undo-refused" }, 409);
-    if (!files.length) return await done(0, `on request #${request.number}`);
-    const synced = await syncRepo(ctx, repo.id);
-    if ("error" in synced) return c.json({ error: `the repository could not be read to undo the turn (${maskUrl(synced.error)})` }, 502);
-    const head = await branchHead(mirrorDir(ctx, repo.id), request.branch);
-    if (!head) return c.json({ error: `${request.branch} is no longer on the repository`, code: "moved" }, 409);
-    let moved: { headSha: string };
-    try {
-      moved = await updateRequestBranch(ctx, repo, request.branch, { files, title: `Undo the change from ${said} on`, commitBody: `Undone by the TeamHandbook Orchestrator for task ${task.id}, at its starter's ask.`, author: { name: user.name, email: user.email }, expectedHead: head });
-    } catch (err) {
-      return c.json({ error: (err as Error).message, code: "moved" }, 409);
-    }
-    await recheckRequest(ctx, repo, request, moved.headSha);
-    return await done(files.length, `on request #${request.number}`);
+      if (turn.place === "project") {
+        const folder = await changedFolder(task);
+        if (!folder || folder.onMachine) return c.json({ error: "this task's turns are not kept here", code: "not-undoable" }, 409);
+        if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
+        if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
+        const holder = `undo:${task.id}`;
+        if (!(await ctx.store.takeProjectLock(ctx.tenant, repo.id, holder, new Date().toISOString()))) return c.json({ error: `a task is working in ${repo.name} now; undo this one when it ends`, code: "folder-busy" }, 409);
+        try {
+          const undone = await shadowUndo(folder.place, turn.start, folder.after);
+          if ("refused" in undone) return c.json({ error: undone.refused, code: "undo-refused" }, 409);
+          // The task's change is what is left of it: from where it started to the folder as the undo leaves it.
+          const now = await shadowSnapshot(folder.place, `after undoing ${task.id} from turn ${turn.n}`);
+          if ("refused" in now) return c.json({ error: now.refused, code: "undo-refused" }, 409);
+          const left = await shadowChanges(folder.place, folder.before, now.sha);
+          if (typeof left === "string") return c.json({ error: left, code: "undo-refused" }, 409);
+          if (left.files.length || left.untracked.length) await ctx.store.setTaskChanges(ctx.tenant, task.id, { files: left.files, undone: null, before: folder.before, after: now.sha });
+          else await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) });
+          return await done(undone.undone.length, `in ${repo.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}`);
+        } finally {
+          await ctx.store.releaseProjectLock(ctx.tenant, repo.id, holder);
+        }
+      }
+      const request = task.requestNumber !== null ? await ctx.store.getRequest(ctx.tenant, repo.id, task.requestNumber) : null;
+      if (request?.status !== "open") return c.json({ error: "this task's request is not open, so its turns are not undone on it", code: "request-not-open" }, 409);
+      const files = await filesAsAt(placeOfTurn(ctx, turn, repo), turn.start, last.end!);
+      if ("refused" in files) return c.json({ error: files.refused, code: "undo-refused" }, 409);
+      if (!files.length) return await done(0, `on request #${request.number}`);
+      const synced = await syncRepo(ctx, repo.id);
+      if ("error" in synced) return c.json({ error: `the repository could not be read to undo the turn (${maskUrl(synced.error)})` }, 502);
+      const head = await branchHead(mirrorDir(ctx, repo.id), request.branch);
+      if (!head) return c.json({ error: `${request.branch} is no longer on the repository`, code: "moved" }, 409);
+      let moved: { headSha: string };
+      try {
+        moved = await updateRequestBranch(ctx, repo, request.branch, { files, title: `Undo the change from ${said} on`, commitBody: `Undone by the TeamHandbook Orchestrator for task ${task.id}, at its starter's ask.`, author: { name: user.name, email: user.email }, expectedHead: head });
+      } catch (err) {
+        return c.json({ error: (err as Error).message, code: "moved" }, 409);
+      }
+      await recheckRequest(ctx, repo, request, moved.headSha);
+      return await done(files.length, `on request #${request.number}`);
+    });
   });
 
   // A new task from one turn of this one: the same ask, worked from the files as that turn left them; this task stays.
@@ -1184,6 +1189,10 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
   });
 
   /** Why a second settling of a task's changes is refused, by what the first one did. */
+  // Keep, Undo and a turn's undo of one task run one after another, each reading how the task stands once the one
+  // before is done. Pressed at once in two windows, an undo used to take the files back while the keep was written:
+  // the page said kept and the folder had lost the change.
+  const settleKey = (id: string) => join(ctx.dataDir, "task-settles", ctx.tenant, id);
   const settledAs = async (id: string) =>
     (await ctx.store.getTask(ctx.tenant, id))?.changes?.kept ? { error: "this task's changes were kept, so they are not undone", code: "already-kept" } : { error: "this task's changes were already undone", code: "already-undone" };
 
@@ -1221,18 +1230,21 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
   route(app, "POST /api/tasks/:id/keep", async (c) => {
     const user = c.get("user");
     const id = c.req.param("id") ?? "";
-    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
-    if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
+    const found = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!found || !seesTask(user, found) || (found.createdBy !== user.email && found.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
     const body = (await c.req.json().catch(() => null)) as { commandId?: unknown } | null;
     if (typeof body?.commandId !== "string" || !COMMAND_ID.test(body.commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
-    if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working in the folder; keep its changes once it ends", code: "task-running" }, 409);
-    if (!(await ctx.store.taskChangeSnapshots(ctx.tenant, task.id))) return c.json({ error: "this task changed no folder, so there is nothing to keep", code: "not-undoable" }, 409);
-    if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
-    if (task.changes?.kept) return c.json({ error: "this task's changes were already kept", code: "already-kept" }, 409);
-    if (!(await ctx.store.markTaskChangesKept(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email }))) return c.json(await settledAs(task.id), 409);
-    await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} kept the task's changes.`]);
-    await recordEvent(ctx, user, "task.changes.kept", { repoId: task.repoId, subject: `task:${task.id}`, detail: `kept ${task.changes?.files.length ?? 0} changed file(s)` });
-    return c.json({ task: (await shown([(await ctx.store.getTask(ctx.tenant, task.id))!], [], c.get("user")))[0] });
+    return oneAtATime(settleKey(found.id), async () => {
+      const task = (await ctx.store.getTask(ctx.tenant, found.id))!;
+      if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working in the folder; keep its changes once it ends", code: "task-running" }, 409);
+      if (!(await ctx.store.taskChangeSnapshots(ctx.tenant, task.id))) return c.json({ error: "this task changed no folder, so there is nothing to keep", code: "not-undoable" }, 409);
+      if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
+      if (task.changes?.kept) return c.json({ error: "this task's changes were already kept", code: "already-kept" }, 409);
+      if (!(await ctx.store.markTaskChangesKept(ctx.tenant, task.id, { at: new Date().toISOString(), by: user.email }))) return c.json(await settledAs(task.id), 409);
+      await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} kept the task's changes.`]);
+      await recordEvent(ctx, user, "task.changes.kept", { repoId: task.repoId, subject: `task:${task.id}`, detail: `kept ${task.changes?.files.length ?? 0} changed file(s)` });
+      return c.json({ task: (await shown([(await ctx.store.getTask(ctx.tenant, task.id))!], [], c.get("user")))[0] });
+    });
   });
 
   // The starter takes a finished task's changes back out of the folder, once. A file changed again
@@ -1240,42 +1252,45 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
   route(app, "POST /api/tasks/:id/undo", async (c) => {
     const user = c.get("user");
     const id = c.req.param("id") ?? "";
-    const task = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
-    if (!task || !seesTask(user, task) || (task.createdBy !== user.email && task.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
+    const found = isTaskId(id) ? await ctx.store.getTask(ctx.tenant, id) : null;
+    if (!found || !seesTask(user, found) || (found.createdBy !== user.email && found.createdBy !== user.id)) return c.json({ error: "unknown task" }, 404);
     const body = (await c.req.json().catch(() => null)) as { commandId?: unknown; paths?: unknown; reason?: unknown } | null;
     if (typeof body?.commandId !== "string" || !COMMAND_ID.test(body.commandId)) return c.json({ error: "commandId is 8 to 64 letters, digits, dashes or underscores, the same on a retry" }, 400);
     if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.length > UNDO_REASON_MAX || /[\r\n]/.test(body.reason))) return c.json({ error: `reason is one line of at most ${UNDO_REASON_MAX} characters` }, 400);
     const reason = typeof body.reason === "string" && body.reason.trim() ? new Redactor([]).line(printable(body.reason.trim())) : null;
-    const files = task.changes?.files ?? [];
-    const picked = body.paths === undefined ? null : Array.isArray(body.paths) && body.paths.length && body.paths.every((p) => typeof p === "string" && files.some((f) => f.path === p && f.state !== "undone")) ? (body.paths as string[]) : undefined;
-    if (picked === undefined) return c.json({ error: "paths names files this task changed that are not undone yet", code: "unknown-path" }, 400);
-    if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working in the folder; undo it once it ends", code: "task-running" }, 409);
-    const folder = await changedFolder(task);
-    if (!folder) return c.json({ error: "this task changed no folder, so there is nothing to undo", code: "not-undoable" }, 409);
-    if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
-    if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
-    const holder = `undo:${task.id}`;
-    if (!(await ctx.store.takeProjectLock(ctx.tenant, folder.repo.id, holder, new Date().toISOString()))) return c.json({ error: `a task is working in ${folder.repo.name} now; undo this one when it ends`, code: "folder-busy" }, 409);
-    try {
-      if (picked && folder.onMachine) return c.json({ error: "a folder on a machine is undone whole for now; undo all of the task's changes or keep them", code: "machine-undo-whole" }, 409);
-      // A renamed file goes back with the name it had, so undoing it takes both paths of the rename.
-      const only = picked ? new Set(picked.flatMap((p) => [p, ...(files.find((f) => f.path === p)?.previousPath ?? [])])) : undefined;
-      const undone = folder.onMachine ? await undoOnMachine(ctx, folder.repo, folder) : await shadowUndo(folder.place, folder.before, folder.after, only);
-      if ("refused" in undone) {
-        const { code = "undo-refused", status = 409 } = undone as { code?: string; status?: 409 | 502 | 504 };
-        return c.json({ error: undone.refused, code }, status);
+    return oneAtATime(settleKey(found.id), async () => {
+      const task = (await ctx.store.getTask(ctx.tenant, found.id))!;
+      const files = task.changes?.files ?? [];
+      const picked = body.paths === undefined ? null : Array.isArray(body.paths) && body.paths.length && body.paths.every((p) => typeof p === "string" && files.some((f) => f.path === p && f.state !== "undone")) ? (body.paths as string[]) : undefined;
+      if (picked === undefined) return c.json({ error: "paths names files this task changed that are not undone yet", code: "unknown-path" }, 400);
+      if (task.status === "queued" || task.status === "running") return c.json({ error: "the task is still working in the folder; undo it once it ends", code: "task-running" }, 409);
+      const folder = await changedFolder(task);
+      if (!folder) return c.json({ error: "this task changed no folder, so there is nothing to undo", code: "not-undoable" }, 409);
+      if (task.changes?.undone) return c.json({ error: "this task's changes were already undone", code: "already-undone" }, 409);
+      if (task.changes?.kept) return c.json({ error: "this task's changes were kept, so they are not undone", code: "already-kept" }, 409);
+      const holder = `undo:${task.id}`;
+      if (!(await ctx.store.takeProjectLock(ctx.tenant, folder.repo.id, holder, new Date().toISOString()))) return c.json({ error: `a task is working in ${folder.repo.name} now; undo this one when it ends`, code: "folder-busy" }, 409);
+      try {
+        if (picked && folder.onMachine) return c.json({ error: "a folder on a machine is undone whole for now; undo all of the task's changes or keep them", code: "machine-undo-whole" }, 409);
+        // A renamed file goes back with the name it had, so undoing it takes both paths of the rename.
+        const only = picked ? new Set(picked.flatMap((p) => [p, ...(files.find((f) => f.path === p)?.previousPath ?? [])])) : undefined;
+        const undone = folder.onMachine ? await undoOnMachine(ctx, folder.repo, folder) : await shadowUndo(folder.place, folder.before, folder.after, only);
+        if ("refused" in undone) {
+          const { code = "undo-refused", status = 409 } = undone as { code?: string; status?: 409 | 502 | 504 };
+          return c.json({ error: undone.refused, code }, status);
+        }
+        const record = { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) };
+        const marked = picked ? await ctx.store.markTaskFilesUndone(ctx.tenant, task.id, picked.filter((p) => !undone.kept.includes(p)), record) : await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, record);
+        if (!marked) return c.json(await settledAs(task.id), 409);
+        const what = picked ? picked.join(", ") : "the task's changes";
+        await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} undid ${what} in ${folder.repo.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}.${reason ? ` Why: ${reason}` : ""}`]);
+        await recordEvent(ctx, user, "task.changes.undone", { repoId: task.repoId, subject: `task:${task.id}`, detail: `undid ${undone.undone.length} file(s) in ${folder.repo.name}${reason ? `: ${reason}` : ""}` });
+        const now = (await ctx.store.getTask(ctx.tenant, task.id))!;
+        return c.json({ task: (await shown([now], [], c.get("user")))[0], undone: undone.undone, kept: undone.kept });
+      } finally {
+        await ctx.store.releaseProjectLock(ctx.tenant, folder.repo.id, holder);
       }
-      const record = { at: new Date().toISOString(), by: user.email, kept: undone.kept, ...(reason ? { reason } : {}) };
-      const marked = picked ? await ctx.store.markTaskFilesUndone(ctx.tenant, task.id, picked.filter((p) => !undone.kept.includes(p)), record) : await ctx.store.markTaskChangesUndone(ctx.tenant, task.id, record);
-      if (!marked) return c.json(await settledAs(task.id), 409);
-      const what = picked ? picked.join(", ") : "the task's changes";
-      await ctx.store.appendTaskLog(ctx.tenant, task.id, [`${user.name} undid ${what} in ${folder.repo.name}${undone.kept.length ? `, except ${undone.kept.join(", ")}, changed again since` : ""}.${reason ? ` Why: ${reason}` : ""}`]);
-      await recordEvent(ctx, user, "task.changes.undone", { repoId: task.repoId, subject: `task:${task.id}`, detail: `undid ${undone.undone.length} file(s) in ${folder.repo.name}${reason ? `: ${reason}` : ""}` });
-      const now = (await ctx.store.getTask(ctx.tenant, task.id))!;
-      return c.json({ task: (await shown([now], [], c.get("user")))[0], undone: undone.undone, kept: undone.kept });
-    } finally {
-      await ctx.store.releaseProjectLock(ctx.tenant, folder.repo.id, holder);
-    }
+    });
   });
 
   // The starter stops what the agent is doing now; the task and its session stay, and their next words go on from there.
@@ -1306,12 +1321,17 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
     if (!files) return c.json({ error: "attachments names files uploaded to this task, each once", code: "attachment-unknown" }, 400);
     const request = task.requestNumber !== null ? await ctx.store.getRequest(ctx.tenant, task.repoId, task.requestNumber) : null;
     const offered = offeredFollowUp(runner, task, request, inWorkspace(task) && (await workspaceGoesOn(ctx, task)));
-    if (!offered) return c.json({ error: NO_FOLLOW_UP, code: "follow-up-not-offered" }, 409);
+    const masked = maskedFollowUp(text, quotes);
+    if (!offered) {
+      // The same message sent again, as a retry is, was taken the first time: it is answered as taken, whatever the task takes now.
+      const before = (await ctx.store.taskFollowUps(ctx.tenant, task.id)).find((f) => f.key === `person:${commandId}`);
+      if (before && before.text === masked.text) return c.json({ followUp: { id: before.id, status: before.status, createdAt: before.createdAt } }, 200);
+      return c.json({ error: NO_FOLLOW_UP, code: "follow-up-not-offered" }, 409);
+    }
     if (offered === "continue") {
       const refused = await goOnRefusal(ctx, user, task);
       if (refused) return c.json({ error: refused.error, ...(refused.code ? { code: refused.code } : {}) }, refused.status);
     }
-    const masked = maskedFollowUp(text, quotes);
     let kept;
     try {
       kept = await ctx.store.addFollowUp({ tenant: ctx.tenant, id: newId("fup"), taskId: task.id, source: "person", key: `person:${commandId}`, text: masked.text, quotes: masked.quotes, createdAt: new Date().toISOString(), createdBy: user.email, ...(files.length ? { attachments: files } : {}) });
@@ -1322,6 +1342,14 @@ export function taskRoutes(ctx: OrchestratorContext, runner: TaskRunner): Hono<O
       return c.json({ error: "that commandId already sent another follow-up", code: "command-reused" }, 409);
     }
     if (kept.created) await recordEvent(ctx, user, "task.followup", { repoId: task.repoId, subject: `task:${task.id}`, detail: `sent a follow-up of ${masked.text.length} characters${masked.quotes ? ` with ${masked.quotes.length} quote(s)` : ""}` });
+    // Words written to a task that ended asking are the answer to what it asked: the next run is told the question and
+    // the answer once, so the message is marked as having reached the agent and is not sent a second time beside them.
+    if (kept.created && endedAsking(task)) {
+      await ctx.store.updateTask(ctx.tenant, task.id, { question: { ...task.question!, answer: masked.text } });
+      await ctx.store.markFollowUpsDelivered(ctx.tenant, [kept.followUp.id], new Date().toISOString());
+      await goOn(ctx, task, `${user.name} answered the agent's question: ${masked.text}`);
+      return c.json({ followUp: { id: kept.followUp.id, status: "delivered", createdAt: kept.followUp.createdAt } }, 202);
+    }
     // Only the message that takes the task out of review puts it back in line; a retry, or more words while it waits, queue nothing.
     if (kept.created && offered === "continue" && task.status !== "queued") {
       const from = request?.status === "merged" ? `; the task goes on from the change kept in request #${request.number}, on a branch of its own` : task.requestNumber !== null ? ` on request #${task.requestNumber}; the task goes on from its branch` : inPlaceReview(task) ? "; the task goes on in the folder from the files as it left them" : task.status === "nothing-changed" ? "; the task goes on from where it worked, with the agent's answer" : "; the task goes on in each repository from what it left";
@@ -1384,7 +1412,14 @@ const DROP_PATH_MAX = 1024;
  * A task in review goes on only from a request still open: one merged or closed takes no more. A task on a folder of
  * repositories goes on when `workspaceOpen` says it can (workspaceGoesOn).
  */
+/**
+ * Whether a task ended asking its starter something they have not answered, where their answer sends it on: a run that
+ * stopped to ask is no failure to them, and what they write in the task's own box is the answer.
+ */
+export const endedAsking = (task: TaskRecord): boolean => Boolean(task.question && !task.question.answer) && task.status !== "queued" && task.status !== "running" && task.runner === "local";
+
 export function offeredFollowUp(runner: TaskRunner, task: TaskRecord, request: RequestRecord | null | undefined, workspaceOpen = false): FollowUpOffer {
+  if (endedAsking(task)) return "continue";
   const offered = runner.followUp(task);
   if (offered !== "continue") return offered;
   // A request kept goes on as one in review does: the next round starts from the repository that holds the kept change.

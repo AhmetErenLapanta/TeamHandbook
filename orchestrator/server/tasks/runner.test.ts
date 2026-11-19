@@ -15,7 +15,7 @@ import { readTeamSetup } from "../inventory.js";
 import type { Store } from "../store.js";
 import { agentSetup, claudeCodeAdapter, fakeAgentAdapter } from "./agents.js";
 import type { AgentAdapter } from "./agents.js";
-import { fence } from "./changes.js";
+import { checkout, fence } from "./changes.js";
 import { saveEnabled } from "../integrations/records.js";
 import { TRACKER, TRACKER_TOKEN_SECRET } from "../integrations/tracker.js";
 import { createVault, storeSecret } from "../vault.js";
@@ -158,6 +158,33 @@ describe("a task from start to request", () => {
     expect(branchExists(bare, `task/${task.id}`)).toBe(false);
     expect(log.join("\n")).not.toContain(CREDENTIAL);
     expect(log).toContain("using [redacted:credential]");
+  });
+
+  it("given an agent that crashes after it changed a file, one that crashes having changed none and one whose disk filled after it changed a file, when each ends, then the first's change waits for review on its request with the crash as the reason in one sentence, the second fails with that sentence, and the third's change waits with the full disk as its reason", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const wrote = script(root, "crash-after-writing", 'writeFileSync("half-done.md", "half\\n"); console.error("the agent crashed"); process.exit(1);');
+    const bare = script(root, "crash-bare", 'console.error("the agent crashed"); process.exit(1);');
+    const full = script(root, "crash-disk-full", 'writeFileSync("half-done.md", "half\\n"); console.error("ENOSPC: no space left on device, write"); process.exit(1);');
+    const ran = async (agent: string) => {
+      const tasks = runner(ctx, [fakeAgentAdapter(agent)]);
+      const started = await tasks.start({ repo: (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!, title: "Add a note", description: "", agent: "fake", user: ADMIN });
+      await tasks.idle();
+      return (await ctx.store.getTask(ctx.tenant, started.id))!;
+    };
+
+    // when
+    const kept = await ran(wrote);
+    const nothing = await ran(bare);
+    const outOfSpace = await ran(full);
+
+    // then
+    expect(kept).toMatchObject({ status: "needs-review", error: "The agent did not finish successfully (exit code 1). What it changed by then waits for review: keep it or undo it." });
+    expect(kept.requestNumber).not.toBeNull();
+    expect((await ctx.store.taskLog(ctx.tenant, kept.id, 0)).map((l) => l.text)).toEqual(expect.arrayContaining(["The agent changed 1 file(s): half-done.md", "The agent did not finish successfully (exit code 1). Last line: stderr: the agent crashed"]));
+    expect(outOfSpace).toMatchObject({ status: "needs-review", error: "This machine's disk is full. Free some space, then start the task again. What it changed by then waits for review: keep it or undo it." });
+    expect(nothing).toMatchObject({ status: "failed", requestNumber: null });
+    expect(nothing.error).toMatch(/^The agent did not finish successfully \(exit code 1\)\./);
   });
 
   it("given an agent that writes a token-shaped secret, when the run ends, then the change is refused by the secret scan and no request opens", async () => {
@@ -455,6 +482,74 @@ describe("a task from start to request", () => {
     expect((await ctx.store.getTask(ctx.tenant, "aaaaaaaaaaaa"))?.error).toMatch(/restarted/);
     expect((await ctx.store.getTask(ctx.tenant, "bbbbbbbbbbbb"))?.status).toBe("needs-review");
   });
+
+  it("given a running task whose checkout is still on disk with the agent's edits, and one whose checkout is gone, when a runner starts after a restart, then the first waits for review in a request holding the edits, said in one sentence, and the second fails as before", async () => {
+    // given
+    const { ctx } = await seeded();
+    const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
+    const paths = taskPaths(ctx.dataDir, ctx.tenant, "aaaaaaaaaaaa");
+    await makeTaskDirs(paths);
+    const baseSha = await checkout(paths, mirrorDir(ctx, repo.id), "HEAD");
+    writeFileSync(join(paths.work, "restart-note.md"), "written before the restart\n");
+    const base = { tenant: ctx.tenant, repoId: repo.id, team: repo.team, title: "Add a note", description: "", issueUrl: null, issueKey: null, agent: "fake", createdBy: ADMIN.email, createdAt: new Date().toISOString(), startedAt: null, finishedAt: null, baseSha, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null };
+    await ctx.store.createTask({ ...base, id: "aaaaaaaaaaaa", status: "running" });
+    await ctx.store.createTask({ ...base, id: "bbbbbbbbbbbb", status: "running" });
+
+    // when
+    const tasks = runner(ctx, [fakeAgentAdapter(FAKE_AGENT)]);
+    await tasks.idle();
+    await tasks.start({ repo, title: "x", description: "", agent: "fake", user: ADMIN });
+    await tasks.idle();
+
+    // then
+    const kept = (await ctx.store.getTask(ctx.tenant, "aaaaaaaaaaaa"))!;
+    const request = (await ctx.store.getRequest(ctx.tenant, repo.id, kept.requestNumber!))!;
+    expect(kept).toMatchObject({ status: "needs-review", error: "Stopped when the orchestrator restarted." });
+    expect(git(["show", `${request.branch}:restart-note.md`], localRepoPath(repo.url)!)).toBe("written before the restart\n");
+    expect(await ctx.store.getTask(ctx.tenant, "bbbbbbbbbbbb")).toMatchObject({ status: "failed", error: expect.stringMatching(/restarted/) });
+    expect(existsSync(paths.root)).toBe(false);
+  });
+
+  it("given a running task whose directories were half made when the orchestrator stopped, when a runner starts, then it starts without an error, the task fails as before, and no directory is left", async () => {
+    // given
+    const { ctx } = await seeded();
+    const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
+    const paths = taskPaths(ctx.dataDir, ctx.tenant, "aaaaaaaaaaaa");
+    await makeTaskDirs(paths);
+    writeFileSync(join(paths.work, "half.md"), "no checkout was made\n");
+    await ctx.store.createTask({ tenant: ctx.tenant, id: "aaaaaaaaaaaa", repoId: repo.id, team: repo.team, title: "Add a note", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "running", createdBy: ADMIN.email, createdAt: new Date().toISOString(), startedAt: null, finishedAt: null, baseSha: "f".repeat(40), tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null });
+
+    // when
+    const tasks = runner(ctx, [fakeAgentAdapter(FAKE_AGENT)]);
+    await tasks.ready();
+
+    // then
+    expect(await ctx.store.getTask(ctx.tenant, "aaaaaaaaaaaa")).toMatchObject({ status: "failed", error: expect.stringMatching(/restarted/) });
+    expect(existsSync(paths.root)).toBe(false);
+  });
+
+  it("given a running task whose checkout holds edits and whose person the directory has turned off, when a runner starts after a restart, then nothing is opened for them and the task fails as before", async () => {
+    // given
+    const { ctx } = await seeded();
+    const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
+    const paths = taskPaths(ctx.dataDir, ctx.tenant, "aaaaaaaaaaaa");
+    await makeTaskDirs(paths);
+    const baseSha = await checkout(paths, mirrorDir(ctx, repo.id), "HEAD");
+    writeFileSync(join(paths.work, "restart-note.md"), "written before the restart\n");
+    await ctx.store.createTask({ tenant: ctx.tenant, id: "aaaaaaaaaaaa", repoId: repo.id, team: repo.team, title: "Add a note", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "running", createdBy: ADMIN.email, createdAt: new Date().toISOString(), startedAt: null, finishedAt: null, baseSha, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null });
+    const account = (await ctx.store.listUsers(ctx.tenant)).find((u) => u.email === ADMIN.email)!;
+    await ctx.store.setSetting(ctx.tenant, `scim.off.${account.id}`, new Date().toISOString());
+
+    // when
+    const tasks = runner(ctx, [fakeAgentAdapter(FAKE_AGENT)]);
+    await tasks.idle();
+    await tasks.start({ repo, title: "x", description: "", agent: "fake", user: ADMIN });
+    await tasks.idle();
+
+    // then
+    expect(await ctx.store.getTask(ctx.tenant, "aaaaaaaaaaaa")).toMatchObject({ status: "failed", error: expect.stringMatching(/restarted/) });
+    expect((await ctx.store.listRequests(ctx.tenant)).filter((r) => r.title === "Add a note")).toEqual([]);
+  });
 });
 
 /** Commits a change to one file of a team repository, the way a merged request lands, and resyncs the mirror. */
@@ -546,6 +641,21 @@ describe("an orchestrator that stops while a task runs", () => {
     expect(existsSync(taskPaths(ctx.dataDir, ctx.tenant, first.id).git)).toBe(false);
     expect(await ctx.store.unfinishedTasks(ctx.tenant)).toEqual([]);
     await expect(tasks.start({ repo, title: "Too late", description: "", agent: "fake", user: ADMIN })).rejects.toThrow(/stopping/);
+  });
+
+  it("given an orchestrator that stopped while a task's step was stopped and waiting for its person's words, when the next one starts, then the task reads as failed by the restart and no longer as waiting for those words", async () => {
+    // given
+    const { ctx } = await seeded();
+    const now = new Date().toISOString();
+    await ctx.store.createTask({ tenant: ctx.tenant, id: "cccccccccccc", repoId: "payments-skills", team: "Payments", title: "t", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "running", createdBy: ADMIN.email, createdAt: now, startedAt: now, finishedAt: null, baseSha: null, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null });
+    await ctx.store.updateTask(ctx.tenant, "cccccccccccc", { stage: "stopped" });
+
+    // when
+    await runner(ctx, [fakeAgentAdapter(FAKE_AGENT)]).ready();
+
+    // then
+    const task = (await ctx.store.getTask(ctx.tenant, "cccccccccccc"))!;
+    expect([task.status, task.stage ?? null, task.error]).toEqual(["failed", null, "The orchestrator restarted before this task finished."]);
   });
 
   it("given an orchestrator that was killed while an agent ran, when the next one starts, then that agent's group ends, a group that is not the task's is left alone, and the leftover directories go", async () => {

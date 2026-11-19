@@ -141,6 +141,7 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
       } catch (error) {
         outcome = error instanceof Ended ? { ...ended(error.status, error.message), ...error.kept } : ended("failed", error instanceof Error ? error.message : String(error));
       }
+      if (abortedAway(hooks)) outcome = { ...outcome, status: "interrupted", error: (hooks.signal.reason as Error).message };
       if (outcome.status !== "interrupted") {
         await releasePersonalGuard(root);
         await rm(root, { recursive: true, force: true });
@@ -279,6 +280,7 @@ export function machineExecutor({ dataDir, org, machineId, working = new Set(), 
     } catch (error) {
       outcome = error instanceof Ended ? { ...ended(error.status, error.message), ...error.kept } : ended("failed", error instanceof Error ? error.message : String(error));
     }
+    if (abortedAway(hooks)) outcome = { ...outcome, status: "interrupted", error: (hooks.signal.reason as Error).message };
     if (outcome.status !== "interrupted") {
       await releasePersonalGuard(root);
       await rm(root, { recursive: true, force: true });
@@ -731,6 +733,10 @@ const nothingChanged = (message: string, summary: string) => new Ended("failed",
 function untilReset(work: RemoteWork, failure: AgentFailure | undefined, nativeSessionId: string | null): Ended | null {
   if (failure?.class !== "usage_limit" || !failure.resetAt || !nativeSessionId || "folder" in work) return null;
   return new Ended("interrupted", failure.message, { nativeSessionId, limitResetAt: failure.resetAt });
+}
+
+function abortedAway(hooks: ExecutorHooks): boolean {
+  return hooks.signal.aborted && hooks.signal.reason instanceof Error && !stoppedByPerson(hooks);
 }
 
 function stoppedByPerson(hooks: ExecutorHooks): boolean {

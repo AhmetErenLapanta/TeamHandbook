@@ -1,5 +1,5 @@
-import { MachineRefused, ProtocolMismatch } from "./http-link.js";
-import type { ChecksAnswer, ChecksAsk, FolderAnswer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, RunnerLink, SetupAnswer, SetupAsk, UndoAnswer, UndoAsk } from "./link.js";
+import { LeaseGone, MachineRefused, NotTaken, ProtocolMismatch } from "./http-link.js";
+import type { ChecksAnswer, ChecksAsk, FolderAnswer, FolderAsk, LessonAnswer, LessonAsk, LessonOpAnswer, LessonOpAsk, PushAnswer, PushAsk, RunnerLink, SetupAnswer, SetupAsk, TaskOutcome, UndoAnswer, UndoAsk } from "./link.js";
 import { runLeasedTask } from "./task.js";
 import type { LeasedTask, TaskExecutor, TaskOptions } from "./task.js";
 
@@ -54,8 +54,24 @@ export interface LoopOptions extends TaskOptions {
 export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, options: LoopOptions): RunnerLoop {
   const { random = Math.random, onPollFailed = () => {}, now = Date.now, listFolders, undoInFolder, queueLesson, readChecks, lessonOp, pushBranch, setupHere, slots = () => 1, onRefused = () => {} } = options;
   const running = new Map<string, LeasedTask>();
+  const late = new Map<string, NonNullable<TaskOutcome["changes"]>>();
   const halt = new AbortController();
+  const deliverLate = async () => {
+    for (const [taskId, changes] of late) {
+      try {
+        await link.lateChanges!(taskId, changes);
+        late.delete(taskId);
+      } catch (error) {
+        if (error instanceof LeaseGone || error instanceof NotTaken) late.delete(taskId);
+        else throw error;
+      }
+    }
+  };
   let wakeSleep: (() => void) | null = null;
+  // The poll under way when it began with every slot taken. It says for its whole wait that the runner takes nothing,
+  // so a task that ended meanwhile left its slot unoffered until the wait ran out, and a task waiting for this runner
+  // read as waiting its turn for up to that long. It is ended as a task finishes, and the next poll offers the slot.
+  let full: AbortController | null = null;
 
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
@@ -70,8 +86,14 @@ export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, option
     let failures = 0;
     let stableSince: number | null = null;
     while (!halt.signal.aborted) {
+      const turn = new AbortController();
+      const endTurn = () => turn.abort();
+      halt.signal.addEventListener("abort", endTurn, { once: true });
+      const canTake = running.size < slots();
+      full = canTake ? null : turn;
       try {
-        const { lease, commands, folders = [], undos = [], lessons = [], checks = [], lessonOps = [], pushes = [], setups = [] } = await link.poll(POLL_WAIT_MS, running.size < slots(), halt.signal);
+        await deliverLate();
+        const { lease, commands, folders = [], undos = [], lessons = [], checks = [], lessonOps = [], pushes = [], setups = [] } = await link.poll(POLL_WAIT_MS, canTake && late.size === 0, turn.signal);
         if (stableSince === null) stableSince = now();
         if (now() - stableSince >= STABLE_MS) failures = 0;
         for (const command of commands) running.get(command.taskId)?.command(command);
@@ -87,12 +109,19 @@ export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, option
         if (lease && !running.has(lease.task.id) && !halt.signal.aborted) {
           const task = runLeasedTask(lease, link, executor, options);
           running.set(lease.task.id, task);
-          void task.done.finally(() => {
-            if (running.get(lease.task.id) === task) running.delete(lease.task.id);
-          });
+          void task.done
+            .then(({ outcome, reported }) => {
+              if (!reported && outcome.changes && link.lateChanges) late.set(lease.task.id, outcome.changes);
+            })
+            .finally(() => {
+              if (running.get(lease.task.id) === task) running.delete(lease.task.id);
+              full?.abort();
+            });
         }
       } catch (error) {
         if (halt.signal.aborted) break;
+        // A poll this loop ended to offer a freed slot failed nothing.
+        if (turn.signal.aborted) continue;
         if (error instanceof MachineRefused || error instanceof ProtocolMismatch) {
           onRefused(error);
           for (const task of running.values()) task.shutDown();
@@ -103,6 +132,9 @@ export function startRunnerLoop(link: RunnerLink, executor: TaskExecutor, option
         const wait = backoffMs(failures, random);
         onPollFailed(error, wait);
         await sleep(wait);
+      } finally {
+        halt.signal.removeEventListener("abort", endTurn);
+        if (full === turn) full = null;
       }
     }
     await Promise.all([...running.values()].map((task) => task.done));

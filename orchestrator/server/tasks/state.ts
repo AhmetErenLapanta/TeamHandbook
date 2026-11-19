@@ -54,6 +54,7 @@ export function taskState(task: TaskRecord, requestOf: RequestOf, waitingFor: st
   if (task.status === "running") return asking || task.stage === "stopped" ? "needs-you" : "working";
   if (task.status === "queued") return waitingFor === "limit" ? "usage-limit" : waitingFor ? "waiting-machine" : "waiting";
   if (task.status === "interrupted" && waitingFor === "limit") return "usage-limit";
+  if (task.status === "needs-answer") return "needs-you";
   if (task.status === "nothing-changed") return "finished-nothing-changed";
   if (task.status === "cancelled" || task.status === "interrupted") return "stopped";
   if (task.status === "failed") return "failed";
