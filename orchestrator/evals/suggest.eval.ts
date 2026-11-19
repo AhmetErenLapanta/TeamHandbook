@@ -52,7 +52,7 @@ describe.skipIf(!LIVE)("the skill-suggestion prompt against a real model", () =>
   it("given each case, when the model is asked as the orchestrator asks it, then the result is written for comparison", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "orchestrator-eval-"));
     const agent = claudeCodeAdapter(process.env.ORCHESTRATOR_CLAUDE_BIN || "claude");
-    const deps = { agent, isolation: { mode: "process" as const, network: "open" as const }, hostEnv: process.env, passEnv: [], timeoutMs: 180_000, dataDir, tenant: "eval", model: null };
+    const deps = { agent, isolation: { mode: "process" as const, network: "open" as const }, hostEnv: process.env, passEnv: [], timeoutMs: 180_000, dataDir, tenant: "eval", model: null, personal: false };
     const results: CaseResult[] = [];
     try {
       for (const c of CASES) {
