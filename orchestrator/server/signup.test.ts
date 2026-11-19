@@ -298,7 +298,7 @@ describe("invitations to a signed-in person", () => {
     expect(before).toEqual({ orgs: [], invitations: [expect.objectContaining({ orgName: "Okafor Labs", invitedBy: "Ada Okafor", role: "member", teams: [] })], joinable: [] });
     expect(joined.status).toBe(200);
     expect(await joined.json()).toEqual({ tenant: "okafor", orgName: "Okafor Labs", next: "/okafor/tasks" });
-    expect([again.status, (await again.json()).code]).toEqual([404, "invite-unknown"]);
+    expect([again.status, await again.json()]).toEqual([404, { error: "This invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one.", code: "invite-unknown" }]);
     expect(after).toEqual({ orgs: [{ tenant: "okafor", orgName: "Okafor Labs", role: "member" }], invitations: [], joinable: [] });
   });
 

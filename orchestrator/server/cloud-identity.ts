@@ -246,7 +246,7 @@ export function identityRoutes(options: IdentityRoutesOptions): Hono {
     const invite = await store.getInvite(tenant, id);
     const org = await store.getOrg(tenant);
     // One revoked, never sent or in a deleted organization reads alike, so nobody learns which.
-    if (!invite || org?.deletedAt) throw new SignInRefused("invite-unknown", "This invitation is not one this orchestrator holds. Ask whoever invited you for a new link.");
+    if (!invite || org?.deletedAt) throw new SignInRefused("invite-unknown", "This invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one.");
     const shownName = org?.name ?? (await orgName(store, tenant));
     if (invite.expiresAt <= new Date().toISOString()) {
       const inviter = (await store.getUserByEmail(tenant, invite.invitedBy))?.name || invite.invitedBy;
@@ -387,7 +387,7 @@ export function identityRoutes(options: IdentityRoutesOptions): Hono {
       return c.json({ error: err.message, code: err.problem }, status);
     }
   };
-  const unknownInvite = () => Promise.reject(new SignInRefused("invite-unknown", "This invitation is not one this orchestrator holds. Ask whoever invited you for a new link."));
+  const unknownInvite = () => Promise.reject(new SignInRefused("invite-unknown", "This invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one."));
 
   app.post("/api/identity/join", async (c) => {
     const who = await signedIn(c);
@@ -452,7 +452,7 @@ export function identityRoutes(options: IdentityRoutesOptions): Hono {
     const who = await signedIn(c);
     if (who instanceof Response) return who;
     const invite = await ownInvite(who.identity, c.req.param("id"));
-    if (!invite) return c.json({ error: "This invitation is not one this orchestrator holds. Ask whoever invited you for a new link.", code: "invite-unknown" }, 404);
+    if (!invite) return c.json({ error: "This invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one.", code: "invite-unknown" }, 404);
     await store.deleteInvite(invite.tenant, invite.id);
     return c.body(null, 204);
   });

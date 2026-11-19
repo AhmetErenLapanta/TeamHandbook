@@ -84,7 +84,7 @@ describe("inviting people", () => {
 });
 
 describe("accepting an invitation by link", () => {
-  it("given an invitation to an admin role with a team, when the link is opened and accepted, then the account has that role and team, signs in with the password chosen, and the link is used up", async () => {
+  it("given an invitation to an admin role with a team, when the link is opened and accepted, then the account has that role and team, signs in with the password chosen, and the link is used up, a second use saying it was used and to sign in", async () => {
     // given
     const { store, owner } = await organization();
     const { invited } = await invite(store, TENANT, TEAMS, { emails: "kim@example.invalid", role: "admin", teams: ["Platform"] }, owner, NOW);
@@ -99,7 +99,8 @@ describe("accepting an invitation by link", () => {
     expect(shown).toMatchObject({ email: "kim@example.invalid", role: "admin", teams: ["Platform"], invitedBy: owner.name });
     expect(await principalOf(store, user)).toMatchObject({ name: "Kim", role: "admin", ownedTeams: ["Platform"] });
     await expect(signInWithPassword(store, TENANT, "kim@example.invalid", PASSWORD)).resolves.toMatchObject({ id: user.id });
-    await expect(acceptInvite(store, TENANT, token, { password: PASSWORD }, later)).rejects.toMatchObject({ status: 404 });
+    await expect(acceptInvite(store, TENANT, token, { password: PASSWORD }, later)).rejects.toMatchObject({ status: 404, message: "this invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one" });
+    await expect(readInvite(store, TENANT, token, later)).rejects.toMatchObject({ status: 404, message: "this invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one" });
     expect(await store.listInvites(TENANT)).toEqual([]);
   });
 

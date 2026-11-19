@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIGN_IN_PEOPLE, signInClients } from "../lab/cloud.js";
+import { removeUser } from "./accounts.js";
 import { startSignInProviders } from "../lab/sign-in-providers.js";
 import { createApp } from "./app.js";
 import { identityRoutes, SIGN_IN_METHODS } from "./cloud-identity.js";
@@ -110,6 +111,28 @@ describe("one sign-in across organizations", () => {
 
     // then
     expect([ended, afterFresh, off, githubOnly]).toEqual([401, 200, 401, 401]);
+  });
+
+  it("given a signed-in member an owner removes, when their open page calls next, then it is told they are no longer a member and to ask for an invitation, while an organization they never belonged to says only to sign in", async () => {
+    // given
+    const store = openSqliteStore(":memory:");
+    const app = cloud(store);
+    const { cookies } = await signIn(app, "google", "Ada Okafor");
+    const identity = (await store.getIdentityByLogin("google", "104857600123456789012"))!;
+    await member(store, "acme", "idn_owner", "owner@acme.example.invalid");
+    await store.insertUser({ tenant: "acme", id: "usr_ada", email: identity.email, name: "Ada", role: "member", passwordHash: null, oidcIssuer: null, oidcSubject: null, forgeLogin: null, createdAt: new Date().toISOString(), identityId: identity.id });
+    const me = (tenant: string) => createApp({ store, dataDir: "unused", tenant, allowedHosts: null }).request("/api/me", { headers: { cookie: header(cookies) } });
+    const before = (await me("acme")).status;
+
+    // when
+    await removeUser(store, "acme", "usr_ada", { id: "usr_acme", name: "Owner", email: "owner@acme.example.invalid", role: "owner", ownedTeams: [] });
+    const removed = await me("acme");
+    const never = await me("globex");
+
+    // then
+    expect([before, removed.status, never.status]).toEqual([200, 401, 401]);
+    expect(await removed.json()).toEqual({ error: "you are no longer a member of this organization; ask one of its owners or admins to invite you again", code: "removed" });
+    expect(await never.json()).toEqual({ error: "sign in first", code: "signed-out" });
   });
 
   it("given a sign-in another browser started, when its callback is opened here, then this browser is not signed in", async () => {
