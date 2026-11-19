@@ -18,7 +18,10 @@ import { HandbookPluginCard } from "./PluginCard";
 import { usePersonalSetup } from "./personal";
 import type { Personal } from "./personal";
 import type { HandbookPick, Proposed } from "./Handbook";
-import { lessonsApi, skillText } from "../TaskLearned";
+import { RailSheet } from "../design/RailSheet";
+import { LessonRail, LessonsReview } from "./LessonsReview";
+import { useLessonsReview } from "./lessons-review";
+import type { ReviewRow } from "./lessons-review";
 import type { TaskLessonRow } from "../TaskLearned";
 import { ControlsView, PoliciesSection } from "../controls/Controls";
 import "./team.css";
@@ -120,24 +123,6 @@ function SetupProblemLine({ problem }: { problem: SetupProblem }) {
 /** A lesson still waiting for its person: pending in the orchestrator's own queue, or sent to one of their machines and not decided there. */
 export const waiting = (l: Pick<TaskLessonRow, "status">) => l.status === "pending" || l.status === "sent";
 
-/** The person's own lessons, on either kind of orchestrator; an answer that is no list hides the section rather than showing it empty. */
-/**
- * The person's own lessons, and how many wait for review in all: on one person's own orchestrator the
- * plugin's whole queue, not only what tasks taught, so the count says `waiting` where the answer has it.
- */
-function useLessons(): [TaskLessonRow[] | null, () => void, number | null] {
-  const [lessons, setLessons] = useState<TaskLessonRow[] | null>(null);
-  const [waitingAll, setWaitingAll] = useState<number | null>(null);
-  const [round, setRound] = useState(0);
-  useEffect(() => {
-    call<{ candidates: TaskLessonRow[]; waiting?: number }>("GET", "/api/lessons").then((r) => {
-      setLessons(r.candidates.filter(waiting));
-      setWaitingAll(typeof r.waiting === "number" ? r.waiting : null);
-    }, () => setLessons(null));
-  }, [round]);
-  return [lessons, () => setRound((n) => n + 1), waitingAll];
-}
-
 /** The setup still open: the next step with its one action, the rest by name. With nothing left the section is not drawn. */
 function SettingUp({ steps, skipped }: { steps: Step[]; skipped: readonly string[] }) {
   const [next, ...rest] = steps;
@@ -165,61 +150,6 @@ function PersonTasks({ people }: { people: PersonOutcomes[] }) {
     </TurnSection>
   );
 }
-
-function Lessons({ lessons, waitingAll, picked, onPick }: { lessons: TaskLessonRow[]; waitingAll: number | null; picked: string | null; onPick: (lesson: TaskLessonRow) => void }) {
-  // The plugin's queue holds lessons from the person's own sessions too; those are reviewed in Claude Code.
-  const more = waitingAll !== null ? Math.max(waitingAll - lessons.length, 0) : 0;
-  if (!lessons.length && !more) return null;
-  return (
-    <TurnSection name="Lessons to review" count={lessons.length + more} why="What a task taught, offered as a skill; keep it and every later task loads it." empty="No lesson waits. A task you correct or finish leaves its lesson here.">
-      <ul className="team-rows">
-        {lessons.map((l) => (
-          <li key={l.slug} className={l.slug === picked ? "picked" : undefined}>
-            <button type="button" className="row-pick" aria-pressed={l.slug === picked} onClick={() => onPick(l)}><span className="mono">{l.slug}</span></button>
-            {l.description ? <span className="muted"> {l.description}</span> : null}
-            {l.status === "sent" && l.machine ? <span className="muted"> waits on {l.machine}</span> : null}
-          </li>
-        ))}
-      </ul>
-      {more ? <p className="muted">{more === 1 ? "1 more waits" : `${more} more wait`} from your own sessions; review {more === 1 ? "it" : "them"} with <code>/handbook:review</code> in Claude Code.</p> : null}
-    </TurnSection>
-  );
-}
-
-/** The picked lesson in the rail: what the person said it comes from, the skill's text, and the decision. */
-function LessonRail({ task, slug, onDecided }: { task: string; slug: string; onDecided: () => void }) {
-  const [detail, setDetail] = useState<Awaited<ReturnType<typeof lessonsApi.read>> | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
-  const [never, setNever] = useState(false);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setDetail(null);
-    setFailed(null);
-    lessonsApi.read(task, slug).then(setDetail, (e: Error) => setFailed(e.message));
-  }, [task, slug]);
-  const decide = (action: Promise<unknown>) => {
-    setBusy(true);
-    setFailed(null);
-    action.then(onDecided, (e: Error) => setFailed(e.message)).finally(() => setBusy(false));
-  };
-  return (
-    <section aria-labelledby="lesson-h">
-      <h2 id="lesson-h" className="mono">{slug}</h2>
-      {failed ? <p className="error" role="alert">{failed}</p> : !detail ? <Loading what="the lesson" /> : (
-        <>
-          {detail.quote ? <p dir="auto">You said: “{detail.quote}”</p> : null}
-          <Markdown text={skillText(detail.skillMd)} />
-          <div className="actions">
-            <button type="button" disabled={busy} onClick={() => decide(lessonsApi.keep(task, slug))}>Keep</button>
-            <button type="button" className="secondary" disabled={busy} onClick={() => decide(lessonsApi.reject(task, slug, never))}>Discard</button>
-          </div>
-          <label className="check"><input type="checkbox" checked={never} onChange={(e) => setNever(e.target.checked)} /> Never suggest it again</label>
-        </>
-      )}
-    </section>
-  );
-}
-
 
 /** One person's own setup where no team repository exists yet: what their Claude Code loads in one sentence, the list folded, and the one way on, sharing it with a team. */
 function YourSetup({ personal }: { personal: Personal | null }) {
@@ -266,12 +196,12 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
   const managing = manages(me);
   const [summary, setSummary] = useState<ActivitySummary | null>(null);
   const [onboarding, setOnboarding] = useState<Onboarding | null>(null);
-  const [picked, setPicked] = useState<{ kind: "lesson"; slug: string; task: string } | { kind: "invite" } | { kind: "handbook"; pick: HandbookPick } | null>(null);
+  const [picked, setPicked] = useState<{ kind: "lesson"; row: ReviewRow } | { kind: "invite" } | { kind: "handbook"; pick: HandbookPick } | null>(null);
   const [proposed, setProposed] = useState<Proposed>(new Map());
   const members = useMembers(me);
   const outcomes = useOutcomes(!local);
   const [forges] = useForgeConnections(!local && managing);
-  const [lessons, readLessons, waitingAll] = useLessons();
+  const review = useLessonsReview();
   const shared = useShared();
   const problems = useSetupProblems();
   const loaded = usePersonalSetup(local);
@@ -288,18 +218,18 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
   // Only a required step still open is listed; with none the section is not drawn.
   const settingUp = steps.some((s) => s.required) ? steps : [];
   const teamRepos = (repos ?? []).filter((r) => r.kind === "skills" && r.configured !== false);
-  const sentence = teamSentence({ people: local ? null : members.users?.length ?? null, shared: local ? null : shared, lessons: waitingAll ?? lessons?.length ?? null });
+  const sentence = teamSentence({ people: local ? null : members.users?.length ?? null, shared: local ? null : shared, lessons: review.waiting ?? review.rows?.length ?? null });
   const invite = managing && !local ? <button type="button" onClick={() => setPicked({ kind: "invite" })}>Invite members</button> : null;
   return (
     <div className="page">
       <PageHead title="Team" {...(sentence ? { summary: sentence } : {})} {...(invite ? { actions: invite } : {})} />
-      <HandbookPluginCard me={me} />
+      <HandbookPluginCard me={me} quiet />
       <div className={picked ? "with-rail" : undefined}>
         <div>
           {/* Setup still open is the page's empty state; a team that is set up and broke since sees what broke. */}
           {settingUp.length ? <SettingUp steps={settingUp} skipped={onboarding?.skipped ?? []} /> : null}
           {settingUp.length ? null : problems.map((pr) => <SetupProblemLine key={`${pr.repoId}:${pr.title}`} problem={pr} />)}
-          {lessons ? <Lessons lessons={lessons} waitingAll={waitingAll} picked={picked?.kind === "lesson" ? picked.slug : null} onPick={(l) => setPicked({ kind: "lesson", slug: l.slug, task: l.taskId })} /> : null}
+          <LessonsReview review={review} picked={picked?.kind === "lesson" ? picked.row.slug : null} onPick={(row) => setPicked({ kind: "lesson", row })} />
           {/* Whoever sees the members sees each one's last 30 days beside their role; anyone else, the tasks they see. */}
           {local ? null : managing ? <MembersSections me={me} data={members} hideEmpty extra={{ name: "Last 30 days", cell: (u) => outcomesCell(outcomes?.get(u.email)) }} /> : outcomes ? <PersonTasks people={[...outcomes.values()]} /> : <Loading what="tasks by person" />}
           {/* One person's Team is their own Claude Code setup, the team's plugin a row in it; a team's server shows the team repository. */}
@@ -317,7 +247,7 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
           <PoliciesSection me={me} />
         </div>
         {picked ? (
-          <aside className="rail" aria-label={picked.kind === "invite" ? "Invite members" : picked.kind === "handbook" ? "The picked row" : "The picked lesson"}>
+          <RailSheet label={picked.kind === "invite" ? "Invite members" : picked.kind === "handbook" ? "The picked row" : "The picked lesson"} onClose={() => setPicked(null)}>
             {picked.kind === "invite" ? (
               <InviteForm me={me} teams={members.teams} onSent={(sent, skipped) => { members.setSent({ sent, skipped }); members.reload(); setPicked(null); }} onCancel={() => setPicked(null)} />
             ) : picked.kind === "handbook" ? (
@@ -326,9 +256,9 @@ function TeamPage({ me, org, repos }: { me: Principal; org: string; repos: RepoR
                 setPicked(null);
               }} />
             ) : (
-              <LessonRail key={`${picked.task}/${picked.slug}`} task={picked.task} slug={picked.slug} onDecided={() => { setPicked(null); readLessons(); }} />
+              <LessonRail key={picked.row.slug} row={picked.row} onDecided={(r) => { review.settled(r); setPicked(null); }} />
             )}
-          </aside>
+          </RailSheet>
         ) : null}
       </div>
     </div>

@@ -6,7 +6,8 @@ import type { OrchestratorEnv, Principal } from "./auth.js";
 import { readInventory } from "./inventory.js";
 import type { Inventory } from "./inventory.js";
 import { shownProjects } from "./projects.js";
-import { skillsOf } from "./skill-outcomes.js";
+import { decidedTasks, outcomeOf, skillsOf } from "./skill-outcomes.js";
+import type { OutcomeBucket } from "./skill-outcomes.js";
 import { route } from "./route-scopes.js";
 import type { RepoRecord } from "./store.js";
 import { everyTask, visibleTasks } from "./tasks/guards.js";
@@ -28,7 +29,7 @@ export interface TeamProblem {
 }
 
 export interface TeamShared {
-  skills: { name: string; slug: string; repoId: string; repoName: string; tasks: number | null }[];
+  skills: { name: string; slug: string; repoId: string; repoName: string; tasks: number | null; /** How the window's decided tasks that used it ended; the rates are null under the measure's minimum. */ outcome: OutcomeBucket }[];
   /** A team's MCP server is loaded into every task rather than picked, so how many tasks used it is not known. */
   mcpServers: { name: string; repoId: string; repoName: string; tasks: null }[];
 }
@@ -77,12 +78,16 @@ export async function teamShared(ctx: OrchestratorContext, user: Principal, days
   const tasks = await everyTask(ctx.store, ctx.tenant, { ...visibleTasks(user), since });
   const used = new Map<string, number>();
   for (const task of tasks) for (const name of skillsOf(task)) used.set(name, (used.get(name) ?? 0) + 1);
+  const decided = await decidedTasks(ctx, tasks.filter((t) => !t.parentId));
   const shared: TeamShared = { skills: [], mcpServers: [] };
   for (const repo of (await teamRepos(ctx, user)).filter((r) => r.head)) {
     const read = await inventoryOf(ctx, repo);
     if (!read) continue;
     const at = { repoId: repo.id, repoName: repo.name };
-    for (const skill of read.skills) shared.skills.push({ name: skill.name, slug: skill.slug, ...at, tasks: used.get(skill.slug) ?? used.get(skill.name) ?? 0 });
+    for (const skill of read.skills) {
+      const usedIt = decided.filter((d) => skillsOf(d.task).has(skill.slug) || skillsOf(d.task).has(skill.name));
+      shared.skills.push({ name: skill.name, slug: skill.slug, ...at, tasks: used.get(skill.slug) ?? used.get(skill.name) ?? 0, outcome: outcomeOf(usedIt) });
+    }
     for (const server of read.mcpServers) shared.mcpServers.push({ name: server.name, ...at, tasks: null });
   }
   return shared;

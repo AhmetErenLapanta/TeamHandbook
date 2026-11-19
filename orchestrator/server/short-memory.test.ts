@@ -35,4 +35,23 @@ describe("what a short memory keeps", () => {
     // then
     expect([loads, again]).toEqual([3, "ok"]);
   });
+
+  it("given a memory that answers from an old read for a while, when a read asks past its minute, then it gets the old answer at once, one read runs behind it, and a failed one keeps the old answer", async () => {
+    // given
+    let clock = 0;
+    const memory = shortMemory(60_000, () => clock, 600_000);
+    let loads = 0;
+    await memory.read("a", async () => (loads += 1));
+
+    // when
+    clock = 61_000;
+    const [first, second] = await Promise.all([memory.read("a", async () => (loads += 1)), memory.read("a", async () => (loads += 1))]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const fresh = await memory.read("a", async () => (loads += 1));
+    clock = 800_000;
+    const beyond = await memory.read("a", async () => (loads += 1));
+
+    // then
+    expect([first, second, fresh, beyond, loads]).toEqual([1, 1, 2, 3, 3]);
+  });
 });

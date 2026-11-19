@@ -53,4 +53,29 @@ describe("what the Team page reads of the team's repositories", () => {
     expect(shared.mcpServers).toEqual(inventory.mcpServers.map((s) => ({ name: s.name, repoId: repo.id, repoName: repo.name, tasks: null })));
     expect(shared.mcpServers.length).toBeGreaterThan(0);
   });
+
+  it("given a team skill used by six decided tasks of the window, five kept as they were and one undone, and another skill none used, when what the team shares is read, then the skill says how those ended, with rates because there are enough, and the other says none decided with no rates", async () => {
+    // given
+    const { ctx, root } = await seededContext("orchestrator-team-", ["payments-skills"]);
+    dirs.push(root);
+    const repo = (await ctx.store.getRepo(ctx.tenant, "payments-skills"))!;
+    const inventory = await readInventory(mirrorDir(ctx, repo.id), repo.head!);
+    const skill = inventory.skills[0]!.slug;
+    const now = Date.parse("2026-11-04T12:00:00.000Z");
+    const at = new Date(now - 3 * 86_400_000).toISOString();
+    for (let i = 0; i < 6; i++) {
+      const id = `tsk_decided${i}`;
+      await ctx.store.createTask({ tenant: ctx.tenant, id, repoId: repo.id, team: repo.team, title: "t", description: "", issueUrl: null, issueKey: null, agent: "fake", status: "needs-review", createdBy: OWNER.email, createdAt: at, startedAt: null, finishedAt: at, baseSha: null, tests: null, cost: { usd: null, inputTokens: null, outputTokens: null }, requestNumber: null, error: null, skills: [skill], result: "changes" });
+      const kept = i < 5 ? { at, by: OWNER.email } : null;
+      await ctx.store.setTaskChanges(ctx.tenant, id, { files: [], undone: kept ? null : { at, by: OWNER.email, kept: [] }, kept, before: "tree-before", after: "tree-after" });
+    }
+
+    // when
+    const shared = await teamShared(ctx, OWNER, 30, now);
+
+    // then
+    const [used, ...others] = [shared.skills.find((s) => s.slug === skill)!, ...shared.skills.filter((s) => s.slug !== skill)];
+    expect(used.outcome).toMatchObject({ tasks: 6, accepted: 5, acceptedWithoutRevision: 5, rejected: 1, rates: { withoutRevision: 5 / 6, rejected: 1 / 6 } });
+    for (const other of others) expect(other.outcome).toMatchObject({ tasks: 0, rates: { withoutRevision: null, rejected: null } });
+  });
 });
