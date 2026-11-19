@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { compress } from "hono/compress";
 import { randomBytes } from "node:crypto";
 import { createApp, inConfiguration, syncRepos } from "./app.js";
 import { addedCodeTarget, loadAddedRepos, yieldToFile } from "./connect.js";
@@ -464,6 +465,8 @@ if (localMode()) served[0]!.ctx.localSignedIn = async () => void signInPage(data
 let copyNow: () => Promise<string | null> = async () => null;
 const app = orgRoutes(served, { mode, secure, allowedHosts: hosts, logFormat: logAs, metricsToken: scrapeToken, dataDir, secrets: sealing.source, ...(cloudOrgs ? { cloud: cloudOrgs } : {}), ...(localMode() ? { local: localLinkRoutes(dataDir, signInLink, () => copyNow()) } : {}) });
 const webRoot = resolve(process.env.ORCHESTRATOR_WEB_ROOT ?? "dist/web");
+// The page's script and styles go out compressed: over a slow line the one bundle was most of the first draw. Only these files, never an API answer or a live stream.
+app.use("/assets/*", compress());
 app.use("/*", serveStatic({ root: webRoot }));
 app.get("*", serveStatic({ path: join(webRoot, "index.html") }));
 
