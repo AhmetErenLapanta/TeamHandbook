@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { basename, join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { OrchestratorContext } from "./app.js";
@@ -8,9 +9,10 @@ import type { UserRecord } from "./accounts.js";
 import { localRepoPath } from "./forge/local.js";
 import { isId, OLDER_IDS } from "./ids.js";
 import { localMode } from "./mode.js";
-import { detectSecret, hostIdentityOf, listCandidates, keepTaskLesson, queueTaskLesson, readTaskLessonReply, rejectTaskLesson, signalIsSafe, taskLesson, taskLessonCandidate, taskLessons } from "./plugin.js";
+import { detectSecret, hostIdentityOf, listCandidates, keepLessonForTeam, keepLessonInto, keepTaskLesson, pendingLesson, pendingLessons, queueTaskLesson, rejectLesson, readTaskLessonReply, rejectTaskLesson, signalIsSafe, taskLesson, taskLessonCandidate, taskLessons } from "./plugin.js";
 import type { CandidateMeta, TaskLessonSignal, TaskLessonWire } from "./plugin.js";
 import { route } from "./route-scopes.js";
+import { handbookReads } from "./short-memory.js";
 import { secretsForTask } from "./task-secrets.js";
 import { fence } from "./tasks/changes.js";
 import { seesTask } from "./tasks/guards.js";
@@ -276,6 +278,23 @@ export function startLessonSweep(ctx: OrchestratorContext, place: LessonPlace, e
   return Object.assign(() => clearInterval(timer), { firstSweep });
 }
 
+// A folder's skills are committed with its repository: the folder and its .claude and skills are resolved first, and one
+// that is a link leading out of the folder is refused rather than written through.
+function skillsOfFolder(folder: string): string | null {
+  try {
+    const root = realpathSync(folder);
+    const claude = join(root, ".claude");
+    for (const dir of [claude, join(claude, "skills")]) {
+      if (!existsSync(dir)) continue;
+      const out = relative(root, realpathSync(dir));
+      if (out.startsWith("..") || isAbsolute(out)) return null;
+    }
+    return join(claude, "skills");
+  } catch {
+    return null;
+  }
+}
+
 function shownLesson(meta: CandidateMeta) {
   return { slug: meta.slug, description: meta.description, status: meta.status, createdAt: meta.createdAt, taskId: meta.sessionId };
 }
@@ -381,7 +400,9 @@ export function lessonRoutes(ctx: OrchestratorContext, place: LessonPlace | null
         if (!folder) return c.json({ error: "this task's project is not a folder on this machine, so the lesson cannot be kept there" }, 409);
         const lesson = taskLesson(queue!.home, slug);
         if (!lesson || detectSecret(lesson.skillMd) || (lesson.quote && detectSecret(lesson.quote))) return c.json({ error: "the lesson holds what looks like a credential, so it stays out of the folder; keep it as yours" }, 409);
-        into = join(folder, ".claude", "skills");
+        const inside = skillsOfFolder(folder);
+        if (!inside) return c.json({ error: "this task's project folder leads its skills out of the folder, so the lesson cannot be kept there" }, 409);
+        into = inside;
       }
       const kept = keepTaskLesson(queue!.home, slug, into, at, queue!.host);
       if (!kept.ok || !("meta" in kept) || !kept.meta) return c.json({ error: kept.error ?? "not kept" }, 409);
@@ -391,6 +412,7 @@ export function lessonRoutes(ctx: OrchestratorContext, place: LessonPlace | null
       if (answer instanceof Response) return answer;
       if (!("decided" in answer) || answer.decided !== "approved") return c.json({ error: "your machine answered something else" }, 502);
     }
+    handbookReads.forget();
     await marked(task.id, slug, "keptAt", at);
     return c.json({ lesson: { slug, status: "approved", target } });
   });
@@ -416,5 +438,95 @@ export function lessonRoutes(ctx: OrchestratorContext, place: LessonPlace | null
     return c.json({ lesson: { slug, status: "rejected" }, muted });
   });
 
+
+  // The whole pending queue, the plugin's own as /handbook:review reads it: lessons from tasks and from sessions in one list.
+  const PAGE_MOST = 50;
+  const DECIDE_MOST = 100;
+  const queueOwned = async (c: Context<OrchestratorEnv>) => (queue && (await isOwner(c.get("user"))) ? queue : null);
+
+  route(app, "GET /api/lessons/review", async (c) => {
+    const own = await queueOwned(c);
+    if (!own) return c.json(notHere, 404);
+    const offset = Number(c.req.query("offset") ?? 0);
+    const limit = Number(c.req.query("limit") ?? PAGE_MOST);
+    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > PAGE_MOST) return c.json({ error: `offset is a whole number from 0 and limit one from 1 to ${PAGE_MOST}`, code: "bad-page" }, 400);
+    return c.json(pendingLessons(own.home, offset, limit));
+  });
+
+  route(app, "GET /api/lessons/review/:slug", async (c) => {
+    const own = await queueOwned(c);
+    const lesson = own ? pendingLesson(own.home, c.req.param("slug") ?? "") : null;
+    if (!own || !lesson) return c.json({ error: "unknown lesson" }, 404);
+    return c.json({ lesson: { ...shownLesson(lesson.meta), origin: lesson.meta.origin ?? "harvest", skillMd: lesson.skillMd, quote: lesson.quote } });
+  });
+
+  const slugsOf = (body: { slugs?: unknown }): string[] | null =>
+    Array.isArray(body.slugs) && body.slugs.length > 0 && body.slugs.length <= DECIDE_MOST && body.slugs.every((s) => typeof s === "string" && SLUG.test(s)) ? [...new Set(body.slugs as string[])] : null;
+  const settled = (own: LessonQueue, results: { slug: string; ok: boolean; error?: string; proposedMessage?: string }[]) => ({ results, waiting: listCandidates(own.home, "pending").length });
+
+  // Where a kept lesson goes as files: the folder of the project the orchestrator knows. A task's lesson goes to its task's
+  // project; a session's goes to the project whose folder is the one the session ran in, and to no other: the path a
+  // candidate names is its own word, not a place the orchestrator has been given.
+  const folderOf = async (taskId: string | null, cwd: string | undefined): Promise<string | null> => {
+    const task = taskId && isTaskId(taskId) ? await ctx.store.getTask(ctx.tenant, taskId) : null;
+    const repos = task ? [await ctx.store.getRepo(ctx.tenant, task.repoId)] : cwd && isAbsolute(cwd) ? await ctx.store.listRepos(ctx.tenant) : [];
+    const known = repos.flatMap((r) => (r ? [localRepoPath(r.url)] : [])).filter((f): f is string => !!f && existsSync(f));
+    if (task) return known[0] ?? null;
+    const ran = cwd && existsSync(cwd) ? realpathSync(cwd) : null;
+    return known.find((f) => realpathSync(f) === ran) ?? null;
+  };
+
+  route(app, "POST /api/lessons/review/keep", async (c) => {
+    const own = await queueOwned(c);
+    if (!own) return c.json(notHere, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { slugs?: unknown; target?: unknown; message?: unknown };
+    const slugs = slugsOf(body);
+    if (!slugs) return c.json({ error: `name from 1 to ${DECIDE_MOST} lessons by their names` }, 400);
+    if (body.target !== "yours" && body.target !== "folder" && body.target !== "team") return c.json({ error: "a lesson is kept as yours, in this folder or for the team" }, 400);
+    const message = typeof body.message === "string" && body.message.trim() ? body.message.trim() : undefined;
+    const at = new Date().toISOString();
+    const results = [];
+    for (const slug of slugs) {
+      const lesson = pendingLesson(own.home, slug);
+      if (!lesson) {
+        results.push({ slug, ok: false, error: "unknown lesson" });
+        continue;
+      }
+      let kept: { ok: boolean; error?: string; proposedMessage?: string };
+      if (body.target === "team") {
+        kept = keepLessonForTeam(own.home, slug, at, { host: own.host, ...(message ? { commitMessage: { message } } : {}) });
+      } else if (body.target === "yours") {
+        kept = keepLessonInto(own.home, slug, own.skillsDir, at, own.host);
+      } else {
+        const folder = await folderOf(lesson.meta.origin === "task" ? lesson.meta.sessionId : null, lesson.meta.cwd);
+        const inside = folder ? skillsOfFolder(folder) : null;
+        if (!folder) kept = { ok: false, error: "this lesson's project is not a folder on this machine, so it cannot be kept there" };
+        else if (detectSecret(lesson.skillMd) || (lesson.quote && detectSecret(lesson.quote))) kept = { ok: false, error: "the lesson holds what looks like a credential, so it stays out of the folder; keep it as yours" };
+        else if (!inside) kept = { ok: false, error: "this lesson's project folder leads its skills out of the folder, so it cannot be kept there" };
+        else kept = keepLessonInto(own.home, slug, inside, at, own.host);
+      }
+      if (kept.ok) handbookReads.forget();
+      if (kept.ok && lesson.meta.origin === "task") await marked(lesson.meta.sessionId, slug, "keptAt", at);
+      results.push({ slug, ok: kept.ok, ...(kept.ok ? {} : { error: kept.error ?? "not kept" }), ...(!kept.ok && kept.proposedMessage ? { proposedMessage: kept.proposedMessage } : {}) });
+    }
+    return c.json(settled(own, results));
+  });
+
+  route(app, "POST /api/lessons/review/reject", async (c) => {
+    const own = await queueOwned(c);
+    if (!own) return c.json(notHere, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { slugs?: unknown; never?: unknown };
+    const slugs = slugsOf(body);
+    if (!slugs) return c.json({ error: `name from 1 to ${DECIDE_MOST} lessons by their names` }, 400);
+    const at = new Date().toISOString();
+    const results = [];
+    for (const slug of slugs) {
+      const lesson = pendingLesson(own.home, slug);
+      const rejected = lesson ? rejectLesson(own.home, slug, at, body.never === true) : { ok: false, error: "unknown lesson" };
+      if (rejected.ok && lesson?.meta.origin === "task") await marked(lesson.meta.sessionId, slug, "rejectedAt", at);
+      results.push({ slug, ok: rejected.ok, ...(rejected.ok ? {} : { error: rejected.error ?? "not rejected" }) });
+    }
+    return c.json(settled(own, results));
+  });
   return app;
 }
