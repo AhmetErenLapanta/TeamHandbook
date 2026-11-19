@@ -70,16 +70,31 @@ export class SourceFailed extends Error {
   }
 }
 
+/** The one sentence a tracker's refusal becomes: what happened and what to do, naming no credential. */
+export function trackerRefusal(res: Pick<Response, "status" | "headers">, what: "board" | "issue"): string | null {
+  if (res.status === 401 || res.status === 403) return `the tracker refused the token (${res.status}); check the token and its permissions under Integrations`;
+  if (res.status === 404) return what === "board" ? "the tracker has no such board; it was removed, or the token cannot see it" : `${NO_SUCH_ISSUE}; it was deleted, or the token cannot see it`;
+  if (res.status === 429) {
+    const seconds = Number(res.headers.get("retry-after"));
+    return `the tracker is limiting requests; try again ${Number.isFinite(seconds) && seconds > 0 ? `in ${Math.ceil(seconds)} seconds` : "in a minute"}`;
+  }
+  return null;
+}
+
+export const NO_SUCH_ISSUE = "the tracker has no such issue";
+
+export const NOT_REACHED = "the tracker was not reached; check the connection and try again";
+
 export async function trackerJson(url: string, headers: Record<string, string>, send: typeof fetch, post?: unknown): Promise<unknown> {
   let res: Response;
   try {
     const body = post === undefined ? {} : { method: "POST", body: JSON.stringify(post) };
     res = await send(url, { headers: { accept: "application/json", ...(post === undefined ? {} : { "content-type": "application/json" }), ...headers }, ...body, redirect: "error", signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
   } catch (err) {
-    throw new SourceFailed((err as Error).name === "TimeoutError" ? `the tracker did not answer within ${READ_TIMEOUT_MS / 1000} seconds` : "the tracker was not reached");
+    throw new SourceFailed((err as Error).name === "TimeoutError" ? `the tracker did not answer within ${READ_TIMEOUT_MS / 1000} seconds; try again` : NOT_REACHED);
   }
-  if (res.status === 401 || res.status === 403) throw new SourceFailed(`the tracker refused the token (${res.status})`);
-  if (res.status === 404) throw new SourceFailed("the tracker has no such board, or the token cannot see it");
+  const refused = trackerRefusal(res, "board");
+  if (refused) throw new SourceFailed(refused, res.status);
   if (!res.ok) throw new SourceFailed(`the tracker answered ${res.status}`, res.status);
   if (res.status === 204) return null;
   try {

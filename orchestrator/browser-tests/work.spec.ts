@@ -395,6 +395,52 @@ test.describe("starting agents on picked issues", () => {
     expect(sent.every((b) => typeof b.issueUrl === "string" && b.issueUrl)).toBe(true);
   });
 
+  test("given an agent that lets Model and Effort be chosen, when Start agents opens, then both wait under More options and are there when it is opened", async ({ page }) => {
+    // given
+    await standInWork(page, { backlog: sprintItems });
+    await standInStart(page);
+    await page.route("**/api/tasks/options", async (route) => {
+      const real = await route.fetch().then((r) => r.json());
+      await route.fulfill({ json: { ...real, agents: real.agents.map((a: Record<string, unknown>, i: number) => (i ? a : { ...a, options: [{ id: "model", label: "Model", choices: [{ value: "big", label: "Big" }] }, { id: "effort", label: "Effort", choices: [{ value: "high", label: "High" }] }] })) } });
+    });
+    await page.goto("/demo/work/backlog");
+    await page.getByRole("checkbox", { name: "Pick PAY-101" }).check();
+
+    // when
+    await page.getByRole("region", { name: "Picked issues" }).getByRole("button", { name: "Start agents" }).click();
+    const form = page.getByRole("form", { name: "Start agents" });
+
+    // then
+    await expect(form.getByRole("combobox", { name: "Model", exact: true })).toBeHidden();
+    await expect(form.getByRole("combobox", { name: "Effort", exact: true })).toBeHidden();
+
+    // when
+    await form.getByText("More options", { exact: true }).click();
+
+    // then
+    await expect(form.getByRole("combobox", { name: "Model", exact: true })).toBeVisible();
+    await expect(form.getByRole("combobox", { name: "Effort", exact: true })).toBeVisible();
+  });
+
+  test("given two issues picked at 1440, when Start agents opens, then its fields stay a reading width and the picked bar gives way, so Start agents is one button", async ({ page }) => {
+    // given
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await standInWork(page);
+    await standInStart(page, {});
+    await page.goto("/demo/work");
+    await page.getByRole("checkbox", { name: "Pick PAY-101" }).check();
+    await page.getByRole("checkbox", { name: "Pick PAY-102" }).check();
+
+    // when
+    await page.getByRole("region", { name: "Picked issues" }).getByRole("button", { name: "Start agents" }).click();
+
+    // then
+    const form = page.getByRole("form", { name: "Start agents" });
+    await expect(page.getByRole("region", { name: "Picked issues" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Start (\d+ agents?|agents)$/ })).toHaveCount(1);
+    expect((await form.boundingBox())!.width).toBeLessThanOrEqual(720);
+  });
+
   test("given two issues picked on the board, when agents start, then one request goes out with both issues, the agent finds the repositories, and each issue says whether it started", async ({ page }) => {
     // given
     await standInWork(page);
