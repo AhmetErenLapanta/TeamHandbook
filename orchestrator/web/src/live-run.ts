@@ -35,7 +35,7 @@ export interface ToolLine {
 /** A line of the stream: the agent's words, a tool call, a decision taken on a card, what a person told it, or a pause. */
 export type StreamLine =
   | { kind: "say"; key: string; at: string; text: string }
-  | { kind: "you"; key: string; at: string; text: string; by: string | null }
+  | { kind: "you"; key: string; at: string; text: string; by: string | null; byId?: string }
   | ToolLine
   | { kind: "card"; key: string; at: string; text: string }
   | { kind: "started"; key: string; at: string; text: string; from: string }
@@ -146,7 +146,7 @@ export function liveRun(log: TaskLogLine[], place: RunPlace = { folder: null, ho
       if (from) push({ kind: "started", key: `started-${line.seq}`, at: line.at, text: line.text, from });
     } else if (line.kind === "steer") {
       const said = text(data.text)?.trim();
-      if (said) push({ kind: "you", key: `you-${line.seq}`, at: line.at, text: said, by: text(data.by) });
+      if (said) push({ kind: "you", key: `you-${line.seq}`, at: line.at, text: said, by: text(data.by), ...(text(data.byId) ? { byId: text(data.byId)! } : {}) });
     } else if (line.kind === "todos") {
       const plan = planOf(data.items);
       if (plan) run.plan = plan;
@@ -300,6 +300,15 @@ export function writtenPlan(stream: StreamLine[]): string | null {
   return null;
 }
 
+/**
+ * How a call's mark is drawn. One that started and never ended turns only while its run is working: once the step is
+ * stopped or the run is over nothing is running, and a mark still turning said the agent was at work.
+ */
+export function stepMark(status: CallStatus, working: boolean): "running" | "stopped" | "done" | "failed" | "refused" {
+  if (status === "started") return working ? "running" : "stopped";
+  return status;
+}
+
 /** What a line's result says in its tone: refused (with how many times), failed, or passed for a command. */
 export function toolResult(line: ToolLine): { word: string; tone: string } | null {
   if (line.status === "refused") return { word: line.calls.length > 1 ? `refused ${line.calls.length} times` : "refused", tone: "error" };
@@ -307,3 +316,6 @@ export function toolResult(line: ToolLine): { word: string; tone: string } | nul
   if (line.verb === "Ran" && line.status === "done") return { word: "passed", tone: "ok" };
   return null;
 }
+
+/** Whether words in the stream were the reader's: every word on one person's own orchestrator, else the sender's account id when the stream carries it, and the name when the sender has no account. */
+export const isOwnWords = (me: { mode?: string; id: string; name: string }, by: string, byId?: string): boolean => me.mode === "local" || (byId ? byId === me.id : by === me.name);

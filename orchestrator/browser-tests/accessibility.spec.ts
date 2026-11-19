@@ -28,6 +28,31 @@ async function startedTask(page: Page): Promise<string> {
   return (await res.json()).task.id;
 }
 
+
+const HANDBOOKS = [
+  { id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "release-notes", description: "Write release notes" }], commands: [{ name: "standup" }], mcpServers: [{ name: "jira" }], hooks: [], claudeMd: true },
+  { id: "plugin:payments-skills@payments-market", kind: "plugin", name: "payments-skills", version: "1.4.0", marketplace: "payments-market", enabled: true, skills: [{ name: "add-endpoint" }, { name: "review-checklist" }], commands: [], mcpServers: [], hooks: [{ name: "PreToolUse" }] },
+  { id: "plugin:docs-kit@payments-market", kind: "plugin", name: "docs-kit", version: "2.0.0", marketplace: "payments-market", enabled: false, skills: [{ name: "write-docs" }], commands: [], mcpServers: [], hooks: [] },
+];
+
+async function standInHandbooks(page: Page, onThisMachine = false): Promise<void> {
+  if (onThisMachine) {
+    await page.route("**/api/me", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      await route.fulfill({ response: res, json: { ...body, user: { ...body.user, mode: "local" } } });
+    });
+  }
+  await page.route("**/api/handbook/sources*", (route) => route.fulfill({ json: { available: true, sources: HANDBOOKS, readAt: new Date().toISOString() } }));
+  await page.route((url) => url.pathname === "/api/handbook/defaults", (route) => route.fulfill({ json: { off: { skills: [], commands: [], mcpServers: [] } } }));
+}
+
+async function standInLessons(page: Page): Promise<void> {
+  const items = Array.from({ length: 4 }, (_, i) => ({ slug: `lesson-${i}`, description: `Use when ${i}`, origin: i % 2 ? "harvest" : "task", sessionId: `ses_${i}`, createdAt: "2026-11-05T09:00:00.000Z", firstLine: `First line ${i}` }));
+  await page.route("**/api/lessons/review?*", (route) => route.fulfill({ json: { total: 4, items } }));
+  await page.route("**/api/lessons/review/lesson-1", (route) => route.fulfill({ json: { lesson: { slug: "lesson-1", skillMd: "---\nname: lesson-1\n---\nRetry twice, then stop.", quote: null } } }));
+}
+
 const SCREENS: { name: string; open: (page: Page) => Promise<void> }[] = [
   {
     name: "repository overview",
@@ -328,6 +353,32 @@ const SCREENS: { name: string; open: (page: Page) => Promise<void> }[] = [
       await page.getByRole("checkbox", { name: "Pick PAY-101" }).check();
       await page.getByRole("region", { name: "Picked issues" }).getByRole("button", { name: "Start agents" }).click();
       await expect(page.getByRole("form", { name: "Start agents" })).toBeVisible();
+    },
+  },
+  {
+    name: "new task with its setup panel",
+    open: async (page) => {
+      await standInHandbooks(page);
+      await page.goto("/demo/tasks");
+      await expect(page.locator("section.task-setup")).toBeVisible();
+    },
+  },
+  {
+    name: "team with lessons to review and one open in the rail",
+    open: async (page) => {
+      await standInLessons(page);
+      await page.goto("/demo/team");
+      await page.getByRole("region", { name: /^Lessons to review/ }).getByRole("button", { name: "First line 1", exact: true }).click();
+      await expect(page.getByText("Retry twice, then stop.")).toBeVisible();
+    },
+  },
+  {
+    name: "team on one person's machine with Your handbooks",
+    open: async (page) => {
+      await standInHandbooks(page, true);
+      await page.goto("/demo/team");
+      await expect(page.getByRole("region", { name: /^Your handbooks/ }).locator("li.handbook").first()).toBeVisible();
+      await page.getByRole("button", { name: /Add a skill, a command/ }).click();
     },
   },
   {

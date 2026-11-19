@@ -21,7 +21,7 @@ const PROBLEMS: Record<string, string> = {
   "personal-microsoft": "Microsoft sign-in takes work and school accounts only. Sign in with Google or GitHub instead.",
   "unvouched-microsoft": "Microsoft does not vouch for this account's email address: only your organization's Microsoft admin can, by verifying its domain. Sign in with Google or GitHub instead, or ask that admin.",
   "address-taken": "This email address already signs in with another provider. Sign in with that one, then add this provider under Your account.",
-  "invite-unknown": "This invitation link is not valid any more. Ask for a new one.",
+  "invite-unknown": "This invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one.",
   "invite-email": "This invitation is for another email address. Sign in with the account that has that address.",
   "invite-elsewhere": "An invitation is accepted only from the orchestrator's own page. Open its link again.",
   "plan-limit": "This organization has as many members as its plan allows. Ask an owner to make room.",

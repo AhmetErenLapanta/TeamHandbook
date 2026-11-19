@@ -77,7 +77,7 @@ export interface StateSource {
 export function stateOf(task: StateSource): TaskState {
   if (task.state) return task.state;
   if (task.next === "answer" || task.next === "review" || task.next === "follow-up" || task.attention) return "needs-you";
-  if (task.status === "failed" && task.question && !task.question.answer) return "needs-you";
+  if (task.status === "needs-answer" || (task.status === "failed" && task.question && !task.question.answer)) return "needs-you";
   if (task.requests?.some((r) => r.status === "pending" && r.responseCapability === "live")) return "needs-you";
   if (task.waitingFor === "limit") return "usage-limit";
   if (task.waitingFor) return "waiting-machine";

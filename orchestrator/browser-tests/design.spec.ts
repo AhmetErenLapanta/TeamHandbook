@@ -116,6 +116,7 @@ const HANDBOOKS = (() => {
       skills: [
         { name: "release-notes", description: "Use when a release is cut: write the notes from the merged changes.", context: { tokens: 146, percent: 0.1 }, used: used(14, 3) },
         { name: "on-call-handover", description: "Use at the end of an on-call week: what is open and what changed.", context: { tokens: 132, percent: 0.1 }, used: used(0, null) },
+        { name: "weekly-digest", description: "Use on Fridays: a short digest of what merged this week.", context: { tokens: 118, percent: 0.1 }, used: used(0, null) },
       ],
       mcpServers: [{ name: "tracker", context: { tokens: 6200, percent: 3.1 }, used: used(9, 1) }] },
     { id: "folder", kind: "folder", name: "payments-api", enabled: true, claudeMd: true, hooks: [], commands: [], mcpServers: [],
@@ -340,6 +341,14 @@ const SCREENS: Screen[] = [
     await p.goto("/demo/team");
     const section = p.getByRole("region", { name: /^Your handbooks/ });
     await expect(section).toContainText("payments-skills");
+    await expect(section).toContainText("Turning a plugin off turns it off in your terminal too.");
+    await expect(section).not.toContainText("here and in your terminal");
+    await expect(section).not.toContainText(/not used in 30 days/i);
+    await section.getByRole("button", { name: "Yours" }).click();
+    await section.getByRole("button", { name: "weekly-digest", exact: true }).click();
+    await expect(section).toContainText("Not used in 30 days.");
+    await section.getByRole("button", { name: "weekly-digest", exact: true }).click();
+    await section.getByRole("button", { name: "Yours" }).click();
     await section.getByText("payments-skills", { exact: true }).first().click();
   } },
   { name: "task-setup", open: async (p) => {

@@ -32,6 +32,7 @@ describe("stateOf", () => {
     expect(stateOf({ status: "running", waitingFor: "machine" })).toBe("waiting-machine");
     expect(stateOf({ status: "needs-review", phase: "review", request: { status: "open", provider: "local" } })).toBe("needs-you");
     expect(stateOf({ status: "failed", question: { text: "Which?" } as { answer?: string } })).toBe("needs-you");
+    expect(stateOf({ status: "needs-answer" })).toBe("needs-you");
     expect(stateOf({ status: "needs-review", phase: "merged", request: { status: "merged", provider: "local" } })).toBe("kept");
     expect(stateOf({ status: "needs-review", phase: "merged", request: { status: "merged", provider: "gitlab" } })).toBe("merged");
     expect(stateOf({ status: "needs-review", phase: "review", request: { status: "open", provider: "gitlab" } })).toBe("in-review");

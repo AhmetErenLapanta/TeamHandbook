@@ -11,7 +11,7 @@ function problemFromHash(): string | null {
   return query ? new URLSearchParams(query).get("problem") : null;
 }
 
-export function SignIn({ config, org = null, onSignedIn }: { config: AuthConfig; org?: string | null; onSignedIn: () => void }) {
+export function SignIn({ config, org = null, ended = null, onSignedIn }: { config: AuthConfig; org?: string | null; ended?: string | null; onSignedIn: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(problemFromHash());
@@ -33,6 +33,7 @@ export function SignIn({ config, org = null, onSignedIn }: { config: AuthConfig;
         <div className="brand">TeamHandbook <span>Orchestrator</span></div>
         <h1 id="signin-h">Sign in</h1>
         {org ? <p className="muted">to {org}</p> : null}
+        {ended ? <p role="status">{ended}</p> : null}
         <label>Email<input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required {...described} /></label>
         <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required {...described} /></label>
         {error ? <p className="error" role="alert" id={errorId}>{error}</p> : null}

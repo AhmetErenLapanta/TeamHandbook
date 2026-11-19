@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskLogLine } from "./api";
-import { liveRun, OUTPUT_HELD, OUTPUT_KEPT, shortPath, toolResult, toolSaid, writtenDocument, writtenPlan, commandLine } from "./live-run";
+import { isOwnWords, liveRun, OUTPUT_HELD, OUTPUT_KEPT, shortPath, stepMark, toolResult, toolSaid, writtenDocument, writtenPlan, commandLine } from "./live-run";
 import type { StreamLine } from "./live-run";
 
 const said = (l: StreamLine) => {
@@ -241,5 +241,33 @@ describe("a file change put to its person", () => {
     // then
     expect(waiting.stream.filter((l) => l.kind === "tool").map(said)).toEqual(["Asks to write src/delivery.ts"]);
     expect(answered.stream.filter((l) => l.kind === "tool").map(said)).toEqual(["Wrote src/delivery.ts"]);
+  });
+});
+
+describe("whose words in the stream", () => {
+  const ada = { mode: "cloud", id: "u-ada", name: "Ada Example" };
+
+  it("given a steer with its sender's account id, when the run is read, then the id is kept on the line", () => {
+    const run = liveRun([event({ type: "steer", text: "Also name the pager rotation.", by: "Ada Example", byId: "u-ada" }, 1)]);
+
+    expect(run.stream.find((l) => l.kind === "you")).toMatchObject({ by: "Ada Example", byId: "u-ada" });
+  });
+
+  it("given two people of one name, when one id is the reader's, then only that sender's words are the reader's", () => {
+    expect(isOwnWords(ada, "Ada Example", "u-ada")).toBe(true);
+    expect(isOwnWords(ada, "Ada Example", "u-someone-else")).toBe(false);
+  });
+
+  it("given a sender without an account id, when the name is the reader's, then it falls back to the name, and on one person's own orchestrator every word is theirs", () => {
+    expect(isOwnWords(ada, "Ada Example")).toBe(true);
+    expect(isOwnWords(ada, "Grace Example")).toBe(false);
+    expect(isOwnWords({ ...ada, mode: "local" }, "Anyone")).toBe(true);
+  });
+});
+
+describe("a call's mark in the stream", () => {
+  it("given a call that started and never ended, when its mark is drawn while the run works and once the step is stopped, then it turns only while the run works, and a call that ended keeps its own mark", () => {
+    // then
+    expect([stepMark("started", true), stepMark("started", false), stepMark("done", false), stepMark("failed", true), stepMark("refused", false)]).toEqual(["running", "stopped", "done", "failed", "refused"]);
   });
 });

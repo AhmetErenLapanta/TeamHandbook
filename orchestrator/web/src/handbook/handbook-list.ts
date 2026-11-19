@@ -140,8 +140,6 @@ const USED_WINDOW_DAYS = 30;
 /** A skill's text without its front matter, which the row's own sentence already says in plain words; the editor shows it whole. */
 export const skillBody = (text: string) => text.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, "").trimStart();
 
-/** What a row says quietly at its end about use: only that nothing used it, and only while it is on. */
-export const unusedSaid = (u: Used | undefined, on: boolean) => (u?.tasks === 0 && on ? `Not used in ${USED_WINDOW_DAYS} days` : null);
 export const usedSaid = (u: Used) =>
   u.tasks === 0 ? `Not used in ${USED_WINDOW_DAYS} days.` : `Used in ${u.tasks} ${u.tasks === 1 ? "task" : "tasks"}${u.lastAt ? `, last ${new Date(u.lastAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : ""}.`;
 

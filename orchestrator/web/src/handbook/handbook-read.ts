@@ -1,4 +1,5 @@
 import { call } from "../api";
+import { lastAnswer, rememberAnswer } from "../last-answer";
 
 /** What a handbook holds, by name only: a server's settings and any secret in them are never read. Fields past `hooks` appear as the orchestrator can tell them. */
 export interface HandbookSource {
@@ -33,10 +34,16 @@ export type OffList = "skills" | "commands" | "mcpServers";
 
 export type SourcesRead = { sources: HandbookSource[]; readAt: string } | { available: false; why: string };
 
+const sourcesPath = (folder?: string) => `/api/handbook/sources${folder ? `?${new URLSearchParams({ folder })}` : ""}`;
+const DEFAULTS_PATH = "/api/handbook/defaults";
+
 export const handbookRead = {
+  /** The last sources answer of this page's life, for a form opened again to draw at once while it reads behind it. */
+  lastSources: (folder?: string) => lastAnswer<SourcesRead>(sourcesPath(folder)),
+  lastDefaults: () => lastAnswer<Off>(DEFAULTS_PATH),
   /** The skills, commands and servers this person's agents start without; a plugin's state is Claude Code's own and is not here. */
-  defaults: () => call<{ off: Partial<Off> }>("GET", "/api/handbook/defaults").then((r) => ({ ...NOTHING_OFF, ...r.off, sources: [] })),
-  sources: (folder?: string) => call<SourcesRead>("GET", `/api/handbook/sources${folder ? `?${new URLSearchParams({ folder })}` : ""}`),
+  defaults: () => call<{ off: Partial<Off> }>("GET", DEFAULTS_PATH).then((r) => rememberAnswer(DEFAULTS_PATH, { ...NOTHING_OFF, ...r.off, sources: [] })),
+  sources: (folder?: string) => call<SourcesRead>("GET", sourcesPath(folder)).then((r) => rememberAnswer(sourcesPath(folder), r)),
   /** Puts a plugin's notice away for the version it is about; a later version says it again. */
   noticed: (plugin: string) => call<{ noticed: string }>("POST", "/api/handbook/noticed", { plugin }),
   skill: (source: string, name: string) => call<{ content: string }>("GET", `/api/handbook/skill?${new URLSearchParams({ source, name })}`).then((r) => r.content),

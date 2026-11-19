@@ -634,7 +634,7 @@ test.describe("the welcome on one person's machine", () => {
     await onThisMachine(page, true);
     const personal = { commands: [{ name: "deploy", description: "" }, { name: "review", description: "" }], plugins: [], mcpServers: [{ name: "gitlab", kind: "stdio", asksForValue: false }], claudeMd: true, readAt: new Date().toISOString() };
     await page.route("**/api/tasks/options", (route) => route.fulfill({ json: { agents: [{ id: "claude-code", label: "Claude Code", readiness: { ready: true, state: "ready" }, personal }], repos: [], readinessReport: true, profile: { personal: false } } }));
-    await page.route("**/api/lessons", (route) => route.fulfill({ json: { candidates: [] } }));
+    await page.route("**/api/lessons/review?*", (route) => route.fulfill({ json: { total: 0, items: [] } }));
     await page.route((url) => url.pathname === "/api/repos", (route) => route.fulfill({ json: { repos: [] } }));
     await page.route("**/api/activity/summary", async (route) => {
       const real = await route.fetch().then((r) => r.json()).catch(() => null);
@@ -697,6 +697,23 @@ test.describe("the welcome on one person's machine", () => {
     await page.route((url) => url.pathname === "/api/repos", (route) => route.fulfill({ json: { repos: [] } }));
   };
 
+  test("given a local orchestrator whose Claude Code lacks the handbook plugin and no task yet, when the Tasks page opens, then the card is one short line with its two buttons beside it", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    await withPlugins(page, []);
+    await page.route((url) => url.pathname === "/api/tasks/board", (route) => route.fulfill({ json: { sections: { yours: [], agents: [], waiting: [], done: [] }, counts: { yours: 0, agents: 0, waiting: 0, done: 0 } } }));
+
+    // when
+    await page.goto("/demo/tasks");
+    const card = page.locator(".plugin-card");
+
+    // then
+    await expect(card).toContainText("Add the handbook plugin to your Claude Code.");
+    await expect(card).not.toContainText("It turns what your sessions teach");
+    const line = await card.boundingBox();
+    expect(line!.height).toBeLessThan(80);
+  });
+
   test("given a local orchestrator whose Claude Code lacks the handbook plugin, when Team opens, then one card offers it, says what pressing Install does first, and installs only after that press", async ({ page }) => {
     // given
     await onThisMachine(page, true);
@@ -714,6 +731,7 @@ test.describe("the welcome on one person's machine", () => {
     // then
     await expect(card).toContainText("Add the handbook plugin to your Claude Code.");
     await expect(card.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "Install the plugin…" })).toHaveClass(/secondary/);
 
     // when
     await card.getByRole("button", { name: "Install the plugin…" }).click();
@@ -911,18 +929,92 @@ test.describe("the welcome on one person's machine", () => {
     expect(posted).toEqual(["noticed", "update", "disable"]);
   });
 
-  test("given three lessons waiting in the plugin's queue and none from a task, when Team opens, then Lessons to review counts the three and says where to review them, as does the head", async ({ page }) => {
+  test("given three lessons waiting from sessions, when Team opens, then Lessons to review lists the three and the head counts them", async ({ page }) => {
     // given
     await onThisMachine(page, true);
-    await page.route("**/api/lessons", (route) => route.fulfill({ json: { candidates: [], waiting: 3 } }));
+    const items = ["a-note", "b-note", "c-note"].map((slug) => ({ slug, description: `Use when ${slug}`, origin: "harvest", sessionId: "ses_1", createdAt: "2026-11-05T09:00:00.000Z", firstLine: `About ${slug}` }));
+    await page.route("**/api/lessons/review?*", (route) => route.fulfill({ json: { total: 3, items } }));
 
     // when
     await page.goto("/demo/team");
 
     // then
     const lessons = page.getByRole("region", { name: /^Lessons to review/ });
-    await expect(lessons).toContainText("3 more wait from your own sessions; review them with /handbook:review in Claude Code.");
+    await expect(lessons.locator(".lessons-rows > li")).toHaveCount(3);
+    await expect(lessons).toContainText("From a session, 2026-11-05");
     await expect(page.locator(".page-head")).toContainText("3 lessons wait for review");
+  });
+
+  test("given a phone and a waiting lesson, when the lesson is pressed, then its text opens in a side panel that is on the screen and closes", async ({ page }) => {
+    // given
+    await page.setViewportSize({ width: 390, height: 844 });
+    await onThisMachine(page, true);
+    const items = Array.from({ length: 30 }, (_, i) => ({ slug: `note-${i}`, description: `Use when ${i}`, origin: "harvest", sessionId: "ses_1", createdAt: "2026-11-05T09:00:00.000Z", firstLine: `About ${i}` }));
+    await page.route("**/api/lessons/review?*", (route) => route.fulfill({ json: { total: 30, items } }));
+    await page.route("**/api/lessons/review/note-29", (route) => route.fulfill({ json: { lesson: { slug: "note-29", skillMd: "---\nname: note-29\n---\nRetry twice, then stop.", quote: null } } }));
+    await page.goto("/demo/team");
+
+    // when
+    const lessons = page.getByRole("region", { name: /^Lessons to review/ });
+    await lessons.getByRole("button", { name: "About 29", exact: true }).scrollIntoViewIfNeeded();
+    await lessons.getByRole("button", { name: "About 29", exact: true }).click();
+
+    // then
+    const panel = page.getByRole("dialog", { name: "The picked lesson" });
+    await expect(panel).toContainText("Retry twice, then stop.");
+    await expect(panel).toBeInViewport();
+
+    // when
+    await panel.getByRole("button", { name: "Close" }).click();
+
+    // then
+    await expect(panel).toHaveCount(0);
+  });
+
+  test("given 120 lessons waiting from tasks and sessions, when Team opens, then 50 are drawn, two picked with the Team landing are kept in one decision, and the count drops at once", async ({ page }) => {
+    // given
+    await onThisMachine(page, true);
+    const rows = Array.from({ length: 120 }, (_, i) => ({ slug: `lesson-${i}`, description: `Use when ${i}`, origin: i % 2 ? "harvest" : "task", sessionId: `ses_${i}`, createdAt: "2026-11-05T09:00:00.000Z", firstLine: `First line ${i}` }));
+    const decided: unknown[] = [];
+    await page.route("**/api/lessons/review?*", (route) => {
+      const asked = new URL(route.request().url()).searchParams;
+      const offset = Number(asked.get("offset") ?? 0);
+      return route.fulfill({ json: { total: 120, items: rows.slice(offset, offset + Number(asked.get("limit") ?? 50)) } });
+    });
+    await page.route("**/api/lessons/review/keep", (route) => {
+      const body = route.request().postDataJSON() as { slugs: string[] };
+      decided.push(body);
+      return route.fulfill({ json: { results: body.slugs.map((slug) => ({ slug, ok: true })), waiting: 118 } });
+    });
+    await page.route("**/api/lessons/review/lesson-1", (route) => route.fulfill({ json: { lesson: { slug: "lesson-1", skillMd: "---\nname: lesson-1\n---\nRetry twice, then stop.", quote: null } } }));
+
+    // when
+    await page.goto("/demo/team");
+    const lessons = page.getByRole("region", { name: /^Lessons to review/ });
+
+    // then
+    await expect(lessons.locator(".lessons-rows > li")).toHaveCount(50);
+    await expect(lessons).toContainText("From a session, 2026-11-05");
+    await expect(lessons).toContainText("First line 0");
+
+    // when
+    await lessons.getByRole("button", { name: /^Show more/ }).click();
+    await expect(lessons.locator(".lessons-rows > li")).toHaveCount(100);
+    await lessons.getByRole("checkbox", { name: "Pick lesson-0", exact: true }).check();
+    await lessons.getByRole("checkbox", { name: "Pick lesson-2", exact: true }).check();
+    await lessons.getByRole("button", { name: "First line 1", exact: true }).click();
+    const rail = page.getByRole("complementary", { name: "The picked lesson" });
+    await expect(rail).toContainText("Retry twice, then stop.");
+    await expect(page.locator("button:not(.secondary):not(.link)").filter({ hasText: /^Keep$/ })).toHaveCount(1);
+    await expect(rail.getByRole("button", { name: "Keep", exact: true })).toHaveClass(/secondary/);
+    await lessons.getByRole("combobox", { name: "Keep in" }).click();
+    await page.getByRole("option", { name: "Team" }).click();
+    await lessons.getByRole("button", { name: "Keep", exact: true }).click();
+
+    // then
+    await expect(lessons.getByRole("button", { name: "First line 0", exact: true })).toHaveCount(0);
+    await expect(page.locator(".page-head")).toContainText("118 lessons wait for review");
+    expect(decided).toEqual([{ slugs: ["lesson-0", "lesson-2"], target: "team" }]);
   });
 
   test("given a plugin a known marketplace offers, when the person adds it, then the page says the exact install command before running it and the line after says it ran", async ({ page }) => {

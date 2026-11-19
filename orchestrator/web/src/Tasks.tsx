@@ -38,7 +38,7 @@ import { WelcomeView } from "./Welcome";
 import { Announcer } from "./Announcer";
 import { Hint } from "./Hint";
 import { mergeCommand, sentence } from "./said";
-import { liveRun, writtenPlan } from "./live-run";
+import { isOwnWords, liveRun, writtenPlan } from "./live-run";
 import { useProjectChecks } from "./ProjectChecks";
 import { checkWords, stillFails, verificationRead } from "./verification-read";
 import type { TaskVerification } from "./verification-read";
@@ -79,6 +79,7 @@ export const STATUS_TEXT: Record<ShownStatus, string> = {
   queued: "queued",
   running: "running",
   "needs-review": "needs review",
+  "needs-answer": "needs you",
   failed: "failed",
   cancelled: "cancelled",
   interrupted: "interrupted",
@@ -1702,7 +1703,7 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
   // Where the task works heads its run on a person's own orchestrator; only its starter moves it, and only while it runs.
   const where = (moves: boolean) => (task.routing ? <TaskWhere task={task} routing={task.routing} canMove={moves && task.createdBy === me.email} checked={[...new Set(checks.flatMap((c) => c.verification.checks.map((k) => k.command)))]} onChecksOff={() => void verificationRead.task(id).then(setChecks, () => setChecks([]))} /> : null);
   // Words in the stream the reader sent: all of them on one person's own orchestrator, else the ones under the reader's name.
-  const mine = (by: string) => me.mode === "local" || by === me.name;
+  const mine = (by: string, byId?: string) => isOwnWords(me, by, byId);
   const spent = run.costUsd ?? task.cost.usd;
   // The newest of the agent's own words, for the announcer while it works.
   const lastSaid = [...run.stream].reverse().find((l) => l.kind === "say")?.text ?? "";
@@ -1775,7 +1776,7 @@ export function TaskView({ id, me }: { id: string; me: Principal }) {
           {refused ? <p className="error" role="alert">{mergeCommand(refused) ? <>{mergeCommand(refused)!.said}: <CopyText text={mergeCommand(refused)!.command} /></> : refused}</p> : null}
           <WaitingNote task={task} me={me} onContinued={() => setAttempt((n) => n + 1)} />
           <McpSignIn names={task.mcpNeedsSignIn ?? []} onePerson={me.mode === "local" && manages(me)} />
-          {working && live ? <section className="section" aria-label="The agent at work"><LiveRun run={run} withPlan={false} isMine={mine} first={where(true)} working={task.status === "running" && !task.waitingFor} /></section> : null}
+          {working && live ? <section className="section" aria-label="The agent at work"><LiveRun run={run} withPlan={false} isMine={mine} first={where(true)} working={task.status === "running" && !task.waitingFor && task.stage !== "stopped"} /></section> : null}
           {/* A card waits where the agent stopped for it: right after what it did so far. */}
           {task.stage === "stopped" ? <p className="waiting" role="status">You stopped the agent's step; tell it what to do next.</p> : null}
           <TaskRequests task={task} me={me} agent={agentLabel} onAnswered={reread} />
