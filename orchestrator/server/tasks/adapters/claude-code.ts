@@ -383,11 +383,11 @@ function refusalOf(frame: Record<string, unknown>): Refusal {
 /**
  * The MCP servers Claude Code found waiting for a sign-in when the session opened, said once in the
  * orchestrator's words: a session that asks nobody cannot finish a sign-in, so their tools are not
- * there, and the agent would otherwise go on trying them. A plugin's server is named as its own.
+ * there, and the agent would otherwise go on trying them. A plugin's server keeps the name that says which plugin brought it.
  */
 function signInNotice(servers: unknown): AgentEvent[] {
   if (!Array.isArray(servers)) return [];
-  return signInEvents(servers.flatMap((s: Record<string, unknown> | null) => (s?.status === "needs-auth" && typeof s.name === "string" && s.name ? [s.name.replace(/^plugin_[^_]+_(?=.)/, "")] : [])));
+  return signInEvents(servers.flatMap((s: Record<string, unknown> | null) => (s?.status === "needs-auth" && typeof s.name === "string" && s.name ? [s.name] : [])));
 }
 
 const MCP_STATE: Record<string, NonNullable<AgentLoaded["mcpServers"]>[number]["state"]> = { connected: "connected", pending: "starting", "needs-auth": "needs-sign-in", failed: "failed", disabled: "off" };

@@ -1288,7 +1288,7 @@ describe("MCP servers waiting for a sign-in when a session opens", () => {
 
     // then
     expect(waiting.filter((e) => e.type !== "loaded")).toEqual([
-      { type: "mcp_status", needsSignIn: ["gitlab", "notion"] },
+      { type: "mcp_status", needsSignIn: ["gitlab", "plugin_team-tools_notion"] },
       { type: "notice", text: "gitlab and notion need a sign-in, so their tools are not in this task. Sign them in on this machine, then start the task again." },
     ]);
     expect(none.filter((e) => e.type !== "loaded")).toEqual([]);

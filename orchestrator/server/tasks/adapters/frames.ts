@@ -118,7 +118,8 @@ export function opencodeMcp(id: string, servers: readonly string[]): { server: s
 export function signInEvents(waiting: readonly string[]): AgentEvent[] {
   if (!waiting.length) return [];
   const one = waiting.length === 1;
-  const names = one ? waiting[0]! : `${waiting.slice(0, -1).join(", ")} and ${waiting.at(-1)}`;
+  const said = waiting.map((name) => name.replace(PLUGIN_SERVER, ""));
+  const names = one ? said[0]! : `${said.slice(0, -1).join(", ")} and ${said.at(-1)}`;
   return [
     { type: "mcp_status", needsSignIn: [...waiting] },
     { type: "notice", text: `${names} ${one ? "needs" : "need"} a sign-in, so ${one ? "its" : "their"} tools are not in this task. Sign ${one ? "it" : "them"} in on this machine, then start the task again.` },
