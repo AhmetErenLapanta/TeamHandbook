@@ -49,7 +49,7 @@ test.describe("an owner inviting people", () => {
     // then
     await expect(invited.getByRole("button", { name: "Account: Kim Invited" })).toBeVisible();
     await invited.goto(link.replace(/^https?:\/\/[^/]+/, ""));
-    await expect(invited.getByRole("alert")).toHaveText("This invitation link is not valid any more; ask for a new one.");
+    await expect(invited.getByRole("alert")).toHaveText("This invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one.");
     await context.close();
     await page.reload();
     await expect(page.getByRole("row", { name: /Kim Invited/ })).toContainText("Admin");

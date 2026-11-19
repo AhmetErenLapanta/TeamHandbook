@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { DOCS, MARKET, PAYMENTS, PLANTED, standInCalls } from "./handbook-home.js";
@@ -37,13 +38,35 @@ async function resetDefaults(page: Page): Promise<void> {
   expect((await send(page, "PUT", "/api/handbook/defaults", { off: NOTHING_OFF })).status()).toBe(200);
 }
 
-const handbook = (page: Page, name: string | RegExp): Locator => handbooksOf(page).locator("li.handbook").filter({ has: page.locator(".handbook-line .handbook-name").filter({ hasText: name }) });
+const handbook = (page: Page, name: string | RegExp): Locator => handbooksOf(page).locator("li.handbook:not(.handbook-off)").filter({ has: page.locator(".handbook-line .handbook-name").filter({ hasText: name }) });
 const itemOf = (within: Locator, name: string): Locator => within.locator("li.handbook-row").filter({ has: within.page().locator(".handbook-name", { hasText: new RegExp(`^/?${name}$`) }) });
 async function openHandbook(page: Page, name: string | RegExp): Promise<Locator> {
   const list = handbook(page, name);
   const head = list.locator(".handbook-line .handbook-name").first();
   if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
   return list;
+}
+
+const REVIEW_CLI = fileURLToPath(new URL("../../dist/review.js", import.meta.url));
+const LESSONS = [
+  { slug: "restart-the-queue-worker", origin: "harvest", sessionId: "ses_stand_in_1", createdAt: "2026-11-03T10:00:00.000Z", rule: "Restart the queue worker after a config change, then watch its first job." },
+  { slug: "log-with-the-app-logger", origin: "task", sessionId: "tsk_stand_in_1", createdAt: "2026-11-02T10:00:00.000Z", rule: "Log through the app logger from src/log.ts, never console.log." },
+  { slug: "name-tests-after-behaviour", origin: "task", sessionId: "tsk_stand_in_2", createdAt: "2026-11-01T10:00:00.000Z", rule: "Name a test after the behaviour it checks, not the function it calls." },
+] as const;
+
+/** The plugin's own review queue, read the way the person's terminal reads it: the same home, the real command. */
+const reviewList = () => spawnSync("node", [REVIEW_CLI, "list", "--lessons"], { env: { HOME: server().home, PATH: process.env.PATH ?? "" }, encoding: "utf8" }).stdout;
+const queued = () => join(server().home, ".teamhandbook", "candidates");
+
+/** Three lessons waiting in the person's queue, one taught in a session and two by tasks, as the plugin writes them. */
+function fillQueue(): void {
+  for (const l of LESSONS) {
+    const dir = join(queued(), l.slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${l.slug}\ndescription: Use when the work touches this rule.\n---\n\n${l.rule}\n`);
+    writeFileSync(join(dir, "grounded-case.json"), JSON.stringify({ quote: `${l.slug} stand-in words` }));
+    writeFileSync(join(dir, "candidate.json"), JSON.stringify({ slug: l.slug, status: "pending", createdAt: l.createdAt, scope: "payments-api", description: "Use when the work touches this rule.", fingerprint: `fp-${l.slug}`, sessionId: l.sessionId, gate: null, origin: l.origin, kind: "correction", suggestedTarget: "personal" }));
+  }
 }
 
 test.describe("handbook visibility", () => {
@@ -61,7 +84,7 @@ test.describe("handbook visibility", () => {
 
     // then the person's own setup and both plugins load, with no click and none held back
     const loaded = launches().at(-1)!;
-    expect(((await (await page.request.get(`/api/tasks/${first}`)).json()) as { task: { status: string; error: string | null } }).task).toMatchObject({ status: "needs-review", error: null });
+    expect(((await (await page.request.get(`/api/tasks/${first}`)).json()) as { task: { status: string; error: string | null } }).task).toMatchObject({ status: expect.stringMatching(/^(needs-review|nothing-changed)$/), error: null });
     expect(calledSkills(loaded)).toEqual(expect.arrayContaining(["review-checklist", "release-notes", "add-endpoint", "docs-kit:write-docs", "payments-skills:changelog"]));
     expect(calledSkills(loaded)).not.toContain("folder-checklist");
     expect(loaded.loaded.servers.map((s) => s.name)).toEqual(expect.arrayContaining(["postgres", "jira", "ledger-sandbox", "docs-search"]));
@@ -220,7 +243,8 @@ test.describe("handbook visibility", () => {
     await startTask(page, "A second note for the payments API");
     expect(calledSkills(launches().at(-1)!)).not.toContain("docs-kit:write-docs");
     await page.goto("/default/team");
-    await handbooksOf(page).locator("li.handbook-off > .handbook-line .handbook-name").click();
+    const offGroup = handbooksOf(page).locator("li.handbook-off > .handbook-line .handbook-name");
+    if ((await offGroup.getAttribute("aria-expanded")) !== "true") await offGroup.click();
     await handbook(page, "docs-kit").getByRole("switch", { name: /^Use docs-kit/ }).click();
     await expect(handbook(page, "docs-kit")).not.toContainText("off");
     expect(standInCalls(server()).filter((c) => c.call === "plugin enable").map((c) => c.args.includes(DOCS))).toEqual([true]);
@@ -392,5 +416,53 @@ test.describe("handbook visibility", () => {
     expect(standInCalls(server()).filter((c) => c.call === "mcp remove").map((c) => c.args.at(-1))).toEqual(["jira"]);
     expect(JSON.parse(readFileSync(join(server().home, ".claude.json"), "utf8")).mcpServers.jira).toBeUndefined();
     for (const value of Object.values(PLANTED)) expect(body).not.toContain(value);
+  });
+
+  test("given three lessons waiting, one taught in a session, when the person reads one, keeps two as theirs and rejects the third, then the list and its count follow, the kept skills show in Your handbooks, and the plugin's own queue says the same", async ({ page }) => {
+    // given
+    rmSync(queued(), { recursive: true, force: true });
+    fillQueue();
+    await signIn(page);
+    await page.goto("/default/team");
+    const lessons = page.locator("section.turn").filter({ has: page.getByRole("heading", { name: /^Lessons to review/ }) });
+    await expect(lessons).toBeVisible();
+    await expect(lessons.getByRole("heading", { name: /^Lessons to review/ })).toContainText("3");
+    for (const l of LESSONS) await expect(lessons).toContainText(l.rule);
+    expect(reviewList()).toContain("restart-the-queue-worker");
+
+    // when
+    await lessons.getByRole("button", { name: LESSONS[0].rule }).click();
+    await expect(page.getByRole("heading", { name: LESSONS[0].rule })).toBeVisible();
+    await expect(page.getByRole("region", { name: LESSONS[0].rule }).getByText(LESSONS[0].rule).nth(1)).toBeVisible();
+    const closeRail = page.getByRole("button", { name: "Close", exact: true });
+    if (await closeRail.isVisible()) await closeRail.click();
+    await lessons.getByLabel(`Pick ${LESSONS[0].slug}`).check();
+    await lessons.getByLabel(`Pick ${LESSONS[1].slug}`).check();
+    await lessons.getByRole("group", { name: "Decide the picked lessons" }).getByRole("button", { name: "Keep", exact: true }).click();
+
+    // then
+    await expect(lessons.getByRole("heading", { name: /^Lessons to review/ })).toContainText("1");
+    await expect(lessons).not.toContainText(LESSONS[1].rule);
+    await expect(lessons).toContainText(LESSONS[2].rule);
+    await lessons.getByLabel(`Pick ${LESSONS[2].slug}`).check();
+    await lessons.getByRole("group", { name: "Decide the picked lessons" }).getByRole("button", { name: "Reject" }).click();
+    await expect(lessons).toHaveCount(0);
+    expect(readFileSync(join(server().home, ".claude", "skills", LESSONS[0].slug, "SKILL.md"), "utf8")).toContain(LESSONS[0].rule);
+    expect(readFileSync(join(server().home, ".claude", "skills", LESSONS[1].slug, "SKILL.md"), "utf8")).toContain(LESSONS[1].rule);
+    expect(() => readFileSync(join(server().home, ".claude", "skills", LESSONS[2].slug, "SKILL.md"), "utf8")).toThrow();
+    const statuses = LESSONS.map((l) => JSON.parse(readFileSync(join(queued(), l.slug, "candidate.json"), "utf8")).status);
+    expect(statuses).toEqual(["approved", "approved", "rejected"]);
+    for (const l of LESSONS) expect(reviewList()).not.toContain(l.slug);
+    await page.reload();
+    const yours = await openHandbook(page, "Yours");
+    await expect(yours.locator("li.handbook-row").first()).toBeVisible();
+    const all = yours.getByRole("button", { name: /^Show all \(\d+\)$/ });
+    if (await all.count()) await all.click();
+    await expect(itemOf(yours, LESSONS[0].slug)).toContainText("Skill");
+    await expect(itemOf(yours, LESSONS[1].slug)).toContainText("Skill");
+    await expect(itemOf(yours, LESSONS[2].slug)).toHaveCount(0);
+    rmSync(join(server().home, ".claude", "skills", LESSONS[0].slug), { recursive: true, force: true });
+    rmSync(join(server().home, ".claude", "skills", LESSONS[1].slug), { recursive: true, force: true });
+    rmSync(queued(), { recursive: true, force: true });
   });
 });

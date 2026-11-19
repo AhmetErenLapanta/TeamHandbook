@@ -75,6 +75,14 @@ export function buildScaleHome(root: string): HandbookHome {
     installed[id] = [{ scope: "user", installPath: dir, version: "1.0.0", installedAt: "2026-10-01T09:00:00.000Z" }];
     return { id, name: spec.name, version: "1.0.0", enabled: SCALE_PLUGINS_ON.includes(spec.name), scope: "user" };
   });
+  const ownDir = join(plugins, "cache", "teamhandbook", "handbook", "1.0.0");
+  plugin(ownDir, { name: "handbook", version: "1.0.0", skills: [["learn-from-session", "TeamHandbook's own skill", "Notes."]] });
+  installed["handbook@teamhandbook"] = [{ scope: "user", installPath: ownDir, version: "1.0.0", installedAt: "2026-10-01T09:00:00.000Z" }];
+  state.push({ id: "handbook@teamhandbook", name: "handbook", version: "1.0.0", enabled: true, scope: "user" });
+  const own = join(plugins, "cache", "teamhandbook", "handbook", "1.0.0");
+  plugin(own, { name: "handbook", version: "1.0.0", skills: [["handbook-learn", "Keeps a lesson of a session", "Notes."]] });
+  installed["handbook@teamhandbook"] = [{ scope: "user", installPath: own, version: "1.0.0", installedAt: "2026-10-01T09:00:00.000Z" }];
+  state.push({ id: "handbook@teamhandbook", name: "handbook", version: "1.0.0", enabled: true, scope: "user" });
   write(join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: installed }, null, 2));
   for (const name of NOT_INSTALLED) plugin(join(market, name), { name, version: "0.3.0", skills: [[`${name}-guide`, `A skill of ${name}`, "Notes."]] });
   write(join(market, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: MARKET, owner: { name: "Stand-in Team" }, plugins: [...PLUGINS.map((p) => p.name), ...NOT_INSTALLED].map((name) => ({ name, source: `./${name}`, description: `The ${name} handbook of a made-up team.` })) }, null, 2));
