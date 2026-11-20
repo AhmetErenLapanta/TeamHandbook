@@ -927,7 +927,7 @@ leave a part neither its value nor its pattern matches. No skill, MCP server or 
 lost database is rebuilt by connecting the repositories again. What Jira, GitLab or GitHub
 answers for Work (boards, sprints, columns, and each issue's key, summary, status, assignee and
 labels) is held
-in the orchestrator process for a minute, at most 500 answers, and never written to the database,
+in the orchestrator process for two minutes, at most 500 answers, and never written to the database,
 a backup, an export or the log; what is stored for Work is which team each board is mapped to
 and each board's "Move issues as the agent works" setting. A repository the configuration
 file no longer lists is not fetched again, so a URL taken out with its token is not used; an
@@ -1580,7 +1580,11 @@ not start. Git runs there with no hook, fsmonitor or protocol, and the folder is
 the project rule again on every call, so one turned into a link after it was opened is refused.
 Undo writes back only the files still as the task left them: a file you changed since is kept
 and named, and a link or a path out of the folder is not touched. None of this leaves the
-machine.
+machine. On a machine connected to a team's orchestrator the shadow is the machine's own, and what
+leaves it is the paths changed and the two snapshot ids; a machine that lost the task's lease
+while the agent worked (a sleep, a cut line) sends them once it is back, before it takes another
+task, and the orchestrator keeps them only from the machine that ran the task, only once it has
+stopped, and only when no change is recorded for it yet.
 
 Merging a request on your own machine moves the branch checked out in your working copy forward to
 the merge, as `git merge --ff-only` does, with your folder's hooks and fsmonitor off; it is refused,
@@ -1643,6 +1647,14 @@ offered only the repositories they can start on.
   runs in the orchestrator; a test plants one and checks it did not run. The checkout, the HOME and
   the git directory are deleted when the run ends; measured in the container image, the data
   volume holds no task directory after a run.
+  A run the orchestrator's restart cut off, whose checkout was still there, is read once from that
+  checkout through the same git directory and held to the checks a finished run's changes pass (the
+  size and file limits, the credential sieve, the team repository's rules); what passes opens as a
+  request that waits for review, and what does not is dropped with the directory. The request
+  opens as the person who started the task, only for a task this orchestrator ran and only while
+  their account is not turned off by the directory; a crashed agent's change is kept the same way,
+  with the cause and never the agent's last line. A test starts a
+  runner over a left checkout and checks the request holds the edit and the directory is gone.
 - *What the agent sees of the host.* `PATH`, the locale, a HOME and temp directory of its own,
   and the variables its adapter names for its model credential, plus any an operator lists in
   `ORCHESTRATOR_TASK_ENV_PASS`. Nothing else of the orchestrator's environment crosses: a test builds the
@@ -1707,7 +1719,10 @@ offered only the repositories they can start on.
   `~/.m2`, `~/Library/Caches` and the like) and each directory of your PATH under your home on its
   own, never the folder around it, with the sign-in places and cache tokens hidden again inside them
   (`CREDENTIAL_PLACES`: `~/.ssh`, `~/.aws`, `~/.config`, `~/.local/share/keyrings`,
-  `~/.cargo/credentials.toml`, `~/.cache/huggingface` and the like). It reads the task's git
+  `~/.cargo/credentials.toml`, `~/.cache/huggingface` and the like). On macOS a symbolic link
+  that leads to one of those opened places is readable as a link, itself alone and never the
+  folder it sits in, so a PATH directory behind a link in your home is reached by its name; a link
+  inside a sign-in place stays hidden. It reads the task's git
   directory without writing to it, and writes only to the task's folder, its HOME and temp
   directory and the standard streams. On macOS it reaches neither the keychain's service nor a unix
   socket outside the task's directories, so not an ssh-agent's, name lookups' own socket aside; on

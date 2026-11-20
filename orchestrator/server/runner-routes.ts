@@ -1,10 +1,11 @@
+import { stuckOf } from "./tasks/stuck.js";
 import { keepMeasuredContext } from "./tasks/handbook-context.js";
 import { createHash } from "node:crypto";
 import { TURN_SAID_MAX, TURNS_MAX } from "./tasks/turns.js";
 import { SOURCE_ID } from "./tasks/handbook-use.js";
 import { dropTaskSecrets } from "./task-secrets.js";
 import { noteLimit } from "./tasks/agent-limits.js";
-import { nameReader } from "./task-suggestions.js";
+import { nameReader, personReader } from "./task-suggestions.js";
 import { readFile } from "node:fs/promises";
 import { Hono } from "hono";
 import { attachmentPath, contentDisposition, MAX_ATTACHMENT_BYTES } from "./attachments.js";
@@ -272,6 +273,8 @@ function agentsOf(raw: unknown): MachineAgentStatus[] | null {
   return raw as MachineAgentStatus[];
 }
 
+const endsKept = (text: string) => (text.length <= LAST_SAID_MAX ? text : `${text.slice(0, LAST_SAID_MAX / 2 - 2)}\n…\n${text.slice(-(LAST_SAID_MAX / 2 - 1))}`);
+
 function outcomeOf(raw: unknown, mask: Mask): TaskOutcome | null {
   const o = raw as Partial<TaskOutcome> | null;
   const named = (value: unknown) => value === null || exact(value, mask, 255);
@@ -281,7 +284,7 @@ function outcomeOf(raw: unknown, mask: Mask): TaskOutcome | null {
   const changes = o.changes === undefined || o.changes === null ? null : changesOf(o.changes, mask);
   if (changes === undefined) return null;
   const request = o.request ? { title: mask(o.request.title), body: mask(o.request.body) } : null;
-  return { status: o.status!, error: o.error === null ? null : mask(o.error!), nativeSessionId: o.nativeSessionId!, branch: o.branch!, position: o.position!, request, ...(changes ? { changes } : {}), ...(typeof o.limitResetAt === "string" ? { limitResetAt: o.limitResetAt } : {}), ...(o.nothingChanged === true ? { nothingChanged: true as const } : {}), ...(typeof o.lastSaid === "string" ? { lastSaid: mask(o.lastSaid.slice(0, LAST_SAID_MAX)) } : {}) };
+  return { status: o.status!, error: o.error === null ? null : mask(o.error!), nativeSessionId: o.nativeSessionId!, branch: o.branch!, position: o.position!, request, ...(changes ? { changes } : {}), ...(typeof o.limitResetAt === "string" ? { limitResetAt: o.limitResetAt } : {}), ...(o.nothingChanged === true ? { nothingChanged: true as const } : {}), ...(o.asked === true ? { asked: true as const } : {}), ...(typeof o.lastSaid === "string" ? { lastSaid: mask(endsKept(o.lastSaid)) } : {}) };
 }
 
 const SNAPSHOT = SHA;
@@ -326,7 +329,9 @@ export function organizationRunners(ctx: OrchestratorContext): RunnerService {
     describeWork: (taskId) => ctx.tasks!.describeWork(taskId),
     onSpend: (taskId, usd) => ctx.tasks!.holdSpend(taskId, usd),
     nameOf: nameReader(ctx),
+    personOf: personReader(ctx),
     isQuestion: async (taskId) => (await ctx.store.getTask(ctx.tenant, taskId))?.readOnly === true,
+    questionOf: stuckOf,
     checks: {
       record: async (taskId, raw) => {
         const task = await ctx.store.getTask(ctx.tenant, taskId);
@@ -562,6 +567,20 @@ export function runnerRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
       return c.json({ ok: false, unverified: true, reason: match.reason } satisfies ForgeRequestAnswer);
     }
     return c.json({ ok: false, reason: match.reason } satisfies ForgeRequestAnswer, 409);
+  });
+
+  route(app, "POST /api/runner/tasks/:id/late-changes", async (c) => {
+    const call = await caller(c);
+    if (call instanceof Response) return call;
+    const taskId = c.req.param("id")!;
+    const task = await ctx.store.getTask(ctx.tenant, taskId);
+    const lease = task ? await ctx.store.taskLease(ctx.tenant, taskId) : null;
+    if (!task || lease?.claimedBy !== call.machine.id || task.status === "running" || task.status === "queued" || task.changes) return notFound(c);
+    const changes = changesOf(call.body.changes, await maskOf(taskId));
+    if (!changes) return c.json({ error: "changes name the snapshots before and after and the files between them" }, 400);
+    await keepMachineChanges(ctx, taskId, { status: "interrupted", error: null, nativeSessionId: null, branch: null, position: null, request: null, changes });
+    if ((await ctx.store.getTask(ctx.tenant, taskId))?.changes) await ctx.store.appendTaskLog(ctx.tenant, taskId, [`${call.machine.name} lost the task while it worked; what the agent changed by then is kept for review: keep it or undo it.`]);
+    return c.body(null, 204);
   });
 
   onTask("POST /api/runner/tasks/:id/finish", async (c, call, taskId, leaseId) => {

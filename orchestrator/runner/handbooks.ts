@@ -20,7 +20,7 @@ export async function setupHere(ask: SetupAsk, where: MachineWhere, hostEnv: Rec
   if ((ask.want === "skill" || ask.want === "file") && !FILE_NAME.test(ask.name)) return { refused: "that is not a name this runner takes" };
   if (ask.want === "plugin" && !NAME.test(ask.plugin.slice("plugin:".length))) return { refused: "that is not a name this runner takes" };
   const home = await realpath(where.home).catch(() => where.home);
-  const folder = ask.want === "plugin" ? null : ask.folder;
+  const folder = ask.want === "plugin" || ask.want === "marketplaces" ? null : ask.folder;
   const place = folder ? await folderPlace(folder.path, folder.projectId, where) : null;
   if (place && "refused" in place) return place;
   const root = await mkdtemp(join(tmpdir(), "handbook-setup-"));
@@ -34,6 +34,7 @@ export async function setupHere(ask: SetupAsk, where: MachineWhere, hostEnv: Rec
       const personal = await probePersonalSetup(program, env, root, place ? [place.folder] : [], READ_TIMEOUT_MS).catch(() => null);
       return readSources({ claudeDir: hostEnv.CLAUDE_CONFIG_DIR || join(home, ".claude"), ...(place && folder ? { folder: place.folder, folderTrusted: folder.trusted } : {}), plugins, personal });
     };
+    if (ask.want === "marketplaces") return runPluginOp(program, env, root, "check", "", "user");
     if (ask.want === "sources") {
       const { sources } = await read();
       return { sources: sources.map((source) => ({ ...source, id: source.id.startsWith(`folder:${home}${sep}`) ? `folder:~/${source.id.slice(`folder:${home}${sep}`.length)}` : source.id })) };

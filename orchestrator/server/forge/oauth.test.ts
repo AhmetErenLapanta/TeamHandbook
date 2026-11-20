@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createUser, principalOf, setupFirstOwner, startSession } from "../accounts.js";
 import { createApp } from "../app.js";
 import type { OrchestratorContext } from "../app.js";
@@ -572,3 +572,25 @@ describe("checking the GitLab connection from the card", () => {
     expect(short.check).toMatchObject({ ok: false, missing: ["api"] });
   });
 });
+
+describe("the GitLab card's sign-in with a one-time code through the release's own application", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("given an orchestrator with no GitLab application of the organization's and no glab of the person's, when an owner reads the GitLab card, then it offers Sign in with GitLab with a code, unless the operator turned it off", async () => {
+    // given
+    const { ctx } = await organization("https://gitlab.example.invalid", { forgeApps: {} });
+    const app = createApp(ctx);
+    const owner = await sessionHeaders(ctx, (await ctx.store.listUsers(TENANT)).find((u) => u.role === "owner")!.id);
+    const card = async () => ((await (await app.request("/api/forge/gitlab/sign-in", { headers: owner })).json()) as { device: { offered: boolean; signIn: { state: string } } | null }).device;
+
+    // when
+    const offered = await card();
+    vi.stubEnv("ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID", "off");
+    const turnedOff = await card();
+
+    // then
+    expect(offered).toEqual({ offered: true, signIn: { state: "idle" } });
+    expect(turnedOff).toBeNull();
+  });
+});
+

@@ -419,8 +419,9 @@ servers shared; 1 lesson waits for review"), with Invite members as its action.
   Code: when the plugin is not in it, one card sits right under Team's head, before any section,
   with no heading and no box, a hairline under it like a row. A sentence, its first part in the
   strong weight ("Add the handbook plugin to your Claude Code. It turns what your sessions teach
-  into skills you keep or share."), then "Install the plugin…" filled and "Not now" beside it.
-  Pressed, it says first what it does, in one muted sentence naming the two commands in mono
+  into skills you keep or share."), then "Install the plugin…" and "Not now" beside it, both
+  secondary: setting up is not the person's daily work, so the page's first filled button stays
+  the lessons' Keep. Pressed, it says first what it does, in one muted sentence naming the two commands in mono
   (`claude plugin marketplace add`, `claude plugin install`) and "Nothing else changes", with
   Install filled and Cancel beside it; nothing runs before that press. While it runs Install reads
   "Installing…" and waits; a refusal is the CLI's own reason in the danger tone with "Install the
@@ -469,14 +470,14 @@ what else it does is said on the row it is on:
 
 | Switched off | What happens | The row then says |
 |---|---|---|
-| A plugin | Claude Code's own command runs, so it is off in the terminal too | "off", and the reach label beside its switch, "here and in your terminal", says the rest |
-| A skill, a command or an MCP server | the orchestrator keeps it for this person and leaves it out of each task it starts | "off", and "here" beside its switch; opened, "Off for agents started here. Your terminal still has it." |
+| A plugin | Claude Code's own command runs, so it is off in the terminal too | "off", and the line above the list says the rest |
+| A skill, a command or an MCP server | the orchestrator keeps it for this person and leaves it out of each task it starts | "off"; opened, "Off for agents started here. Your terminal still has it." |
 | One skill of a plugin | the same, as far as the agent allows | "off"; opened, "Off for agents started here: the agent cannot call it; its name still shows." |
 
-Where a switch reaches is read before it is pressed, not after. The line above the list is set
-in the text colour at the body size, never muted or small. Each switch carries its reach beside
-it, always, in two words or four: "here" on a skill, a command or a server, "here and in your
-terminal" on a plugin. A plugin's switch says which command ran, once, muted: "Ran claude plugin
+Where a switch reaches is read before it is pressed, not after, and is said once: the line above
+the list is set in the text colour at the body size, never muted or small, and it names the one
+switch that goes further than "here", a plugin's. No row repeats it beside its switch. A plugin's
+switch says which command ran, once, muted: "Ran claude plugin
 disable payments-skills."; refused, the row keeps its state and shows the CLI's own reason. The
 orchestrator writes no setting into the person's Claude Code files; the one thing written as a
 file is the person's own skill or command, edited, removed or made, with its change shown first.
@@ -497,7 +498,7 @@ An action Claude Code has no command for is not drawn, as a switch is not.
   name. A handbook's row: its name, its version where it has one, how much of it is on ("5 of 7
   on"), and its switch, which shows a mixed state when some of it is off; Yours and This folder
   have no switch of their own, only their items do. A handbook that is off has no count: its row
-  says only "off", and the reach label beside its switch stays. Above the rows one summary line,
+  says only "off". Above the rows one summary line,
   which carries the counts, so the section's heading has none: "14 handbooks, 84 of 159 on",
   with ", 2 updates" when there are some. Its context part, "about 2.1k tokens in every task", is
   there only where something was measured: skills, commands, CLAUDE.md and memory are counted
@@ -509,16 +510,16 @@ An action Claude Code has no command for is not drawn, as a switch is not.
   "Off (9)" below the list, the same rows, "off" where a count would be.
 - **A handbook opened**, in place, lists its items, at most seven, then "Show all (14)"; what is
   off comes last, folded under "Off (2)". An item's row, the same in all three places: the name,
-  its kind in one word (Skill, Server, Command, Hook, Rules), and at the end its switch, or on
-  the task page its state word. At 390 it breaks in two lines, the name and the switch above,
+  its kind in one word (Skill, Server, Command, Hook, Rules), and at the end its switch alone, or
+  on the task page its state word. At 390 it breaks in two lines, the name and the switch above,
   the kind and what the row says under.
 - **A row opened**, in place, starts with what it is: a skill's description as one plain sentence,
   read from its frontmatter however that is written, then its body in reading form; the
   frontmatter itself is not shown raw, only when the text is edited. Then what it costs ("in
   every task about 146 tokens, when used about 30") and its text links, "Edit" for Yours and This
-  folder, "Remove". How it is used is on the row itself, at its right, muted: "used in 14 tasks,
-  last 3 days ago", or "Not used in 30 days; turn off?" for one that takes context; never inside
-  what opened. A hook opened shows its event, its matcher and the command it runs, in mono,
+  folder, "Remove". How it is used is said only once the row is opened, after what it is: "Used in 14
+  tasks, last Nov 15.", or "Not used in 30 days." for one nothing used. No row at first glance, and
+  no handbook's count, says it. A hook opened shows its event, its matcher and the command it runs, in mono,
   masked as the stream masks and cut at 200 characters, a part that looks like a secret reading
   "(withheld)"; environment values are never shown. A hook is never edited or switched from here,
   only seen. CLAUDE.md and rules open into their text in reading form, with "Edit" for Yours and
@@ -871,7 +872,9 @@ the task form says both before Start."
   everywhere; waiting for review, the state's main action and its counterpart ("Keep these
   changes" filled, "Discard these changes…" beside it). While a card waits nothing stays in view
   over the stream, the foot row included, so the card's title, what it asks and its actions read
-  together; its answer is the one action.
+  together; its answer is the one action. The review's foot row is drawn only while the task waits
+  for review, and stops staying in view while the follow-up box has the focus: the bar would cover
+  the box's own button, and the person is typing there, so it takes its place in the page.
 - **Going on from a review**, the same section in both experiences: under the changes of a task
   waiting for its starter's review, "Continue with a follow-up", one field, the quoted lines as
   chips over it, and "Start the next run". Its note says where the next run starts, in the words

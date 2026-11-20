@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MiddlewareHandler } from "hono";
@@ -8,6 +8,7 @@ import type { UserRecord } from "./accounts.js";
 import { createApp } from "./app.js";
 import type { OrchestratorContext } from "./app.js";
 import type { OrchestratorEnv, Principal } from "./auth.js";
+import { handbookReads } from "./short-memory.js";
 import { lessonPrompt, lessonQueueOf, reviewTask, startLessonSweep, sweepLessons } from "./lessons.js";
 import type { LessonPlace, LessonQueue, LessonRow, MachineLessons } from "./lessons.js";
 import type { LessonAnswer } from "../runner/link.js";
@@ -357,6 +358,7 @@ describe("lessons from a task's review", () => {
     const { ctx, queue, place, task, asked } = await local(DRAFT);
     ctx.lessons = place;
     const folder = join(dirname(queue.home), "shop-api-folder");
+    mkdirSync(folder, { recursive: true });
     await ctx.store.upsertRepo({ tenant: "t", id: "shop-api", team: "Payments", name: "shop-api", url: folder });
     await followUp(ctx, "fup_1", "use our logger here, never console.log");
     await sweepLessons(ctx, place, NOW);
@@ -416,6 +418,95 @@ describe("lessons from a task's review", () => {
     // then
     expect(listed.candidates).toHaveLength(1);
     expect(listed.waiting).toBe(2);
+  });
+
+  it("given a task's lesson and two lessons from sessions in the queue, when the owner lists, keeps two as theirs and rejects one in one call each, then the list covers all three, the files are written, the task row records its lesson and the count drops at once", async () => {
+    // given
+    const { ctx, queue, place, task } = await local(DRAFT);
+    ctx.lessons = place;
+    await followUp(ctx, "fup_1", "use our logger here, never console.log");
+    await sweepLessons(ctx, place, NOW);
+    for (const slug of ["fix-npm-test", "fix-stale-snapshot"]) {
+      const dir = join(queue.home, "candidates", slug);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: ${slug}\ndescription: Use when ${slug}\n---\n\nRun the fix for ${slug} and commit the result.\n`);
+      writeFileSync(join(dir, "candidate.json"), JSON.stringify({ slug, status: "pending", createdAt: "2026-11-01T00:00:00.000Z", scope: "team", description: `Use when ${slug}`, fingerprint: `fp-${slug}`, sessionId: "ses_1", gate: null, origin: "harvest" }));
+    }
+    const app = createApp(ctx, as(ADA));
+    const post = (path: string, body: unknown) => app.request(`/api/lessons/review/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    await handbookReads.read("probe", async () => "read before the keep");
+
+    // when
+    const listed = await (await app.request("/api/lessons/review?limit=2")).json();
+    const kept = await (await post("keep", { slugs: ["log-with-the-app-logger", "fix-npm-test"], target: "yours" })).json();
+    const reread = await handbookReads.read("probe", async () => "read after the keep");
+    const rejected = await (await post("reject", { slugs: ["fix-stale-snapshot", "no-such-lesson"], never: true })).json();
+    const row = JSON.parse((await ctx.store.getSetting("t", `task.lessons.${task.id}`))!);
+
+    // then
+    expect(listed.total).toBe(3);
+    expect(listed.items).toHaveLength(2);
+    expect(kept.results).toEqual([{ slug: "log-with-the-app-logger", ok: true }, { slug: "fix-npm-test", ok: true }]);
+    expect(kept.waiting).toBe(1);
+    expect(reread).toBe("read after the keep");
+    expect(existsSync(join(queue.skillsDir, "fix-npm-test", "SKILL.md"))).toBe(true);
+    expect(rejected.results).toEqual([{ slug: "fix-stale-snapshot", ok: true }, { slug: "no-such-lesson", ok: false, error: "unknown lesson" }]);
+    expect(rejected.waiting).toBe(0);
+    expect(row.candidates[0].keptAt).toEqual(expect.any(String));
+  });
+
+  it("given the queue's lessons, when someone asks to keep a lesson with a bad target, a bad page or without being the queue's owner, then each is refused and nothing is written", async () => {
+    // given
+    const { ctx, queue, place } = await local(DRAFT);
+    ctx.lessons = place;
+    const owner = createApp(ctx, as(ADA));
+    const keyed = createApp(ctx, as({ ...ADA, key: { id: "key_1", scopes: [["tasks", "read"]] } } as unknown as Principal));
+
+    // when
+    const badTarget = await owner.request("/api/lessons/review/keep", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slugs: ["a-lesson"], target: "everyone" }) });
+    const badPage = await owner.request("/api/lessons/review?limit=500");
+    const unowned = await keyed.request("/api/lessons/review");
+
+    // then
+    expect([badTarget.status, badPage.status, unowned.status]).toEqual([400, 400, 404]);
+    expect(existsSync(queue.skillsDir)).toBe(false);
+  });
+
+  it("given a lesson holding a credential and a folder whose skills link points outside it, when the owner keeps them as theirs and in the folder, then both are refused and nothing is written", async () => {
+    // given
+    const { ctx, queue, place } = await local(DRAFT);
+    ctx.lessons = place;
+    const outside = mkdtempSync(join(tmpdir(), "orchestrator-lessons-outside-"));
+    dirs.push(outside);
+    const folder = join(dirname(queue.home), "project");
+    mkdirSync(join(folder, ".claude"), { recursive: true });
+    symlinkSync(outside, join(folder, ".claude", "skills"));
+    await ctx.store.upsertRepo({ tenant: "t", id: "linked", team: "Payments", name: "linked", url: folder });
+    const plant = (slug: string, body: string, fields: Record<string, unknown> = {}) => {
+      const dir = join(queue.home, "candidates", slug);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: ${slug}\ndescription: Use when ${slug}\n---\n\n${body}\n`);
+      writeFileSync(join(dir, "candidate.json"), JSON.stringify({ slug, status: "pending", createdAt: "2026-11-01T00:00:00.000Z", scope: "team", description: `Use when ${slug}`, fingerprint: `fp-${slug}`, sessionId: "ses_1", gate: null, origin: "harvest", ...fields }));
+    };
+    plant("leaky-lesson", "Sign in with ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8");
+    plant("linked-lesson", "Run the fix and commit the result.", { cwd: folder });
+    plant("elsewhere-lesson", "Run the other fix and commit the result.", { cwd: outside });
+    const app = createApp(ctx, as(ADA));
+    const keep = async (slug: string, target: string) => (await (await app.request("/api/lessons/review/keep", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slugs: [slug], target }) })).json()).results[0];
+
+    // when
+    const leaky = await keep("leaky-lesson", "yours");
+    const linked = await keep("linked-lesson", "folder");
+    const elsewhere = await keep("elsewhere-lesson", "folder");
+
+    // then
+    expect(leaky).toMatchObject({ ok: false, error: expect.stringContaining("credential") });
+    expect(linked).toMatchObject({ ok: false, error: expect.stringContaining("leads its skills out") });
+    expect(elsewhere).toMatchObject({ ok: false, error: expect.stringContaining("not a folder on this machine") });
+    expect(existsSync(join(outside, ".claude", "skills", "elsewhere-lesson"))).toBe(false);
+    expect(existsSync(join(queue.skillsDir, "leaky-lesson"))).toBe(false);
+    expect(existsSync(join(outside, "linked-lesson"))).toBe(false);
   });
 
   it("given the owner's API key, when it asks for the queue, then it is refused like anyone else", async () => {

@@ -363,6 +363,7 @@ button.switch[aria-checked="mixed"] .switch-knob { transform: translateX(7px); }
 .pick-bar .actions { margin: 0; }
 .backlog-list { max-width: 760px; }
 .start-agents .picked { display: grid; gap: 4px; margin: 0 0 8px; }
+.start-agents > form { max-width: 720px; }
 .outcomes { display: grid; gap: 4px; margin: 0 0 8px; }
 .read-at { margin: 0; }
 .read-at .badge { margin-right: 4px; }

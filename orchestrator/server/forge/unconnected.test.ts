@@ -131,6 +131,26 @@ describe("a change a person's machine pushed to a remote no organization connect
     ]);
   });
 
+  it("given the machine's branch deleted on GitLab, or GitLab no longer taking her sign-in, when she presses, then each says what happened and what to do, and nothing opens", async () => {
+    // given
+    const gone = await unconnectedRemote();
+    execFileSync("git", ["update-ref", "-d", "refs/heads/handbook/fix"], { cwd: join(gone.root, "served", "acme", "service.git") });
+    const deleted = await adasTask(gone);
+    const remote = await unconnectedRemote();
+    const expired = await adasTask(remote);
+    // Her token still names her, and GitLab refuses it where it writes: a sign-in revoked for the project alone.
+    const refusing = (async (url: string) => new Response(JSON.stringify(String(url).endsWith("/user") ? { username: "ada" } : { message: "401 Unauthorized" }), { status: String(url).endsWith("/user") ? 200 : 401, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+    // when
+    const onDeleted = await openOnUnconnectedRemote(deleted.ctx, deleted.ada, deleted.task, deleted.project, deleted.kept, deleted.send, gone.endpoints);
+    const onExpired = await openOnUnconnectedRemote(expired.ctx, expired.ada, expired.task, expired.project, expired.kept, refusing, remote.endpoints);
+
+    // then
+    expect(onDeleted).toEqual({ refused: "handbook/fix is no longer on GitLab: it was deleted there, so nothing opened; push it again with `git push origin handbook/fix` in its folder, then press again" });
+    expect(onExpired).toEqual({ refused: expect.stringMatching(/^GitLab no longer accepts your sign-in to code; sign in to GitLab again on its card under Integrations/) });
+    expect(deleted.calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
+
   it("given a task run on someone else's machine, or a remote on another host, when the starter presses, then it is refused and the forge is not asked", async () => {
     // given
     const remote = await unconnectedRemote();

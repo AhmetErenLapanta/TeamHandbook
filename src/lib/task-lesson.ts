@@ -7,7 +7,7 @@ import type { DistilledDraft, GroundedCase } from "./distill.js";
 import { lessonFingerprint } from "./harvest.js";
 import { maskIdentity } from "./identity.js";
 import type { HostIdentity } from "./identity.js";
-import { decideCandidate, isSafeSlug, listCandidates, loadMutedFingerprints, writeCandidateMeta } from "./queue.js";
+import { decideCandidate, isSafeSlug, listCandidates, loadMutedFingerprints, secretInSkillDir, writeCandidateMeta } from "./queue.js";
 import type { CandidateMeta, DecideResult } from "./queue.js";
 export type { CandidateMeta } from "./queue.js";
 export { hostIdentityOf } from "./identity.js";
@@ -191,6 +191,8 @@ export function keepTaskLesson(home: string, slug: string, skillsDir: string, de
   const meta = taskLessons(home).find((m) => m.slug === slug);
   if (!meta) return { ok: false, error: `no lesson from a task named "${slug}"` };
   if (meta.status !== "pending") return { ok: false, error: `lesson "${slug}" is already ${meta.status}` };
+  const secret = secretInSkillDir(join(candidatesDir(home), slug));
+  if (secret) return { ok: false, error: `lesson "${slug}" holds what looks like a credential (${secret.pattern} in ${secret.file}), so it is not kept; edit it with /handbook:review` };
   return deliverPersonal(join(candidatesDir(home), slug), meta, decidedAt, skillsDir, { host });
 }
 

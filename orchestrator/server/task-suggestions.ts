@@ -38,17 +38,26 @@ export function suggestsOn(user: Principal, task: Pick<TaskRecord, "createdBy" |
   return !user.key && !startedTask(user, task) && canStartOnTeam(user, task.team) && offered !== null && requestOpen;
 }
 
-/** A person's name as a suggestion shows it, from the address or id a record keeps; never the address itself. */
-export function nameReader(ctx: Pick<OrchestratorContext, "store" | "tenant">): (who: string) => Promise<string> {
-  const names = new Map<string, Promise<string>>();
+/**
+ * A person as a task's stream names them, from the address or id a record keeps: their name, never the address itself,
+ * and their account's id, which tells two people of one name, or two with none, apart. No id for someone with no account.
+ */
+export function personReader(ctx: Pick<OrchestratorContext, "store" | "tenant">): (who: string) => Promise<{ name: string; id?: string }> {
+  const people = new Map<string, Promise<{ name: string; id?: string }>>();
   const read = async (who: string) => {
     const person = (who.includes("@") ? await ctx.store.getUserByEmail(ctx.tenant, who) : null) ?? (await ctx.store.getUser(ctx.tenant, who));
-    return person?.name || "A teammate";
+    return { name: person?.name || "A teammate", ...(person ? { id: person.id } : {}) };
   };
   return (who) => {
-    if (!names.has(who)) names.set(who, read(who));
-    return names.get(who)!;
+    if (!people.has(who)) people.set(who, read(who));
+    return people.get(who)!;
   };
+}
+
+/** A person's name as a suggestion shows it, from the address or id a record keeps; never the address itself. */
+export function nameReader(ctx: Pick<OrchestratorContext, "store" | "tenant">): (who: string) => Promise<string> {
+  const person = personReader(ctx);
+  return async (who) => (await person(who)).name;
 }
 
 /**

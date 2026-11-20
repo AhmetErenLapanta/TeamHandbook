@@ -204,7 +204,7 @@ describe("a request for a branch the runner already pushed, opened with the pers
     const { root, mirror, repo, head } = await repositories();
     const { run, calls } = cli({});
 
-    await expect(createOwnCliForge(GITHUB, root, () => mirror, FILE_ONLY, run).openForBranch!(repo, pushed(head))).rejects.toThrow(/handbook\/pushed is not in skills; the runner pushes it first/);
+    await expect(createOwnCliForge(GITHUB, root, () => mirror, FILE_ONLY, run).openForBranch!(repo, pushed(head))).rejects.toThrow(/handbook\/pushed is not in skills: it was not pushed there, or it was deleted since; push it again, then open the request/);
     expect(calls.some((c) => c.args[0] === "pr")).toBe(false);
   });
 

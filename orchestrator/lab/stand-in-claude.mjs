@@ -200,6 +200,14 @@ if (prompt.includes("## Candidate repositories")) {
   process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer, num_turns: 1, total_cost_usd: 0.05, usage: { input_tokens: 800, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 60 }, permission_denials: [] }) + "\n");
   process.exit(0);
 }
+// `stand-in: ask and stop` ends the run as an agent that cannot go on does: nothing changed, and a last message that
+// closes with one question and two short answers for its person, in the lines a task's prompt asks for.
+if (/^stand-in: ask and stop$/m.test(prompt)) {
+  const asked = "I cannot tell which tier a parcel at the limit belongs to.\nQUESTION: Does a parcel exactly at a weight limit take the lower tier?\nOPTION: Yes, the lower tier\nOPTION: No, the next tier";
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: asked }] } }) + "\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: asked, num_turns: 1, total_cost_usd: 0.05, usage: { input_tokens: 600, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 60 }, permission_denials: [] }) + "\n");
+  process.exit(0);
+}
 // "stand-in: wait <n> seconds" keeps the agent working that long first, so a scenario sees tasks run side by side.
 const wait = prompt.match(/^stand-in: wait (\d+) seconds?$/m);
 if (wait) await new Promise((resolve) => setTimeout(resolve, Math.min(120, Number(wait[1])) * 1000));

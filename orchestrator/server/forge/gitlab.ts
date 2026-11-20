@@ -1,6 +1,6 @@
 import type { RepoRecord } from "../store.js";
 import { checkBranch, forgeHttp, ForgeHttpError } from "./http.js";
-import { ForgeRefusal } from "./local.js";
+import { ForgeRefusal, missingBranch } from "./local.js";
 import { PENDING_LIMIT, forgeState, forgeTime, shownText, shownUrl } from "./types.js";
 import type { BranchUpdate, ChangeRequest, CommitCheck, FileChange, ForgeConfig, ForgeProvider, ForgeState, OpenedRequest, PendingShare, PushedBranch, RequestAssignment } from "./types.js";
 
@@ -112,7 +112,7 @@ export function createGitLabForge(config: ForgeConfig, token: string, fetchImpl:
       checkBranch(branch);
       if (!update.files.length) throw new Error("the change has no files");
       const at = await http.request<{ commit?: { id?: unknown } }>("GET", `${project}/repository/branches/${encodeURIComponent(branch)}`).catch((err) => {
-        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(`branch ${branch} is not in ${repo.name}; open the request again`);
+        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(`branch ${branch} is no longer in ${repo.name} on GitLab: it was deleted there, so nothing was written to it; open the request again`);
         throw err;
       });
       if (at.commit?.id !== update.expectedHead) throw new ForgeRefusal(`${branch} moved since the change was prepared; read the request again`);
@@ -171,11 +171,11 @@ export function createGitLabForge(config: ForgeConfig, token: string, fetchImpl:
     async openForBranch(repo: RepoRecord, pushed: PushedBranch): Promise<OpenedRequest> {
       checkBranch(pushed.branch);
       const at = await http.request<{ commit?: { id?: unknown } }>("GET", `${project}/repository/branches/${encodeURIComponent(pushed.branch)}`).catch((err) => {
-        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(`branch ${pushed.branch} is not in ${repo.name}; the runner pushes it first`);
+        if (err instanceof ForgeHttpError && err.status === 404) throw new ForgeRefusal(missingBranch(pushed.branch, repo.name));
         throw err;
       });
       const headSha = at.commit?.id;
-      if (typeof headSha !== "string") throw new ForgeRefusal(`branch ${pushed.branch} is not in ${repo.name}; the runner pushes it first`);
+      if (typeof headSha !== "string") throw new ForgeRefusal(missingBranch(pushed.branch, repo.name));
       const target = pushed.target ?? (await http.request<Project>("GET", project)).default_branch;
       const notes: string[] = [];
       // The branch is the runner's: a merge request GitLab refuses leaves it where it was pushed.

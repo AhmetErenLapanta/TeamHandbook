@@ -267,8 +267,22 @@ for (const [, name] of prompt.matchAll(/^stand-in: use-skill (\S+)$/gm)) {
   say({ type: "assistant", message: { content: [{ type: "tool_use", id: `toolu-skill-${n}`, name: "Skill", input: { skill: name } }] }, session_id });
   say({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: `toolu-skill-${n}`, content: `Launching skill: ${name}` }] }, session_id });
 }
+if (/^stand-in: crash after writing$/m.test(prompt)) {
+  mkdirSync(join(cwd, "src"), { recursive: true });
+  writeFileSync(join(cwd, "src", "half-done.js"), "export const half = true;\n");
+  console.error("stand-in: the agent crashed");
+  process.exit(1);
+}
+if (/^stand-in: keep working$/m.test(prompt)) {
+  mkdirSync(join(cwd, "src"), { recursive: true });
+  writeFileSync(join(cwd, "src", "half-done.js"), "export const half = true;\n");
+  await new Promise((resolve) => setTimeout(resolve, 600_000));
+}
 // Something to open a request with.
-mkdirSync(dirname(join(cwd, "handbook-note.md")), { recursive: true });
-writeFileSync(join(cwd, "handbook-note.md"), "A note the stand-in agent left.\n");
-say({ type: "result", subtype: "success", is_error: false, result: "Done.", num_turns: 1, total_cost_usd: 0.01, usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 20 }, permission_denials: [], terminal_reason: "completed", session_id });
+if (!/^stand-in: answer only$/m.test(prompt)) {
+  mkdirSync(dirname(join(cwd, "handbook-note.md")), { recursive: true });
+  writeFileSync(join(cwd, "handbook-note.md"), "A note the stand-in agent left.\n");
+}
+const markdownAnswer = "**Short answer:** it touches `three` files.\n\n| File | Change |\n|---|---|\n| src/refund.js | add the rounding |\n| src/refund.test.js | cover it |";
+say({ type: "result", subtype: "success", is_error: false, result: /^stand-in: answer markdown$/m.test(prompt) ? markdownAnswer : "Done.", num_turns: 1, total_cost_usd: 0.01, usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 20 }, permission_denials: [], terminal_reason: "completed", session_id });
 process.exit(0);

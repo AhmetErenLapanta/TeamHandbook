@@ -4,7 +4,7 @@ Two kinds of registration live here: a two-minute one that lets one person's orc
 
 ## Sign in without the command line tools
 
-A single person's orchestrator can sign in to GitHub or GitLab in the browser with a short code, with no `gh` or `glab` installed. The sign-in goes through an application registered on the forge: GitHub's is compiled into the release, and GitLab.com's is registered once, in two minutes, as below; register a GitHub one only to sign in through your own. The orchestrator ships no secret and keeps none: the sign-in sends only the application's public client ID.
+A single person's orchestrator can sign in to GitHub or GitLab in the browser with a short code, with no `gh` or `glab` installed. The sign-in goes through an application registered on the forge, and the release carries the orchestrator's own for GitHub and for GitLab.com; register one as below only to sign in through your own. The orchestrator ships no secret and keeps none: the sign-in sends only the application's public client ID.
 
 ### GitHub: an OAuth App
 
@@ -19,7 +19,7 @@ This is an OAuth App, not a GitHub App; the GitHub App below is for a shared orc
 
 ### GitLab.com: an application
 
-1. On gitlab.com open **Preferences > Applications > Add new application** (or the same page of a group).
+1. On gitlab.com open **User settings > Access > Applications > Add new application** (`https://gitlab.com/-/user_settings/applications`), or the same page of a group.
 2. Name it. **Redirect URI**: any address (the device flow does not use it; GitLab asks for one).
 3. **Confidential**: unticked. **Scopes**: `api` and `write_repository`.
 4. Save, copy the **Application ID**, and set `ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID=<Application ID>`. Restart the orchestrator.
@@ -32,7 +32,7 @@ A self-managed GitLab keeps today's way (its own sign-in with `glab`, or the org
 
 With a client ID set, the GitHub and GitLab cards say "Sign in to GitHub with a one-time code; nothing to install." and offer **Sign in with GitHub** (or **GitLab**). The card shows "Enter <code> on GitHub" with **Open GitHub**, the person enters the code there and approves, and the card says "Connected as <account> on <host>." With no client ID, or with `off` as its value, the card falls back to the `gh` or `glab` way, and says which command to install. A code that is not entered within the time the forge gives is dropped, and the person presses the button again. A token is renewed only when the person presses for a request, never while a screen is open. When the forge refuses a renewal (the person revoked the application, or did not use it for six months), the orchestrator forgets the tokens and the card says why, with **Sign in again**; when the forge does not answer, the tokens stay and the person presses again.
 
-Where the client ID goes for a release: a client ID can also be compiled into a release in `RELEASE_DEVICE_CLIENTS` (`server/forge/device-sign-in.ts`); the environment variable wins when both are set. The orchestrator's own GitHub application is compiled in, so GitHub needs no registration of your own; GitLab.com's is not yet. To turn a forge's code sign-in off, the release's application included, set `ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID=off` (or the GitLab one); its card then offers the other ways to connect, and a sign-in a person made before is no longer used to open anything. An empty value keeps the release's application.
+Where the client ID goes for a release: a client ID can also be compiled into a release in `RELEASE_DEVICE_CLIENTS` (`server/forge/device-sign-in.ts`); the environment variable wins when both are set. The orchestrator's own GitHub and GitLab.com applications are compiled in, so neither needs a registration of your own. To turn a forge's code sign-in off, the release's application included, set `ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID=off` (or the GitLab one); its card then offers the other ways to connect, and a sign-in a person made before is no longer used to open anything. An empty value keeps the release's application.
 
 ---
 
@@ -65,7 +65,7 @@ card offers no **Connect with GitLab** or **Connect with GitHub**, and
 
 ## GitLab OAuth application
 
-1. On gitlab.com, open **Applications** in your user settings, or in the settings of the group
+1. On gitlab.com, open **User settings > Access > Applications**, or the same page in the settings of the group
    that will own the application.
 2. Name it, for instance `TeamHandbook Orchestrator`.
 3. **Redirect URI**: `<ORCHESTRATOR_PUBLIC_URL>/integrations/forge/callback`.

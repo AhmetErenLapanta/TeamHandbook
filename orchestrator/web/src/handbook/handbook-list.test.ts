@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changesBetween, entriesOf, flipEntry, handbookLabel, skillBody, summaryOf, unusedSaid, usedSaid } from "./handbook-list";
+import { changesBetween, entriesOf, flipEntry, handbookLabel, skillBody, summaryOf, usedSaid } from "./handbook-list";
 import { flipItem, flipSource, NOTHING_OFF } from "./handbook-read";
 import type { HandbookSource } from "./handbook-read";
 
@@ -111,14 +111,6 @@ describe("what a skill row shows of the skill and of its use", () => {
 
     // then
     expect([withFront, plain]).toEqual(["# Steps\nDo it.\n", "# Steps\nDo it.\n"]);
-  });
-
-  it("given an item nothing used, one something used and one that is off, when the quiet note is asked, then only the unused one that is on carries it", () => {
-    // when
-    const notes = [unusedSaid({ tasks: 0, lastAt: null }, true), unusedSaid({ tasks: 3, lastAt: "2026-01-02T00:00:00.000Z" }, true), unusedSaid({ tasks: 0, lastAt: null }, false), unusedSaid(undefined, true)];
-
-    // then
-    expect(notes).toEqual(["Not used in 30 days", null, null, null]);
   });
 });
 

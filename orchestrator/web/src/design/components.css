@@ -499,13 +499,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .page-head.sticky { position: sticky; top: var(--topbar-height); z-index: 3; padding: var(--space-3) 0; background: var(--canvas); border-bottom: 1px solid var(--border); }
 /* On a phone the head and its plan took a third of a 390 screen and covered what a card asks: they scroll away, and the foot row keeps the action. */
 @media (max-width: 639px) { .page-head.sticky { position: static; } }
-/* On a phone a review's main action and its counterpart stand at the foot of the screen; a card waiting for an answer takes that place, so nothing sticks then. */
+/* On a phone a review's main action and its counterpart stand at the foot of the screen; a card waiting for an answer, or a follow-up being typed, takes that place, so nothing sticks then. */
 .main-wide { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .foot-actions { display: none; }
 @media (max-width: 639px) {
   .main-wide { display: none; }
   .foot-actions { position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); padding: var(--space-3) 0; background: var(--canvas); border-top: 1px solid var(--border); }
-  main:has(.approval.pending) .foot-actions { position: static; }
+  main:has(.approval.pending, .follow-form:focus-within) .foot-actions { position: static; }
 }
 @media (max-width: 639px) {
   .page-head { grid-template-columns: minmax(0, 1fr); }
@@ -637,6 +637,7 @@ section.queued li > form { flex: 1 1 auto; }
 }
 .run-mark { flex: none; display: inline-block; width: 12px; height: 12px; align-self: center; }
 .run-mark[data-status="running"] { border: 1.5px solid var(--working-soft); border-top-color: var(--working); border-radius: var(--radius-full); animation: run-turn 0.9s linear infinite; }
+.run-mark[data-status="stopped"] { border: 1.5px solid var(--working-soft); border-radius: var(--radius-full); }
 .run-mark[data-status="done"] { width: 5px; height: 9px; margin: 0 3px 2px; border: solid var(--text-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
 .run-mark[data-status="failed"] { background: linear-gradient(45deg, transparent 43%, var(--danger) 43% 57%, transparent 57%), linear-gradient(-45deg, transparent 43%, var(--danger) 43% 57%, transparent 57%); }
 .run-mark[data-status="refused"] { border: 1.5px solid var(--danger); border-radius: var(--radius-full); background: linear-gradient(-45deg, transparent 43%, var(--danger) 43% 57%, transparent 57%); }

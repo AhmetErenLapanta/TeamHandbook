@@ -31,12 +31,12 @@ export function HandbookPluginCard({ me, quiet = false }: { me: Principal; quiet
     );
   };
   return (
-    <div className="plugin-card" role="status">
+    <div className={quiet ? "plugin-card plugin-card-quiet" : "plugin-card"} role="status">
       {step.at === "done" ? (
         <p>The handbook plugin is installed; your next Claude Code session has it.</p>
       ) : (
         <>
-          <p><strong>Add the handbook plugin to your Claude Code.</strong> It turns what your sessions teach into skills you keep or share.</p>
+          <p><strong>Add the handbook plugin to your Claude Code.</strong>{quiet ? null : " It turns what your sessions teach into skills you keep or share."}</p>
           {step.at === "asking" || step.at === "busy" ? <p className="muted">This adds the TeamHandbook marketplace to your Claude Code and installs the handbook plugin from it, with <code>claude plugin marketplace add</code> and <code>claude plugin install</code>. Nothing else changes.</p> : null}
           {step.at === "failed" ? <p className="error" role="alert">{step.why}</p> : null}
           <div className="actions">

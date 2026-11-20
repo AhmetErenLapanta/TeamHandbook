@@ -62,7 +62,7 @@ export interface RunnerEventRow {
 }
 
 /** What a runner reports of a task: the agent's own events, the orchestrator's own lines as `log`, and each follow-up as it reached the agent as `steer`. */
-export type RunnerEvent = AgentEvent | { type: "log"; text: string } | { type: "steer"; text: string; by: string } | { type: "turn"; n: number; said: string; start: string; end: string; files: number };
+export type RunnerEvent = AgentEvent | { type: "log"; text: string } | { type: "steer"; text: string; by: string; byId?: string } | { type: "turn"; n: number; said: string; start: string; end: string; files: number };
 
 /** What the orchestrator's progress on a leased task changes; `addCost` is added to what the task already spent. */
 export interface LeasedTaskPatch {
@@ -78,7 +78,7 @@ export interface LeasedTaskPatch {
 }
 
 export interface LeasedTaskEnd {
-  status: "needs-review" | "failed" | "interrupted" | "nothing-changed";
+  status: "needs-review" | "needs-answer" | "failed" | "interrupted" | "nothing-changed";
   error: string | null;
   nativeSession: string | null;
   branch: string | null;

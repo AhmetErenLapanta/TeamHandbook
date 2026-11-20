@@ -40,7 +40,7 @@ import { dropTaskSecrets, secretsForTask, UnreadTaskSecret } from "../task-secre
 import { versionRaise, versionRaiseNote } from "../versions.js";
 import type { RepoRecord, Store } from "../store.js";
 import { agentSetup, personalMcp, writeTeamSkills } from "./agents.js";
-import { listedPlugins, probePersonalSetup } from "./personal-setup.js";
+import { listedPlugins, probePersonalSetup, readHandbookInputs } from "./personal-setup.js";
 import { availablePlugins, readSources } from "./handbook-sources.js";
 import type { AvailablePlugin, ReadSources } from "./handbook-sources.js";
 import { installHandbookPlugin, runPluginOp } from "./plugin-install.js";
@@ -67,7 +67,7 @@ import { processTransport } from "./transport.js";
 import type { CheckoutWork, FolderWork, RelayedFollowUp, RemoteWork, TaskOutcome, WorkspaceWork } from "../../runner/link.js";
 import type { TaskExecutor } from "../../runner/task.js";
 import { STOPPED } from "../../runner/task.js";
-import { nameReader } from "../task-suggestions.js";
+import { nameReader, personReader } from "../task-suggestions.js";
 import { WORKING_COPIES_MAX, workingCopies } from "../../runner/workspace.js";
 import { noteHealth } from "../integrations/health.js";
 import { issueTool, readIssue } from "../integrations/issue-read.js";
@@ -103,6 +103,7 @@ import { readsOnly, folderHooksRefusal, managedSettingsPlaces, readManagedSettin
 import { REVIEW_CONTEXT, runReview } from "./review.js";
 import { PLAN_TEXT_MAX } from "../../shared/runner-wire.js";
 import { principalOf } from "../accounts.js";
+import { suspended } from "../scim.js";
 import { memberTags } from "../directory.js";
 import { budgetLedger, ownSetupFor, taskCreators, taskStartRefusal, unnamedMode } from "../policies.js";
 import { orchestratorPolicies } from "../policy-routes.js";
@@ -1164,9 +1165,12 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     try {
       await makeTaskDirs(paths);
       const env = personalEnv(options.hostEnv, paths);
-      const plugins = (await listedPlugins(agent.probe!.program, env, paths.work, 30_000)) ?? [];
-      const managed = (await readManagedSettings(managedSettingsPlaces(options.hostEnv))).map((m) => m.settings);
-      return await readSources({ claudeDir: env.CLAUDE_CONFIG_DIR || join(env.HOME ?? "", ".claude"), ...(folder ? { folder, folderTrusted } : {}), plugins, personal: await personalSetup(), managed });
+      const inputs = await readHandbookInputs({
+        plugins: () => listedPlugins(agent.probe!.program, env, paths.work, 30_000),
+        managed: async () => (await readManagedSettings(managedSettingsPlaces(options.hostEnv))).map((m) => m.settings),
+        personal: () => personalSetup(),
+      });
+      return await readSources({ claudeDir: env.CLAUDE_CONFIG_DIR || join(env.HOME ?? "", ".claude"), ...(folder ? { folder, folderTrusted } : {}), ...inputs });
     } finally {
       await Promise.all([rm(paths.root, { recursive: true, force: true }), rm(paths.git, { recursive: true, force: true })]);
     }
@@ -1252,11 +1256,67 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       await store.deleteSetting(tenant, inPlaceKey(id));
       await store.releaseProjectLock(tenant, repoId, id);
     }
+    await keepCutOffChanges();
     await store.interruptTasks(tenant, "The orchestrator restarted before this task finished.");
     // A folder held by a task that ended is free again; an interrupted one keeps it for Continue or its cancel.
     await store.releaseStaleProjectLocks(tenant);
     sweepTaskDirs(ctx.dataDir, tenant);
     void reopenCutOff().catch((err: Error) => console.error(`reopening the requests a stop cut off: ${err.message}`));
+  }
+
+  /**
+   * A run in a team repository's checkout that a restart cut off, whose checkout is still on disk: what the agent had
+   * changed by then is opened as a request and waits for review, as a Stop leaves it, instead of going with the
+   * directories swept next. Its person goes on from the request with a follow-up. A run whose checkout is gone, whose
+   * changes do not pass the checks a finished run's do, or that cannot be opened here fails as it did before.
+   */
+  async function keepCutOffChanges(): Promise<void> {
+    // Nothing read or opened here stops the orchestrator from starting: a task this cannot keep fails as it did before.
+    const unfinished = await store.unfinishedTasks(tenant, "server").catch((err: Error) => {
+      console.error(`what a restart cut off was not looked at: ${err.message}`);
+      return [];
+    });
+    for (const { id } of unfinished) {
+      try {
+        await keepCutOffTask(id);
+      } catch (err) {
+        console.error(`task ${id}: what the restart cut off was not kept: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  async function keepCutOffTask(id: string): Promise<void> {
+    const task = await store.getTask(tenant, id);
+    const repo = task ? await store.getRepo(tenant, task.repoId) : null;
+    const account = task ? (await store.listUsers(tenant)).find((u) => u.email === task.createdBy) : undefined;
+    if (!task || !repo || !account || !task.baseSha || task.status !== "running" || task.readOnly || task.template || task.targets?.length || task.requestNumber !== null || options.codeTarget?.(repo)) return;
+    // The request opens as its person: an account the directory turned off has nothing opened for it.
+    if (await suspended(store, tenant, account.id)) return;
+    const paths = taskPaths(ctx.dataDir, tenant, id);
+    if (!(await access(paths.work).then(() => true, () => false))) return;
+    const mirror = mirrorDir(ctx, repo.id);
+    const redactor = new Redactor((await secretsForTask(ctx, repo.id, repo.team, undefined, task.id)).map((secret) => secret.value));
+    const changes = await collectChanges(paths, task.baseSha, (text) => redactor.carriesCredential(text));
+    if ("refused" in changes || !changes.files.length) return;
+    const checked = await checkTaskResult(changes.files, mirror, task.baseSha);
+    if ("refused" in checked) return;
+    const named = await branchFor(task, repo, null, mirror, task.baseSha, null);
+    if ("failed" in named) return;
+    const user = await principalOf(store, account);
+    const stopped = "Stopped when the orchestrator restarted.";
+    const request = await inRequestTurn(ctx, repo.id, () =>
+      propose(ctx, { ...repo, head: task.baseSha! }, user, {
+        ...(task.baseBranch ? { target: task.baseBranch } : {}),
+        title: named.subject,
+        body: `${stopped} This is what the agent had changed by then; the agent's own description of it was not kept.`,
+        commitBody: commitBody(task),
+        branch: named.branch,
+        files: changes.files,
+      }),
+    );
+    await store.recordRequestCheck(tenant, repo.id, request.number, { head: request.headSha, passed: true });
+    await store.appendTaskLog(tenant, id, [`${stopped} What the agent had changed waits for review in request #${request.number} on ${request.branch}.`]);
+    await store.updateTask(tenant, id, { status: "needs-review", error: stopped, requestNumber: request.number, finishedAt: new Date().toISOString() });
   }
 
   /**
@@ -1766,6 +1826,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       let error: string | null = null;
       let lastSaid: string | null = null;
       const delivered: { pushed: PushedBranch | null } = { pushed: null };
+      let stepStopped = false;
       const sink: RunSink = {
         // An agent's event goes as an event, so the machine path stores it with its kind and data as a machine's own does;
         // one of a kind that path does not take yet goes as its line, since a batch with a kind it does not know is refused whole.
@@ -1775,6 +1836,12 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         update: async ({ status: now, error: why, stage, baseSha, tests, cost, lastSaid: words }) => {
           if (now) [status, error] = [now, why ?? null];
           if (words) lastSaid = words;
+          // A step its person stopped is said on the task here as on a run of the orchestrator's own, and taken back
+          // when the step goes on: the page reads it to say the task needs them, and the runner's progress carries no such stage.
+          if (stage === "stopped" || (stage === null && stepStopped)) {
+            stepStopped = stage === "stopped";
+            await store.updateTask(tenant, task.id, { stage });
+          }
           hooks.record({ ...(stage === "tests" || stage === "request" ? { stage } : {}), ...(baseSha ? { baseSha } : {}), ...(tests ? { tests } : {}), ...(cost ? { cost } : {}) });
         },
         branch: async (branch) => hooks.record({ branch }),
@@ -1822,7 +1889,9 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       await run(task, user, hooks.signal, sink);
       // A run that changed nothing goes as a machine's runner sends it: failed, flagged, with its answer.
       const unchanged = status === "nothing-changed";
-      const done: TaskOutcome["status"] = status === "needs-review" ? "needs-review" : status === "failed" || unchanged ? "failed" : "interrupted";
+      // One that ended asking goes the same way, flagged: failed to an orchestrator from before, waiting for its answer to this one.
+      const asked = status === "needs-answer";
+      const done: TaskOutcome["status"] = status === "needs-review" ? "needs-review" : status === "failed" || unchanged || asked ? "failed" : "interrupted";
       const { pushed } = delivered;
       const stopped = hooks.signal.reason instanceof Error ? hooks.signal.reason.message : error;
       return {
@@ -1833,6 +1902,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         position: null,
         request: done === "needs-review" && pushed ? { title: pushed.title, body: pushed.body } : null,
         ...(unchanged ? { nothingChanged: true as const } : {}),
+        ...(asked ? { asked: true as const } : {}),
         ...(lastSaid ? { lastSaid } : {}),
       };
     },
@@ -2072,11 +2142,16 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     let approvedPlan: string | null = null;
     // Why a Stop or one of the task's caps ended the agent's turn: what it changed so far still goes to review, as its person decided.
     let stopped: string | null = null;
+    // An agent that crashed or ended without a result after it changed files: the change is kept for review as a stopped
+    // run's is, with this as the reason. Thrown away with the task's checkout, minutes of work went with one bad exit.
+    let endedEarly: string | null = null;
+    // The same end as the run itself gave it, with the agent's last line: what the task says when nothing was changed.
+    let endedWith: string | null = null;
     /**
      * The agent's turn, or, when its person stops it or a cap does, what it had done by then: the change is kept for
      * review rather than thrown away. The orchestrator stopping leaves the task to go on, as before.
      */
-    const untilStopped = async (turn: Promise<{ report: AgentReport } | { failed: string }>): Promise<{ report: AgentReport } | { failed: string }> => {
+    const untilStopped = async (turn: Promise<{ report: AgentReport } | { failed: string; ended?: string }>): Promise<{ report: AgentReport } | { failed: string; ended?: string }> => {
       try {
         return await turn;
       } catch (err) {
@@ -2086,10 +2161,13 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       }
     };
     // A run that changed nothing and ends asking its starter keeps the question for the task's page, where the answer sends it on.
+    // Set by a run that ended asking: its end is the task waiting for the answer, never a failure.
+    let endedAsking = false;
     const stuckEnd = async (summary: string): Promise<{ failed: string } | null> => {
       const asked = stuckOf(summary);
       if (!asked) return null;
       await store.updateTask(tenant, task.id, { question: asked });
+      endedAsking = true;
       return { failed: `The agent stopped to ask you: ${asked.text}` };
     };
     // A task the orchestrator does itself runs no agent and is handed no credential.
@@ -2429,7 +2507,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       await log(`${answer.by} approved the plan${changed ? " as they changed it" : ""}:`, "## Plan", ...approvedPlan.split("\n"));
     };
 
-    const nameOf = nameReader(ctx);
+    const personOf = personReader(ctx);
     /** The agent's run as a conversation: the prompt is its first message, and the task is one turn. */
     const talkTo = (codec: AgentCodec, text: string, position: number | null, steer: boolean) => async (transport: AgentTransport): Promise<AgentEvent[]> => {
       const session = openSession(codec, transport, { steer });
@@ -2441,13 +2519,21 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       let turns = 1;
       // Work the agent left running in the background: a turn that ends with some still going does not end the session.
       let background = 0;
-      // A step its person stopped: the session waits for their next words rather than end with the turn.
+      // A step its person stopped: the session waits for their next words rather than end with the turn. Words that
+      // were waiting when they stopped it are not those: sent by themselves after the stop, they started the agent
+      // again with nobody having said to, and the task read as working. They go with what the person writes next.
       let held = false;
+      let heldAt = 0;
+      // The messages last seen waiting, and those of them waiting at the stop: what tells one with no time of its own from a later one.
+      let lastQueued: string[] = [];
+      let heldOver = new Set<string>();
       // When the agent's turns last ended, and whether it is compacting its conversation before words that came after a pause.
       let idleSince: number | null = null;
       let compacting = false;
       liveSteps.set(task.id, async () => {
         held = true;
+        heldAt = Date.now();
+        heldOver = new Set(lastQueued);
         await sink.update({ stage: "stopped" });
         await store.endTaskRequests(tenant, task.id, new Date().toISOString());
         try {
@@ -2455,7 +2541,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         } catch {
           // the agent has ended
         }
-        await log(`${user.name} stopped the agent's step; it waits for what they say next.`);
+        const waiting = (await sink.followUps().catch(() => [])).length;
+        await log(`${user.name} stopped the agent's step; it waits for what they say next.${waiting ? ` ${waiting === 1 ? "The message" : `The ${waiting} messages`} sent before the stop ${waiting === 1 ? "goes" : "go"} with it.` : ""}`);
       });
       session.sendTurn(text);
       // Follow-ups reach the agent as they come: while it works when it steers, and otherwise once
@@ -2464,10 +2551,14 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       // follow-up of its own, and the agent goes on from it.
       const relay = (async () => {
         while (!over) {
-          // An agent that does not steer takes one message at a time, each once the one before is done.
-          const pending = steer ? await sink.followUps() : turns <= 0 ? (await sink.followUps()).slice(0, 1) : [];
+          const queued = steer || held || turns <= 0 ? await sink.followUps() : [];
           // The session can end while the store answers; a follow-up after it waits for the next run.
           if (over) break;
+          if (!held) lastQueued = queued.map((f) => f.id);
+          // A stopped step goes on only with words its person wrote after stopping it.
+          const goesOn = !held || queued.some((f) => f.source === "person" && (f.createdAt ? Date.parse(f.createdAt) > heldAt : !heldOver.has(f.id)));
+          // An agent that does not steer takes one message at a time, each once the one before is done.
+          const pending = !goesOn ? [] : steer ? queued : turns <= 0 ? queued.slice(0, 1) : [];
           // Words that come after the agent's prompt cache ran out would have it read the whole conversation again at full
           // price: it compacts first, as a turn of its own, and they go once that turn ends.
           if (pending.length && turns <= 0 && !compacting && idleSince !== null && Date.now() - idleSince >= (options.promptCacheMs ?? PROMPT_CACHE_MS)) {
@@ -2502,9 +2593,9 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
             turns += steer ? (turns > 0 ? 0 : 1) : pending.length;
             await sink.delivered(pending.map((f) => f.id));
             await log(`Sent ${pending.length} follow-up(s) to the agent while it works.`);
-            // Each as it reached the agent, for the page's live view: who sent it, by name, and what it says, masked.
-            const sent = await Promise.all(pending.map(async (followUp) => ({ said: redactor.line(printable(followUp.text)), by: await nameOf(followUp.createdBy) })));
-            await append(sent.map(({ said, by }) => ({ text: `${by}: ${said}`, kind: "steer", data: { type: "steer", text: said, by } })));
+            // Each as it reached the agent, for the page's live view: who sent it, by name and by their account's id, and what it says, masked.
+            const sent = await Promise.all(pending.map(async (followUp) => ({ said: redactor.line(printable(followUp.text)), by: await personOf(followUp.createdBy) })));
+            await append(sent.map(({ said, by }) => ({ text: `${by.name}: ${said}`, kind: "steer", data: { type: "steer", text: said, by: by.name, ...(by.id ? { byId: by.id } : {}) } })));
           } else if (turns <= 0 && !held && background === 0 && (await sink.openChildren()) === 0) {
             transport.end();
             break;
@@ -2580,7 +2671,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
      * holds and on the prompt alone otherwise, and what it reported. `nothing` ends the sentence that
      * says what a failed run leaves behind.
      */
-    const agentRun = async (agent: AgentAdapter, paths: TaskPaths, setup: AgentSetup, text: string, personal: boolean, env: Record<string, string>, egress: TaskProxy | null, part: TargetPart | null, record: (patch: TargetPatch) => Promise<void>, nothing: string, rules: readonly PolicyRule[] = []): Promise<{ report: AgentReport } | { failed: string }> => {
+    const agentRun = async (agent: AgentAdapter, paths: TaskPaths, setup: AgentSetup, text: string, personal: boolean, env: Record<string, string>, egress: TaskProxy | null, part: TargetPart | null, record: (patch: TargetPatch) => Promise<void>, nothing: string, rules: readonly PolicyRule[] = []): Promise<{ report: AgentReport } | { failed: string; ended?: string }> => {
       const mode = task.mode ?? DEFAULT_MODE;
       if (servedAsYou(agent, personal)) {
         if (options.isolation.mode === "container") return { failed: `The task did not run: ${agent.label} runs as you only in process isolation, on this machine.` };
@@ -2630,8 +2721,18 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       await record({ cost: withEstimate(report.cost) });
       if (outcome.timedOut) return { failed: `The agent ran past its time limit of ${limitText(clockMs)} and was stopped.` };
       if (!report.ok) {
-        const why = outcome.code === 0 ? "The agent ended without reporting a result (exit code 0)." : `The agent did not finish successfully (exit code ${outcome.code ?? "none"}).`;
-        return { failed: `${why}${lastWords(outcome.lastLine)}` };
+        // A process ended by a signal has no exit code: said as what happened, since "exit code none" tells its person nothing.
+        const why =
+          outcome.code === 0
+            ? "The agent ended without reporting a result (exit code 0)."
+            : outcome.code === null
+              ? `The agent's process was ended from outside the orchestrator before it finished${outcome.signal ? ` (${outcome.signal})` : ""}, as a machine out of memory ends one. Run the task again.`
+              : `The agent did not finish successfully (exit code ${outcome.code}).`;
+        // `ended` says it was the agent that ended, in the sentence alone: what it had changed by then is kept for review where the run can.
+        const said = `${why}${lastWords(outcome.lastLine)}`;
+        const plain = plainFailure(said);
+        // A cause put in plain words, a full disk for one, is the reason a kept change carries too.
+        return { failed: plain, ended: plain === said ? why : plain };
       }
       // Its directory gone, nothing of the agent's is left to test or read back; git and the
       // tests would only fail on a working tree that is not there.
@@ -2917,9 +3018,16 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
             turnPoints = turnRecorder(store, tenant, task.id, turnsPlace(ctx, task.id, paths.work), "task");
             await turnPoints.begin(saidOf(handed[0]?.text ?? asked[0]?.text ?? task.title));
           }
-          const ran = await untilStopped(turn(text));
+          const turned = await untilStopped(turn(text));
           if (asked.length) await store.markFollowUpsDelivered(tenant, asked.map((f) => f.id), new Date().toISOString());
-          if ("failed" in ran) return ran;
+          // A task over several repositories ends where one of them fails, as before: its requests already opened say what stands.
+          if ("failed" in turned && (!turned.ended || part)) return turned;
+          if ("failed" in turned) {
+            endedEarly = turned.ended!;
+            endedWith = turned.failed;
+            await log(turned.failed);
+          }
+          const ran = "failed" in turned ? { report: { ok: true, summary: "(the agent ended before it reported)", cost: UNKNOWN_COST } } : turned;
           report = ran.report;
           if (finding) await keepFoundChecks(repo, ran.report.summary);
           repair = async (prompt) => {
@@ -2931,7 +3039,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         }
 
         const io = checkIo(paths, secretEnv, egress);
-        const verification = stopped ? notRun("the task was stopped before its checks ran") : await checkAfter(repo, prior ?? (await checkPlan(repo, io.read)), io, record, repair);
+        const verification = stopped ? notRun("the task was stopped before its checks ran") : endedEarly ? notRun("the agent ended before its checks ran") : await checkAfter(repo, prior ?? (await checkPlan(repo, io.read)), io, record, repair);
         const tests = testsSummary(verification);
         const evidence = maskBlock(evidenceMarkdown(verification).join("\n")).split("\n");
 
@@ -2940,6 +3048,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         if ("refused" in changes) return { failed: changes.refused };
         if (task.readOnly && changes.files.length) return { failed: QUESTION_CHANGED };
         if (!changes.files.length) {
+          if (endedEarly) return { failed: endedWith ?? endedEarly };
           if (stopped) throw new Cancelled();
           return (await stuckEnd(report.summary)) ?? { unchanged: report.summary };
         }
@@ -3579,7 +3688,8 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
       const copies = folder ? await workingCopies(folder) : [];
       if (!Array.isArray(copies)) return void (await finish({ status: "failed", error: `The task did not run: ${project!.name} holds more than ${WORKING_COPIES_MAX} repositories; open one of them as the project instead.` }));
       const outcome = project && folder ? (copies.length ? await runWorkspace(project, folder, copies, issue, record) : await runInPlace(project, folder, issue, record)) : await runTarget(task.repoId, paths, issue, record);
-      if ("failed" in outcome) return void (await finish({ status: "failed", error: outcome.failed }));
+      // A task over several repositories fails where one of them asks, as it does where one fails: its other requests stand.
+      if ("failed" in outcome) return void (await finish({ status: endedAsking && !task.targetMode ? "needs-answer" : "failed", error: outcome.failed }));
       if ("unchanged" in outcome) {
         // Changing nothing is an outcome, not a failure: what the agent said last is its answer. A run that went on from a
         // review and changed nothing more leaves that review as it was.
@@ -3589,8 +3699,10 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
         await log(goesBack ? "The agent changed nothing more; the review stays as it was." : "The agent finished without changing anything.");
         return void (await finish({ status: goesBack ? "needs-review" : "nothing-changed", lastSaid }));
       }
+      const early = stopped ?? (endedEarly ? `${endedEarly} What it changed by then waits for review: keep it or undo it.` : null);
       if (stopped) await log(`${stopped} What the agent changed by then waits for review: keep it or undo it.`);
-      await finish({ status: "needs-review", lastSaid: null, ...(stopped ? { error: stopped } : {}), ...("request" in outcome ? { requestNumber: outcome.request.number } : {}) });
+      else if (early) await log(early);
+      await finish({ status: "needs-review", lastSaid: null, ...(early ? { error: early } : {}), ...("request" in outcome ? { requestNumber: outcome.request.number } : {}) });
       await moved("review");
     } catch (err) {
       // An outcome that did not reach the store is written again below; a second, different
@@ -3629,7 +3741,7 @@ export function createTaskRunner(ctx: OrchestratorContext, options: RunnerOption
     if (suggesting < SUGGESTIONS_AT_ONCE) suggesting++;
     else await new Promise<void>((turn) => suggestionTurns.push(turn));
     try {
-      return await run({ agent, isolation: options.isolation, hostEnv: options.hostEnv, passEnv: options.passEnv ?? [], timeoutMs: SUGGESTION_TIMEOUT_MS, dataDir: ctx.dataDir, tenant, model: key ? { key, upstream: ANTHROPIC_UPSTREAM } : null });
+      return await run({ agent, isolation: options.isolation, hostEnv: options.hostEnv, passEnv: options.passEnv ?? [], timeoutMs: SUGGESTION_TIMEOUT_MS, dataDir: ctx.dataDir, tenant, model: key ? { key, upstream: ANTHROPIC_UPSTREAM } : null, personal: options.profile === "personal" });
     } finally {
       const next = suggestionTurns.shift();
       if (next) next();

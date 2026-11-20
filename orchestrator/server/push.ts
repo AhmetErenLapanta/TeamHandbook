@@ -219,7 +219,8 @@ export function startPushWatch(ctx: OrchestratorContext, fetcher: typeof fetch =
       if (!(await subscribed())) return;
       const task = await ctx.store.getTask(ctx.tenant, taskId);
       if (!task) return;
-      const asking = task.status === "running" && (await ctx.store.taskRequests(ctx.tenant, taskId)).some((r) => r.status === "pending");
+      // A run that ended asking wakes its person as one that asks while it works does: it is no failure.
+      const asking = task.status === "needs-answer" || (task.status === "running" && (await ctx.store.taskRequests(ctx.tenant, taskId)).some((r) => r.status === "pending"));
       const state = asking ? "asking" : task.status;
       const last = told.get(taskId);
       if (told.size > 5000) told.clear();

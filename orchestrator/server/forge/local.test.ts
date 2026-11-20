@@ -251,7 +251,7 @@ describe("a request for a branch the runner already pushed", () => {
     pushed(bare, "handbook/elsewhere", null);
     const local = forge(root);
 
-    await expect(local.openForBranch!(repo, { title: "t", body: "b", branch: "handbook/missing", baseSha: base })).rejects.toThrow(/handbook\/missing is not in .*the runner pushes it first/);
+    await expect(local.openForBranch!(repo, { title: "t", body: "b", branch: "handbook/missing", baseSha: base })).rejects.toThrow(/handbook\/missing is not in .*: it was not pushed there, or it was deleted since; push it again, then open the request/);
     await expect(local.openForBranch!(repo, { title: "t", body: "b", branch: "handbook/elsewhere", baseSha: base })).rejects.toThrow(/does not start from the commit the task started from/);
     expect(gitMaybe(["rev-parse", "--verify", "--quiet", localDescriptionRef("handbook/elsewhere")], bare)).toBeNull();
   });

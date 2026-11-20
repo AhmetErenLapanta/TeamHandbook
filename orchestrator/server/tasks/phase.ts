@@ -15,6 +15,8 @@ export type TaskPhase = "planned" | "working" | "tests" | "request" | "review" |
 export function taskPhase(task: Pick<TaskRecord, "status" | "stage" | "repoId" | "requestNumber" | "targets" | "result" | "changes">, requestStatus: (repoId: string, number: number) => RequestStatus | null): TaskPhase {
   // A run that changed nothing is done, with nothing to review or settle.
   if (task.status === "nothing-changed") return "finished";
+  // A run that ended asking waits on its person as a change in review does; nothing failed.
+  if (task.status === "needs-answer") return "review";
   if (task.status === "failed" || task.status === "cancelled") return "failed";
   // Changes made in a folder without git are settled by their person: kept reads as merged, undone as a closed request does.
   if (task.status === "needs-review" && task.result === "changes") return task.changes?.kept ? "merged" : task.changes?.undone ? "failed" : "review";

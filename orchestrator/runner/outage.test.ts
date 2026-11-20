@@ -116,4 +116,45 @@ describe("a machine's runner when the line to its orchestrator is cut", () => {
 
     expect((await org.store.getTask("acme", "tsk_cut_2"))!.status).toBe("interrupted");
   });
+
+  it("given a task in a folder of the machine whose agent changed files, when the line stays down past the lease and comes back, then what it changed reaches the orchestrator for review and undo before the runner takes another task, and from no other machine", async () => {
+    // given
+    const org = await orchestratorBehindALine();
+    const profile = await connect({ address: "https://orchestrator.example.invalid", code: org.code, dataDir, name: "max-laptop", platform: "darwin-arm64", fetch: org.fetchImpl });
+    const [machine] = await org.store.listMachines("acme", null);
+    await org.store.upsertRepo({ id: "payments-skills", tenant: "acme", team: "Payments", name: "notes", url: `machine:${machine!.id}:~/notes` });
+    await org.store.createTask(task("tsk_cut_3"));
+    const changes = { before: "a".repeat(40), after: "b".repeat(40), files: [{ path: "notes/rota.md", status: "modified" as const, previousPath: null, additions: 2, deletions: 1, binary: false, test: false }] };
+    const taken: string[] = [];
+    const executor: TaskExecutor = {
+      run: (leased, given) =>
+        new Promise<TaskOutcome>((resolve) => {
+          taken.push(leased.id);
+          given.signal.addEventListener("abort", () => resolve({ status: "interrupted", error: String(given.signal.reason), nativeSessionId: null, branch: null, position: null, request: null, changes }));
+        }),
+    };
+    const loop = startRunnerLoop(httpLink(profile, org.fetchImpl), executor, { mask: (t) => t });
+    await settle(1_000);
+
+    // when
+    org.line.down = true;
+    await settle(FENCE_MS + RENEW_MS);
+    await settle(60_000);
+    await org.store.expireLeases(new Date().toISOString());
+    await org.store.createTask(task("tsk_cut_4"));
+    const taskBeforeLineIsBack = (await org.store.getTask("acme", "tsk_cut_3"))!;
+    org.line.down = false;
+    await settle(120_000);
+    const stopping = loop.stop();
+    await settle(30_000);
+    await stopping;
+    const fromAnother = await org.store.getTask("acme", "tsk_cut_3");
+
+    // then
+    expect(taskBeforeLineIsBack.status).toBe("interrupted");
+    expect(taskBeforeLineIsBack.changes ?? null).toBeNull();
+    expect(fromAnother).toMatchObject({ status: "interrupted", changes: { files: [{ path: "notes/rota.md" }], undone: null } });
+    expect((await org.store.taskLog("acme", "tsk_cut_3", 0)).map((l) => l.text)).toContain("max-laptop lost the task while it worked; what the agent changed by then is kept for review: keep it or undo it.");
+    expect(taken).toEqual(["tsk_cut_3", "tsk_cut_4"]);
+  });
 });

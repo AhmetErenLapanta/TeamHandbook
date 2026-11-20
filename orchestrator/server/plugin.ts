@@ -46,5 +46,7 @@ export type { PolicyAction, PolicyRule, TeamFilePolicy } from "../../src/lib/pol
 export { installedPluginDirs, marketplacePluginRoot, pluginFreshness, pluginLabel } from "../../src/lib/handbook-sources.js";
 export type { Freshness } from "../../src/lib/handbook-sources.js";
 export { listCandidates } from "../../src/lib/queue.js";
+export { keepLessonForTeam, keepLessonInto, pendingLesson, pendingLessons, rejectLesson } from "../../src/lib/lesson-review.js";
+export type { PendingLesson } from "../../src/lib/lesson-review.js";
 export { hostIdentityOf, keepTaskLesson, queueTaskLesson, readTaskLessonReply, readTaskLessonWire, rejectTaskLesson, signalIsSafe, taskLesson, taskLessonCandidate, taskLessons } from "../../src/lib/task-lesson.js";
 export type { CandidateMeta, TaskLessonSignal, TaskLessonWire } from "../../src/lib/task-lesson.js";

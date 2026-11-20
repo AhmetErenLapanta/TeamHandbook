@@ -39,7 +39,7 @@ export const OUTCOME_MINIMUM = 5;
 const DAY_MS = 86_400_000;
 const LESSONS_PREFIX = "task.lessons.";
 
-type Decision = "accepted" | "rejected";
+export type Decision = "accepted" | "rejected";
 
 /** How a task ended once its person decided; null while the decision waits or when it made nothing to decide on. */
 function decisionOf(task: TaskRecord, requestStatus: (repoId: string, number: number) => RequestStatus | null): Decision | null {
@@ -112,6 +112,21 @@ async function pivotOf(ctx: OrchestratorContext, skill: string): Promise<Pivot> 
   return added.length ? { at: added.map((at) => new Date(at).toISOString()).sort()[0]!, lessonTasks: null } : null;
 }
 
+/** The tasks among these that their person decided, each with how it ended and how many follow-ups from a person or a watch it took. */
+export async function decidedTasks(ctx: OrchestratorContext, tasks: readonly TaskRecord[]): Promise<{ task: TaskRecord; decision: Decision; rounds: number }[]> {
+  const requests = new Map((await ctx.store.listRequests(ctx.tenant)).map((r) => [`${r.repoId}#${r.number}`, r.status]));
+  const statusOf = (repoId: string, number: number) => requests.get(`${repoId}#${number}`) ?? null;
+  const decided = tasks.flatMap((task) => {
+    const decision = decisionOf(task, statusOf);
+    return decision ? [{ task, decision }] : [];
+  });
+  const rounds = await ctx.store.deliveredFollowUpCounts(ctx.tenant, decided.map((d) => d.task.id), ["person", "watch"]);
+  return decided.map((d) => ({ ...d, rounds: rounds.get(d.task.id) ?? 0 }));
+}
+
+/** How a set of decided tasks ended: the bucket the before and after measure uses, so the Team line and the skill's own page read alike. */
+export const outcomeOf = (decided: { decision: Decision; rounds: number }[]): OutcomeBucket => bucketOf(decided);
+
 export async function skillOutcomes(ctx: OrchestratorContext, user: Principal, skill: string, days: number, now = Date.now()): Promise<SkillOutcomes> {
   const pivot = await pivotOf(ctx, skill);
   const span = days * DAY_MS;
@@ -120,14 +135,7 @@ export async function skillOutcomes(ctx: OrchestratorContext, user: Principal, s
   const earliest = pivot ? start - span : start;
   const tasks = (await everyTask(ctx.store, ctx.tenant, { ...visibleTasks(user), since: new Date(earliest).toISOString() })).filter((t) => !t.parentId && Date.parse(t.createdAt) < end);
 
-  const requests = new Map((await ctx.store.listRequests(ctx.tenant)).map((r) => [`${r.repoId}#${r.number}`, r.status]));
-  const statusOf = (repoId: string, number: number) => requests.get(`${repoId}#${number}`) ?? null;
-  const decided = tasks.flatMap((task) => {
-    const decision = decisionOf(task, statusOf);
-    return decision ? [{ task, decision }] : [];
-  });
-  const rounds = await ctx.store.deliveredFollowUpCounts(ctx.tenant, decided.map((d) => d.task.id), ["person", "watch"]);
-  const scored = decided.map((d) => ({ ...d, rounds: rounds.get(d.task.id) ?? 0, at: Date.parse(d.task.createdAt) }));
+  const scored = (await decidedTasks(ctx, tasks)).map((d) => ({ ...d, at: Date.parse(d.task.createdAt) }));
 
   const after = scored.filter((d) => d.at >= start);
   let withSkill: typeof scored;
@@ -155,8 +163,45 @@ export async function skillOutcomes(ctx: OrchestratorContext, user: Principal, s
   };
 }
 
+export interface SkillAcceptance {
+  skill: string;
+  /** Tasks with the skill that were decided in the window: the base of the rate. */
+  decided: number;
+  acceptedWithoutRevision: number;
+  /** The share accepted with no follow-up asked; null below the minimum, like every rate here. */
+  withoutRevision: number | null;
+}
+
+/**
+ * For every skill a person's tasks used in the last `days` days, how many of its decided tasks were accepted without a
+ * revision round: the one number the Team page puts beside "N tasks this month". It does not compare with tasks that did
+ * not use the skill (that is `skillOutcomes`), so it is cheap enough to read for every row at once.
+ */
+export async function skillAcceptance(ctx: OrchestratorContext, user: Principal, days: number, now = Date.now()): Promise<{ days: number; minimum: number; skills: SkillAcceptance[] }> {
+  const tasks = (await everyTask(ctx.store, ctx.tenant, { ...visibleTasks(user), since: new Date(now - days * DAY_MS).toISOString() })).filter((t) => !t.parentId);
+  const requests = new Map((await ctx.store.listRequests(ctx.tenant)).map((r) => [`${r.repoId}#${r.number}`, r.status]));
+  const decided = tasks.flatMap((task) => {
+    const decision = decisionOf(task, (repoId, number) => requests.get(`${repoId}#${number}`) ?? null);
+    return decision ? [{ task, decision }] : [];
+  });
+  const rounds = await ctx.store.deliveredFollowUpCounts(ctx.tenant, decided.map((d) => d.task.id), ["person", "watch"]);
+  const byskill = new Map<string, { decision: Decision; rounds: number }[]>();
+  for (const { task, decision } of decided) for (const skill of skillsOf(task)) byskill.set(skill, [...(byskill.get(skill) ?? []), { decision, rounds: rounds.get(task.id) ?? 0 }]);
+  const skills = [...byskill].map(([skill, list]) => {
+    const bucket = bucketOf(list);
+    return { skill, decided: bucket.tasks, acceptedWithoutRevision: bucket.acceptedWithoutRevision, withoutRevision: bucket.rates.withoutRevision };
+  });
+  return { days, minimum: OUTCOME_MINIMUM, skills: skills.sort((a, b) => b.decided - a.decided || a.skill.localeCompare(b.skill)) };
+}
+
 export function skillOutcomeRoutes(ctx: OrchestratorContext): Hono<OrchestratorEnv> {
   const app = new Hono<OrchestratorEnv>();
+  route(app, "GET /api/skills/acceptance", async (c) => {
+    const given = c.req.query("days");
+    const days = given === undefined ? 30 : Number(given);
+    if (!Number.isInteger(days) || days < 7 || days > 90) return c.json({ error: "days is a whole number from 7 to 90", code: "bad-days" }, 400);
+    return c.json(await skillAcceptance(ctx, c.get("user"), days));
+  });
   route(app, "GET /api/skills/:name/outcomes", async (c) => {
     const skill = c.req.param("name") ?? "";
     if (!SKILL_SLUG.test(skill)) return c.json({ error: "a skill name is lowercase letters, digits and dashes", code: "bad-skill" }, 400);

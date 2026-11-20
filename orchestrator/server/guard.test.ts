@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 // share rules as the plugin. buildInventory reads a home only through its defaulted paths, which
 // the orchestrator passes on a one-person orchestrator alone; both modules load with homedir()
 // throwing, measured below.
-const ALLOWED = new Set(["skill-index", "mcp", "secrets", "init", "upgrade", "branch", "join", "commands", "skill-format", "skill-health", "policy", "task-lesson", "share", "queue", "handbook-sources"]);
+const ALLOWED = new Set(["skill-index", "mcp", "secrets", "init", "upgrade", "branch", "join", "commands", "skill-format", "skill-health", "policy", "task-lesson", "share", "queue", "handbook-sources", "lesson-review"]);
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

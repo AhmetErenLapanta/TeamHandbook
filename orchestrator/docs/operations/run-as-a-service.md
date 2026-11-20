@@ -14,7 +14,7 @@ own Docker, with `ORCHESTRATOR_TARGET=local`), a domain pointing at it, and port
 
 1. **Write the env file.** `cp orchestrator/deploy/.env.staging.example orchestrator/deploy/.env.staging`
    (or `.env.prod`), and set `ORCHESTRATOR_TARGET` (`ssh://user@host[:port]`), `ORCHESTRATOR_TARGET_DIR`,
-   `COMPOSE_PROJECT_NAME`, `ORCHESTRATOR_DOMAIN`, the three `ORCHESTRATOR_QUOTA_*` limits and the copy
+   `COMPOSE_PROJECT_NAME`, `ORCHESTRATOR_DOMAIN`, the `ORCHESTRATOR_QUOTA_*` limits if the plan is to be limited (only the member limit is enforced today; the two task limits refuse nothing yet), and the copy
    schedule. The staging example takes certificates from Let's Encrypt's staging CA, which
    browsers do not trust. The file holds names and settings only, never a secret.
 
@@ -121,6 +121,13 @@ dc run --rm --no-deps --entrypoint sh backup -c 'ls /backups'
 dc run --rm --no-deps --entrypoint sh backup -c 'export PGPASSWORD=$(cat /run/secrets/pg_password); dropdb --force orchestrator && createdb orchestrator && pg_restore --no-owner -d orchestrator /backups/<name>.dump'
 ```
 
+`dc` uses the cloud file alone; run one-off commands with `--no-deps`, or compose creates Postgres, and the orchestrator
+with it, again (a short outage, and the observability log starts over), since the release was started with more files than `dc` names.
+
+To take a dump by hand first, on the host: `dc run --rm --no-deps -T backup once <label>` writes
+`/backups/orchestrator-<time>-<label>.dump`. This restore was exercised on a local Docker stack: an
+organization and a name change made after the dump were undone, and the earlier data stayed.
+
 Then `npm run deploy:rollback -- staging` from this machine starts the release before it on the
 restored database, behind the health gate; to go on with the release serving now, `dc start
 orchestrator` on the host instead.
@@ -147,4 +154,6 @@ reaches nothing, that Prometheus scrapes the orchestrator on `127.0.0.1:18790`
 machine. A second one runs beside it under its own `ORCHESTRATOR_LOCAL_PROJECT` and
 `ORCHESTRATOR_LOCAL_DIR`, with ports of its own and its own `ORCHESTRATOR_LOCAL_EDGE_SUBNET` and
 `ORCHESTRATOR_LOCAL_PROXY_IP`. `npm run deploy:local -- down`, with the same variables, stops it and
-deletes its volumes and that directory.
+deletes its volumes and that directory. The stand-in sign-in providers share the orchestrator's network;
+after stopping and starting the orchestrator by hand, restart them too (`docker restart <project>-sign-in-1`) or run
+`npm run deploy:local` again.

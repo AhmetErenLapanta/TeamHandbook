@@ -13,8 +13,9 @@ import { here } from "../router";
  * default leaves out. Where the orchestrator reads no handbooks, nothing is drawn and the caller keeps its own line.
  */
 export function TaskSetup({ folder, off, onOff, onRead }: { folder?: string; off: Off; onOff: (off: Off) => void; onRead?: (read: boolean) => void }) {
-  const [sources, setSources] = useState<HandbookSource[] | null>(null);
-  const [defaults, setDefaults] = useState<Off>(NOTHING_OFF);
+  const lastRead = handbookRead.lastSources(folder);
+  const [sources, setSources] = useState<HandbookSource[] | null>("sources" in (lastRead ?? {}) ? (lastRead as { sources: HandbookSource[] }).sources : null);
+  const [defaults, setDefaults] = useState<Off>(handbookRead.lastDefaults() ?? NOTHING_OFF);
   const [wide, setWide] = useState(() => window.matchMedia("(min-width: 1100px)").matches);
   useEffect(() => {
     const query = window.matchMedia("(min-width: 1100px)");
@@ -24,6 +25,7 @@ export function TaskSetup({ folder, off, onOff, onRead }: { folder?: string; off
   }, []);
   useEffect(() => {
     let current = true;
+    if (handbookRead.lastDefaults()) onOff(handbookRead.lastDefaults()!);
     handbookRead.defaults().then((d) => {
       if (!current) return;
       setDefaults(d);
@@ -35,6 +37,7 @@ export function TaskSetup({ folder, off, onOff, onRead }: { folder?: string; off
   }, []);
   useEffect(() => {
     let current = true;
+    if (sources) onRead?.(true);
     handbookRead.sources(folder).then((r) => {
       if (!current) return;
       const found = "sources" in r ? r.sources : null;

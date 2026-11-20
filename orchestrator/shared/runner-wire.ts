@@ -52,6 +52,7 @@ export const RUNNER_PATHS = {
   progress: (taskId: string) => `/api/runner/tasks/${taskId}/progress`,
   forgeRequest: (taskId: string) => `/api/runner/tasks/${taskId}/request`,
   finish: (taskId: string) => `/api/runner/tasks/${taskId}/finish`,
+  lateChanges: (taskId: string) => `/api/runner/tasks/${taskId}/late-changes`,
   /** The follow-ups that reached the task's agent. */
   followUpsDelivered: (taskId: string) => `/api/runner/tasks/${taskId}/follow-ups`,
   /** One of the task's attachments, its bytes, for the machine to put in the task's own folder. */

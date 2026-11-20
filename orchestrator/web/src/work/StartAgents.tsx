@@ -125,6 +125,7 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
       </>,
     );
   }
+  const agentOptions = options.agents.find((a) => a.id === agent)?.options;
   const repos = code.length ? code : options.repos;
   if (!local && !repos.length) return panel(<p>No repository is connected for agents to work in yet. <a href={here("repositories")}>Connect a repository</a></p>);
   if (!options.agents.length) return panel(<p>No agent is set up on this orchestrator yet. <a href={here("settings", "agents")}>See Agent readiness</a></p>);
@@ -198,7 +199,12 @@ export function StartAgents({ items, local = false, onStarted, onCancel }: { ite
       ) : null}
       {!local && !letAgentPick ? <Select label="Repository" value={repo} onChange={setRepo} options={repos.map((r) => ({ value: r.id, label: r.name, ...(local ? {} : { hint: r.team }) }))} /> : null}
       {options.agents.length > 1 ? <Select label="Agent" value={agent} onChange={(v) => { setAgent(v); setChoices({}); }} options={options.agents.map((a) => ({ value: a.id, label: a.label }))} /> : null}
-      <AgentChoicesPicker options={options.agents.find((a) => a.id === agent)?.options} value={choices} onChange={setChoices} />
+      {agentOptions?.length ? (
+        <details className="more">
+          <summary>More options</summary>
+          <div className="form"><AgentChoicesPicker options={agentOptions} value={choices} onChange={setChoices} /></div>
+        </details>
+      ) : null}
       <p className="muted">{local ? "Each agent works in the folder picked from its issue; you review every change before you keep it." : "Each agent opens its own request for review; nothing merges on its own."}</p>
       <div className="actions">
         <button type="submit" disabled={busy || (!local && !repoId) || !agent || (local && items.some((i) => !pathOf(i.key)))}>{items.length === 1 ? "Start 1 agent" : `Start ${items.length} agents`}</button>

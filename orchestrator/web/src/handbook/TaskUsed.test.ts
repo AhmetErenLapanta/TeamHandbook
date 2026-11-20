@@ -1,8 +1,10 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import { entriesOf } from "./handbook-list";
 import { flipItem, NOTHING_OFF } from "./handbook-read";
 import type { HandbookSource } from "./handbook-read";
-import { didNotLoad, stateOf } from "./TaskUsed";
+import { didNotLoad, stateOf, TaskUsed } from "./TaskUsed";
 
 const yours: HandbookSource = { id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [{ name: "release-notes" }, { name: "changelog" }], commands: [], mcpServers: [{ name: "jira" }], hooks: [], claudeMd: true };
 const used = { skills: [{ name: "release-notes", source: "yours", sourceLabel: "Yours" }], mcpServers: [] };
@@ -73,5 +75,17 @@ describe("off by the default and off for the task", () => {
 
     // then
     expect([word("jira"), word("release-notes")]).toEqual(["Off", "Off for this task"]);
+  });
+});
+
+describe("a task that started with nothing of the person's setup", () => {
+  const html = () => renderToStaticMarkup(createElement(TaskUsed, { setup: [{ id: "yours", kind: "yours", name: "Yours", enabled: true, skills: [], commands: [], mcpServers: [], hooks: [] }] }));
+
+  it("given nothing loaded and nothing called, when the block is drawn, then it says so in one line", () => {
+    const drawn = html();
+
+    expect(drawn).toContain("Nothing of your setup was used.");
+    expect(drawn).not.toContain("The agent called no skill or server.");
+    expect(drawn.match(/<p/g)).toHaveLength(1);
   });
 });

@@ -17,7 +17,7 @@ import { LOGIN, said } from "./own-cli.js";
  */
 
 /** The orchestrator's own applications, registered by the publisher: an id is public and carries no secret. A forge with none keeps today's way on the card. */
-export const RELEASE_DEVICE_CLIENTS: Record<AppForge, string> = { github: "Ov23liQ8aEvWzyO7lqWs", gitlab: "" };
+export const RELEASE_DEVICE_CLIENTS: Record<AppForge, string> = { github: "Ov23liQ8aEvWzyO7lqWs", gitlab: "6ba84531bfeb01b19630cb19adfc95d4196f3672dc2703f1ac2a206829728121" };
 
 /** The application a person signs in through: the operator's own when they name one, else the release's; null when there is none or the operator set `off`. */
 export function deviceClientId(kind: AppForge, env: Record<string, string | undefined> = process.env): string | null {

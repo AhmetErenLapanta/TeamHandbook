@@ -1,0 +1,35 @@
+# Alert rules Prometheus evaluates itself: they show on its Alerts page. Nothing sends them anywhere
+# until an Alertmanager is added to prometheus.yml; each says what to look at.
+groups:
+  - name: teamhandbook-orchestrator
+    rules:
+      - alert: OrchestratorDown
+        expr: up{job="teamhandbook-orchestrator"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The orchestrator does not answer its metrics scrape.
+
+      - alert: RepositorySyncsFailing
+        expr: increase(teamhandbook_orchestrator_sync_failures_total[30m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: Repositories keep failing to sync; the forge's token, address or rate limit is the first to check.
+
+      - alert: RepositoryUnreadable
+        expr: teamhandbook_orchestrator_repositories{state="failing"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: A repository has stayed unreadable for half an hour.
+
+      - alert: OrchestratorAnswersWithErrors
+        expr: sum(rate(teamhandbook_orchestrator_http_requests_total{status=~"5.."}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The orchestrator answers with server errors; its log says which request.

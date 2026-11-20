@@ -52,9 +52,8 @@ beforehand, so it cannot be connected in one step, and Slack notifications stay 
   starts the person's own `gh` or `glab` browser sign-in and shows its one-time code ("Enter
   ABCD-1234 on GitHub") with **Open GitHub**, then waits. Where the orchestrator has its own GitHub or GitLab.com application (its registered client ID is
   in `ORCHESTRATOR_FORGE_<GITHUB|GITLAB>_DEVICE_CLIENT_ID` or in the release), the same button gives
-  a one-time code to enter on the forge's page instead: nothing to install. GitHub's application ships with the release; GitLab.com's is registered once
-  by whoever runs the orchestrator, and `off` as the client ID turns the code sign-in off for that
-  forge. The token and its refresh token are sealed for that person alone, and a lapsed token is
+  a one-time code to enter on the forge's page instead: nothing to install. The release carries an application for GitHub and one for GitLab.com (a self-managed GitLab keeps
+  `glab`), and `off` as the client ID turns the code sign-in off for that forge. The token and its refresh token are sealed for that person alone, and a lapsed token is
   renewed only when you press (opening a request, pushing); where the forge will not renew it, the
   card offers **Sign in again**. Without the CLI or that application the card says to install the CLI,
   then **Check again**. Elsewhere the card connects the organization through the operator's OAuth

@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import type { ReactNode } from "react";
-import { entriesOf, flipEntry, handbookLabel, ordered, skillBody, summaryOf, tokensSaid, unusedSaid, usedSaid } from "./handbook-list";
+import { entriesOf, flipEntry, handbookLabel, ordered, skillBody, summaryOf, tokensSaid, usedSaid } from "./handbook-list";
 import type { Entry, Level } from "./handbook-list";
 import { flipSource, handbookRead, sourceOff } from "./handbook-read";
 import type { HandbookSource, Off } from "./handbook-read";
@@ -18,10 +18,6 @@ const SEARCH_FROM = 20;
 const cut = (text: string, most: number) => (text.length > most ? `${text.slice(0, most).trimEnd()}…` : text);
 
 export type { Level };
-
-/** Where a switch on Team reaches, beside it before it is pressed. */
-const REACH_ITEM = "here";
-const REACH_PLUGIN = "here and in your terminal";
 
 const LEAD: Record<Level, string | null> = {
   default: "How agents started here begin. Turning a plugin off turns it off in your terminal too.",
@@ -57,10 +53,10 @@ function Switch({ on, mixed = false, label, disabled = false, onChange }: { on: 
 type State = { word: string; danger: boolean; seq?: number };
 /** What a row offers for the person's own files: on Team alone, each change written and the list read again after. */
 export interface FileActions { onChanged: () => void }
-interface RowProps { entry: Entry; locked: boolean; changed: boolean; reach?: string; state?: State; read: (source: string, name: string) => Promise<string>; onFlip: () => void; files?: FileActions }
+interface RowProps { entry: Entry; locked: boolean; changed: boolean; state?: State; read: (source: string, name: string) => Promise<string>; onFlip: () => void; files?: FileActions }
 
 /** One item: its name, its kind in a word, and its switch or state word; opened in place it says what it is, what it costs and how it is used. */
-function Row({ entry, locked, changed, reach, state, read, onFlip, files }: RowProps) {
+function Row({ entry, locked, changed, state, read, onFlip, files }: RowProps) {
   const [opened, setOpened] = useState(false);
   const [editing, setEditing] = useState(false);
   const fileKind = entry.kind === "Skill" ? "skill" : entry.kind === "Command" ? "command" : null;
@@ -82,7 +78,7 @@ function Row({ entry, locked, changed, reach, state, read, onFlip, files }: RowP
         </span>
         {/* The state word or the switch ends the row, with where the switch reaches beside it, so every row's switch lines up. */}
         {state ? <span className={`handbook-end ${state.danger ? "error small" : "muted small"}`}>{state.word}</span> : entry.switchable && !locked ? (
-          <span className="handbook-end">{/* Only on Team, where reach is said: the task panel carries no use notes. */}{reach && unusedSaid(entry.used, entry.on) ? <span className="muted small handbook-idle" title={unusedSaid(entry.used, entry.on)!} role="img" aria-label={unusedSaid(entry.used, entry.on)!}>○</span> : null}{reach ? <span className="muted small">{reach}</span> : null}<Switch on={entry.on} label={`Use ${name}`} onChange={onFlip} /></span>
+          <span className="handbook-end"><Switch on={entry.on} label={`Use ${name}`} onChange={onFlip} /></span>
         ) : null}
       </div>
       {/* An item with no switch says why on its own line, unopened, where its switch would be read. */}
@@ -91,7 +87,7 @@ function Row({ entry, locked, changed, reach, state, read, onFlip, files }: RowP
         <div id={id} className="handbook-open small">
           {entry.sentence ? <p dir="auto">{cut(entry.sentence, SENTENCE_AT_MOST)}</p> : null}
           {entry.context ? <p className="muted">{tokensSaid(entry.context)}</p> : null}
-          {entry.used && entry.used.tasks > 0 ? <p className="muted">{usedSaid(entry.used)}</p> : null}
+          {entry.used ? <p className="muted">{usedSaid(entry.used)}</p> : null}
           {entry.clash ? <p className="muted">{entry.clash}</p> : null}
           {entry.hook ? (
             <dl className="plugin-changes">
@@ -178,7 +174,7 @@ export function HandbookList({ sources, off, defaultOff, level, onChange, onPlug
   const before = defaultOff ? new Map(entriesOf(sources, defaultOff, level).map((e) => [e.key, e.on])) : null;
   const changedOf = (e: Entry) => Boolean(before && e.list && before.get(e.key) !== e.on);
   const needle = search.trim().toLowerCase();
-  const rowFor = (e: Entry) => <Row key={e.key} entry={e} locked={locked} changed={changedOf(e)} {...(level === "default" ? { reach: REACH_ITEM } : {})} {...(stateOf ? { state: stateOf(e) } : {})} read={read} onFlip={() => onChange?.(flipEntry(off, e))} {...(files ? { files } : {})} />;
+  const rowFor = (e: Entry) => <Row key={e.key} entry={e} locked={locked} changed={changedOf(e)} {...(stateOf ? { state: stateOf(e) } : {})} read={read} onFlip={() => onChange?.(flipEntry(off, e))} {...(files ? { files } : {})} />;
   if (!sources.length) return <p className="muted">Your Claude Code has no skills of its own yet.</p>;
   // The fold of what is off opens when the person turns a handbook off, so the switch they pressed stays where they can see it.
   const [offOpen, setOffOpen] = useState(false);
@@ -202,9 +198,9 @@ export function HandbookList({ sources, off, defaultOff, level, onChange, onPlug
             <span className="handbook-meta">
               {s.version ? <span className="muted small">{cut(s.version, 24)}{s.latest ? ` → ${cut(s.latest.version, 24)}` : ""}</span> : null}
               {s.latest && pluginActions && !opened ? <button type="button" className="link small" onClick={() => setOpen(s.id)}>Update…</button> : null}
-              <span className="muted small">{isOff ? "off" : `${onCount} of ${mine.length} on`}{level === "default" && !isOff && mine.filter((e) => unusedSaid(e.used, e.on)).length ? `, ${mine.filter((e) => unusedSaid(e.used, e.on)).length} not used in 30 days` : ""}</span>
+              <span className="muted small">{isOff ? "off" : `${onCount} of ${mine.length} on`}</span>
             </span>
-            {plugin && !locked && !s.whyNot ? <span className="handbook-end">{level === "default" ? <span className="muted small">{REACH_PLUGIN}</span> : null}<Switch on={!isOff} mixed={!isOff && onCount < mine.length} label={`Use ${cut(handbookLabel(s), NAME_AT_MOST)}`} disabled={level === "task" && !s.enabled} onChange={() => flipPlugin(s)} /></span> : null}
+            {plugin && !locked && !s.whyNot ? <span className="handbook-end"><Switch on={!isOff} mixed={!isOff && onCount < mine.length} label={`Use ${cut(handbookLabel(s), NAME_AT_MOST)}`} disabled={level === "task" && !s.enabled} onChange={() => flipPlugin(s)} /></span> : null}
           </div>
           {s.whyNot ? <p className="muted small">{cut(s.whyNot, SENTENCE_AT_MOST)}</p> : null}
           {opened ? <div id={`${id}-${s.id}`} className="handbook-opened"><Items entries={mine} rowFor={rowFor} />{plugin && pluginActions ? pluginActions(s) : null}</div> : null}

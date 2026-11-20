@@ -208,6 +208,25 @@ describe("the runner's poll loop", () => {
     await loop.stop();
   });
 
+  it("given one slot and a task running while a poll waits that said the runner takes nothing, when the task ends, then that poll is ended at once and the next one offers the slot, without sitting out the wait", async () => {
+    // given
+    const { link, asked } = scriptedLink([{ lease, commands: [] }]);
+    let end: (outcome: TaskOutcome) => void = () => {};
+    const executor: TaskExecutor = { run: () => new Promise<TaskOutcome>((resolve) => (end = resolve)) };
+    const loop = startRunnerLoop(link, executor, { mask });
+    await vi.advanceTimersByTimeAsync(0);
+    const whileRunning = [...asked];
+
+    // when
+    end({ status: "needs-review", error: null, nativeSessionId: null, branch: null, position: null, request: null });
+    await vi.advanceTimersByTimeAsync(10);
+
+    // then
+    expect(whileRunning).toEqual([true, false]);
+    expect(asked).toEqual([true, false, true]);
+    await loop.stop();
+  });
+
   it("given a task running, when the runner stops, then the agent is stopped and its outcome still reaches the orchestrator", async () => {
     const { link, finished } = scriptedLink([{ lease, commands: [] }]);
     const held = heldExecutor();

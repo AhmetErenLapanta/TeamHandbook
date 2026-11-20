@@ -14,7 +14,7 @@ import { forgeTokenName } from "../propose.js";
 import { openSqliteStore } from "../store.js";
 import { createVault, storeSecret } from "../vault.js";
 import { ForgeHttpError } from "./http.js";
-import { CAPABILITIES, COMMENT_MAX, ForgeReadError, normalizeChecks, readFailure, readRequestWatch } from "./read-model.js";
+import { CAPABILITIES, COMMENT_MAX, ForgeReadError, forgeRefusalSentence, normalizeChecks, readFailure, readRequestWatch } from "./read-model.js";
 import type { RawCheck } from "./read-model.js";
 import { readRequestTemplate, TEMPLATE_MAX } from "./templates.js";
 
@@ -56,18 +56,27 @@ describe("why a forge read failed", () => {
   const repo = { tenant: TENANT, id: "skills", team: "Payments", name: "skills", url: "https://gitlab.example.invalid/acme/skills.git", head: null, error: null, syncedAt: null } as never;
 
   it("given a refused token, when the repository is reached through the connection or a token of its own, then the fix says which to renew and who renews it", () => {
-    expect(readFailure(new ForgeHttpError("GitLab answered 401", 401), "gitlab", repo, true)).toMatchObject({ reason: "unauthenticated", message: expect.stringContaining("an owner or an admin connects GitLab again under Integrations") });
-    expect(readFailure(new ForgeHttpError("GitLab answered 401", 401), "gitlab", repo, false)).toMatchObject({ reason: "unauthenticated", message: expect.stringContaining("an owner or an admin enters a new token for skills under Integrations") });
+    expect(readFailure(new ForgeHttpError("GitLab answered 401", 401), "gitlab", repo, "connection")).toMatchObject({ reason: "unauthenticated", message: expect.stringContaining("an owner or an admin connects GitLab again under Integrations") });
+    expect(readFailure(new ForgeHttpError("GitLab answered 401", 401), "gitlab", repo, "token")).toMatchObject({ reason: "unauthenticated", message: expect.stringContaining("an owner or an admin enters a new token for skills under Integrations") });
   });
 
   it("given a spent rate limit, when the forge says when to come back, then the reason is rate-limited and carries that time", () => {
-    const failed = readFailure(new ForgeHttpError("GitHub answered 403", 403, "2026-11-02T13:00:00.000Z"), "github", repo, true);
+    const failed = readFailure(new ForgeHttpError("GitHub answered 403", 403, "2026-11-02T13:00:00.000Z"), "github", repo, "connection");
     expect(failed).toBeInstanceOf(ForgeReadError);
     expect(failed).toMatchObject({ reason: "rate-limited", retryAt: "2026-11-02T13:00:00.000Z", status: 429 });
   });
 
+  it("given each refusal a forge gives a write, when it is said, then an expired sign-in asks to sign in again, a forbidden or missing repository says nothing was changed and what fixes it, a wait says until when, and a failure on the forge's side says to try again", () => {
+    const said = (err: ForgeHttpError, access: "connection" | "token" | "sign-in") => forgeRefusalSentence(err, "github", repo, access, "write").sentence;
+    expect(said(new ForgeHttpError("GitHub answered 401", 401), "sign-in")).toBe("GitHub no longer accepts your sign-in to skills; sign in to GitHub again on its card under Integrations");
+    expect(said(new ForgeHttpError("GitHub answered 403", 403), "token")).toBe("GitHub does not let the orchestrator's access open requests in skills; nothing was changed there, and an owner or an admin enters a new token for skills under Integrations, one that writes to it");
+    expect(said(new ForgeHttpError("GitHub answered 404", 404), "connection")).toBe("GitHub has no skills, or the orchestrator's access does not see it; nothing was changed there, and if it is there, an owner or an admin connects GitHub again under Integrations");
+    expect(said(new ForgeHttpError("GitHub answered 403", 403, "2026-11-18T13:00:00.000Z"), "token")).toBe("GitHub asks the orchestrator to wait until 2026-11-18T13:00:00.000Z before it changes anything more; nothing was changed, try again after that");
+    expect(said(new ForgeHttpError("GitHub answered 502", 502), "token")).toBe("GitHub failed on its side (502); nothing was changed, try again in a few minutes");
+  });
+
   it("given a request the forge does not have, when read, then the reason is not-found, said as a request, with what to do next", () => {
-    expect(readFailure(new ForgeHttpError("answered 404", 404), "github", repo, false).message).toMatch(/^GitHub has no such request in skills, .*; open it again from the list of requests, and if it is there, an owner or an admin enters a new token/);
+    expect(readFailure(new ForgeHttpError("answered 404", 404), "github", repo, "token").message).toMatch(/^GitHub has no such request in skills, .*; open it again from the list of requests, and if it is there, an owner or an admin enters a new token/);
   });
 });
 

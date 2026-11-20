@@ -4,6 +4,58 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.36.0] - 2026-11-19
+
+### Orchestrator 0.4.0: Added
+
+- **Lessons to review.** On Team, every waiting lesson, from a task or a session, in one list: open one to
+  read it, pick where it lands (**Yours**, **This folder** or **Team**), and **Keep** or **Reject** one
+  or several at once; a kept lesson becomes a skill file and shows in Your handbooks.
+- **Check for updates** on Your handbooks runs Claude Code's own marketplace refresh on your click, so a
+  newer plugin version shows, and an off plugin with one offers **Update**.
+- **Work remembers the source, board and sprint you last picked**, and Your handbooks opens in the time
+  of its slowest read instead of the sum of its reads.
+- **An agent that ends on a question waits for your answer.** The task reads **needs you**, and the words
+  you write in the follow-up box are the answer: the next run goes on with the question and your answer,
+  on your machine too, and the same message sent again is taken once.
+- **GitLab.com signs in with a one-time code too**, with nothing to install, as GitHub does; a self-managed
+  GitLab keeps `glab`.
+- **A team skill on Team says how the decided tasks that used it ended**, by the same measure as its
+  before and after, with rates only from five tasks.
+- **On a team's orchestrator you edit your own skill, check for plugin updates and update a plugin**
+  through your own computer, which nobody else can ask.
+
+### Orchestrator 0.4.0: Changed
+
+- **A lesson leads with its first sentence** and names the task that taught it, with a link, and says
+  "session" only when a session taught it; Lessons to review keeps one filled action.
+- **Pages open faster.** The first screen draws the last data it had and refreshes behind it, the
+  handbook and server reads answer from their last read while a new one runs, and the page's script and
+  styles go out compressed.
+- **Keyboard and screen reader.** The task setup panel, the lessons rail and Your handbooks are checked in
+  both themes, and a task can be opened, started, steered, stopped and kept with the keyboard alone.
+- **A stopped step goes on only with words you write after stopping it**; a message that was already
+  waiting no longer starts the agent again by itself.
+- **Start agents keeps Model and Effort under More options.**
+- **Started with says one line** when nothing of your setup was used.
+- **The handbook plugin card is one short line** with its buttons beside it.
+- **A forge, a tracker, an invitation, an ended session or a removed member says what happened and what
+  to do** in one sentence: an expired sign-in, a project it will not show, a wait the forge asks for, a
+  deleted branch or issue, a reused invitation. A task you typed survives signing in again.
+
+### Orchestrator 0.4.0: Fixed
+
+- **What an agent changed before it crashed or ended without a result waits for review** on its request,
+  with the cause in a sentence (a full disk, an unreachable service), where it used to go with the task's
+  checkout; a restart keeps such a checkout and waits for review with it instead of failing.
+- **A computer that loses a task to sleep or a cut line keeps its work**: a folder's change reaches the
+  orchestrator for review once the line is back.
+- **Keep and Undo pressed at once in two windows settle a task one way**, and after a stopped step the
+  task reads as needing you on this machine too.
+- **A lesson holding what looks like a credential is not kept as yours**, and a folder whose skills path
+  is a link out of it is not written through.
+- **A check on macOS runs when a folder on your PATH sits behind a symbolic link in your home**; it used to end at once with nothing printed, so the change could not be shown as verified.
+
 ## [0.35.0] - 2026-11-18
 
 This release carries Orchestrator 0.3.0. The plugin's own commands and hooks are unchanged.

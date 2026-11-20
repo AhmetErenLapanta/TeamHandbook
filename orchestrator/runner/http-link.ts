@@ -97,6 +97,9 @@ export function httpLink(profile: RunnerProfile, fetchImpl: Fetch = fetch): Runn
     async finish(taskId, leaseId, outcome) {
       await call(RUNNER_PATHS.finish(taskId), { leaseId, outcome });
     },
+    async lateChanges(taskId, changes) {
+      await call(RUNNER_PATHS.lateChanges(taskId), { changes });
+    },
     async status(agents, started) {
       await call(RUNNER_PATHS.status, { agents, features: [...MACHINE_FEATURES], ...(started ? { started: true } : {}) });
     },

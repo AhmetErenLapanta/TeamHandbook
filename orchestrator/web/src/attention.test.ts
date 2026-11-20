@@ -139,6 +139,7 @@ describe("a run that stopped to ask", () => {
 
     // then
     expect(attentionOf(waiting)).toBe("answer");
+    expect(attentionOf({ ...task("k", "failed"), status: "needs-answer" as const, question: { text: "Which environment?", options: [] } })).toBe("answer");
     expect(attentionOf(answered)).toBe("failed");
     expect(attentionOf(task("k", "failed"))).toBe("failed");
   });

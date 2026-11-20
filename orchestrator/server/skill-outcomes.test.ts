@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createUser, principalOf, setupFirstOwner } from "./accounts.js";
 import { syncRepo } from "./app.js";
 import type { OrchestratorContext } from "./app.js";
-import { skillOutcomes } from "./skill-outcomes.js";
+import { skillAcceptance, skillOutcomes } from "./skill-outcomes.js";
 import { openSqliteStore } from "./store.js";
 import type { TaskRecord } from "./tasks/types.js";
 
@@ -106,6 +106,38 @@ describe("a skill's tasks before and after it, with it and without it", () => {
       without: bucket(2, 1, 1, 1),
     });
     expect(JSON.stringify(outcomes)).not.toMatch(/shop|tsk_|task\//);
+  });
+
+  it("given tasks that used skills, some accepted at once, some after a follow-up, one undone, one waiting and one outside the window, when the acceptance is read, then each skill says its decided tasks and the share accepted without a revision, which is empty under five tasks", async () => {
+    // given
+    const { store, ctx, max } = await setup();
+    const used = { skills: ["release-notes"] };
+    await seed(store, [
+      task("tsk_a", { ...used, ...kept }),
+      task("tsk_b", { ...used, ...kept }),
+      task("tsk_c", { ...used, ...kept }),
+      task("tsk_d", { ...used, ...kept }),
+      task("tsk_e", { ...used, ...undone }),
+      task("tsk_waiting", { ...used, result: "changes", changes: { files: [], undone: null, kept: null } }),
+      task("tsk_old", { ...used, ...kept, createdAt: at(50) }),
+      task("tsk_other", kept),
+    ]);
+    await store.noteUsedSkill(TENANT, "tsk_a", "db-query");
+    await store.addFollowUp({ tenant: TENANT, id: "fup_1", taskId: "tsk_b", source: "person", key: "fup_1", text: "also cover the summary", quotes: null, createdAt: at(10), createdBy: max.email });
+    await store.markFollowUpsDelivered(TENANT, ["fup_1"], at(10));
+
+    // when
+    const acceptance = await skillAcceptance(ctx, max, 30, NOW);
+
+    // then
+    expect(acceptance).toEqual({
+      days: 30,
+      minimum: 5,
+      skills: [
+        { skill: "release-notes", decided: 5, acceptedWithoutRevision: 3, withoutRevision: 0.6 },
+        { skill: "db-query", decided: 1, acceptedWithoutRevision: 1, withoutRevision: null },
+      ],
+    });
   });
 
   it("given a skill kept from a lesson candidate, a later candidate of it still waiting, and tasks on the lesson's project by the person who kept it and by a teammate, when the owner reads its outcomes, then the pivot is when it was kept, the keeper's tasks after it are with it, the teammate's are without it, and the commit in the team repository does not move the pivot", async () => {

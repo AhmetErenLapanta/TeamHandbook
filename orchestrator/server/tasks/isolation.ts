@@ -160,6 +160,8 @@ export function containerInvocation(
 
 export interface RunOutcome {
   code: number | null;
+  /** The signal that ended the process when it left no exit code: one the orchestrator did not send says something outside it ended the agent. */
+  signal?: string;
   timedOut: boolean;
   cancelled: boolean;
   stdout: string;
@@ -271,7 +273,7 @@ export function startProcess(inv: Invocation, options: RunOptions): StartedProce
     };
     kill = onAbort;
 
-    const finish = (code: number | null) => {
+    const finish = (code: number | null, signal: string | null = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -279,7 +281,7 @@ export function startProcess(inv: Invocation, options: RunOptions): StartedProce
       for (const stream of ["stdout", "stderr"] as const) if (pending[stream]) options.onLine(stream, pending[stream]);
       // Whatever the agent left running in its group goes with it, even on a clean exit.
       killGroup("SIGKILL");
-      resolve({ code, timedOut, cancelled, stdout: dropped ? `${stdout}\n${tail.slice(tail.indexOf("\n") + 1)}` : stdout + tail });
+      resolve({ code, ...(code === null && signal ? { signal } : {}), timedOut, cancelled, stdout: dropped ? `${stdout}\n${tail.slice(tail.indexOf("\n") + 1)}` : stdout + tail });
     };
     child.on("error", (err) => {
       options.onLine("stderr", `${inv.program} did not start: ${err.message}`);
@@ -288,7 +290,7 @@ export function startProcess(inv: Invocation, options: RunOptions): StartedProce
     // A grandchild that inherited the pipes keeps them open after the agent exits, and the
     // close event waits for the pipes; ending the group on exit lets close arrive.
     child.on("exit", () => killGroup("SIGKILL"));
-    child.on("close", (code) => finish(code));
+    child.on("close", (code, signal) => finish(code, signal));
   });
   return { outcome, write: (text) => write(text), end: (last) => end(last), kill: () => kill() };
 }

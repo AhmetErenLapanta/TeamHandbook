@@ -9,7 +9,7 @@ import { ownCliReader, runOwnCli } from "../forge/own-cli.js";
 import type { CliRun } from "../forge/own-cli.js";
 import { githubOrigins } from "../work/own-github.js";
 import { linearEndpoint } from "../work/linear.js";
-import { READ_TIMEOUT_MS } from "../work/provider.js";
+import { NO_SUCH_ISSUE, NOT_REACHED, READ_TIMEOUT_MS, trackerRefusal } from "../work/provider.js";
 import { readEnabled } from "./records.js";
 import { TRACKER, TRACKER_TOKEN_SECRET } from "./tracker.js";
 import type { TrackerConfig } from "./tracker.js";
@@ -67,6 +67,11 @@ export function adfText(node: unknown): string {
 
 class ReadFailed extends Error {}
 
+/** The sentence a question about an issue the tracker no longer has is refused with, or null when the read found it or failed another way. */
+export function issueGone(read: IssueRead | { problem: string } | null, key: string | null): string | null {
+  return read && "problem" in read && read.problem.startsWith(NO_SUCH_ISSUE) ? `${key ?? "The issue"} was deleted, or this token cannot see it any more. Ask about another issue.` : null;
+}
+
 // A body makes it a POST, as a GraphQL query is sent; nothing else is.
 async function getJson(url: string, headers: Record<string, string>, send: typeof fetch, body?: unknown): Promise<Json> {
   let res: Response;
@@ -74,10 +79,10 @@ async function getJson(url: string, headers: Record<string, string>, send: typeo
     const post = body === undefined ? {} : { method: "POST", body: JSON.stringify(body) };
     res = await send(url, { ...post, headers: { accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers }, redirect: "error", signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
   } catch (err) {
-    throw new ReadFailed((err as Error).name === "TimeoutError" ? `the tracker did not answer within ${READ_TIMEOUT_MS / 1000} seconds` : `the tracker was not reached (${(err as Error).message})`);
+    throw new ReadFailed((err as Error).name === "TimeoutError" ? `the tracker did not answer within ${READ_TIMEOUT_MS / 1000} seconds; try again` : NOT_REACHED);
   }
-  if (res.status === 401 || res.status === 403) throw new ReadFailed(`the tracker refused the token (${res.status})`);
-  if (res.status === 404) throw new ReadFailed("the tracker has no such issue, or the token cannot see it");
+  const refused = trackerRefusal(res, "issue");
+  if (refused) throw new ReadFailed(refused);
   if (!res.ok) throw new ReadFailed(`the tracker answered ${res.status}`);
   try {
     return (await res.json()) as Json;

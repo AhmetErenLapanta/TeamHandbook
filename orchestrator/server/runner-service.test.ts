@@ -88,7 +88,7 @@ describe("the runner service a local orchestrator's runner calls", () => {
   it("given runs that changed nothing, one answering plainly, one whose answer looks like it holds a secret, an older runner's plain failure and a run that went on from a review and changed nothing more, when each finishes, then the first two end with nothing changed, only the plain answer is kept, the older one stays failed and the last is back in review with its answer", async () => {
     // given
     const mem = memoryStore();
-    const service = createRunnerService({ tenant: "acme", store: mem.store });
+    const service = createRunnerService({ tenant: "acme", store: mem.store, questionOf: (said) => (said.includes("QUESTION: Which tier?") ? { text: "Which tier?", options: ["The lower", "The next"] } : null) });
     const finish = async (id: string, outcome: Partial<TaskOutcome>) => {
       mem.queued.push(task(id, ADA));
       const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
@@ -100,6 +100,8 @@ describe("the runner service a local orchestrator's runner calls", () => {
     await finish("tsk-secret", { nothingChanged: true, lastSaid: "Use ghp_0123456789abcdefghijklmnopqrstuvwxyzAB to read it." });
     await finish("tsk-older", {});
     await finish("tsk-again", { status: "needs-review", error: null, lastSaid: "Nothing more to add." });
+    await finish("tsk-asked", { asked: true, error: "The agent stopped to ask you: Which tier?" });
+    await finish("tsk-asked-away", { nothingChanged: true, lastSaid: "I cannot tell.\nQUESTION: Which tier?\nOPTION: The lower\nOPTION: The next" });
 
     // then
     expect(mem.ended["tsk-plain"]).toMatchObject({ status: "nothing-changed", error: null, lastSaid: "No change is needed." });
@@ -107,6 +109,11 @@ describe("the runner service a local orchestrator's runner calls", () => {
     expect(mem.ended["tsk-secret"]!.lastSaid).toBeUndefined();
     expect(mem.ended["tsk-older"]).toMatchObject({ status: "failed", error: "The agent changed nothing, so there is nothing to push." });
     expect(mem.ended["tsk-again"]).toMatchObject({ status: "needs-review", lastSaid: "Nothing more to add." });
+    // A run that ended asking is no failure either: the task waits for the answer, its question as its reason.
+    expect(mem.ended["tsk-asked"]).toMatchObject({ status: "needs-answer", error: "The agent stopped to ask you: Which tier?" });
+    // A machine's runner sends such a run as one that changed nothing, with its last words: the question is read from them here.
+    expect(mem.ended["tsk-asked-away"]).toMatchObject({ status: "needs-answer", error: "The agent stopped to ask you: Which tier?" });
+    expect(mem.patched).toContainEqual({ taskId: "tsk-asked-away", patch: { question: { text: "Which tier?", options: ["The lower", "The next"] } } });
   });
 
   it("given a question taken by a machine whose agent changed files and pushed a branch all the same, when it finishes for review, then it ends failed with nothing kept and no request to open, what follows hears the same, and another task's review stands", async () => {
@@ -181,6 +188,26 @@ describe("the runner service a local orchestrator's runner calls", () => {
     await service.events("tsk-1", lease!.leaseId, [{ n: 1, event: { type: "steer", text: "Also name the pager rotation.", by: ADA } }]);
 
     expect(mem.events.get("tsk-1")).toEqual([expect.objectContaining({ kind: "steer", text: "Ada Example: Also name the pager rotation.", data: { type: "steer", text: "Also name the pager rotation.", by: "Ada Example" } })]);
+  });
+
+  it("given a machine that reports words sent to its agent with an id of its own for the sender, when the event is kept, then it carries the sender's name and their account's id as the orchestrator reads them, and one with no account carries no id", async () => {
+    // given
+    const mem = memoryStore();
+    mem.queued.push(task("tsk-1", ADA));
+    const service = createRunnerService({ tenant: "acme", store: mem.store, personOf: async (who) => (who === ADA ? { name: "Ada Example", id: "u-ada" } : { name: "A teammate" }) });
+    const { lease } = await service.poll(ADA, "machine-1", 0, true, open());
+
+    // when
+    await service.events("tsk-1", lease!.leaseId, [
+      { n: 1, event: { type: "steer", text: "Also name the pager rotation.", by: ADA, byId: "u-someone-else" } },
+      { n: 2, event: { type: "steer", text: "And the escalation.", by: "gone@example.invalid" } },
+    ]);
+
+    // then
+    expect((mem.events.get("tsk-1") ?? []).map((e) => e.data)).toEqual([
+      { type: "steer", text: "Also name the pager rotation.", by: "Ada Example", byId: "u-ada" },
+      { type: "steer", text: "And the escalation.", by: "A teammate" },
+    ]);
   });
 
   it("given the agent's plan, when its starter approves it as they changed it, then the runner gets the changed plan with the answer", async () => {
@@ -594,7 +621,7 @@ describe("the runner service a local orchestrator's runner calls", () => {
     const stale = service.followUpsDelivered("tsk-1", "lease-not-held", ["fup-1"]);
 
     // then
-    expect(first.commands).toEqual([{ type: "follow_up", taskId: "tsk-1", followUp: { id: "fup-1", source: "person", text: "use our logger", quotes: null, createdBy: ADA } }]);
+    expect(first.commands).toEqual([{ type: "follow_up", taskId: "tsk-1", followUp: { id: "fup-1", source: "person", text: "use our logger", quotes: null, createdBy: ADA, createdAt: mem.followUps[0]!.createdAt } }]);
     expect(again.commands).toEqual([]);
     expect(mem.followUps.map((f) => [f.id, f.status])).toEqual([["fup-1", "delivered"], ["fup-2", "pending"]]);
     await expect(stale).rejects.toBeInstanceOf(NotHeld);

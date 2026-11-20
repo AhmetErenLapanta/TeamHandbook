@@ -45,6 +45,8 @@ export function didNotLoad(sources: HandbookSource[], off: Off, report: StartedW
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+const NOTHING = "Nothing of your setup";
+
 /** "12 skills, 3 plugins, 4 MCP servers, CLAUDE.md": what the task's agent started with, counted once. */
 export function startedSaid(sources: HandbookSource[], off: Off, entries: Entry[]): string {
   const on = entries.filter((e) => e.on);
@@ -52,7 +54,7 @@ export function startedSaid(sources: HandbookSource[], off: Off, entries: Entry[
   const plugins = sources.filter((s) => s.kind === "plugin" && !sourceOff(off, s)).length;
   const servers = on.filter((e) => e.kind === "Server").length;
   const parts = [skills ? count(skills, "skill", "skills") : null, plugins ? count(plugins, "plugin", "plugins") : null, servers ? count(servers, "MCP server", "MCP servers") : null, on.some((e) => e.kind === "Rules") ? "CLAUDE.md" : null].filter((p): p is string => p !== null);
-  return parts.length ? parts.join(", ") : "Nothing of your setup";
+  return parts.length ? parts.join(", ") : NOTHING;
 }
 
 /** One row: a used one's name links to the stream line where the agent called it; elsewhere the row carries its state word. */
@@ -90,6 +92,7 @@ export function TaskUsed({ setup, off = NOTHING_OFF, used, report }: { setup?: H
   const of = (word: Word) => rows.filter((r) => r.state.word === word);
   const leaked = of("Loaded, though off");
   const usedRows = of("Used");
+  const started = setup ? startedSaid(sources, off, entries) : null;
   const fold = (title: string, list: typeof rows) => (list.length ? (
     <details className="small">
       <summary>{title} ({list.length})</summary>
@@ -100,13 +103,13 @@ export function TaskUsed({ setup, off = NOTHING_OFF, used, report }: { setup?: H
     <section aria-labelledby="task-started-h" className="task-started">
       <h2 id="task-started-h">Started with</h2>
       {setup ? didNotLoad(sources, off, report).map((name) => <p key={name} className="error small">{cut(name)} was on and did not load.</p>) : null}
-      <p>{setup ? startedSaid(sources, off, entries) : count(usedRows.length, "item used", "items used")}</p>
+      {setup && !leaked.length && !usedRows.length && started === NOTHING ? <p>Nothing of your setup was used.</p> : <p>{setup ? started : count(usedRows.length, "item used", "items used")}</p>}
       {leaked.length || usedRows.length ? (
         <ul className="plain">
           {leaked.map((r) => <Line key={r.e.key} e={r.e} state={r.state} />)}
           {usedRows.map((r) => <Line key={r.e.key} e={r.e} state={r.state} word={false} />)}
         </ul>
-      ) : <p className="muted small">The agent called no skill or server.</p>}
+      ) : started === NOTHING && setup ? null : <p className="muted small">The agent called no skill or server.</p>}
       {fold("Loaded", of("Loaded"))}
       {fold("Off", of("Off"))}
       {fold("Off for this task", of("Off for this task"))}

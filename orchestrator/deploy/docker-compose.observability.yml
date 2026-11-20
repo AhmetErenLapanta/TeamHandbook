@@ -24,6 +24,7 @@ services:
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=${ORCHESTRATOR_PROMETHEUS_RETENTION:-15d}"]
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/rules.yml:/etc/prometheus/rules.yml:ro
       - prometheus-data:/prometheus
     secrets: [metrics_token]
     # Its page on this host's loopback only; reach it from elsewhere with an ssh tunnel.

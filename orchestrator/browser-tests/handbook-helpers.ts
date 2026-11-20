@@ -21,7 +21,7 @@ export async function send(page: Page, method: "PUT" | "POST" | "DELETE", url: s
 }
 
 export async function finished(page: Page, id: string): Promise<void> {
-  await expect.poll(async () => ((await (await page.request.get(`/api/tasks/${id}`)).json()) as { task: { status: string } }).task.status, { timeout: 90_000 }).toMatch(/needs-review|failed|completed/);
+  await expect.poll(async () => ((await (await page.request.get(`/api/tasks/${id}`)).json()) as { task: { status: string } }).task.status, { timeout: 90_000 }).toMatch(/needs-review|nothing-changed|failed|completed|cancelled/);
 }
 
 /** Starts a task from the one box and waits until its run is over; the id of the task it made. */

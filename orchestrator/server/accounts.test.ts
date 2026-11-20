@@ -182,7 +182,7 @@ describe("a session", () => {
     expect(wrong.status).toBe(403);
   });
 
-  it("given an expired session, a forged token and a removed account, when each calls, then each is asked to sign in", async () => {
+  it("given an expired session, a forged token and a removed account, when each calls, then each is told its session here ended and to sign in again, while a call with no session is only asked to sign in", async () => {
     // given
     const { store, ownerId } = await withOwner();
     const owner = await createUser(store, TENANT, TEAMS, { email: "olu@example.invalid", role: "member", teams: ["Payments"], password: PASSWORD }, BY_OWNER);
@@ -195,9 +195,12 @@ describe("a session", () => {
     const calls = await Promise.all(
       [expired.token, "forged-token", removed.token].map((token) => app.request("/api/whoami", { headers: { cookie: `${SESSION_COOKIE}=${token}` } })),
     );
+    const none = await app.request("/api/whoami");
 
     // then
     expect(calls.map((r) => r.status)).toEqual([401, 401, 401]);
+    expect(await Promise.all(calls.map((r) => r.json()))).toEqual(calls.map(() => ({ error: "your session here ended: it ran out, or your access to this organization changed; sign in again, and ask an owner or an admin if that does not let you in", code: "session-ended" })));
+    expect([none.status, await none.json()]).toEqual([401, { error: "sign in first" }]);
   });
 
   it("given an admin whose role and team an owner takes away, when their open session calls next, then it already reads as a member who edits nothing", async () => {
@@ -1060,6 +1063,19 @@ const signInLocally = (app: { request: (path: string, init?: RequestInit) => Res
 describe("a local orchestrator's one person", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("given a local session that ran out, when its page calls next, then it is told to run the orchestrator's command again rather than to ask an owner", async () => {
+    // given
+    vi.stubEnv("ORCHESTRATOR_MODE", "local");
+    const { store, ownerId } = await withOwner();
+    const stale = await startSession(store, TENANT, ownerId, new Date(Date.now() - 31 * 86_400_000));
+
+    // when
+    const res = await guarded(store).request("/api/whoami", { headers: { cookie: `${SESSION_COOKIE}=${stale.token}` } });
+
+    // then
+    expect([res.status, await res.json()]).toEqual([401, { error: "your session here ended; run the orchestrator's command again and open the address it prints", code: "session-ended" }]);
   });
 
   it("given a local orchestrator started twice, when its owner is made and the printed address is opened, previewed and its button pressed, then one owner exists, opening spends nothing, the button signs them in once and leaves the address bar, and no setup or password form is offered", async () => {

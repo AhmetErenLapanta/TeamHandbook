@@ -15,7 +15,7 @@ import { DEVICE_ENDPOINTS, deviceSignInState, personForgeToken, personLastingTok
 import { githubAuth } from "./github.js";
 import { gitlabAuth } from "./gitlab.js";
 import { forgeHttp } from "./http.js";
-import { readFailure, readWatchWith } from "./read-model.js";
+import { forgeRefusalSentence, readFailure, readWatchWith } from "./read-model.js";
 import type { OnForgeWatch } from "./pushed.js";
 import type { DeviceEndpoints } from "./device-sign-in.js";
 import { APP_FORGES } from "./oauth.js";
@@ -24,6 +24,9 @@ import { ForgeHttpError } from "./http.js";
 import { scratch } from "./local.js";
 import { originOf } from "./pushed.js";
 import { DRIVERS } from "./registry.js";
+
+/** What stopped the read of the remote before the forge refused anything: said as it is. */
+class Unread extends Error {}
 
 export type UnconnectedOpened = { opened: { forge: string; account: string; number: number; url: string } } | { refused: string };
 
@@ -46,7 +49,7 @@ function restOf(kind: "github" | "gitlab", api: string, project: string, token: 
   return {
     defaultBranch: async () => {
       const branch = (await call("GET", repoPath)).default_branch;
-      if (typeof branch !== "string" || !branch) throw new ForgeHttpError(`${FORGES[kind].label} names no default branch for ${project}`, 502);
+      if (typeof branch !== "string" || !branch) throw new Unread(`${FORGES[kind].label} names no default branch for ${project}`);
       return branch;
     },
     close: async (number: number, note: string) => {
@@ -94,14 +97,17 @@ export async function openOnUnconnectedRemote(ctx: OrchestratorContext, user: Pi
   try {
     const target = await rest.defaultBranch();
     const pinned = await pinnedGitSettings(ctx, url).catch((err: Error) => {
-      throw new ForgeHttpError(err.message, 400);
+      throw new Unread(err.message);
     });
     const header = `Authorization: Basic ${Buffer.from(`${FORGES[kind].gitUser}:${token}`).toString("base64")}`;
     const env = { ...gitConfigEnv(url, [...pinned, ["credential.helper", ""], [`http.${url.origin}/.extraHeader`, header]]), GIT_ALLOW_PROTOCOL: new URL(web).protocol.replace(":", ""), GIT_TERMINAL_PROMPT: "0" };
     await gitAsync(["init", "--quiet", "--bare", dir], dir);
     // The whole history of both branches: no depth, so the base check sees every ancestor; no tags, no submodules.
     await gitAsync(["--git-dir", dir, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", url.href, `refs/heads/${kept.branch}:refs/heads/${kept.branch}`, `refs/heads/${target}:refs/heads/${target}`], dir, undefined, undefined, { env }).catch((err: Error & { stderr?: string }) => {
-      throw new ForgeHttpError(`git did not read ${kept.branch} from ${FORGES[kind].label}: ${redactLine((err.stderr || err.message).replace(/\p{C}+/gu, " ").trim().slice(0, 300))}`, 502);
+      const said = (err.stderr || err.message).replace(/\p{C}+/gu, " ").trim();
+      // A branch deleted on the forge since the machine pushed it is said as such, with what brings it back.
+      if (/find remote ref/i.test(said)) throw new Unread(`${kept.branch} is no longer on ${FORGES[kind].label}: it was deleted there, so nothing opened; push it again with \`git push origin ${kept.branch}\` in its folder, then press again`);
+      throw new Unread(`git did not read ${kept.branch} from ${FORGES[kind].label}: ${redactLine(said.slice(0, 300))}`);
     });
     await gitAsync(["--git-dir", dir, "symbolic-ref", "HEAD", `refs/heads/${target}`], dir);
     const head = (await gitAsyncMaybe(["--git-dir", dir, "rev-parse", "--verify", "--quiet", `refs/heads/${kept.branch}^{commit}`], dir))?.trim();
@@ -125,7 +131,8 @@ export async function openOnUnconnectedRemote(ctx: OrchestratorContext, user: Pi
     }
     return { opened: { forge: FORGES[kind].label, account: signedIn.account, number: opened.number, url: opened.url } };
   } catch (err) {
-    if (err instanceof ForgeHttpError) return { refused: err.message };
+    if (err instanceof Unread) return { refused: err.message };
+    if (err instanceof ForgeHttpError) return { refused: forgeRefusalSentence(err, kind, project, "sign-in", "write").sentence };
     throw err;
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -153,7 +160,7 @@ export async function onMachineForge(ctx: OrchestratorContext, kept: TaskTarget,
     ...where,
     read: () =>
       readWatchWith(http, config, kept.forgeRequest!.number).catch((err: Error) => {
-        if (err instanceof ForgeHttpError) throw readFailure(err, kind, repo, false);
+        if (err instanceof ForgeHttpError) throw readFailure(err, kind, repo, "sign-in");
         throw err;
       }),
   };

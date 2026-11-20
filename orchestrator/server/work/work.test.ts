@@ -134,8 +134,8 @@ describe("the orchestrator tasks an issue was started from", () => {
   });
 });
 
-describe("a tracker's answers kept for a minute", () => {
-  it("given an answer read, when it is asked again within the minute, after it, and freshly, then the tracker is asked once, then behind a stale answer, then again", async () => {
+describe("a tracker's answers kept for two minutes", () => {
+  it("given an answer read, when it is asked again within the two minutes, after them, and freshly, then the tracker is asked once, then behind a stale answer, then again", async () => {
     // given
     let now = 0;
     const cache = new WorkCache(() => now);
@@ -155,6 +155,32 @@ describe("a tracker's answers kept for a minute", () => {
     expect([within.value, within.stale]).toEqual([1, false]);
     expect([past.value, past.stale]).toEqual([1, true]);
     expect([fresh.value, fresh.stale]).toEqual([3, false]);
+  });
+
+  it("given a tracker that answers slowly, when three reads ask at once and a fourth asks after the answer is stale, then the tracker is asked once for the three and the fourth is answered at once with the old answer while one new read runs behind it", async () => {
+    // given
+    let now = 0;
+    const cache = new WorkCache(() => now);
+    let reads = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = async () => {
+      const n = ++reads;
+      await gate;
+      return n;
+    };
+
+    // when
+    const first = [cache.read("acme:tracker:board:items", slow), cache.read("acme:tracker:board:items", slow), cache.read("acme:tracker:board:items", slow)];
+    release();
+    const together = await Promise.all(first);
+    now = WORK_TTL_MS + 1;
+    const again = await cache.read("acme:tracker:board:items", slow);
+    const alsoAgain = await cache.read("acme:tracker:board:items", slow);
+
+    // then
+    expect(together.map((r) => [r.value, r.stale])).toEqual([[1, false], [1, false], [1, false]]);
+    expect([again.value, again.stale, alsoAgain.value, alsoAgain.stale, reads]).toEqual([1, true, 1, true, 2]);
   });
 
   it("given two tenants' answers, when one tenant's are dropped, then only theirs are read again", async () => {

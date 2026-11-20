@@ -53,7 +53,7 @@ test("given a self-hosted orchestrator a second person also reaches and no GitLa
   // given
   await page.route("**/api/forge/gitlab/sign-in", async (route) => {
     const read = await (await route.fetch()).json();
-    await route.fulfill({ json: { ...read, offered: false, why: "signing in with your own glab is for an orchestrator only one person reaches, on this machine", cli: null, installLine: null, signIn: { state: "idle" } } });
+    await route.fulfill({ json: { ...read, offered: false, why: "signing in with your own glab is for an orchestrator only one person reaches, on this machine", cli: null, installLine: null, signIn: { state: "idle" }, device: null } });
   });
 
   // when

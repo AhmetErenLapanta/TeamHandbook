@@ -11,9 +11,9 @@ export interface SignInServer {
 const words = (text: string) => text.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[\s_\-.]+/).filter(Boolean);
 const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 
-/** Claude Code names a plugin's server `plugin:<plugin>:<server>` and a claude.ai connector `claude.ai <Name>`. */
+/** Claude Code names a plugin's server `plugin:<plugin>:<server>` (or with underscores, as its tools are named) and a claude.ai connector `claude.ai <Name>`. */
 function parts(name: string): { server: string; plugin: string | null; connector: boolean } {
-  const plugin = /^plugin:([^:]+):(.+)$/.exec(name);
+  const plugin = /^plugin[:_]([^:_]+)[:_](.+)$/.exec(name);
   if (plugin) return { server: plugin[2]!, plugin: plugin[1]!, connector: false };
   const connector = /^claude[._ ]ai[._ ](.+)$/i.exec(name);
   if (connector) return { server: connector[1]!, plugin: null, connector: true };

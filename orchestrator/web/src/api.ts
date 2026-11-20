@@ -122,8 +122,8 @@ export class ApiError extends Error {
 
 /** Thrown for a 401, so the shell can show the sign-in screen instead of an error. */
 export class SignedOut extends ApiError {
-  constructor(message: string) {
-    super(message, "signed-out", 401);
+  constructor(message: string, code = "signed-out") {
+    super(message, code, 401);
   }
 }
 /** Thrown for a 404, so a screen can tell a page this orchestrator does not offer from a failure. */
@@ -183,7 +183,7 @@ async function send<T>(method: string, url: string, body: unknown, token: string
   const payload = await res.json().catch(() => ({}));
   // Every reason the server gives reaches the page as a sentence, so no screen shows one in lower case or runs it into the next.
   const reason = typeof payload.error === "string" && payload.error.trim() ? sentence(payload.error) : null;
-  if (res.status === 401) throw new SignedOut(reason ?? "Sign in first.");
+  if (res.status === 401) throw new SignedOut(reason ?? "Sign in first.", typeof payload.code === "string" ? payload.code : undefined);
   const code = typeof payload.code === "string" ? payload.code : "error";
   if (res.status === 404) throw new NotFound(reason ?? "Not found.", code === "error" ? "not-found" : code);
   if (!res.ok) throw new ApiError(reason ?? `The orchestrator failed to answer (${res.status} ${res.statusText}). Try again; when it keeps failing, the orchestrator's log says why.`, code, res.status, payload);
@@ -393,7 +393,7 @@ async function inOrg<T>(tenant: string, defaultOrg: string, method: string, path
       throw new Error("The orchestrator did not answer. Check that it is running and reachable from here, then try again.");
     });
     const payload = await res.json().catch(() => ({}));
-    if (res.status === 401) throw new SignedOut(payload.error ?? "sign in first");
+    if (res.status === 401) throw new SignedOut(typeof payload.error === "string" ? sentence(payload.error) : "Sign in first.", typeof payload.code === "string" ? payload.code : undefined);
     if (!res.ok) throw new ApiError(payload.error ?? `The orchestrator failed to answer (${res.status} ${res.statusText}).`, typeof payload.code === "string" ? payload.code : "error", res.status);
     return payload;
   };

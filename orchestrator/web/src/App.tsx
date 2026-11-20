@@ -280,6 +280,8 @@ export function App() {
   const [gate, setGate] = useState<AuthConfig | null>(null);
   const [orgs, setOrgs] = useState<OrgList | null>(null);
   const [unknownOrg, setUnknownOrg] = useState<string | null>(null);
+  // Why a session this browser held stopped letting the person in, said on the screen they land on instead.
+  const [ended, setEnded] = useState<string | null>(null);
   const [repos, setRepos] = useState<RepoRecord[] | null>(null);
   const [workSources, setWorkSources] = useState<WorkSource[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -327,6 +329,7 @@ export function App() {
           (e: Error) => {
             setMe(null);
             // On a cloud orchestrator a signed-in person outside this organization is not a member; anyone else signs in first.
+            if (e instanceof SignedOut) setEnded(e.code === "signed-out" ? null : e.message);
             if (e instanceof SignedOut && cloud) identityApi.me().then(() => setUnknownOrg(org), () => navigate("/signup", true));
             else if (e instanceof SignedOut) auth.config().then(setGate, (err: Error) => setError(err.message));
             else if (e instanceof NotFound && org) setUnknownOrg(org);
@@ -374,7 +377,7 @@ export function App() {
       <Gate>
         <div className="panel form" role="alert">
           <div className="brand">TeamHandbook <span>Orchestrator</span></div>
-          <p>You are not a member of {unknownOrg}.</p>
+          <p>{ended ?? `You are not a member of ${unknownOrg}.`}</p>
           {home ? <p><a href={pathIn(home, place.section ?? "tasks")}>Go to {home}</a></p> : null}
         </div>
       </Gate>
@@ -392,7 +395,7 @@ export function App() {
       );
     }
     if (gate?.setupNeeded) return <Setup onSignedIn={load} />;
-    if (gate) return <SignIn config={gate} org={place.org !== orgs?.default ? place.org : null} onSignedIn={load} />;
+    if (gate) return <SignIn config={gate} org={place.org !== orgs?.default ? place.org : null} ended={ended} onSignedIn={load} />;
     return (
       <Gate>
         {error ? (

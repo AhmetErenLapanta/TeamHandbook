@@ -9,7 +9,7 @@ import type { RepoRecord } from "../store.js";
 import { FORGES } from "../../shared/forge-def.js";
 import { checkBranch, ForgeHttpError } from "./http.js";
 import type { ForgeHttp } from "./http.js";
-import { changeCommit, ForgeRefusal, scratch } from "./local.js";
+import { changeCommit, ForgeRefusal, missingBranch, scratch } from "./local.js";
 import { forgeState, forgeTime } from "./types.js";
 import type { BranchUpdate, ChangeRequest, CommitCheck, ForgeConfig, ForgeProvider, ForgeState, OpenedRequest, PushedBranch, RequestAssignment } from "./types.js";
 
@@ -511,7 +511,7 @@ export function createOwnCliForge(config: ForgeConfig & { kind: CliForge }, work
       const heads = await gitAsyncMaybe(["ls-remote", "--heads", repo.url, `refs/heads/${pushed.branch}`], tmpdir(), { env });
       if (heads === null) throw new OwnCliRefused(`git did not reach ${repo.name} with your ${t.tool} sign-in; check it with \`${t.tool} auth status\``);
       const headSha = /^([0-9a-f]{40})\s/.exec(heads)?.[1];
-      if (!headSha) throw new ForgeRefusal(`branch ${pushed.branch} is not in ${repo.name}; the runner pushes it first`);
+      if (!headSha) throw new ForgeRefusal(missingBranch(pushed.branch, repo.name));
       const assignment = pushed.assignment ?? NO_ASSIGNMENT;
       const answer = await createRequest(pushed.branch, pushed.target ?? (await targetOf(repo)), pushed.title, pushed.body, assignment, as);
       if (answer.code !== 0) throw new OwnCliRefused(`${t.tool} did not open the request: ${cliSaid(t, answer)}; the branch stays as it was pushed, so open it again once \`${t.tool} auth status\` says you are signed in`);

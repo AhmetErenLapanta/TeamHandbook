@@ -13,6 +13,17 @@ describe("the MCP servers that ask to sign in, as a person reads them", () => {
     expect(listed).toEqual([{ name: "plugin:acme-skills:atlassian", label: "Atlassian (from acme-skills)" }]);
   });
 
+  it("given a plugin's server named with underscores, as the agent's tools name it, when it is listed, then it reads the same", () => {
+    // given
+    const names = ["plugin_incident-kit_atlassian"];
+
+    // when
+    const listed = signInServers(names);
+
+    // then
+    expect(listed).toEqual([{ name: "plugin_incident-kit_atlassian", label: "Atlassian (from incident-kit)" }]);
+  });
+
   it("given one service reached as a claude.ai connector and as the person's own server, when they are listed, then it shows once and signs in under the server that is not the connector", () => {
     // given
     const names = ["claude.ai Notion", "notion"];

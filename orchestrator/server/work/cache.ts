@@ -11,18 +11,19 @@ interface Entry {
   loading?: Promise<unknown>;
 }
 
-export const WORK_TTL_MS = 60_000;
+export const WORK_TTL_MS = 120_000;
 export const FRESH_EVERY_MS = 15_000;
 const MAX_ENTRIES = 500;
 
 /**
  * What the trackers answered, kept in this process only: a board polled every few seconds asks
- * the tracker once a minute, and an issue's text never reaches the database, a backup or an
- * export. An answer past its minute is returned at once and read again behind it; a fresh read,
+ * the tracker once in two minutes, and an issue's text never reaches the database, a backup or an
+ * export. An answer past its two minutes is returned at once and read again behind it; a fresh read,
  * as a board's "Read the tracker again" and the automations' watch make, asks the tracker anew.
  */
 export class WorkCache {
   private readonly entries = new Map<string, Entry>();
+  private readonly opening = new Map<string, Promise<Entry>>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -34,12 +35,21 @@ export class WorkCache {
       this.reload(key, entry, load);
       return this.answer(entry, true);
     }
-    const value = await load();
-    const stored = { at: this.now(), value };
-    this.entries.delete(key);
-    this.entries.set(key, stored);
-    if (this.entries.size > MAX_ENTRIES) this.entries.delete(this.entries.keys().next().value!);
-    return this.answer(stored, false);
+    // Reads that ask while the first is still with the tracker wait for it instead of asking again.
+    let opening = this.opening.get(key);
+    if (!opening) {
+      opening = load()
+        .then((value) => {
+          const stored = { at: this.now(), value };
+          this.entries.delete(key);
+          this.entries.set(key, stored);
+          if (this.entries.size > MAX_ENTRIES) this.entries.delete(this.entries.keys().next().value!);
+          return stored;
+        })
+        .finally(() => this.opening.delete(key));
+      this.opening.set(key, opening);
+    }
+    return this.answer(await opening, false);
   }
 
   /** Drops every answer whose key starts with `prefix`, such as one tenant's tracker. */

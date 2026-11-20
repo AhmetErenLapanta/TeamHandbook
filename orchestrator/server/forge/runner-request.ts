@@ -5,6 +5,7 @@ import { FORGES } from "../../shared/forge-def.js";
 import type { HostedForge } from "../../shared/forge-def.js";
 import { giteaRunnerSeen } from "./gitea.js";
 import { forgeHttp, ForgeHttpError } from "./http.js";
+import { forgeRefusalSentence } from "./read-model.js";
 import { cliConfig, ownCliReader, OwnCliRefused } from "./own-cli.js";
 import type { ForgeHttp } from "./http.js";
 import type { ForgeConfig } from "./types.js";
@@ -89,7 +90,7 @@ async function read(ctx: OrchestratorContext, repo: RepoRecord, number: number):
     return await READERS[config.kind](http, config, number);
   } catch (err) {
     if (err instanceof OwnCliRefused) return { reason: err.message, unverified: true };
-    if (err instanceof ForgeHttpError) return { reason: err.status === 404 ? `the forge has no request ${number} in ${repo.name}` : err.message };
+    if (err instanceof ForgeHttpError) return { reason: err.status === 404 ? `the forge has no request ${number} in ${repo.name}` : forgeRefusalSentence(err, config.kind, repo, access?.config && ctx.addedRepos?.get(repo.id)?.connection ? "connection" : "token", "read").sentence };
     throw err;
   }
 }

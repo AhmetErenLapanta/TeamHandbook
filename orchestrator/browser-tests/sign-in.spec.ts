@@ -51,6 +51,35 @@ test.describe("signing in", () => {
     expect(cookie).toMatchObject({ httpOnly: true, sameSite: "Strict" });
     await context.close();
   });
+
+  test("given a session that ended while a task was being typed, when the orchestrator is opened again, then the sign-in screen says the session ended and what to do, and after signing in the typed words are back", async ({ browser }) => {
+    // given
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    await context.request.post("/api/auth/login", { data: { email: ROLES.admin.email, password: PASSWORD } });
+    const typing = await context.newPage();
+    await typing.goto("/demo/tasks");
+    await typing.getByLabel("What needs doing?").fill("Add a retry to the payments webhook.");
+    const session = (await context.cookies()).find((c) => c.name.startsWith("th_session_"))!;
+    await context.addCookies([{ ...session, value: "ended" }]);
+
+    // when
+    const page = await context.newPage();
+    await page.goto("/demo/tasks");
+
+    // then
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+    await expect(page.getByText("Your session here ended: it ran out, or your access to this organization changed; sign in again, and ask an owner or an admin if that does not let you in.")).toBeVisible();
+    await expect(page.getByLabel("Email")).not.toHaveAttribute("aria-invalid", "true");
+
+    // when they sign in
+    await page.getByLabel("Email").fill(ROLES.admin.email);
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Sign in" }).click();
+
+    // then
+    await expect(page.getByLabel("What needs doing?")).toHaveValue("Add a retry to the payments webhook.");
+    await context.close();
+  });
 });
 
 test.describe("an owner", () => {

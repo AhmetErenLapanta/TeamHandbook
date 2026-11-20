@@ -11,6 +11,7 @@ import type { Store } from "../store.js";
 import { claudeCodeAdapter, fakeAgentAdapter, opencodeAdapter } from "./agents.js";
 import type { AgentAdapter } from "./agents.js";
 import { taskPaths } from "./isolation.js";
+import { MAX_FILES, MAX_FILE_BYTES } from "./changes.js";
 import { createTaskRunner, failureText } from "./runner.js";
 import { readEvidence } from "./verify.js";
 import type { RunnerOptions, TaskRunner } from "./runner.js";
@@ -147,18 +148,28 @@ describe("an agent that breaks its own workspace", () => {
     expect([left, branches]).toEqual([[], []]);
   });
 
-  it("given the stand-in told to write a file over the limit and thousands of files, when the task ends, then it fails on the first limit without staging either", async () => {
+  it("given the stand-in told to write a file one megabyte over the limit, when the task ends, then it fails on that limit without staging it", async () => {
     // given
     const { ctx } = await seeded();
 
     // when
-    const big = await run(ctx, runner(ctx, FAKE_AGENT), "stand-in: write a 20 MB file");
-    const many = await run(ctx, runner(ctx, FAKE_AGENT), "stand-in: write 3000 files");
+    const big = await run(ctx, runner(ctx, FAKE_AGENT), `stand-in: write a ${MAX_FILE_BYTES / 1024 / 1024 + 1} MB file`);
 
     // then
-    expect(big.task).toMatchObject({ status: "failed", error: "The agent wrote big.txt at 20971520 bytes, over the 1048576-byte limit for one file." });
-    expect(many.task).toMatchObject({ status: "failed", error: "The agent changed 3001 files, over the limit of 200 for one request." });
-    expect([big.left, big.branches, many.left, many.branches]).toEqual([[], [], [], []]);
+    expect(big.task).toMatchObject({ status: "failed", error: `The agent wrote big.txt at ${MAX_FILE_BYTES + 1024 * 1024} bytes, over the ${MAX_FILE_BYTES}-byte limit for one file.` });
+    expect([big.left, big.branches]).toEqual([[], []]);
+  });
+
+  it("given the stand-in told to write one file more than a request is allowed to change, when the task ends, then it fails on that limit without staging them", async () => {
+    // given
+    const { ctx } = await seeded();
+
+    // when
+    const many = await run(ctx, runner(ctx, FAKE_AGENT), `stand-in: write ${MAX_FILES} files`);
+
+    // then
+    expect(many.task).toMatchObject({ status: "failed", error: `The agent changed ${MAX_FILES + 1} files, over the limit of ${MAX_FILES} for one request.` });
+    expect([many.left, many.branches]).toEqual([[], []]);
   });
 });
 
@@ -268,6 +279,19 @@ describe("an agent whose output is not what its CLI promises", () => {
     // then
     expect(task).toMatchObject({ status: "failed", error: "The agent ended without reporting a result (exit code 0). Last line: half a line" });
     expect(log).toEqual(expect.arrayContaining(["{not json", '{"type":"log"', "half a line"]));
+  });
+
+  it("given an agent whose process is killed from outside before it reports, when it ends, then the task fails saying its process was ended and by which signal, never an exit code of none", async () => {
+    // given
+    const { ctx, root } = await seeded();
+    const killed = join(root, "killed.mjs");
+    writeFileSync(killed, 'process.kill(process.pid, "SIGKILL");\nawait new Promise((r) => setTimeout(r, 10_000));\n');
+
+    // when
+    const { task } = await run(ctx, runner(ctx, killed));
+
+    // then
+    expect(task).toMatchObject({ status: "failed", error: "The agent's process was ended from outside the orchestrator before it finished (SIGKILL), as a machine out of memory ends one. Run the task again." });
   });
 
   it("given an agent that prints binary bytes, when they reach the log and the error, then no control character is kept", async () => {

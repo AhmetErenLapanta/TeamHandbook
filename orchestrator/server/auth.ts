@@ -8,6 +8,7 @@ import { suspended } from "./scim.js";
 import type { KeyGrant } from "./keys.js";
 import type { Store } from "./store.js";
 import { cloudMemberOf, identitySessionOf } from "./cloud-identity.js";
+import { wasRemoved } from "./directory-join.js";
 import type { IdentityStore } from "./identities.js";
 import { cloudMode, localMode } from "./mode.js";
 
@@ -137,7 +138,7 @@ export function devPrincipalAuth(): MiddlewareHandler<OrchestratorEnv> {
 export function sessionAuth(store: AccountStore & IdentityStore, tenant: string, secure = false): MiddlewareHandler<OrchestratorEnv> {
   return async (c, next) => {
     const signedIn = await sessionOf(c, store, tenant, secure);
-    if (!signedIn) return c.json({ error: "sign in first" }, 401);
+    if (!signedIn) return c.json(await signedOutReason(c, store, tenant, secure), 401);
     const refused = csrfRefusal(c, signedIn.csrf);
     if (refused) return refused;
     const principal = await principalOf(store, signedIn.user);
@@ -189,6 +190,22 @@ export async function seen(tokenHash: string, touch: (at: string) => Promise<voi
 }
 
 /** The account this browser's session cookie for `tenant` signs in, or null when it signs in none. */
+/**
+ * What a refused request tells the person when it carried a session that no longer lets them in:
+ * one that ran out, or an account removed, turned off or signed out elsewhere, says so and what to
+ * do, rather than a bare "sign in first" in the middle of what they were typing. A request with no
+ * session at all gets the plain answer, and a cloud identity that never belonged here learns nothing.
+ */
+export async function signedOutReason(c: Context, store: AccountStore & IdentityStore, tenant: string, secure = false): Promise<{ error: string; code?: string }> {
+  if (cloudMode()) {
+    const identity = await identitySessionOf(c, store, secure);
+    return identity && (await wasRemoved(store, tenant, identity.identityId)) ? { error: "you are no longer a member of this organization; ask one of its owners or admins to invite you again", code: "removed" } : { error: "sign in first" };
+  }
+  if (!getCookie(c, sessionCookie(tenant, secure))) return { error: "sign in first" };
+  if (localMode()) return { error: "your session here ended; run the orchestrator's command again and open the address it prints", code: "session-ended" };
+  return { error: "your session here ended: it ran out, or your access to this organization changed; sign in again, and ask an owner or an admin if that does not let you in", code: "session-ended" };
+}
+
 export async function sessionOf(c: Context, store: AccountStore & IdentityStore, tenant: string, secure = false): Promise<{ user: UserRecord; csrf: string } | null> {
   if (cloudMode()) {
     const identity = await identitySessionOf(c, store, secure);

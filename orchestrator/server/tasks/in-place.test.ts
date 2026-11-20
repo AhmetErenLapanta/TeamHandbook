@@ -267,6 +267,23 @@ describe("a task in a folder that is not a git repository", { timeout: 120_000 }
     expect([keptAgain.status, (await keptAgain.json()).code]).toEqual([409, "already-kept"]);
   });
 
+  it("given a task's changes waiting for review, when its starter presses Keep in one window and Undo in another at once, then exactly one is taken, the other is told which, and the folder agrees with what the task says", async () => {
+    // given
+    const { ctx, app, folder, start, undo, keep } = await folderProject('writeFileSync("todo.md", "- one\\n");');
+    const id = (await start()).task.id as string;
+    await ctx.tasks!.idle();
+
+    // when
+    const [kept, undone] = await Promise.all([keep(id, "cmd-keep-window-1"), undo(id, "cmd-undo-window-2")]);
+
+    // then
+    const task = (await (await app.request(`/api/tasks/${id}`)).json()).task;
+    expect([kept.status, undone.status].sort()).toEqual([200, 409]);
+    expect([(await kept.json()).code, (await undone.json()).code].filter(Boolean)).toEqual([kept.status === 200 ? "already-kept" : "already-undone"]);
+    expect(task.state).toBe(kept.status === 200 ? "kept" : "undone");
+    expect(existsSync(join(folder, "todo.md"))).toBe(kept.status === 200);
+  });
+
   it("given a task's changes undone, when its starter keeps them, then keep is refused and the task reads as failed", async () => {
     // given
     const { ctx, app, start, undo, keep } = await folderProject('writeFileSync("README.md", "Undone.\\n");');
@@ -370,7 +387,7 @@ describe("a task in a folder that is not a git repository", { timeout: 120_000 }
     await ctx.tasks!.idle();
 
     // then
-    expect(await ctx.store.getTask(ctx.tenant, started.task.id)).toMatchObject({ status: "failed", error: "The agent stopped to ask you: Can you paste the issue's text?", question: { text: "Can you paste the issue's text?", options: ["Paste it here", "Skip the issue"] } });
+    expect(await ctx.store.getTask(ctx.tenant, started.task.id)).toMatchObject({ status: "needs-answer", error: "The agent stopped to ask you: Can you paste the issue's text?", question: { text: "Can you paste the issue's text?", options: ["Paste it here", "Skip the issue"] } });
   });
 
   it("given a person whose own Claude Code has two commands, an enabled and a disabled plugin, an MCP server and a CLAUDE.md, when a task runs as them, then the task keeps what it loaded by count alone", async () => {

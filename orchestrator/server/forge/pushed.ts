@@ -21,7 +21,7 @@ import { DEVICE_ENDPOINTS, personForgeToken, personLastingToken, personSignedIn 
 import { forgeHttp } from "./http.js";
 import { githubAuth } from "./github.js";
 import { gitlabAuth } from "./gitlab.js";
-import { ForgeReadError, readFailure, readWatchWith } from "./read-model.js";
+import { ForgeReadError, forgeRefusalSentence, readFailure, readWatchWith } from "./read-model.js";
 import type { RequestWatch } from "./read-model.js";
 import type { OnForgeRead } from "../../shared/forge-read.js";
 import { ownCliReader } from "./own-cli.js";
@@ -59,7 +59,7 @@ export async function requestForPushedBranch(ctx: OrchestratorContext, repo: Rep
     } catch (err) {
       // The branch is on the forge already, so a request the forge refuses is one the person can still open there.
       if (!(err instanceof OwnCliRefused || err instanceof ForgeHttpError)) throw err;
-      reason = err.message;
+      reason = err instanceof ForgeHttpError ? forgeRefusalSentence(err, config.kind, repo, ctx.addedRepos?.get(repo.id)?.connection ? "connection" : "token", "write").sentence : err.message;
     }
   }
   const target = pushed.target ?? (((await gitAsyncMaybe(["symbolic-ref", "--short", "HEAD"], mirrorDir(ctx, repo.id))) ?? "").trim() || "main");
@@ -157,7 +157,8 @@ async function originRequestAsPerson(ctx: OrchestratorContext, path: string, rep
     const forge = DRIVERS[kind].provider({ repoId: repo.id, kind, apiUrl: FORGES[kind].apiUrlFor(new URL(at.web)), project: at.project }, token, send, true);
     return { opened: await forge.openForBranch!({ ...repo, url: url.href }, { ...pushed, target }) };
   } catch (err) {
-    if (err instanceof ForgeRefusal || err instanceof ForgeHttpError) return page(err.message);
+    if (err instanceof ForgeHttpError) return page(forgeRefusalSentence(err, kind, repo, "sign-in", "write").sentence);
+    if (err instanceof ForgeRefusal) return page(err.message);
     throw err;
   }
 }
@@ -213,7 +214,7 @@ export async function onForgeWatch(ctx: OrchestratorContext, repo: RepoRecord, n
       return await readWatchWith(http, config, kept.number);
     } catch (err) {
       if (err instanceof OwnCliRefused) throw new ForgeReadError("unauthenticated", err.message);
-      if (err instanceof ForgeHttpError) throw readFailure(err, kind, repo, false);
+      if (err instanceof ForgeHttpError) throw readFailure(err, kind, repo, "sign-in");
       throw err;
     }
   };
@@ -273,14 +274,15 @@ export async function openRequestOnForge(ctx: OrchestratorContext, repo: RepoRec
   const path = localRepoPath(repo.url);
   if (!path || request.provider !== "local") throw new OnForgeRefused("no-origin", `${repo.name} is not read by path, so its request is already on its forge`, 400);
   if (request.status !== "open") throw new OnForgeRefused("not-open", `request #${request.number} is ${request.status}; only an open request opens on its forge`, 409);
+  // Only what the orchestrator checked leaves the machine: a branch deleted or moved since is said before the forge is asked anything.
+  const head = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${request.branch}^{commit}`], path))?.trim();
+  if (!head) throw new OnForgeRefused("gone", `${request.branch} is no longer in ${repo.name}: it was deleted there, so nothing was pushed`, 409);
   const own = await ownCliHere(ctx);
   // Without the person's own CLI here, only the task's own starter pushes, and only with the sign-in that is theirs.
   const origin = own ? null : await originForge(ctx, path);
   const token = !own && origin && (origin.kind === "github" || origin.kind === "gitlab") && request.createdBy === user.email ? await personForgeToken(ctx, user, origin.kind, { send }) : null;
   if (!own && !token) throw new OnForgeRefused("not-one-person", request.createdBy === user.email ? "sign in to GitHub or GitLab on its card first; your own gh or glab is not used on an orchestrator more than one person reaches" : "only the person who started the task opens its request on the forge", 409);
-  // Only what the orchestrator checked leaves the machine: a branch moved since is read again first.
-  const head = (await gitAsyncMaybe(["rev-parse", "--verify", "--quiet", `refs/heads/${request.branch}^{commit}`], path))?.trim();
-  const base = head && head === (request.checkedHead ?? request.headSha) ? (await gitAsyncMaybe(["merge-base", "HEAD", head], path))?.trim() : null;
+  const base = head === (request.checkedHead ?? request.headSha) ? (await gitAsyncMaybe(["merge-base", "HEAD", head], path))?.trim() : null;
   if (!base) throw new OnForgeRefused("moved", `${request.branch} moved since the orchestrator checked it; read the request again`, 409);
   // The request goes into the branch its task started from on the origin too, as it does here.
   const pushed = { title: request.title, body: (await readLocalDescription(repo, request.branch)) ?? "", branch: request.branch, baseSha: base, ...(request.targetBranch ? { target: request.targetBranch } : {}), assignment: await teamAssignment(ctx, repo, user) };

@@ -200,8 +200,15 @@ export interface RunnerServiceOptions {
    */
   onSpend?: (taskId: string, usd: number) => Promise<unknown>;
   nameOf?: (who: string) => Promise<string>;
+  /** The account of whoever a machine says sent words to its agent, for the id their steer event carries; a machine's own word for it is never kept. */
+  personOf?: (who: string) => Promise<{ name: string; id?: string }>;
   /** Whether a task is a question, which changes nothing wherever it runs. */
   isQuestion?: (taskId: string) => Promise<boolean>;
+  /**
+   * The question a run's last words end with, read here by the same rule a run on this orchestrator is: a machine's
+   * runner sends a run that changed nothing with what its agent said, and need not know a question from an answer.
+   */
+  questionOf?: (said: string) => { text: string; options: string[] } | null;
 }
 
 /**
@@ -215,7 +222,7 @@ export const IDLE_SESSION_MS = 30 * 60_000;
 
 export const QUESTION_CHANGED_AWAY = "The task was a question, and its agent changed files on your machine; none of it was kept here and no request was opened. What it changed is still on that machine.";
 
-export function createRunnerService({ tenant, store, now = Date.now, onFinished = async () => {}, onEnded = async () => {}, onLimit, onContextParts, onTurn, describeWork, checks, onSpend, nameOf, isQuestion }: RunnerServiceOptions): RunnerService {
+export function createRunnerService({ tenant, store, now = Date.now, onFinished = async () => {}, onEnded = async () => {}, onLimit, onContextParts, onTurn, describeWork, checks, onSpend, nameOf, personOf, isQuestion, questionOf }: RunnerServiceOptions): RunnerService {
   const woken = new EventEmitter();
   // What each holder was already handed. A command stays in the store until its task ends, so
   // without this every poll would come back at once with the same answer: a poll that never
@@ -249,7 +256,7 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
         }
       }
       // Words the lease's first message already carried are not handed again.
-      for (const { id, source, text, quotes, createdBy, handedLease, attachments } of await store.pendingFollowUps(tenant, taskId)) if (handedLease !== leaseId) commands.push({ type: "follow_up", taskId, followUp: { id, source, text, quotes, createdBy, ...(attachments ? { attachments } : {}) } });
+      for (const { id, source, text, quotes, createdBy, createdAt, handedLease, attachments } of await store.pendingFollowUps(tenant, taskId)) if (handedLease !== leaseId) commands.push({ type: "follow_up", taskId, followUp: { id, source, text, quotes, createdBy, createdAt, ...(attachments ? { attachments } : {}) } });
     }
     const fresh = commands.filter((c) => !seen.has(keyOf(c)));
     for (const c of fresh) seen.add(keyOf(c));
@@ -310,7 +317,16 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
       return store.renewLease(tenant, taskId, leaseId, iso(now() + LEASE_MS), iso(now()));
     },
     async events(taskId, leaseId, given) {
-      const events = nameOf ? await Promise.all(given.map(async (numbered) => (numbered.event.type === "steer" ? { ...numbered, event: { ...numbered.event, by: await nameOf(numbered.event.by) } } : numbered))) : given;
+      const sender = personOf ?? (nameOf ? async (who: string): Promise<{ name: string; id?: string }> => ({ name: await nameOf(who) }) : null);
+      const events = sender
+        ? await Promise.all(
+            given.map(async (numbered) => {
+              if (numbered.event.type !== "steer") return numbered;
+              const by = await sender(numbered.event.by);
+              return { ...numbered, event: { type: "steer" as const, text: numbered.event.text, by: by.name, ...(by.id ? { byId: by.id } : {}) } };
+            }),
+          )
+        : given;
       const rows = events.filter(({ event }) => event.type !== "context" && event.type !== "context_used" && event.type !== "context_parts" && event.type !== "loaded" && event.type !== "mcp_status" && event.type !== "spend").map(({ n, event }) => ({ n, kind: event.type, text: eventText(event), data: event }));
       await held(() => store.appendRunnerEvents(tenant, taskId, leaseId, rows));
       for (const { event } of events) {
@@ -374,10 +390,15 @@ export function createRunnerService({ tenant, store, now = Date.now, onFinished 
       const ranMs = since ? agentTimeMs(since, now(), await store.taskRequests(tenant, taskId)) : null;
       // A run that changed nothing finished; what it said last is its answer, kept only when nothing in it looks like a secret.
       const unchanged = outcome.status === "failed" && outcome.nothingChanged === true;
+      // A run that ended asking its starter is no failure either: the task waits for their answer. Its runner says so,
+      // or its last words do: the question is kept for the task's page, as a run here keeps it.
+      const question = unchanged && outcome.lastSaid && !detectSecret(outcome.lastSaid) ? (questionOf?.(outcome.lastSaid) ?? null) : null;
+      if (question) await store.updateTask(tenant, taskId, { question });
+      const asked = outcome.status === "failed" && (outcome.asked === true || question !== null);
       // A run that went on from a review and changed nothing more comes back for review with its answer too.
       const answers = unchanged || outcome.status === "needs-review";
       const lastSaid = answers && outcome.lastSaid && !detectSecret(outcome.lastSaid) ? outcome.lastSaid.slice(0, LAST_SAID_MAX) : null;
-      const end: LeasedTaskEnd = { status: unchanged ? "nothing-changed" : outcome.status, error: unchanged ? null : outcome.status === "failed" && outcome.error ? plainFailure(outcome.error) : outcome.error, nativeSession: outcome.nativeSessionId, branch: outcome.branch, ...(ranMs !== null ? { ranMs } : {}), ...(limitResetAt ? { limitResetAt } : {}), ...(lastSaid ? { lastSaid } : {}) };
+      const end: LeasedTaskEnd = { status: asked ? "needs-answer" : unchanged ? "nothing-changed" : outcome.status, error: question ? `The agent stopped to ask you: ${question.text}` : unchanged ? null : outcome.status === "failed" && outcome.error && !asked ? plainFailure(outcome.error) : outcome.error, nativeSession: outcome.nativeSessionId, branch: outcome.branch, ...(ranMs !== null ? { ranMs } : {}), ...(limitResetAt ? { limitResetAt } : {}), ...(lastSaid ? { lastSaid } : {}) };
       await held(() => store.finishLeasedTask(tenant, taskId, leaseId, end, iso(now())));
       await store.endTaskRequests(tenant, taskId, iso(now()));
       try {

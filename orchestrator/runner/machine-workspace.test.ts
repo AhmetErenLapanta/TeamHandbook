@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,7 +7,8 @@ import { fakeAgentAdapter } from "../server/tasks/agents.js";
 import type { AgentAdapter } from "../server/tasks/agents.js";
 import type { RunnerTask, TaskProgress, WorkspaceWork } from "./link.js";
 import { machineExecutor, machinePush } from "./machine-executor.js";
-import { STOPPED } from "./task.js";
+import { LOST_LEASE, STOPPED } from "./task.js";
+import { releasePersonalGuard } from "../server/tasks/profile.js";
 import type { ExecutorHooks } from "./task.js";
 
 const FAKE_AGENT = join(import.meta.dirname, "..", "demo", "fake-agent.mjs");
@@ -128,6 +129,33 @@ describe("a task in its person's one work folder on their machine", { timeout: 6
     expect(outcome).toMatchObject({ status: "needs-review", error: STOPPED, repos: [{ path: "payments-api", branch: "task/tsk_ws_1", baseSha: before }] });
     expect(git(["show", "task/tsk_ws_1:ON-CALL.md"], join(code, "payments-api"))).toBe("Page the on-call engineer.");
     expect(log).toContain(`${STOPPED} What the agent changed by then waits for review: keep it or undo it.`);
+  });
+
+  it("given an agent that changed a repository's copy and is still working, when the machine loses the task's lease, then the run ends interrupted with the copies kept for Continue and nothing reaches the person's repository", async () => {
+    // given
+    const base = fakeAgentAdapter(FAKE_AGENT);
+    const writing: AgentAdapter = {
+      ...base,
+      twoWay: {
+        capabilities: base.twoWay!.capabilities,
+        launch(paths, setup, options) {
+          writeFileSync(join(paths.work, "payments-api", "ON-CALL.md"), "Page the on-call engineer.\n");
+          return base.twoWay!.launch(paths, setup, options);
+        },
+      },
+    };
+    const controller = new AbortController();
+    const hooks: ExecutorHooks = { signal: controller.signal, onEvent: () => {}, log: () => {}, record: () => {}, onProcess: () => setTimeout(() => controller.abort(new Error(LOST_LEASE)), 300), decide: async () => ({ decision: "deny" }), leaseHeld: async () => false };
+    const work: WorkspaceWork = { prompt: "Task: Add an on-call note\nstand-in: wait 30 seconds", mode: "auto", choices: null, setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null, verification: null }, rules: [], workspace: { machineId: "mch_here", projectId: "prj_code", path: "~/code" }, branch: "task/tsk_ws_lost" };
+
+    // when
+    const outcome = await machineExecutor({ ...options(), machineId: "mch_here", adapters: [writing] }).run({ id: "tsk_ws_lost", title: "Add an on-call note", agent: "fake", nativeSession: null, work }, hooks);
+
+    // then
+    expect(outcome).toMatchObject({ status: "interrupted", error: LOST_LEASE });
+    expect(readFileSync(join(home, "runner-data", "runner", "machines", "acme", "tasks", "tsk_ws_lost", "work", "payments-api", "ON-CALL.md"), "utf8")).toBe("Page the on-call engineer.\n");
+    expect(git(["branch", "--list", "task/tsk_ws_lost"], join(code, "payments-api"))).toBe("");
+    await releasePersonalGuard(join(home, "runner-data", "runner", "machines", "acme", "tasks", "tsk_ws_lost"));
   });
 
   it("given a task's change left on a repository's branch, when its person asks for more, then the next run starts from that change, adds to it on the same branch, and keeps the first base", async () => {

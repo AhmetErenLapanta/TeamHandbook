@@ -1,6 +1,9 @@
 global:
   scrape_interval: 30s
 
+rule_files:
+  - /etc/prometheus/rules.yml
+
 scrape_configs:
   - job_name: teamhandbook-orchestrator
     metrics_path: /metrics
@@ -10,8 +13,5 @@ scrape_configs:
     static_configs:
       - targets: ["orchestrator:8080"]
 
-# Alerts worth having, written as rules once an Alertmanager is in place:
-#   up{job="teamhandbook-orchestrator"} == 0 for 2m                          the orchestrator does not answer
-#   increase(teamhandbook_orchestrator_sync_failures_total[30m]) > 3           repositories keep failing to sync
-#   teamhandbook_orchestrator_repositories{state="failing"} > 0 for 30m       a repository stays unreadable
-#   sum(rate(teamhandbook_orchestrator_http_requests_total{status=~"5.."}[5m])) > 0.1   the orchestrator answers with errors
+# The alerts are in rules.yml and show on this server's Alerts page; add an alerting block here, with
+# an Alertmanager, to have them sent.

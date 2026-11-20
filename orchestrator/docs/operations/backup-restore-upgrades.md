@@ -145,8 +145,8 @@ running, and refuses beside one that is. It reads the database's schema against 
 SQLite file's integrity and the space a `VACUUM` gives back, how fresh the orchestrator's own
 copies are against `ORCHESTRATOR_BACKUP_HOURS`, and the task directories a stopped orchestrator left.
 Each finding comes with the line that sets it right, and a problem ends it with exit code 1.
-`--fix` does the one repair that needs no running orchestrator, reclaiming a SQLite database's
-free pages; what a start sets right, such as a stopped task and its directories, is left to the
+`--fix` does the repairs that need no running orchestrator: it reclaims a SQLite database's
+free pages and, when the database fails its check, puts the newest whole copy back; what a start sets right, such as a stopped task and its directories, is left to the
 start.
 
 **Upgrading.** Take a backup, then start the new image on the same volume and database. On

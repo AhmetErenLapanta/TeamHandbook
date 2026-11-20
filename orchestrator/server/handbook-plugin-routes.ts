@@ -130,6 +130,10 @@ export function handbookPluginRoutes(ctx: OrchestratorContext, runner: TaskRunne
     const found = await read(source.startsWith("folder:") ? source.slice("folder:".length) : undefined);
     return found?.roots.get(source) ?? null;
   };
+  const refusedOnMachine = (c: Context<OrchestratorEnv>, answered: { refused: string; detail?: string }) => {
+    const known = REFUSED[answered.refused as FileRefusal];
+    return c.json({ error: answered.detail ?? known?.[0] ?? answered.refused }, known?.[1] ?? 409);
+  };
   const kindOf = (value: unknown): FileKind | null => (value === "skill" || value === "command" ? value : null);
 
   // A plugin's switch, update and removal are Claude Code's own commands, on a plugin the inventory lists, at the scope it was installed in.
@@ -170,6 +174,15 @@ export function handbookPluginRoutes(ctx: OrchestratorContext, runner: TaskRunne
 
   // Claude Code's own `plugin marketplace update`, on a click: the one way the page learns of a version the local copy does not have yet.
   route(app, "POST /api/handbook/marketplaces/update", async (c) => {
+    const machine = await machineOf(c);
+    if (machine === "refused") return c.json({ error: "not found" }, 404);
+    if (machine) {
+      const answered = await setupOnMachine(ctx, machine.id, { want: "marketplaces" });
+      if ("unread" in answered) return c.json({ error: answered.unread }, 409);
+      if (!("ok" in answered)) return c.json({ error: "refused" in answered ? String(answered.refused) : `${machine.name} did not run it` }, 409);
+      await recordEvent(ctx, c.get("user"), "handbook.plugin-command", { subject: "handbook:marketplaces", detail: `${answered.ok ? "ran" : "was refused"} ${answered.command} on ${machine.name}` });
+      return c.json(answered);
+    }
     if (!(await here(c))) return c.json({ error: "not found" }, 404);
     const result = await runner!.pluginOp("check", "", "user");
     if (!result) return c.json({ error: "tasks here do not run as you, so this orchestrator does not change your Claude Code" }, 409);
@@ -214,8 +227,17 @@ export function handbookPluginRoutes(ctx: OrchestratorContext, runner: TaskRunne
   });
 
   route(app, "GET /api/handbook/file", async (c) => {
-    if (!(await here(c))) return c.json({ error: "not found" }, 404);
+    const machine = await machineOf(c);
+    if (machine === "refused") return c.json({ error: "not found" }, 404);
     const kind = kindOf(c.req.query("kind"));
+    if (machine) {
+      if (!kind || c.req.query("source") !== "yours") return c.json({ error: "not found" }, 404);
+      const answered = await setupOnMachine(ctx, machine.id, { want: "file", act: "read", source: "yours", kind, name: c.req.query("name") ?? "", folder: null });
+      if ("unread" in answered) return c.json({ error: answered.unread }, 409);
+      if ("refused" in answered) return refusedOnMachine(c, answered);
+      return c.json(answered);
+    }
+    if (!(await here(c))) return c.json({ error: "not found" }, 404);
     const root = kind ? await ownRoot(c.req.query("source") ?? "") : null;
     if (!kind || !root) return c.json({ error: "not found" }, 404);
     const found = await readForEditing(root, kind, c.req.query("name") ?? "");
@@ -224,9 +246,19 @@ export function handbookPluginRoutes(ctx: OrchestratorContext, runner: TaskRunne
   });
 
   route(app, "PUT /api/handbook/file", async (c) => {
-    if (!(await here(c))) return c.json({ error: "not found" }, 404);
+    const machine = await machineOf(c);
+    if (machine === "refused") return c.json({ error: "not found" }, 404);
     const body = (await c.req.json().catch(() => null)) as { source?: unknown; kind?: unknown; name?: unknown; content?: unknown; expectedDigest?: unknown } | null;
     const kind = kindOf(body?.kind);
+    if (machine) {
+      if (!kind || body?.source !== "yours" || typeof body.name !== "string" || typeof body.content !== "string" || !(body.expectedDigest === null || typeof body.expectedDigest === "string")) return c.json({ error: "say the source (yours), kind, name, text and the digest you opened, or null for a new one" }, 400);
+      const answered = await setupOnMachine(ctx, machine.id, { want: "file", act: "write", source: "yours", kind, name: body.name, content: body.content, expectedDigest: body.expectedDigest as string | null, folder: null });
+      if ("unread" in answered) return c.json({ error: answered.unread }, 409);
+      if ("refused" in answered) return refusedOnMachine(c, answered);
+      await recordEvent(ctx, c.get("user"), "handbook.file-saved", { subject: "handbook:yours", detail: `saved the ${kind} ${body.name} on ${machine.name}` });
+      return c.json(answered);
+    }
+    if (!(await here(c))) return c.json({ error: "not found" }, 404);
     const root = kind && typeof body?.source === "string" ? await ownRoot(body.source) : null;
     if (!kind || !root || typeof body?.name !== "string" || typeof body.content !== "string" || !(body.expectedDigest === null || typeof body.expectedDigest === "string")) return c.json({ error: "say the source (yours or this folder), kind, name, text and the digest you opened, or null for a new one" }, 400);
     const saved = await writeOwnFile(root, kind, body.name, body.content, body.expectedDigest as string | null);
@@ -236,9 +268,19 @@ export function handbookPluginRoutes(ctx: OrchestratorContext, runner: TaskRunne
   });
 
   route(app, "DELETE /api/handbook/file", async (c) => {
-    if (!(await here(c))) return c.json({ error: "not found" }, 404);
+    const machine = await machineOf(c);
+    if (machine === "refused") return c.json({ error: "not found" }, 404);
     const body = (await c.req.json().catch(() => null)) as { source?: unknown; kind?: unknown; name?: unknown; expectedDigest?: unknown } | null;
     const kind = kindOf(body?.kind);
+    if (machine) {
+      if (!kind || body?.source !== "yours" || typeof body.name !== "string" || typeof body.expectedDigest !== "string") return c.json({ error: "say the source, kind, name and the digest you opened" }, 400);
+      const answered = await setupOnMachine(ctx, machine.id, { want: "file", act: "delete", source: "yours", kind, name: body.name, expectedDigest: body.expectedDigest, folder: null });
+      if ("unread" in answered) return c.json({ error: answered.unread }, 409);
+      if ("refused" in answered) return refusedOnMachine(c, answered);
+      await recordEvent(ctx, c.get("user"), "handbook.file-deleted", { subject: "handbook:yours", detail: `deleted the ${kind} ${body.name} on ${machine.name}` });
+      return c.json(answered);
+    }
+    if (!(await here(c))) return c.json({ error: "not found" }, 404);
     const root = kind && typeof body?.source === "string" ? await ownRoot(body.source) : null;
     if (!kind || !root || typeof body?.name !== "string" || typeof body.expectedDigest !== "string") return c.json({ error: "say the source, kind, name and the digest you opened" }, 400);
     const done = await deleteOwnFile(root, kind, body.name, body.expectedDigest);

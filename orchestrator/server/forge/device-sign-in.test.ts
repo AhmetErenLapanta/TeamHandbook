@@ -130,11 +130,14 @@ describe("a person's sign-in to GitHub with a one-time code through the orchestr
     expect(await ctx.store.getSetting(ctx.tenant, `forge.person.github.${turnedOff.id}`)).toBeNull();
   });
 
-  it("given the operator's own application named, none at all, or the sign-in turned off, when the client id is read, then the operator's comes first, then the release's, and a forge turned off or with none offers nothing", () => {
+  it("given the operator's own application named, none at all, or the sign-in turned off, when the client id is read for GitHub and GitLab, then the operator's comes first, then the release's own, and a forge turned off offers nothing", () => {
     expect(deviceClientId("github", { ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID: " Iv1.operator " })).toBe("Iv1.operator");
     expect(deviceClientId("github", {})).toBe("Ov23liQ8aEvWzyO7lqWs");
     expect(deviceClientId("github", { ORCHESTRATOR_FORGE_GITHUB_DEVICE_CLIENT_ID: " OFF " })).toBeNull();
-    expect(deviceClientId("gitlab", {})).toBeNull();
+    expect(deviceClientId("gitlab", { ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID: "gl-operator" })).toBe("gl-operator");
+    expect(deviceClientId("gitlab", {})).toBe("6ba84531bfeb01b19630cb19adfc95d4196f3672dc2703f1ac2a206829728121");
+    expect(deviceClientId("gitlab", { ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID: "" })).toBe("6ba84531bfeb01b19630cb19adfc95d4196f3672dc2703f1ac2a206829728121");
+    expect(deviceClientId("gitlab", { ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID: "off" })).toBeNull();
   });
 });
 

@@ -174,7 +174,7 @@ export async function revokeInvite(store: InviteStore, tenant: string, id: strin
 
 // Made when thrown: accounts.ts and this module import each other through app.ts, so a value
 // built while the module loads can find AccountError not defined yet.
-const gone = () => new AccountError("this invitation link is not valid any more; ask for a new one", 404);
+const gone = () => new AccountError("this invitation link was used already or is no longer valid: if you joined with it, sign in, and otherwise ask whoever invited you for a new one", 404);
 
 /**
  * What the join page shows before anyone accepts: the address, role and teams of this one

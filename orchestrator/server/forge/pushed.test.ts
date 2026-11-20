@@ -323,6 +323,23 @@ describe("a path repository's request opened on its forge with the task starter'
     expect(forBea).toMatchObject({ kind: "gitlab", number: 3, unread: "GitLab is read here only with your own CLI or a sign-in with a code" });
   });
 
+  it("given the request's branch deleted in the person's repository, or the forge no longer taking her sign-in, when she presses, then each says what happened and what to do, and nothing is opened", async () => {
+    // given
+    const deleted = await signedIn();
+    execFileSync("git", ["update-ref", "-d", "refs/heads/handbook/pushed"], { cwd: deleted.clone });
+    const refused = await signedIn();
+    const expired = (async (url: string) => new Response(JSON.stringify({ message: "401 Unauthorized" }), { status: String(url).endsWith("/user") ? 200 : 401, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+    // when
+    const onDeleted = openRequestOnForge(deleted.ctx, deleted.repo, deleted.request, deleted.ada, undefined, deleted.send);
+    const onExpired = openRequestOnForge(refused.ctx, refused.repo, refused.request, refused.ada, undefined, expired);
+
+    // then
+    await expect(onDeleted).rejects.toMatchObject({ code: "gone", message: "handbook/pushed is no longer in skills: it was deleted there, so nothing was pushed" });
+    await expect(onExpired).rejects.toMatchObject({ code: "not-opened", message: expect.stringMatching(/^GitLab no longer accepts your sign-in to skills; sign in to GitLab again on its card under Integrations/) });
+    expect(deleted.calls).toEqual([]);
+  });
+
   it("given an admin who did not start the task, when they press, then it is refused and nothing is pushed or asked of the forge, even with a sign-in of their own", async () => {
     const { ctx, repo, request, ada, forgeRepo, calls, send } = await signedIn();
     const bea = await principalOf(ctx.store, await createUser(ctx.store, "solo", new Set(), { email: "bea@example.invalid", role: "admin", teams: [] }, ada));
@@ -398,7 +415,7 @@ describe("a request for a branch a runner pushed to a repository connected with 
 
     const answer = await requestForPushedBranch(ctx, repo, pushed("a".repeat(40)));
 
-    expect(answer).toEqual({ createUrl: "https://github.example.invalid/acme/skills/compare/main...handbook/pushed?expand=1", reason: expect.stringContaining("Resource not accessible by integration") });
+    expect(answer).toEqual({ createUrl: "https://github.example.invalid/acme/skills/compare/main...handbook/pushed?expand=1", reason: "GitHub does not let the orchestrator's access open requests in skills; nothing was changed there, and an owner or an admin enters a new token for skills under Integrations, one that writes to it (GitHub said: Resource not accessible by integration)" });
   });
 });
 

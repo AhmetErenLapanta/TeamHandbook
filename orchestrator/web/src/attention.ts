@@ -44,7 +44,7 @@ export function attentionOf(task: Decided & Pick<TaskRecord, "attention"> & Part
   // A run that waits on a plan, a permission or a question while it works: the orchestrator's own state says so, with no separate flag.
   if (task.status === "running" && stateOf(task) === "needs-you") return "approval";
   // A run that stopped to ask something calls for its answer, not for a retry.
-  if (task.status === "failed" && task.question && !task.question.answer) return "answer";
+  if (task.status === "needs-answer" || (task.status === "failed" && task.question && !task.question.answer)) return "answer";
   // The orchestrator marks no task for a teammate's follow-up: one its starter can answer is the call.
   if (task.suggestions?.some((s) => s.canAnswer)) return "follow-up";
   if (decisionOf(task)) return null;

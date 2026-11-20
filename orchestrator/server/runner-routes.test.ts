@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { ATTACHMENT_LIMITS, attachmentPath } from "./attachments.js";
 import { ON_A_MACHINE, syncRepo } from "./app.js";
 import { eventOf, organizationRunners } from "./runner-routes.js";
+import { stuckOf } from "./tasks/stuck.js";
 import { checksOnMachine, pushOnMachine, setupOnMachine } from "./machine-folders.js";
 import { handbookNoticed } from "./handbook-defaults.js";
 import { TODOS_MAX } from "../shared/runner-wire.js";
@@ -454,6 +455,26 @@ describe("what a machine says of a task it holds, kept as this orchestrator rebu
     expect(kept).not.toContain(value);
     expect(kept).not.toContain(`ghp_${"a1B2".repeat(9)}`);
     expect(log.find((l) => l.kind === "message")?.data).toEqual({ type: "message", text: expect.any(String) });
+  });
+});
+
+describe("a machine's task whose agent ended asking", () => {
+  it("given last words longer than a task keeps that end with a question, when the machine finishes the task, then the start and the question are both kept and the task waits for an answer", async () => {
+    // given
+    const { store, ctx, maxs } = await organization();
+    const work = { prompt: "Add a note", mode: "auto" as const, choices: null, repo: { url: "https://gitlab.example.invalid/acme/payments-skills.git", baseBranch: "main", baseSha: "a".repeat(40) }, branch: "task/tsk_max", rules: [], setup: { plugin: null, mcpTools: [], deniedTools: [] }, limits: { timeoutMs: 60_000, testCommand: null } };
+    ctx.runnerService = createRunnerService({ tenant: TENANT, store, describeWork: async () => work, questionOf: stuckOf });
+    await store.createTask(task("tsk_max", "max@example.invalid", "2026-11-03T09:01:00.000Z"));
+    const { lease } = await (await maxs(RUNNER_PATHS.poll, { waitMs: 0, canTake: true })).json();
+    const said = ["I read the rota files.", ...Array.from({ length: 200 }, (_, i) => `Line ${i} of what I found in the rota, kept long on purpose.`), "QUESTION: Which rota should the note follow?", "OPTION: The weekly one", "OPTION: The daily one"].join("\n");
+
+    // when
+    const finished = await maxs(RUNNER_PATHS.finish("tsk_max"), { leaseId: lease.leaseId, outcome: { status: "failed", error: "The agent changed nothing.", nativeSessionId: null, branch: null, position: null, request: null, nothingChanged: true, lastSaid: said } });
+
+    // then
+    const kept = (await store.getTask(TENANT, "tsk_max"))!;
+    expect(finished.status).toBe(204);
+    expect(kept).toMatchObject({ status: "needs-answer", question: { text: "Which rota should the note follow?", options: ["The weekly one", "The daily one"] } });
   });
 });
 

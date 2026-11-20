@@ -7,7 +7,7 @@ import { openSqliteStore } from "../store.js";
 import type { OrchestratorContext } from "../app.js";
 import type { Principal } from "../auth.js";
 import { claudeCodeAdapter } from "./agents.js";
-import { probePersonalSetup } from "./personal-setup.js";
+import { listedPlugins, probePersonalSetup, readHandbookInputs } from "./personal-setup.js";
 import { createTaskRunner } from "./runner.js";
 
 const OWNER: Principal = { id: "owner", name: "Owner", email: "owner@example.invalid", role: "owner", ownedTeams: [] };
@@ -122,5 +122,61 @@ describe("what a person's own Claude Code brings to a task", { timeout: 60_000 }
     expect(second).toBe(first);
     expect(personal.lastPersonalSetup()).toBe(first);
     expect(none).toBeNull();
+  });
+});
+
+describe("the reads the handbook list is built from", () => {
+  const slow = <T>(value: T, ms: number) => async () => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return value;
+  };
+
+  it("given three reads that each take 200 ms, when the list's inputs are read, then they take about one read's time, not three, and the answers are the reads'", async () => {
+    // given
+    const delay = 200;
+    const started = Date.now();
+    await slow(null, delay)();
+    await slow(null, delay)();
+    await slow(null, delay)();
+    const oneAfterAnother = Date.now() - started;
+
+    // when
+    const begun = Date.now();
+    const inputs = await readHandbookInputs({ plugins: slow([{ id: "docs-kit@payments-market" }], delay), managed: slow(["policy"], delay), personal: slow(null, delay) });
+    const together = Date.now() - begun;
+
+    // then
+    expect(inputs).toEqual({ plugins: [{ id: "docs-kit@payments-market" }], managed: ["policy"], personal: null });
+    expect(oneAfterAnother).toBeGreaterThanOrEqual(3 * delay - 20);
+    expect(together).toBeLessThan(oneAfterAnother / 2);
+  });
+
+  it("given a plugin list that did not answer, when the inputs are read, then the plugins are none and the other two are still read", async () => {
+    // when
+    const inputs = await readHandbookInputs({ plugins: async () => null, managed: async () => ["policy"], personal: async () => null });
+
+    // then
+    expect(inputs).toEqual({ plugins: [], managed: ["policy"], personal: null });
+  });
+});
+
+describe("the plugin list two reads ask for together", () => {
+  it("given a CLI that lists plugins and two reads that ask at once, when they are answered, then the CLI ran once for both and a read after them runs it again", async () => {
+    // given
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "th-plugin-list-")));
+    dirs.push(dir);
+    const counter = join(dir, "runs");
+    const program = join(dir, "claude");
+    writeFileSync(program, `#!/bin/sh\necho run >> "${counter}"\nsleep 0.2\necho '[{"id":"payments-skills@acme-market","version":"1.4.0","enabled":true}]'\n`);
+    chmodSync(program, 0o755);
+    const env = { HOME: dir, PATH: process.env.PATH ?? "" };
+
+    // when
+    const [a, b] = await Promise.all([listedPlugins(program, env, dir, 10_000), listedPlugins(program, env, dir, 10_000)]);
+    const runsTogether = readFileSync(counter, "utf8").trim().split("\n").length;
+    await listedPlugins(program, env, dir, 10_000);
+
+    // then
+    expect([a?.length, b?.length, runsTogether, readFileSync(counter, "utf8").trim().split("\n").length]).toEqual([1, 1, 1, 2]);
   });
 });

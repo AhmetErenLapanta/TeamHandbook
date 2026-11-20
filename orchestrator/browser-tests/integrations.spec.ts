@@ -116,9 +116,23 @@ test.describe("the Integrations page for an admin", () => {
     await expect(card.getByRole("button", { name: "Sign in again" })).toHaveClass(/secondary/);
   });
 
-  test("given no GitLab application registered, when an admin opens Integrations, then the GitLab card says the next step once, and the settings' names wait behind its (i)", async ({ page }) => {
-    // given
+  test("given the release's own GitLab application, when an admin opens Integrations, then the GitLab card offers signing in with a one-time code as its one action", async ({ page }) => {
+    // when
+    await page.goto("/demo/integrations");
+
+    // then
+    const card = page.locator("#card-gitlab");
+    await expect(card).toContainText("Open the requests of the tasks you start on GitLab as you. You sign in with a one-time code, nothing to install;");
+    await expect(card.getByRole("button", { name: "Sign in with GitLab" })).toHaveClass(/secondary/);
+  });
+
+  test("given no GitLab application registered and the code sign-in turned off, when an admin opens Integrations, then the GitLab card says the next step once, and the settings' names wait behind its (i)", async ({ page }) => {
+    // given the server's answer with ORCHESTRATOR_FORGE_GITLAB_DEVICE_CLIENT_ID=off, which this suite's one server cannot set for one test
     const integrations = "/demo/integrations";
+    await page.route("**/api/forge/gitlab/sign-in", async (route) => {
+      const read = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...read, device: null } });
+    });
 
     // when
     await page.goto(integrations);

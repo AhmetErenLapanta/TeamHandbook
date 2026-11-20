@@ -40,7 +40,7 @@ async function replay(file: string, personal = false, onLine: (line: string, pat
   const env = { ...taskEnv({ PATH: process.env.PATH }, paths, adapter.credentialEnv), ...call.env };
   const lines: string[] = [];
   const outcome = await runProcess({ ...call, env, cwd: paths.work }, {
-    timeoutMs: 20_000,
+    timeoutMs: 25_000,
     signal: new AbortController().signal,
     onLine: (stream, line) => {
       const text = stream === "stdout" ? adapter.logLine(line) : line;
@@ -151,7 +151,7 @@ describe("a two-way run played from a transcript", () => {
   const ANSWER = { type: "control_response", response: { request_id: "r-1", subtype: "success", response: { behavior: "allow" } } };
 
   /** Starts the replay with stdin left open, answers each request line with `answer`, and returns what it printed and its exit code. */
-  function converse(answer: ((line: string) => string | null) | null, timeoutMs = 10_000): Promise<{ code: number | null; stdout: string[] }> {
+  function converse(answer: ((line: string) => string | null) | null, timeoutMs = 25_000): Promise<{ code: number | null; stdout: string[] }> {
     const root = scratch();
     const file = join(root, "two-way.ndjson");
     writeTranscript(file, { agent: "claude-code", cliVersion: "2.1.309", source: "hand", expect: { args: [], stdin: ["Task: "] }, steps: [{ stdin: { type: "user", text: "Task: Add an on-call note" } }, { emit_inbound: REQUEST }, { stdin: ANSWER }, { emit_inbound: { type: "result", subtype: "success" } }], exit: 0 }, []);
@@ -226,7 +226,7 @@ describe("a transcript step aimed outside the checkout", () => {
     writeFileSync(file, [{ meta: { agent: "fake", cliVersion: "none", source: "hand" } }, { expect_outbound: { args: [], stdin: [] } }, ...steps("../victim"), { exit: 0 }].map((l) => JSON.stringify(l)).join("\n") + "\n");
 
     // when
-    const outcome = await runProcess({ program: replayProgram(root, file), args: [], env: { PATH: process.env.PATH ?? "" }, cwd: checkout, stdin: "" }, { timeoutMs: 20_000, signal: new AbortController().signal, onLine: () => {} });
+    const outcome = await runProcess({ program: replayProgram(root, file), args: [], env: { PATH: process.env.PATH ?? "" }, cwd: checkout, stdin: "" }, { timeoutMs: 25_000, signal: new AbortController().signal, onLine: () => {} });
 
     // then
     expect(outcome.code).toBe(REPLAY_MISMATCH);

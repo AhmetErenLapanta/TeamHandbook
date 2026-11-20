@@ -4,6 +4,9 @@
 .team-rows li.picked { background: var(--accent-soft); }
 .plugin-card { display: grid; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
 .plugin-card p { margin: 0; }
+/* On the task form's page the card is one line beside its two small buttons, so the form stays what the page is for. */
+.plugin-card-quiet { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); border-bottom: 0; padding: var(--space-2) 0; }
+.plugin-card-quiet .actions { margin: 0; }
 .team-fold { margin: 0 0 var(--space-3); }
 .team-fold summary { cursor: pointer; color: var(--text-muted); }
 .handbook-join { display: grid; gap: var(--space-1); margin: var(--space-3) 0 0; }
@@ -27,3 +30,7 @@
 .plugin-add-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-1) 0; }
 .plugin-add-what { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plugin-add-line { white-space: nowrap; }
+.lessons-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2) 0; }
+.lessons-rows li { display: flex; align-items: flex-start; gap: var(--space-3); }
+.lessons-rows .lesson-text { min-width: 0; flex: 1; }
+.lessons-rows .lesson-text p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
