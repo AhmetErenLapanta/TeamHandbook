@@ -8,14 +8,14 @@ import { labDir } from "../state.js";
 
 /**
  * A person on 0.3.0 who updates: install.sh puts 0.3.0 on a clean machine from a mirror holding both releases,
- * the person opens a project, `update --check` says 0.3.1 is there, `update --prepare` places it and leaves 0.3.0
+ * the person opens a project, `update --check` says the target release is there, `update --prepare` places it and leaves 0.3.0
  * current, `update --apply --yes` makes it current, and the orchestrator that starts then holds the project and
  * the same schema number it left. LAB_UPDATE_RELEASES names a directory holding both releases' files, built from the
  * two release commits; without it the scenario skips. The machine reaches only the mirror on this machine.
  */
 const RELEASES = process.env.LAB_UPDATE_RELEASES ?? "";
 const FROM = process.env.LAB_UPDATE_FROM ?? "0.3.0";
-const TO = process.env.LAB_UPDATE_TO ?? "0.3.1";
+const TO = process.env.LAB_UPDATE_TO ?? "0.4.0";
 const stamp = (what: string) => join(labDir(), "update-path", `${what}-${Date.now().toString(36)}`);
 
 test.skip(!RELEASES, "LAB_UPDATE_RELEASES names no directory of two releases");
