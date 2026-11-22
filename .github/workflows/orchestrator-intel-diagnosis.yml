@@ -45,6 +45,7 @@ jobs:
 
       - name: The executable, tried under each condition
         working-directory: orchestrator
+        shell: bash {0}
         run: |
           version=$(node -p 'require("./package.json").version')
           binary="package-out/release/handbook-orchestrator-$version-darwin-x64/handbook-orchestrator"
@@ -76,7 +77,23 @@ jobs:
           echo "--- what the system logged about it"
           log show --last 10m --style compact --predicate 'process == "amfid" OR process == "kernel" OR process == "syspolicyd" OR eventMessage CONTAINS "handbook-orchestrator"' 2>&1 | grep -i -E 'handbook-orchestrator|amfid|code signature|syspolicyd|killed' | tail -40 || true
           echo "--- crash reports"
+          mkdir -p /tmp/crash-reports && cp "$HOME"/Library/Logs/DiagnosticReports/* /tmp/crash-reports/ 2>/dev/null
           ls -la "$HOME/Library/Logs/DiagnosticReports" 2>&1 | head -20 || true
+          for report in "$HOME"/Library/Logs/DiagnosticReports/handbook-orchestrator*; do
+            [ -f "$report" ] && { echo "=== $report"; head -c 6000 "$report"; }
+          done
+
+      # A one-line application in the same Node's executable: if this one stops by a signal too, the
+      # fault is Node's executable on this platform and not anything in the orchestrator's bundle.
+      - name: A trivial executable from the same Node
+        shell: bash {0}
+        run: |
+          mkdir /tmp/sea && cd /tmp/sea
+          echo 'console.log("hello")' > main.js
+          echo '{ "main": "main.js", "output": "hello" }' > sea.json
+          node --build-sea sea.json && codesign --sign - --force hello
+          env -i PATH= ./hello
+          echo "exit $?"
 
       # The executable and the logs of this run, for taking apart elsewhere.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -84,5 +101,13 @@ jobs:
         with:
           name: intel-executable
           path: orchestrator/package-out/release/handbook-orchestrator-*-darwin-x64/handbook-orchestrator
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: intel-crash-reports
+          path: /tmp/crash-reports
           if-no-files-found: ignore
           retention-days: 3
