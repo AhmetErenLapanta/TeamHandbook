@@ -95,9 +95,10 @@ needs only its `/metrics` scraped and its stdout kept.
 Prometheus scrapes `/metrics` on the internal network with the metrics token; Caddy answers
 `/metrics` with 404 on the public address. Its page listens on the host's
 `127.0.0.1:ORCHESTRATOR_PROMETHEUS_PORT` (9090) only, reached from elsewhere through an ssh tunnel.
-`observability/prometheus.yml` lists the alerts worth writing once an Alertmanager is in place:
-the orchestrator not answering for 2 minutes, more than 3 failed syncs in 30 minutes, a repository
-failing for 30 minutes, and more than 0.1 server errors a second.
+`observability/rules.yml` holds four alerts Prometheus evaluates itself (the orchestrator not answering
+for 2 minutes, more than 3 failed syncs in 30 minutes, a repository failing for 30 minutes, more than
+0.1 server errors a second); they show on its Alerts page and go nowhere until an Alertmanager is added
+to `prometheus.yml`.
 
 Vector keeps the compose services' log lines (Caddy, the orchestrator, Postgres and the backup job)
 in one file a day in the `orchestrator-logs` volume. Docker sends them with its fluentd driver to the
