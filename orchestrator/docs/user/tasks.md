@@ -197,6 +197,27 @@ When you corrected a task (undid its change or denied a request), a team skill i
 skill…**, which asks first and starts an Improve a skill task on the team's repository; a plugin's
 skill offers **Copy to Yours**.
 
+### Notices when you are away
+
+In the account menu, **Notify me when my tasks need me** asks your browser's permission once. It says
+"A notice says only that a task needs you, failed or stopped; it opens the task." On an orchestrator
+only you use, the notice reaches this browser with the page closed too ("On in this browser, with this
+page closed too."): it is sent when a task needs you, fails or stops, once for each change, reads "A task
+needs you", "A task failed" or "A task stopped", and carries only the task and its state, never a word of
+what it did. Turn the checkbox off to stop them. If the browser blocks notices, allow them in its site
+settings. On a team's orchestrator a notice shows only while the page is open.
+
+### A secret the agent asks for
+
+When the agent needs a value it does not have, such as a token for a test, the task page shows a card,
+"The agent asks for <NAME>", with the agent's reason, one password field and two buttons: **Give it to the
+agent** and **Decline**. Only the person who started the task can answer; anyone else sees "Waiting for
+<name> to give <NAME>." The value is sealed for that run alone ("It is sealed for this task alone; the agent
+gets it by name, and the value is never in the chat or the log."): it is masked in the log and in what the
+run changes, and deleted when the run ends. Once answered the card reads "You gave <NAME>." or "You did not
+give <NAME>."; a later run asks again. A secret under 8 characters or over 8 KB is refused, and a task running
+on your own computer cannot ask for one yet.
+
 ### Files for a task
 
 On the new task form, **Attach files**, a drop or a paste puts a chip under the field with the name and
